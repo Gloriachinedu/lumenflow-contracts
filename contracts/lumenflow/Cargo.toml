@@ -1,0 +1,22 @@
+[package]
+name = "lumenflow"
+version = "1.0.0"
+edition = "2021"
+authors = ["LumenFlow Contributors"]
+description = "Scalable, secure, and decentralized payment processing smart contract for Stellar Soroban"
+license = "MIT"
+repository = "https://github.com/Gloriachinedu/lumenflow-contracts"
+keywords = ["stellar", "soroban", "payments", "smart-contract", "blockchain"]
+categories = ["cryptography::cryptocurrencies"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = { version = "22.0.0", features = ["alloc"] }
+
+[dev-dependencies]
+soroban-sdk = { version = "22.0.0", features = ["testutils", "alloc"] }
+
+[features]
+testutils = ["soroban-sdk/testutils"]
