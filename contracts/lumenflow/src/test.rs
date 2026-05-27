@@ -466,3 +466,21 @@ fn test_cleanup_expired_payments() {
     let removed = client.cleanup_expired_payments(&admin);
     assert_eq!(removed, 1);
 }
+
+#[test]
+fn test_is_registered() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    
+    assert!(!client.is_registered(&merchant));
+    
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Other,
+    );
+    
+    assert!(client.is_registered(&merchant));
+}

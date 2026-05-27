@@ -115,10 +115,16 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
-    /// Get merchant info.
+    /// Get merchant details.
     pub fn get_merchant(env: Env, merchant_address: Address) -> Result<Merchant, PaymentError> {
         storage::get_merchant(&env, &merchant_address).ok_or(PaymentError::MerchantNotFound)
     }
+
+    /// Check if a merchant address is already registered.
+    pub fn is_registered(env: Env, merchant_address: Address) -> bool {
+        storage::get_merchant(&env, &merchant_address).is_some()
+    }
+
 
     // ── Payment processing ────────────────────────────────────────────────────
 
