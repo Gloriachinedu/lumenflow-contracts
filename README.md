@@ -78,6 +78,17 @@ lumenflow-contracts/
 └── SECURITY.md
 ```
 
+## Merchant Onboarding
+
+New merchants can register through the following flow:
+
+1. **Connect Wallet**: Ensure your Stellar wallet is connected.
+2. **Check Registration**: Call `is_registered(address)` to check if you already have a profile.
+3. **Register**: Call `register_merchant` with your business details and category.
+4. **Verification**: Upon success, you will be redirected to the dashboard where you can start accepting payments.
+
+Existing profiles can be retrieved using `get_merchant(address)`.
+
 ---
 
 ## Build
