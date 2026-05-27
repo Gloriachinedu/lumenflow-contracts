@@ -66,6 +66,17 @@ test: add edge cases for multisig threshold
 - Link the related issue with `Closes #N`.
 - All CI checks must pass before merge.
 
+## Team Structure
+
+To ensure high-quality reviews and maintainability, the project is organized into specialized teams:
+
+- **Smart Contract Team** (`@Gloriachinedu/smart-contract-team`): Responsible for core logic in `contracts/`.
+- **DevOps Team** (`@Gloriachinedu/devops-team`): Manages deployment `scripts/` and CI/CD.
+- **Documentation Team** (`@Gloriachinedu/documentation-team`): Maintains project documentation and the `docs/` folder.
+- **SDK Team** (`@Gloriachinedu/sdk-team`): Responsible for the SDK layer (once created).
+
+Pull requests are automatically assigned to the relevant CODEOWNERS. At least one approval from a CODEOWNER is required for all PRs merging into `main`.
+
 ## Reporting Security Issues
 
 Do **not** open a public issue for security vulnerabilities. See [SECURITY.md](SECURITY.md).
