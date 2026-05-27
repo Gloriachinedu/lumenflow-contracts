@@ -454,7 +454,7 @@ fn test_pagination_limit() {
         let pub_key = bytes(&env, &[0u8; 32]);
         let sig = bytes(&env, &[0u8; 64]);
         client.process_payment_with_signature(
-            &payer, &id, &merchant, &token, &100, &str(&env, ""), &sig, &pub_key,
+            &payer, id, &merchant, &token, &100, &str(&env, ""), &sig, &pub_key,
         );
     }
 

@@ -811,4 +811,90 @@ impl PaymentProcessingContract {
             SortOrder::Descending => cmp == core::cmp::Ordering::Greater,
         }
     }
+
+    // ── Payment Requests ──────────────────────────────────────────────────────
+
+    /// Create a payment request that can be shared as a link.
+    pub fn create_payment_request(
+        env: Env,
+        merchant: Address,
+        request_id: String,
+        token: Address,
+        amount: i128,
+        memo: String,
+        ttl: u64,
+    ) -> Result<(), PaymentError> {
+        merchant.require_auth();
+        require_positive(amount)?;
+        require_non_empty_string(&request_id)?;
+
+        if storage::get_payment_request(&env, &request_id).is_some() {
+            return Err(PaymentError::PaymentAlreadyExists);
+        }
+
+        let expires_at = env.ledger().timestamp().saturating_add(ttl);
+
+        let pr = PaymentRequest {
+            request_id,
+            merchant,
+            token,
+            amount,
+            memo,
+            expires_at,
+        };
+
+        storage::set_payment_request(&env, &pr);
+        Ok(())
+    }
+
+    /// Pay a previously created payment request.
+    pub fn pay_payment_request(
+        env: Env,
+        payer: Address,
+        request_id: String,
+    ) -> Result<(), PaymentError> {
+        payer.require_auth();
+
+        let pr = storage::get_payment_request(&env, &request_id)
+            .ok_or(PaymentError::PaymentNotFound)?;
+
+        if env.ledger().timestamp() > pr.expires_at {
+            storage::remove_payment_request(&env, &request_id);
+            return Err(PaymentError::PaymentExpired);
+        }
+
+        // Transfer tokens from payer to merchant
+        let token_client = token::Client::new(&env, &pr.token);
+        token_client.transfer(&payer, &pr.merchant, &pr.amount);
+
+        // Create a PaymentOrder for history
+        let now = env.ledger().timestamp();
+        let payment = PaymentOrder {
+            order_id: pr.request_id.clone(),
+            merchant_address: pr.merchant.clone(),
+            payer: payer.clone(),
+            token: pr.token,
+            amount: pr.amount,
+            status: PaymentStatus::Completed,
+            paid_at: now,
+            refunded_amount: 0,
+            memo: pr.memo,
+        };
+
+        storage::set_payment(&env, &payment);
+        storage::add_merchant_payment_id(&env, &pr.merchant, &pr.request_id);
+        storage::add_payer_payment_id(&env, &payer, &pr.request_id);
+
+        // Update stats
+        let mut stats = storage::get_global_stats(&env);
+        stats.total_payments += 1;
+        stats.total_volume += pr.amount;
+        storage::set_global_stats(&env, &stats);
+
+        // Remove the request as it's paid
+        storage::remove_payment_request(&env, &request_id);
+
+        env.events().publish(("lumenflow", "payment_request_paid"), request_id);
+        Ok(())
+    }
 }
