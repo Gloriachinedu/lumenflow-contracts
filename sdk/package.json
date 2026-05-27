@@ -1,0 +1,22 @@
+{
+  "name": "@lumenflow/sdk",
+  "version": "0.1.0",
+  "description": "LumenFlow TypeScript SDK",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest"
+  },
+  "keywords": [
+    "stellar",
+    "soroban",
+    "lumenflow",
+    "payments"
+  ],
+  "author": "LumenFlow Contributors",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
