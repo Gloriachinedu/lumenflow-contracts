@@ -49,6 +49,17 @@ pub struct PaymentOrder {
     pub memo: String,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaymentRequest {
+    pub request_id: String,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub memo: String,
+    pub expires_at: u64,
+}
+
 // ── Refund ────────────────────────────────────────────────────────────────────
 
 #[contracttype]

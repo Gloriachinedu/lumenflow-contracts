@@ -1,6 +1,6 @@
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
 
-use crate::types::{GlobalStats, Merchant, MultisigPayment, PaymentOrder, RefundRecord};
+use crate::types::{GlobalStats, Merchant, MultisigPayment, PaymentOrder, PaymentRequest, RefundRecord};
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -16,6 +16,7 @@ pub enum DataKey {
     PayerPayments(Address),
     Refund(String),
     Multisig(String),
+    PaymentRequest(String),
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -153,4 +154,25 @@ pub fn set_multisig(env: &Env, ms: &MultisigPayment) {
     env.storage()
         .persistent()
         .set(&DataKey::Multisig(ms.payment_id.clone()), ms);
+}
+
+// ── Payment Request ───────────────────────────────────────────────────────────
+
+pub fn get_payment_request(env: &Env, request_id: &String) -> Option<PaymentRequest> {
+    env.storage()
+        .temporary()
+        .get(&DataKey::PaymentRequest(request_id.clone()))
+}
+
+pub fn set_payment_request(env: &Env, pr: &PaymentRequest) {
+    env.storage().temporary().set(
+        &DataKey::PaymentRequest(pr.request_id.clone()),
+        pr,
+    );
+}
+
+pub fn remove_payment_request(env: &Env, request_id: &String) {
+    env.storage()
+        .temporary()
+        .remove(&DataKey::PaymentRequest(request_id.clone()));
 }

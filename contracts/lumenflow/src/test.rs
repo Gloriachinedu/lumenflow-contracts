@@ -368,12 +368,18 @@ fn test_get_payer_payment_history_with_filter() {
 #[test]
 fn test_pagination_limit() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
-    for i in 0..5u32 {
-        let id = String::from_str(&env, &soroban_sdk::format!("PAG_{}", i));
+    let ids = [
+        str(&env, "PAG_0"),
+        str(&env, "PAG_1"),
+        str(&env, "PAG_2"),
+        str(&env, "PAG_3"),
+        str(&env, "PAG_4"),
+    ];
+    for id in ids.iter() {
         let pub_key = bytes(&env, &[0u8; 32]);
         let sig = bytes(&env, &[0u8; 64]);
         client.process_payment_with_signature(
-            &payer, &id, &merchant, &token, &100, &str(&env, ""), &sig, &pub_key,
+            &payer, id, &merchant, &token, &100, &str(&env, ""), &sig, &pub_key,
         );
     }
 
@@ -465,4 +471,50 @@ fn test_cleanup_expired_payments() {
 
     let removed = client.cleanup_expired_payments(&admin);
     assert_eq!(removed, 1);
+}
+
+#[test]
+fn test_payment_request_success() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let request_id = str(&env, "REQ_123");
+
+    client.create_payment_request(
+        &merchant,
+        &request_id,
+        &token,
+        &500,
+        &str(&env, "Payment Link 1"),
+        &3600, // 1 hour TTL
+    );
+
+    client.pay_payment_request(&payer, &request_id);
+
+    let payment = client.get_payment_by_id(&payer, &request_id);
+    assert_eq!(payment.amount, 500);
+    assert_eq!(payment.memo, str(&env, "Payment Link 1"));
+
+    let stats = client.get_global_payment_stats(&_admin, &None, &None);
+    assert_eq!(stats.total_payments, 1);
+    assert_eq!(stats.total_volume, 500);
+}
+
+#[test]
+fn test_payment_request_expired_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let request_id = str(&env, "REQ_EXP");
+
+    client.create_payment_request(
+        &merchant,
+        &request_id,
+        &token,
+        &500,
+        &str(&env, "Expired"),
+        &10, // 10s TTL
+    );
+
+    // Advance ledger time
+    env.ledger().set_timestamp(env.ledger().timestamp() + 20);
+
+    let result = client.try_pay_payment_request(&payer, &request_id);
+    assert_eq!(result, Err(Ok(PaymentError::PaymentExpired)));
 }
