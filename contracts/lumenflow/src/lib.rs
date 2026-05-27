@@ -21,7 +21,7 @@ use helper::{
 use types::{
     BatchPaymentItem, GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder,
     PaymentPage, PaymentStatus, RefundRecord, RefundStatus, SortField, SortOrder,
-    StatusFilter, Merchant,
+    StatusFilter, Merchant, SuspiciousActivityReason,
 };
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -52,6 +52,18 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         require_admin(&env, &admin)?;
         storage::set_cleanup_period(&env, period);
+        Ok(())
+    }
+
+    /// Set the threshold for unusually large payments (emits suspicious_activity event).
+    pub fn set_large_payment_threshold(
+        env: Env,
+        admin: Address,
+        threshold: i128,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        require_positive(threshold)?;
+        storage::set_large_payment_threshold(&env, threshold);
         Ok(())
     }
 
@@ -192,6 +204,15 @@ impl PaymentProcessingContract {
         stats.total_payments += 1;
         stats.total_volume += amount;
         storage::set_global_stats(&env, &stats);
+
+        // Check for suspicious activity (Issue #96)
+        let threshold = storage::get_large_payment_threshold(&env);
+        if amount >= threshold {
+            env.events().publish(
+                ("lumenflow", "suspicious_activity"),
+                (SuspiciousActivityReason::LargePayment, payer.clone(), amount),
+            );
+        }
 
         env.events().publish(
             ("lumenflow", "payment_processed"),

@@ -155,3 +155,13 @@ pub struct GlobalStats {
     pub total_refund_volume: i128,
     pub active_merchants: u32,
 }
+
+// ── Suspicious Activity ───────────────────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SuspiciousActivityReason {
+    LargePayment = 1,
+    RapidRefunds = 2,
+    ManyAuthFailures = 3,
+}
