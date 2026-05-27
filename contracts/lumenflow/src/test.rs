@@ -244,6 +244,21 @@ fn make_payment(
 }
 
 #[test]
+fn test_get_payment_summary() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_SUMMARY", 1_000);
+
+    // Call summary without any auth
+    let summary = client.get_payment_summary(&str(&env, "ORDER_SUMMARY"));
+
+    assert_eq!(summary.order_id, str(&env, "ORDER_SUMMARY"));
+    assert_eq!(summary.merchant_address, merchant);
+    assert_eq!(summary.amount, 1_000);
+    assert_eq!(summary.token, token);
+    assert!(matches!(summary.status, crate::types::PaymentStatus::Completed));
+}
+
+#[test]
 fn test_successful_refund_flow() {
     let (env, client, admin, merchant, payer, token) = setup_payment_env();
     make_payment(&env, &client, &merchant, &payer, &token, "ORDER_R1", 1_000);
@@ -368,8 +383,9 @@ fn test_get_payer_payment_history_with_filter() {
 #[test]
 fn test_pagination_limit() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
-    for i in 0..5u32 {
-        let id = String::from_str(&env, &soroban_sdk::format!("PAG_{}", i));
+    let ids = ["PAG_0", "PAG_1", "PAG_2", "PAG_3", "PAG_4"];
+    for id_str in ids {
+        let id = String::from_str(&env, id_str);
         let pub_key = bytes(&env, &[0u8; 32]);
         let sig = bytes(&env, &[0u8; 64]);
         client.process_payment_with_signature(

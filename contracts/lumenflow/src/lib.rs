@@ -10,6 +10,7 @@ mod test;
 
 use soroban_sdk::{
     contract, contractimpl, token, Address, Bytes, Env, String, Vec,
+    xdr::ToXdr,
 };
 
 use error::PaymentError;
@@ -19,7 +20,7 @@ use helper::{
 };
 use types::{
     GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder, PaymentPage,
-    PaymentStatus, RefundRecord, RefundStatus, SortField, SortOrder, StatusFilter,
+    PaymentStatus, PaymentSummary, RefundRecord, RefundStatus, SortField, SortOrder, StatusFilter,
     Merchant,
 };
 
@@ -150,7 +151,7 @@ impl PaymentProcessingContract {
 
         // Build payload: order_id bytes + amount bytes
         let mut payload = Bytes::new(&env);
-        payload.append(&order_id.to_xdr(&env));
+        payload.append(&order_id.clone().to_xdr(&env));
         payload.append(&Bytes::from_slice(&env, &amount.to_be_bytes()));
         verify_signature(&env, &merchant_public_key, &payload, &signature)?;
 
@@ -208,6 +209,24 @@ impl PaymentProcessingContract {
             return Err(PaymentError::Unauthorized);
         }
         Ok(payment)
+    }
+
+    /// Get a public summary of a payment by order ID. No auth required.
+    pub fn get_payment_summary(
+        env: Env,
+        order_id: String,
+    ) -> Result<PaymentSummary, PaymentError> {
+        let payment = storage::get_payment(&env, &order_id)
+            .ok_or(PaymentError::PaymentNotFound)?;
+
+        Ok(PaymentSummary {
+            order_id: payment.order_id,
+            merchant_address: payment.merchant_address,
+            amount: payment.amount,
+            token: payment.token,
+            status: payment.status,
+            paid_at: payment.paid_at,
+        })
     }
 
     /// Update payment status after a partial refund.
