@@ -14,6 +14,13 @@ Be respectful, inclusive, and constructive. We follow the [Contributor Covenant]
 4. Make your changes, add tests, and ensure everything passes.
 5. Open a pull request against `main`.
 
+### Toolchain Version
+
+We pin the Rust toolchain to a specific stable version in `rust-toolchain.toml` and `.github/workflows/ci.yml`. To update the version:
+1. Update `channel` in `rust-toolchain.toml`.
+2. Update the `toolchain` version and the `Verify toolchain version` step in `.github/workflows/ci.yml`.
+3. Update this document if the recommended setup changes.
+
 ## Development Setup
 
 ```bash

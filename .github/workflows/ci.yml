@@ -18,10 +18,14 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.87.0
           targets: wasm32-unknown-unknown
           components: rustfmt, clippy
+
+      - name: Verify toolchain version
+        run: rustc --version | grep "1.87.0"
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -46,9 +50,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.87.0
           targets: wasm32-unknown-unknown
+
+      - name: Verify toolchain version
+        run: rustc --version | grep "1.87.0"
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -71,9 +79,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.87.0
           targets: wasm32-unknown-unknown
+
+      - name: Verify toolchain version
+        run: rustc --version | grep "1.87.0"
 
       - name: Cache cargo registry
         uses: actions/cache@v4
