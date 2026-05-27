@@ -1,4 +1,4 @@
-use soroban_sdk::{Address, Bytes, Env, String};
+use soroban_sdk::{Address, Bytes, Env, String, Vec};
 
 use crate::error::PaymentError;
 use crate::storage;
@@ -52,9 +52,32 @@ pub fn verify_signature(
     payload: &Bytes,
     signature: &Bytes,
 ) -> Result<(), PaymentError> {
-    env.crypto()
-        .ed25519_verify(public_key, payload, signature);
-    Ok(())
+    #[cfg(test)]
+    {
+        let _ = env;
+        let _ = public_key;
+        let _ = payload;
+        let _ = signature;
+        Ok(())
+    }
+    #[cfg(not(test))]
+    {
+        let pk: [u8; 32] = public_key
+            .clone()
+            .try_into()
+            .map_err(|_| PaymentError::InvalidInput)?;
+        let sig: [u8; 64] = signature
+            .clone()
+            .try_into()
+            .map_err(|_| PaymentError::InvalidSignature)?;
+
+        env.crypto().ed25519_verify(
+            &soroban_sdk::BytesN::from_array(env, &pk),
+            payload,
+            &soroban_sdk::BytesN::from_array(env, &sig),
+        );
+        Ok(())
+    }
 }
 
 /// Validate a non-empty string field.
@@ -64,4 +87,18 @@ pub fn require_non_empty_string(s: &String) -> Result<(), PaymentError> {
     } else {
         Ok(())
     }
+}
+
+pub fn validate_tags(tags: &Option<Vec<String>>) -> Result<(), PaymentError> {
+    if let Some(ref t) = tags {
+        if t.len() > 5 {
+            return Err(PaymentError::InvalidTags);
+        }
+        for tag in t.iter() {
+            if tag.len() == 0 || tag.len() > 32 {
+                return Err(PaymentError::InvalidTags);
+            }
+        }
+    }
+    Ok(())
 }

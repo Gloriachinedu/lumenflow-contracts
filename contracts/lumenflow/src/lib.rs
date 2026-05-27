@@ -9,13 +9,13 @@ mod types;
 mod test;
 
 use soroban_sdk::{
-    contract, contractimpl, token, Address, Bytes, Env, String, Vec,
+    contract, contractimpl, token, xdr::ToXdr, Address, Bytes, Env, String, Vec,
 };
 
 use error::PaymentError;
 use helper::{
     require_admin, require_admin_or, require_non_empty_string, require_positive,
-    require_valid_limit, verify_signature, REFUND_WINDOW_SECS,
+    require_valid_limit, validate_tags, verify_signature, REFUND_WINDOW_SECS,
 };
 use types::{
     GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder, PaymentPage,
@@ -131,12 +131,14 @@ impl PaymentProcessingContract {
         token_address: Address,
         amount: i128,
         memo: String,
+        tags: Option<Vec<String>>,
         signature: Bytes,
         merchant_public_key: Bytes,
     ) -> Result<(), PaymentError> {
         payer.require_auth();
         require_positive(amount)?;
         require_non_empty_string(&order_id)?;
+        validate_tags(&tags)?;
 
         if storage::get_payment(&env, &order_id).is_some() {
             return Err(PaymentError::PaymentAlreadyExists);
@@ -150,7 +152,7 @@ impl PaymentProcessingContract {
 
         // Build payload: order_id bytes + amount bytes
         let mut payload = Bytes::new(&env);
-        payload.append(&order_id.to_xdr(&env));
+        payload.append(&order_id.clone().to_xdr(&env));
         payload.append(&Bytes::from_slice(&env, &amount.to_be_bytes()));
         verify_signature(&env, &merchant_public_key, &payload, &signature)?;
 
@@ -169,6 +171,7 @@ impl PaymentProcessingContract {
             paid_at: now,
             refunded_amount: 0,
             memo,
+            tags,
         };
 
         storage::set_payment(&env, &payment);
@@ -695,6 +698,16 @@ impl PaymentProcessingContract {
                 if !matches!(payment.status, PaymentStatus::FullyRefunded) {
                     return false;
                 }
+            }
+        }
+        if let Some(ref tag) = f.tag {
+            match payment.tags {
+                Some(ref tags) => {
+                    if !tags.contains(tag) {
+                        return false;
+                    }
+                }
+                None => return false,
             }
         }
         true

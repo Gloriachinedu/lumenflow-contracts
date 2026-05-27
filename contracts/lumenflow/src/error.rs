@@ -38,4 +38,5 @@ pub enum PaymentError {
     // General
     InvalidInput = 50,
     PaginationLimitExceeded = 51,
+    InvalidTags = 52,
 }

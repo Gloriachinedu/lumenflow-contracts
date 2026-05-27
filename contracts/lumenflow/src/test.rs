@@ -159,6 +159,7 @@ fn test_successful_payment_with_signature() {
         &token,
         &1_000,
         &str(&env, "Test payment"),
+        &None,
         &sig,
         &pub_key,
     );
@@ -180,6 +181,7 @@ fn test_duplicate_order_id_fails() {
         &token,
         &500,
         &str(&env, ""),
+        &None,
         &sig,
         &pub_key,
     );
@@ -191,6 +193,7 @@ fn test_duplicate_order_id_fails() {
         &token,
         &500,
         &str(&env, ""),
+        &None,
         &sig,
         &pub_key,
     );
@@ -212,6 +215,7 @@ fn test_payment_inactive_merchant_fails() {
         &token,
         &100,
         &str(&env, ""),
+        &None,
         &sig,
         &pub_key,
     );
@@ -238,6 +242,7 @@ fn make_payment(
         token,
         &amount,
         &str(env, ""),
+        &None,
         &sig,
         &pub_key,
     );
@@ -351,6 +356,7 @@ fn test_get_payer_payment_history_with_filter() {
         amount_max: Some(1_000),
         token: None,
         status: StatusFilter::Any,
+        tag: None,
     };
 
     let page = client.get_payer_payment_history(
@@ -368,12 +374,18 @@ fn test_get_payer_payment_history_with_filter() {
 #[test]
 fn test_pagination_limit() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
-    for i in 0..5u32 {
-        let id = String::from_str(&env, &soroban_sdk::format!("PAG_{}", i));
+    let ids = [
+        str(&env, "PAG_0"),
+        str(&env, "PAG_1"),
+        str(&env, "PAG_2"),
+        str(&env, "PAG_3"),
+        str(&env, "PAG_4"),
+    ];
+    for id in ids.iter() {
         let pub_key = bytes(&env, &[0u8; 32]);
         let sig = bytes(&env, &[0u8; 64]);
         client.process_payment_with_signature(
-            &payer, &id, &merchant, &token, &100, &str(&env, ""), &sig, &pub_key,
+            &payer, id, &merchant, &token, &100, &str(&env, ""), &None, &sig, &pub_key,
         );
     }
 
@@ -465,4 +477,105 @@ fn test_cleanup_expired_payments() {
 
     let removed = client.cleanup_expired_payments(&admin);
     assert_eq!(removed, 1);
+}
+
+#[test]
+fn test_payment_tags_and_filtering() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    let mut tags = Vec::new(&env);
+    tags.push_back(str(&env, "electronics"));
+    tags.push_back(str(&env, "sale"));
+
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "TAG_ORDER_1"),
+        &merchant,
+        &token,
+        &2000,
+        &str(&env, "Tagged payment"),
+        &Some(tags.clone()),
+        &sig,
+        &pub_key,
+    );
+
+    let payment = client.get_payment_by_id(&payer, &str(&env, "TAG_ORDER_1"));
+    assert_eq!(payment.tags, Some(tags));
+
+    // Filter by tag
+    let filter = PaymentFilter {
+        date_start: None,
+        date_end: None,
+        amount_min: None,
+        amount_max: None,
+        token: None,
+        status: StatusFilter::Any,
+        tag: Some(str(&env, "electronics")),
+    };
+
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &Some(filter.clone()),
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+    assert_eq!(page.total, 1);
+
+    // Filter by non-existent tag
+    let mut filter_none = filter.clone();
+    filter_none.tag = Some(str(&env, "fashion"));
+    let page_none = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &Some(filter_none),
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+    assert_eq!(page_none.total, 0);
+}
+
+#[test]
+fn test_invalid_tags_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // Too many tags
+    let mut too_many_tags = Vec::new(&env);
+    for _ in 0..6 {
+        too_many_tags.push_back(str(&env, "tag"));
+    }
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "FAIL_TAGS_1"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &Some(too_many_tags),
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidTags)));
+
+    // Tag too long
+    let mut long_tag = Vec::new(&env);
+    long_tag.push_back(str(&env, "this_is_a_very_long_tag_that_exceeds_32_characters"));
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "FAIL_TAGS_2"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &Some(long_tag),
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidTags)));
 }
