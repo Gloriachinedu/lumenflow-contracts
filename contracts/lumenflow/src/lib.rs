@@ -38,6 +38,12 @@ impl PaymentProcessingContract {
         if storage::get_admin(&env).is_some() {
             return Err(PaymentError::AdminAlreadySet);
         }
+
+        // Prevent setting admin to a contract address or zero address (Issue #83)
+        if admin.contract_id().is_some() {
+            return Err(PaymentError::InvalidAdminAddress);
+        }
+
         admin.require_auth();
         storage::set_admin(&env, &admin);
         env.events().publish(("lumenflow", "admin_set"), admin);
