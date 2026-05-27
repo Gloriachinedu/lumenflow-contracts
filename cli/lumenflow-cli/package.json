@@ -1,0 +1,13 @@
+{
+  "name": "@lumenflow/cli",
+  "version": "0.1.0",
+  "description": "LumenFlow CLI tool",
+  "bin": {
+    "lumenflow": "bin/lumenflow"
+  },
+  "scripts": {
+    "postinstall": "node scripts/install.js"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}
