@@ -17,6 +17,7 @@ pub enum DataKey {
     Refund(String),
     Multisig(String),
     PaymentRequest(String),
+    LargePaymentThreshold,
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -40,6 +41,21 @@ pub fn get_cleanup_period(env: &Env) -> u64 {
 
 pub fn set_cleanup_period(env: &Env, period: u64) {
     env.storage().instance().set(&DataKey::CleanupPeriod, &period);
+}
+
+// ── Suspicious Activity Thresholds ────────────────────────────────────────────
+
+pub fn get_large_payment_threshold(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::LargePaymentThreshold)
+        .unwrap_or(10_000_000) // Default 10M units
+}
+
+pub fn set_large_payment_threshold(env: &Env, threshold: i128) {
+    env.storage()
+        .instance()
+        .set(&DataKey::LargePaymentThreshold, &threshold);
 }
 
 // ── Global stats ──────────────────────────────────────────────────────────────

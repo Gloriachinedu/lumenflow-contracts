@@ -533,6 +533,23 @@ fn test_global_stats_updated() {
     assert_eq!(stats.active_merchants, 1);
 }
 
+#[test]
+fn test_suspicious_activity_event_emitted() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    
+    // Set threshold to 500
+    client.set_large_payment_threshold(&admin, &500);
+
+    // This payment (1000) should trigger the event
+    make_payment(&env, &client, &merchant, &payer, &token, "LARGE_001", 1_000);
+
+    let events = env.events().all();
+    let suspicious_event = events.iter().find(|e| {
+        e.topics.get(1).unwrap() == soroban_sdk::Symbol::new(&env, "suspicious_activity")
+    });
+    assert!(suspicious_event.is_some());
+}
+
 // ── Cleanup tests ─────────────────────────────────────────────────────────────
 
 #[test]
