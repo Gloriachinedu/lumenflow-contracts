@@ -14,6 +14,13 @@ Be respectful, inclusive, and constructive. We follow the [Contributor Covenant]
 4. Make your changes, add tests, and ensure everything passes.
 5. Open a pull request against `main`.
 
+### Toolchain Version
+
+We pin the Rust toolchain to a specific stable version in `rust-toolchain.toml` and `.github/workflows/ci.yml`. To update the version:
+1. Update `channel` in `rust-toolchain.toml`.
+2. Update the `toolchain` version and the `Verify toolchain version` step in `.github/workflows/ci.yml`.
+3. Update this document if the recommended setup changes.
+
 ## Development Setup
 
 ```bash
@@ -65,6 +72,17 @@ test: add edge cases for multisig threshold
 - Fill out the PR template completely.
 - Link the related issue with `Closes #N`.
 - All CI checks must pass before merge.
+
+## Team Structure
+
+To ensure high-quality reviews and maintainability, the project is organized into specialized teams:
+
+- **Smart Contract Team** (`@Gloriachinedu/smart-contract-team`): Responsible for core logic in `contracts/`.
+- **DevOps Team** (`@Gloriachinedu/devops-team`): Manages deployment `scripts/` and CI/CD.
+- **Documentation Team** (`@Gloriachinedu/documentation-team`): Maintains project documentation and the `docs/` folder.
+- **SDK Team** (`@Gloriachinedu/sdk-team`): Responsible for the SDK layer (once created).
+
+Pull requests are automatically assigned to the relevant CODEOWNERS. At least one approval from a CODEOWNER is required for all PRs merging into `main`.
 
 ## Reporting Security Issues
 

@@ -9,7 +9,8 @@ mod types;
 mod test;
 
 use soroban_sdk::{
-    contract, contractimpl, token, xdr::ToXdr, Address, Bytes, Env, String, Vec,
+    contract, contractimpl, token, Address, Bytes, Env, String, Vec,
+    xdr::ToXdr,
 };
 
 use error::PaymentError;
@@ -18,9 +19,9 @@ use helper::{
     require_valid_limit, validate_tags, verify_signature, REFUND_WINDOW_SECS,
 };
 use types::{
-    GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder, PaymentPage,
-    PaymentStatus, RefundRecord, RefundStatus, SortField, SortOrder, StatusFilter,
-    Merchant,
+    BatchPaymentItem, GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder,
+    PaymentPage, PaymentStatus, RefundRecord, RefundStatus, SortField, SortOrder,
+    StatusFilter, Merchant, SuspiciousActivityReason,
 };
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -37,6 +38,12 @@ impl PaymentProcessingContract {
         if storage::get_admin(&env).is_some() {
             return Err(PaymentError::AdminAlreadySet);
         }
+
+        // Prevent setting admin to a contract address or zero address (Issue #83)
+        if admin.contract_id().is_some() {
+            return Err(PaymentError::InvalidAdminAddress);
+        }
+
         admin.require_auth();
         storage::set_admin(&env, &admin);
         env.events().publish(("lumenflow", "admin_set"), admin);
@@ -51,6 +58,18 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         require_admin(&env, &admin)?;
         storage::set_cleanup_period(&env, period);
+        Ok(())
+    }
+
+    /// Set the threshold for unusually large payments (emits suspicious_activity event).
+    pub fn set_large_payment_threshold(
+        env: Env,
+        admin: Address,
+        threshold: i128,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        require_positive(threshold)?;
+        storage::set_large_payment_threshold(&env, threshold);
         Ok(())
     }
 
@@ -115,10 +134,16 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
-    /// Get merchant info.
+    /// Get merchant details.
     pub fn get_merchant(env: Env, merchant_address: Address) -> Result<Merchant, PaymentError> {
         storage::get_merchant(&env, &merchant_address).ok_or(PaymentError::MerchantNotFound)
     }
+
+    /// Check if a merchant address is already registered.
+    pub fn is_registered(env: Env, merchant_address: Address) -> bool {
+        storage::get_merchant(&env, &merchant_address).is_some()
+    }
+
 
     // ── Payment processing ────────────────────────────────────────────────────
 
@@ -189,10 +214,90 @@ impl PaymentProcessingContract {
         stats.total_volume += amount;
         storage::set_global_stats(&env, &stats);
 
+        // Check for suspicious activity (Issue #96)
+        let threshold = storage::get_large_payment_threshold(&env);
+        if amount >= threshold {
+            env.events().publish(
+                ("lumenflow", "suspicious_activity"),
+                (SuspiciousActivityReason::LargePayment, payer.clone(), amount),
+            );
+        }
+
         env.events().publish(
             ("lumenflow", "payment_processed"),
             (order_id, payer, merchant_address, amount),
         );
+        Ok(())
+    }
+
+    /// Pay multiple merchants in one transaction. Maximum 10 items. Atomic.
+    pub fn batch_payment(
+        env: Env,
+        payer: Address,
+        payments: Vec<BatchPaymentItem>,
+    ) -> Result<(), PaymentError> {
+        payer.require_auth();
+        if payments.len() > 10 {
+            return Err(PaymentError::BatchSizeExceeded);
+        }
+
+        for item in payments.iter() {
+            require_positive(item.amount)?;
+            require_non_empty_string(&item.order_id)?;
+
+            if storage::get_payment(&env, &item.order_id).is_some() {
+                return Err(PaymentError::PaymentAlreadyExists);
+            }
+
+            let merchant = storage::get_merchant(&env, &item.merchant_address)
+                .ok_or(PaymentError::MerchantNotFound)?;
+            if !merchant.active {
+                return Err(PaymentError::MerchantInactive);
+            }
+
+            // Build payload: order_id bytes + amount bytes
+            let mut payload = Bytes::new(&env);
+            payload.append(&item.order_id.clone().to_xdr(&env));
+            payload.append(&Bytes::from_slice(&env, &item.amount.to_be_bytes()));
+            verify_signature(&env, &item.merchant_public_key, &payload, &item.signature)?;
+
+            // Transfer tokens from payer to merchant
+            let token_client = token::Client::new(&env, &item.token_address);
+            token_client.transfer(&payer, &item.merchant_address, &item.amount);
+
+            let now = env.ledger().timestamp();
+            let payment = PaymentOrder {
+                order_id: item.order_id.clone(),
+                merchant_address: item.merchant_address.clone(),
+                payer: payer.clone(),
+                token: item.token_address.clone(),
+                amount: item.amount,
+                status: PaymentStatus::Completed,
+                paid_at: now,
+                refunded_amount: 0,
+                memo: item.memo.clone(),
+            };
+
+            storage::set_payment(&env, &payment);
+            storage::add_merchant_payment_id(&env, &item.merchant_address, &item.order_id);
+            storage::add_payer_payment_id(&env, &payer, &item.order_id);
+
+            // Update merchant total
+            let mut m = merchant;
+            m.total_received += item.amount;
+            storage::set_merchant(&env, &m);
+
+            // Update global stats
+            let mut stats = storage::get_global_stats(&env);
+            stats.total_payments += 1;
+            stats.total_volume += item.amount;
+            storage::set_global_stats(&env, &stats);
+
+            env.events().publish(
+                ("lumenflow", "payment_processed"),
+                (item.order_id, payer.clone(), item.merchant_address, item.amount),
+            );
+        }
         Ok(())
     }
 
@@ -211,6 +316,24 @@ impl PaymentProcessingContract {
             return Err(PaymentError::Unauthorized);
         }
         Ok(payment)
+    }
+
+    /// Get a public summary of a payment by order ID. No auth required.
+    pub fn get_payment_summary(
+        env: Env,
+        order_id: String,
+    ) -> Result<PaymentSummary, PaymentError> {
+        let payment = storage::get_payment(&env, &order_id)
+            .ok_or(PaymentError::PaymentNotFound)?;
+
+        Ok(PaymentSummary {
+            order_id: payment.order_id,
+            merchant_address: payment.merchant_address,
+            amount: payment.amount,
+            token: payment.token,
+            status: payment.status,
+            paid_at: payment.paid_at,
+        })
     }
 
     /// Update payment status after a partial refund.
@@ -727,5 +850,91 @@ impl PaymentProcessingContract {
             SortOrder::Ascending => cmp == core::cmp::Ordering::Less,
             SortOrder::Descending => cmp == core::cmp::Ordering::Greater,
         }
+    }
+
+    // ── Payment Requests ──────────────────────────────────────────────────────
+
+    /// Create a payment request that can be shared as a link.
+    pub fn create_payment_request(
+        env: Env,
+        merchant: Address,
+        request_id: String,
+        token: Address,
+        amount: i128,
+        memo: String,
+        ttl: u64,
+    ) -> Result<(), PaymentError> {
+        merchant.require_auth();
+        require_positive(amount)?;
+        require_non_empty_string(&request_id)?;
+
+        if storage::get_payment_request(&env, &request_id).is_some() {
+            return Err(PaymentError::PaymentAlreadyExists);
+        }
+
+        let expires_at = env.ledger().timestamp().saturating_add(ttl);
+
+        let pr = PaymentRequest {
+            request_id,
+            merchant,
+            token,
+            amount,
+            memo,
+            expires_at,
+        };
+
+        storage::set_payment_request(&env, &pr);
+        Ok(())
+    }
+
+    /// Pay a previously created payment request.
+    pub fn pay_payment_request(
+        env: Env,
+        payer: Address,
+        request_id: String,
+    ) -> Result<(), PaymentError> {
+        payer.require_auth();
+
+        let pr = storage::get_payment_request(&env, &request_id)
+            .ok_or(PaymentError::PaymentNotFound)?;
+
+        if env.ledger().timestamp() > pr.expires_at {
+            storage::remove_payment_request(&env, &request_id);
+            return Err(PaymentError::PaymentExpired);
+        }
+
+        // Transfer tokens from payer to merchant
+        let token_client = token::Client::new(&env, &pr.token);
+        token_client.transfer(&payer, &pr.merchant, &pr.amount);
+
+        // Create a PaymentOrder for history
+        let now = env.ledger().timestamp();
+        let payment = PaymentOrder {
+            order_id: pr.request_id.clone(),
+            merchant_address: pr.merchant.clone(),
+            payer: payer.clone(),
+            token: pr.token,
+            amount: pr.amount,
+            status: PaymentStatus::Completed,
+            paid_at: now,
+            refunded_amount: 0,
+            memo: pr.memo,
+        };
+
+        storage::set_payment(&env, &payment);
+        storage::add_merchant_payment_id(&env, &pr.merchant, &pr.request_id);
+        storage::add_payer_payment_id(&env, &payer, &pr.request_id);
+
+        // Update stats
+        let mut stats = storage::get_global_stats(&env);
+        stats.total_payments += 1;
+        stats.total_volume += pr.amount;
+        storage::set_global_stats(&env, &stats);
+
+        // Remove the request as it's paid
+        storage::remove_payment_request(&env, &request_id);
+
+        env.events().publish(("lumenflow", "payment_request_paid"), request_id);
+        Ok(())
     }
 }

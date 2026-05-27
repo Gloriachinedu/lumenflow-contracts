@@ -5,6 +5,7 @@
 [![CI](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml/badge.svg)](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Stellar](https://img.shields.io/badge/Stellar-Soroban-blueviolet)](https://soroban.stellar.org)
+[![Discord](https://img.shields.io/discord/123456789012345678?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/lumenflow)
 
 ---
 
@@ -76,6 +77,17 @@ lumenflow-contracts/
 ├── LICENSE
 └── SECURITY.md
 ```
+
+## Merchant Onboarding
+
+New merchants can register through the following flow:
+
+1. **Connect Wallet**: Ensure your Stellar wallet is connected.
+2. **Check Registration**: Call `is_registered(address)` to check if you already have a profile.
+3. **Register**: Call `register_merchant` with your business details and category.
+4. **Verification**: Upon success, you will be redirected to the dashboard where you can start accepting payments.
+
+Existing profiles can be retrieved using `get_merchant(address)`.
 
 ---
 
@@ -347,6 +359,16 @@ stellar network container restart local
 **Insufficient XLM for fees:** Fund your account via Friendbot (testnet) or acquire XLM (mainnet).
 
 **Test failures:** Ensure `soroban-sdk` version in `Cargo.toml` matches `rust-toolchain.toml` channel.
+
+---
+
+## Community & Support
+
+Need help or want to discuss LumenFlow?
+
+- **Discord Server:** Join our [Discord community](https://discord.gg/lumenflow) to chat with developers and other users.
+- **GitHub Discussions:** Ask questions and share ideas in [GitHub Discussions](https://github.com/Gloriachinedu/lumenflow-contracts/discussions).
+- **Support Guidelines:** See [SUPPORT.md](SUPPORT.md) for details on where to get help and how to report bugs.
 
 ---
 

@@ -1,6 +1,6 @@
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
 
-use crate::types::{GlobalStats, Merchant, MultisigPayment, PaymentOrder, RefundRecord};
+use crate::types::{GlobalStats, Merchant, MultisigPayment, PaymentOrder, PaymentRequest, RefundRecord};
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -16,6 +16,8 @@ pub enum DataKey {
     PayerPayments(Address),
     Refund(String),
     Multisig(String),
+    PaymentRequest(String),
+    LargePaymentThreshold,
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -39,6 +41,21 @@ pub fn get_cleanup_period(env: &Env) -> u64 {
 
 pub fn set_cleanup_period(env: &Env, period: u64) {
     env.storage().instance().set(&DataKey::CleanupPeriod, &period);
+}
+
+// ── Suspicious Activity Thresholds ────────────────────────────────────────────
+
+pub fn get_large_payment_threshold(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::LargePaymentThreshold)
+        .unwrap_or(10_000_000) // Default 10M units
+}
+
+pub fn set_large_payment_threshold(env: &Env, threshold: i128) {
+    env.storage()
+        .instance()
+        .set(&DataKey::LargePaymentThreshold, &threshold);
 }
 
 // ── Global stats ──────────────────────────────────────────────────────────────
@@ -153,4 +170,25 @@ pub fn set_multisig(env: &Env, ms: &MultisigPayment) {
     env.storage()
         .persistent()
         .set(&DataKey::Multisig(ms.payment_id.clone()), ms);
+}
+
+// ── Payment Request ───────────────────────────────────────────────────────────
+
+pub fn get_payment_request(env: &Env, request_id: &String) -> Option<PaymentRequest> {
+    env.storage()
+        .temporary()
+        .get(&DataKey::PaymentRequest(request_id.clone()))
+}
+
+pub fn set_payment_request(env: &Env, pr: &PaymentRequest) {
+    env.storage().temporary().set(
+        &DataKey::PaymentRequest(pr.request_id.clone()),
+        pr,
+    );
+}
+
+pub fn remove_payment_request(env: &Env, request_id: &String) {
+    env.storage()
+        .temporary()
+        .remove(&DataKey::PaymentRequest(request_id.clone()));
 }

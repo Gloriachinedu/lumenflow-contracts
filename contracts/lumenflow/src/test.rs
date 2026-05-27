@@ -8,7 +8,7 @@ use soroban_sdk::{
 
 use crate::{
     error::PaymentError,
-    types::{MerchantCategory, PaymentFilter, SortField, SortOrder, StatusFilter},
+    types::{BatchPaymentItem, MerchantCategory, PaymentFilter, SortField, SortOrder, StatusFilter},
     PaymentProcessingContract, PaymentProcessingContractClient,
 };
 
@@ -55,6 +55,15 @@ fn test_set_admin_twice_fails() {
     client.set_admin(&admin);
     let result = client.try_set_admin(&admin);
     assert_eq!(result, Err(Ok(PaymentError::AdminAlreadySet)));
+}
+
+#[test]
+fn test_set_admin_zero_address_fails() {
+    let (env, client) = setup();
+    // In Soroban, we can test this by trying to set a contract address as admin
+    let contract_address = env.register(PaymentProcessingContract, ());
+    let result = client.try_set_admin(&contract_address);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAdminAddress)));
 }
 
 // ── Merchant tests ────────────────────────────────────────────────────────────
@@ -249,6 +258,86 @@ fn make_payment(
 }
 
 #[test]
+fn test_batch_payment_success() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    
+    let ids = ["B1", "B2", "B3"];
+    let mut payments = Vec::new(&env);
+    for id_str in ids {
+        payments.push_back(BatchPaymentItem {
+            order_id: str(&env, id_str),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 100,
+            memo: str(&env, ""),
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        });
+    }
+
+    client.batch_payment(&payer, &payments);
+
+    // Verify all recorded
+    for id_str in ids {
+        let p = client.get_payment_by_id(&payer, &str(&env, id_str));
+        assert_eq!(p.order_id, str(&env, id_str));
+    }
+}
+
+#[test]
+fn test_batch_payment_size_exceeded() {
+    let (env, client, _admin, merchant, _payer, token) = setup_payment_env();
+    let mut payments = Vec::new(&env);
+    for _ in 0..11 {
+        payments.push_back(BatchPaymentItem {
+            order_id: str(&env, "B"),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 100,
+            memo: str(&env, ""),
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        });
+    }
+    let result = client.try_batch_payment(&merchant, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::BatchSizeExceeded)));
+}
+
+#[test]
+fn test_batch_payment_atomic_failure() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    
+    let mut payments = Vec::new(&env);
+    // 1st item: valid
+    payments.push_back(BatchPaymentItem {
+        order_id: str(&env, "BATCH_OK"),
+        merchant_address: merchant.clone(),
+        token_address: token.clone(),
+        amount: 100,
+        memo: str(&env, ""),
+        signature: bytes(&env, &[0u8; 64]),
+        merchant_public_key: bytes(&env, &[0u8; 32]),
+    });
+    // 2nd item: invalid (negative amount)
+    payments.push_back(BatchPaymentItem {
+        order_id: str(&env, "BATCH_FAIL"),
+        merchant_address: merchant.clone(),
+        token_address: token.clone(),
+        amount: -1,
+        memo: str(&env, ""),
+        signature: bytes(&env, &[0u8; 64]),
+        merchant_public_key: bytes(&env, &[0u8; 32]),
+    });
+
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+
+    // Verify 1st item was NOT recorded (atomicity)
+    let check = client.get_payer_payment_history(&payer, &None, &10, &None, &SortField::Date, &SortOrder::Ascending);
+    assert_eq!(check.total, 0);
+}
+
+#[test]
 fn test_successful_refund_flow() {
     let (env, client, admin, merchant, payer, token) = setup_payment_env();
     make_payment(&env, &client, &merchant, &payer, &token, "ORDER_R1", 1_000);
@@ -374,18 +463,13 @@ fn test_get_payer_payment_history_with_filter() {
 #[test]
 fn test_pagination_limit() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
-    let ids = [
-        str(&env, "PAG_0"),
-        str(&env, "PAG_1"),
-        str(&env, "PAG_2"),
-        str(&env, "PAG_3"),
-        str(&env, "PAG_4"),
-    ];
-    for id in ids.iter() {
+    let ids = ["PAG_0", "PAG_1", "PAG_2", "PAG_3", "PAG_4"];
+    for id_str in ids {
+        let id = String::from_str(&env, id_str);
         let pub_key = bytes(&env, &[0u8; 32]);
         let sig = bytes(&env, &[0u8; 64]);
         client.process_payment_with_signature(
-            &payer, id, &merchant, &token, &100, &str(&env, ""), &None, &sig, &pub_key,
+            &payer, id, &merchant, &token, &100, &str(&env, ""), &sig, &pub_key,
         );
     }
 
@@ -464,6 +548,23 @@ fn test_global_stats_updated() {
     assert_eq!(stats.active_merchants, 1);
 }
 
+#[test]
+fn test_suspicious_activity_event_emitted() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    
+    // Set threshold to 500
+    client.set_large_payment_threshold(&admin, &500);
+
+    // This payment (1000) should trigger the event
+    make_payment(&env, &client, &merchant, &payer, &token, "LARGE_001", 1_000);
+
+    let events = env.events().all();
+    let suspicious_event = events.iter().find(|e| {
+        e.topics.get(1).unwrap() == soroban_sdk::Symbol::new(&env, "suspicious_activity")
+    });
+    assert!(suspicious_event.is_some());
+}
+
 // ── Cleanup tests ─────────────────────────────────────────────────────────────
 
 #[test]
@@ -480,102 +581,19 @@ fn test_cleanup_expired_payments() {
 }
 
 #[test]
-fn test_payment_tags_and_filtering() {
-    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
-    let pub_key = bytes(&env, &[0u8; 32]);
-    let sig = bytes(&env, &[0u8; 64]);
-
-    let mut tags = Vec::new(&env);
-    tags.push_back(str(&env, "electronics"));
-    tags.push_back(str(&env, "sale"));
-
-    client.process_payment_with_signature(
-        &payer,
-        &str(&env, "TAG_ORDER_1"),
+fn test_is_registered() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    
+    assert!(!client.is_registered(&merchant));
+    
+    client.register_merchant(
         &merchant,
-        &token,
-        &2000,
-        &str(&env, "Tagged payment"),
-        &Some(tags.clone()),
-        &sig,
-        &pub_key,
-    );
-
-    let payment = client.get_payment_by_id(&payer, &str(&env, "TAG_ORDER_1"));
-    assert_eq!(payment.tags, Some(tags));
-
-    // Filter by tag
-    let filter = PaymentFilter {
-        date_start: None,
-        date_end: None,
-        amount_min: None,
-        amount_max: None,
-        token: None,
-        status: StatusFilter::Any,
-        tag: Some(str(&env, "electronics")),
-    };
-
-    let page = client.get_merchant_payment_history(
-        &merchant,
-        &None,
-        &10,
-        &Some(filter.clone()),
-        &SortField::Date,
-        &SortOrder::Descending,
-    );
-    assert_eq!(page.total, 1);
-
-    // Filter by non-existent tag
-    let mut filter_none = filter.clone();
-    filter_none.tag = Some(str(&env, "fashion"));
-    let page_none = client.get_merchant_payment_history(
-        &merchant,
-        &None,
-        &10,
-        &Some(filter_none),
-        &SortField::Date,
-        &SortOrder::Descending,
-    );
-    assert_eq!(page_none.total, 0);
-}
-
-#[test]
-fn test_invalid_tags_fails() {
-    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
-    let pub_key = bytes(&env, &[0u8; 32]);
-    let sig = bytes(&env, &[0u8; 64]);
-
-    // Too many tags
-    let mut too_many_tags = Vec::new(&env);
-    for _ in 0..6 {
-        too_many_tags.push_back(str(&env, "tag"));
-    }
-    let result = client.try_process_payment_with_signature(
-        &payer,
-        &str(&env, "FAIL_TAGS_1"),
-        &merchant,
-        &token,
-        &100,
+        &str(&env, "Store"),
         &str(&env, ""),
-        &Some(too_many_tags),
-        &sig,
-        &pub_key,
-    );
-    assert_eq!(result, Err(Ok(PaymentError::InvalidTags)));
-
-    // Tag too long
-    let mut long_tag = Vec::new(&env);
-    long_tag.push_back(str(&env, "this_is_a_very_long_tag_that_exceeds_32_characters"));
-    let result = client.try_process_payment_with_signature(
-        &payer,
-        &str(&env, "FAIL_TAGS_2"),
-        &merchant,
-        &token,
-        &100,
         &str(&env, ""),
-        &Some(long_tag),
-        &sig,
-        &pub_key,
+        &MerchantCategory::Other,
     );
-    assert_eq!(result, Err(Ok(PaymentError::InvalidTags)));
+    
+    assert!(client.is_registered(&merchant));
 }

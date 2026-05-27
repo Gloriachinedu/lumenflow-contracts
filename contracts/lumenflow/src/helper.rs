@@ -52,32 +52,20 @@ pub fn verify_signature(
     payload: &Bytes,
     signature: &Bytes,
 ) -> Result<(), PaymentError> {
+    let pk_bytes: soroban_sdk::BytesN<32> = public_key.clone().try_into().map_err(|_| PaymentError::InvalidSignature)?;
+    let sig_bytes: soroban_sdk::BytesN<64> = signature.clone().try_into().map_err(|_| PaymentError::InvalidSignature)?;
+
     #[cfg(test)]
     {
-        let _ = env;
-        let _ = public_key;
-        let _ = payload;
-        let _ = signature;
-        Ok(())
+        // Skip verification for mock zeros in tests
+        if public_key.len() == 32 && signature.len() == 64 {
+            return Ok(());
+        }
     }
-    #[cfg(not(test))]
-    {
-        let pk: [u8; 32] = public_key
-            .clone()
-            .try_into()
-            .map_err(|_| PaymentError::InvalidInput)?;
-        let sig: [u8; 64] = signature
-            .clone()
-            .try_into()
-            .map_err(|_| PaymentError::InvalidSignature)?;
 
-        env.crypto().ed25519_verify(
-            &soroban_sdk::BytesN::from_array(env, &pk),
-            payload,
-            &soroban_sdk::BytesN::from_array(env, &sig),
-        );
-        Ok(())
-    }
+    env.crypto()
+        .ed25519_verify(&pk_bytes, payload, &sig_bytes);
+    Ok(())
 }
 
 /// Validate a non-empty string field.

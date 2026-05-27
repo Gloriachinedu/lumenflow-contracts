@@ -50,6 +50,18 @@ pub struct PaymentOrder {
     pub tags: Option<Vec<String>>,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchPaymentItem {
+    pub order_id: String,
+    pub merchant_address: Address,
+    pub token_address: Address,
+    pub amount: i128,
+    pub memo: String,
+    pub signature: Bytes,
+    pub merchant_public_key: Bytes,
+}
+
 // ── Refund ────────────────────────────────────────────────────────────────────
 
 #[contracttype]
@@ -144,4 +156,14 @@ pub struct GlobalStats {
     pub total_refunds: u32,
     pub total_refund_volume: i128,
     pub active_merchants: u32,
+}
+
+// ── Suspicious Activity ───────────────────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SuspiciousActivityReason {
+    LargePayment = 1,
+    RapidRefunds = 2,
+    ManyAuthFailures = 3,
 }

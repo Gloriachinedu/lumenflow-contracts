@@ -7,6 +7,7 @@ pub enum PaymentError {
     // Auth
     Unauthorized = 1,
     AdminAlreadySet = 2,
+    InvalidAdminAddress = 3,
 
     // Merchant
     MerchantNotFound = 10,
@@ -38,5 +39,5 @@ pub enum PaymentError {
     // General
     InvalidInput = 50,
     PaginationLimitExceeded = 51,
-    InvalidTags = 52,
+    BatchSizeExceeded = 52,
 }
