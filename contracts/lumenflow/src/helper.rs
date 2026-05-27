@@ -1,4 +1,4 @@
-use soroban_sdk::{Address, Bytes, Env, String};
+use soroban_sdk::{Address, Bytes, Env, String, Vec};
 
 use crate::error::PaymentError;
 use crate::storage;
@@ -75,4 +75,18 @@ pub fn require_non_empty_string(s: &String) -> Result<(), PaymentError> {
     } else {
         Ok(())
     }
+}
+
+pub fn validate_tags(tags: &Option<Vec<String>>) -> Result<(), PaymentError> {
+    if let Some(ref t) = tags {
+        if t.len() > 5 {
+            return Err(PaymentError::InvalidTags);
+        }
+        for tag in t.iter() {
+            if tag.len() == 0 || tag.len() > 32 {
+                return Err(PaymentError::InvalidTags);
+            }
+        }
+    }
+    Ok(())
 }

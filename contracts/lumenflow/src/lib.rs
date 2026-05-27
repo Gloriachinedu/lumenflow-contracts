@@ -16,7 +16,7 @@ use soroban_sdk::{
 use error::PaymentError;
 use helper::{
     require_admin, require_admin_or, require_non_empty_string, require_positive,
-    require_valid_limit, verify_signature, REFUND_WINDOW_SECS,
+    require_valid_limit, validate_tags, verify_signature, REFUND_WINDOW_SECS,
 };
 use types::{
     BatchPaymentItem, GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder,
@@ -156,12 +156,14 @@ impl PaymentProcessingContract {
         token_address: Address,
         amount: i128,
         memo: String,
+        tags: Option<Vec<String>>,
         signature: Bytes,
         merchant_public_key: Bytes,
     ) -> Result<(), PaymentError> {
         payer.require_auth();
         require_positive(amount)?;
         require_non_empty_string(&order_id)?;
+        validate_tags(&tags)?;
 
         if storage::get_payment(&env, &order_id).is_some() {
             return Err(PaymentError::PaymentAlreadyExists);
@@ -194,6 +196,7 @@ impl PaymentProcessingContract {
             paid_at: now,
             refunded_amount: 0,
             memo,
+            tags,
         };
 
         storage::set_payment(&env, &payment);
@@ -818,6 +821,16 @@ impl PaymentProcessingContract {
                 if !matches!(payment.status, PaymentStatus::FullyRefunded) {
                     return false;
                 }
+            }
+        }
+        if let Some(ref tag) = f.tag {
+            match payment.tags {
+                Some(ref tags) => {
+                    if !tags.contains(tag) {
+                        return false;
+                    }
+                }
+                None => return false,
             }
         }
         true

@@ -47,6 +47,7 @@ pub struct PaymentOrder {
     pub paid_at: u64,
     pub refunded_amount: i128,
     pub memo: String,
+    pub tags: Option<Vec<String>>,
 }
 
 #[contracttype]
@@ -134,6 +135,7 @@ pub struct PaymentFilter {
     pub amount_max: Option<i128>,
     pub token: Option<Address>,
     pub status: StatusFilter,
+    pub tag: Option<String>,
 }
 
 #[contracttype]

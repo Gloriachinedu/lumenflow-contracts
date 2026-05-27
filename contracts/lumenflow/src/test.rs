@@ -168,6 +168,7 @@ fn test_successful_payment_with_signature() {
         &token,
         &1_000,
         &str(&env, "Test payment"),
+        &None,
         &sig,
         &pub_key,
     );
@@ -189,6 +190,7 @@ fn test_duplicate_order_id_fails() {
         &token,
         &500,
         &str(&env, ""),
+        &None,
         &sig,
         &pub_key,
     );
@@ -200,6 +202,7 @@ fn test_duplicate_order_id_fails() {
         &token,
         &500,
         &str(&env, ""),
+        &None,
         &sig,
         &pub_key,
     );
@@ -221,6 +224,7 @@ fn test_payment_inactive_merchant_fails() {
         &token,
         &100,
         &str(&env, ""),
+        &None,
         &sig,
         &pub_key,
     );
@@ -247,6 +251,7 @@ fn make_payment(
         token,
         &amount,
         &str(env, ""),
+        &None,
         &sig,
         &pub_key,
     );
@@ -440,6 +445,7 @@ fn test_get_payer_payment_history_with_filter() {
         amount_max: Some(1_000),
         token: None,
         status: StatusFilter::Any,
+        tag: None,
     };
 
     let page = client.get_payer_payment_history(
