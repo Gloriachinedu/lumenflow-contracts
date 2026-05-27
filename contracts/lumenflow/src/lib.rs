@@ -282,6 +282,24 @@ impl PaymentProcessingContract {
         Ok(payment)
     }
 
+    /// Get a public summary of a payment by order ID. No auth required.
+    pub fn get_payment_summary(
+        env: Env,
+        order_id: String,
+    ) -> Result<PaymentSummary, PaymentError> {
+        let payment = storage::get_payment(&env, &order_id)
+            .ok_or(PaymentError::PaymentNotFound)?;
+
+        Ok(PaymentSummary {
+            order_id: payment.order_id,
+            merchant_address: payment.merchant_address,
+            amount: payment.amount,
+            token: payment.token,
+            status: payment.status,
+            paid_at: payment.paid_at,
+        })
+    }
+
     /// Update payment status after a partial refund.
     pub fn update_payment_status(
         env: Env,
