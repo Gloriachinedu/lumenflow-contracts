@@ -8,7 +8,7 @@ use soroban_sdk::{
 
 use crate::{
     error::PaymentError,
-    types::{MerchantCategory, PaymentFilter, SortField, SortOrder, StatusFilter},
+    types::{BatchPaymentItem, MerchantCategory, PaymentFilter, SortField, SortOrder, StatusFilter},
     PaymentProcessingContract, PaymentProcessingContractClient,
 };
 
@@ -244,6 +244,86 @@ fn make_payment(
 }
 
 #[test]
+fn test_batch_payment_success() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    
+    let ids = ["B1", "B2", "B3"];
+    let mut payments = Vec::new(&env);
+    for id_str in ids {
+        payments.push_back(BatchPaymentItem {
+            order_id: str(&env, id_str),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 100,
+            memo: str(&env, ""),
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        });
+    }
+
+    client.batch_payment(&payer, &payments);
+
+    // Verify all recorded
+    for id_str in ids {
+        let p = client.get_payment_by_id(&payer, &str(&env, id_str));
+        assert_eq!(p.order_id, str(&env, id_str));
+    }
+}
+
+#[test]
+fn test_batch_payment_size_exceeded() {
+    let (env, client, _admin, merchant, _payer, token) = setup_payment_env();
+    let mut payments = Vec::new(&env);
+    for _ in 0..11 {
+        payments.push_back(BatchPaymentItem {
+            order_id: str(&env, "B"),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 100,
+            memo: str(&env, ""),
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        });
+    }
+    let result = client.try_batch_payment(&merchant, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::BatchSizeExceeded)));
+}
+
+#[test]
+fn test_batch_payment_atomic_failure() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    
+    let mut payments = Vec::new(&env);
+    // 1st item: valid
+    payments.push_back(BatchPaymentItem {
+        order_id: str(&env, "BATCH_OK"),
+        merchant_address: merchant.clone(),
+        token_address: token.clone(),
+        amount: 100,
+        memo: str(&env, ""),
+        signature: bytes(&env, &[0u8; 64]),
+        merchant_public_key: bytes(&env, &[0u8; 32]),
+    });
+    // 2nd item: invalid (negative amount)
+    payments.push_back(BatchPaymentItem {
+        order_id: str(&env, "BATCH_FAIL"),
+        merchant_address: merchant.clone(),
+        token_address: token.clone(),
+        amount: -1,
+        memo: str(&env, ""),
+        signature: bytes(&env, &[0u8; 64]),
+        merchant_public_key: bytes(&env, &[0u8; 32]),
+    });
+
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+
+    // Verify 1st item was NOT recorded (atomicity)
+    let check = client.get_payer_payment_history(&payer, &None, &10, &None, &SortField::Date, &SortOrder::Ascending);
+    assert_eq!(check.total, 0);
+}
+
+#[test]
 fn test_successful_refund_flow() {
     let (env, client, admin, merchant, payer, token) = setup_payment_env();
     make_payment(&env, &client, &merchant, &payer, &token, "ORDER_R1", 1_000);
@@ -368,8 +448,9 @@ fn test_get_payer_payment_history_with_filter() {
 #[test]
 fn test_pagination_limit() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
-    for i in 0..5u32 {
-        let id = String::from_str(&env, &soroban_sdk::format!("PAG_{}", i));
+    let ids = ["PAG_0", "PAG_1", "PAG_2", "PAG_3", "PAG_4"];
+    for id_str in ids {
+        let id = String::from_str(&env, id_str);
         let pub_key = bytes(&env, &[0u8; 32]);
         let sig = bytes(&env, &[0u8; 64]);
         client.process_payment_with_signature(
