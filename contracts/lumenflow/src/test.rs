@@ -57,6 +57,15 @@ fn test_set_admin_twice_fails() {
     assert_eq!(result, Err(Ok(PaymentError::AdminAlreadySet)));
 }
 
+#[test]
+fn test_set_admin_zero_address_fails() {
+    let (env, client) = setup();
+    // In Soroban, we can test this by trying to set a contract address as admin
+    let contract_address = env.register(PaymentProcessingContract, ());
+    let result = client.try_set_admin(&contract_address);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAdminAddress)));
+}
+
 // ── Merchant tests ────────────────────────────────────────────────────────────
 
 #[test]
