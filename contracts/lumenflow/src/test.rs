@@ -485,6 +485,57 @@ fn test_pagination_limit() {
     assert!(page.next_cursor.is_some());
 }
 
+#[test]
+fn test_pagination_stress() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Create 150 payments for the same merchant
+    for i in 0..150 {
+        let id = String::from_str(&env, &format!("STRESS_{:03}", i));
+        let pub_key = bytes(&env, &[0u8; 32]);
+        let sig = bytes(&env, &[0u8; 64]);
+        client.process_payment_with_signature(
+            &payer, id, &merchant, &token, &100, &str(&env, ""), &None, &sig, &pub_key,
+        );
+    }
+
+    // Fetch pages with limit 100, chaining cursors
+    let mut seen: Vec<String> = Vec::new(&env);
+    let mut cursor: Option<String> = None;
+    loop {
+        let page = client.get_merchant_payment_history(
+            &merchant,
+            &cursor,
+            &100,
+            &None,
+            &SortField::Date,
+            &SortOrder::Ascending,
+        );
+
+        // Collect ids on this page
+        for p in page.payments.iter() {
+            seen.push_back(p.order_id.clone());
+        }
+
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+
+    // Verify we saw exactly 150 unique payments
+    assert_eq!(seen.len(), 150);
+
+    // Ensure no duplicates by converting to a set-like Vec and counting
+    let mut unique: Vec<String> = Vec::new(&env);
+    for s in seen.iter() {
+        if !unique.contains(&s) {
+            unique.push_back(s.clone());
+        }
+    }
+    assert_eq!(unique.len(), 150);
+}
+
 // ── Multisig tests ────────────────────────────────────────────────────────────
 
 #[test]
