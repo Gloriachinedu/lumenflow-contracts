@@ -58,6 +58,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         require_admin(&env, &admin)?;
         storage::set_cleanup_period(&env, period);
+        env.events().publish(("lumenflow", "cleanup_period_set"), period);
         Ok(())
     }
 
