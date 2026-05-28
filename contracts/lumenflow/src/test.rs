@@ -581,6 +581,45 @@ fn test_cleanup_expired_payments() {
 }
 
 #[test]
+fn test_cleanup_removes_from_index_lists() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "OLD_001", 100);
+    make_payment(&env, &client, &merchant, &payer, &token, "OLD_002", 200);
+
+    client.set_payment_cleanup_period(&admin, &1);
+    env.ledger().with_mut(|l| l.timestamp += 10);
+
+    // Add a new payment after the cutoff so it stays
+    make_payment(&env, &client, &merchant, &payer, &token, "NEW_001", 300);
+
+    let removed = client.cleanup_expired_payments(&admin);
+    assert_eq!(removed, 2);
+
+    // History queries should only return the live payment
+    let merchant_page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(merchant_page.payments.len(), 1);
+    assert_eq!(merchant_page.payments.get(0).unwrap().order_id, str(&env, "NEW_001"));
+
+    let payer_page = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(payer_page.payments.len(), 1);
+    assert_eq!(payer_page.payments.get(0).unwrap().order_id, str(&env, "NEW_001"));
+}
+
+#[test]
 fn test_is_registered() {
     let (env, client) = setup();
     let merchant = Address::generate(&env);

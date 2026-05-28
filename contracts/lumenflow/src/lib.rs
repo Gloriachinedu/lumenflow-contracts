@@ -391,6 +391,8 @@ impl PaymentProcessingContract {
                 if let Some(p) = storage::get_payment(&env, &id) {
                     if p.paid_at < cutoff {
                         storage::remove_payment(&env, &id);
+                        storage::remove_merchant_payment_id(&env, &merchant_addr, &id);
+                        storage::remove_payer_payment_id(&env, &p.payer, &id);
                         removed += 1;
                     }
                 }
