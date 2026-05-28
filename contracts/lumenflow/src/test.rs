@@ -22,6 +22,44 @@ fn setup() -> (Env, PaymentProcessingContractClient<'static>) {
     (env, client)
 }
 
+#[test]
+fn test_nonce_increment_and_replay_rejection() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Initial nonce should be 0
+    let n0 = crate::storage::get_payer_nonce(&env, &payer);
+    assert_eq!(n0, 0u64);
+
+    // Submit a payment with nonce 0
+    client.process_payment_with_nonce(
+        &payer,
+        &str(&env, "NONCE_ORDER_1"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &0u64,
+    );
+
+    // Nonce should have incremented to 1
+    let n1 = crate::storage::get_payer_nonce(&env, &payer);
+    assert_eq!(n1, 1u64);
+
+    // Replay with same nonce should fail
+    let result = client.try_process_payment_with_nonce(
+        &payer,
+        &str(&env, "NONCE_ORDER_2"),
+        &merchant,
+        &token,
+        &50,
+        &str(&env, ""),
+        &None,
+        &0u64,
+    );
+    assert_eq!(result, Err(Ok(crate::error::PaymentError::InvalidNonce)));
+}
+
 fn create_token(env: &Env, admin: &Address) -> Address {
     let token_id = env.register_stellar_asset_contract_v2(admin.clone());
     token_id.address()

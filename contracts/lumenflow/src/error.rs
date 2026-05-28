@@ -21,6 +21,7 @@ pub enum PaymentError {
     InvalidSignature = 23,
     PaymentExpired = 24,
     InsufficientBalance = 25,
+    InvalidNonce = 26,
 
     // Refund
     RefundNotFound = 30,

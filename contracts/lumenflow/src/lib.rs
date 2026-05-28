@@ -230,6 +230,82 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Process a payment with an explicit payer nonce for replay protection.
+    pub fn process_payment_with_nonce(
+        env: Env,
+        payer: Address,
+        order_id: String,
+        merchant_address: Address,
+        token_address: Address,
+        amount: i128,
+        memo: String,
+        tags: Option<Vec<String>>,
+        nonce: u64,
+    ) -> Result<(), PaymentError> {
+        payer.require_auth();
+        require_positive(amount)?;
+        require_non_empty_string(&order_id)?;
+        validate_tags(&tags)?;
+
+        // Check nonce against stored per-payer nonce
+        let current = storage::get_payer_nonce(&env, &payer);
+        if nonce != current {
+            return Err(PaymentError::InvalidNonce);
+        }
+
+        if storage::get_payment(&env, &order_id).is_some() {
+            return Err(PaymentError::PaymentAlreadyExists);
+        }
+
+        let merchant = storage::get_merchant(&env, &merchant_address)
+            .ok_or(PaymentError::MerchantNotFound)?;
+        if !merchant.active {
+            return Err(PaymentError::MerchantInactive);
+        }
+
+        // Transfer tokens from payer to merchant
+        let token_client = token::Client::new(&env, &token_address);
+        token_client.transfer(&payer, &merchant_address, &amount);
+
+        let now = env.ledger().timestamp();
+        let payment = PaymentOrder {
+            order_id: order_id.clone(),
+            merchant_address: merchant_address.clone(),
+            payer: payer.clone(),
+            token: token_address,
+            amount,
+            status: PaymentStatus::Completed,
+            paid_at: now,
+            refunded_amount: 0,
+            memo,
+            tags,
+        };
+
+        storage::set_payment(&env, &payment);
+        storage::add_merchant_payment_id(&env, &merchant_address, &order_id);
+        storage::add_payer_payment_id(&env, &payer, &order_id);
+
+        // Update merchant total
+        let mut m = merchant;
+        m.total_received += amount;
+        storage::set_merchant(&env, &m);
+
+        // Update global stats
+        let mut stats = storage::get_global_stats(&env);
+        stats.total_payments += 1;
+        stats.total_volume += amount;
+        storage::set_global_stats(&env, &stats);
+
+        // Increment payer nonce on success
+        storage::increment_payer_nonce(&env, &payer);
+
+        env.events().publish(
+            ("lumenflow", "payment_processed"),
+            (order_id, payer, merchant_address, amount),
+        );
+        Ok(())
+    }
+
     /// Pay multiple merchants in one transaction. Maximum 10 items. Atomic.
     pub fn batch_payment(
         env: Env,

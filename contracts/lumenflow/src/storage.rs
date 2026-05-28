@@ -18,6 +18,7 @@ pub enum DataKey {
     Multisig(String),
     PaymentRequest(String),
     LargePaymentThreshold,
+    PayerNonce(Address),
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -191,4 +192,28 @@ pub fn remove_payment_request(env: &Env, request_id: &String) {
     env.storage()
         .temporary()
         .remove(&DataKey::PaymentRequest(request_id.clone()));
+}
+
+// ── Nonce / Replay protection ───────────────────────────────────────────────
+
+pub fn get_payer_nonce(env: &Env, payer: &Address) -> u64 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::PayerNonce(payer.clone()))
+        .unwrap_or(0u64)
+}
+
+pub fn increment_payer_nonce(env: &Env, payer: &Address) -> u64 {
+    let mut n = get_payer_nonce(env, payer);
+    n = n.saturating_add(1);
+    env.storage()
+        .persistent()
+        .set(&DataKey::PayerNonce(payer.clone()), &n);
+    n
+}
+
+pub fn set_payer_nonce(env: &Env, payer: &Address, n: u64) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::PayerNonce(payer.clone()), &n);
 }
