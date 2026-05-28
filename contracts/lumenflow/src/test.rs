@@ -534,6 +534,112 @@ fn test_multisig_insufficient_signatures_fails() {
     assert_eq!(result, Err(Ok(PaymentError::InsufficientSignatures)));
 }
 
+// ── Multisig double-sign regression tests (Issue #38) ────────────────────────
+
+#[test]
+fn test_multisig_signer_signs_once_success() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer1.clone());
+    signers.push_back(signer2.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_DS_001"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &2,
+    );
+
+    // First sign should succeed
+    client.sign_multisig_payment(&signer1, &str(&env, "MS_DS_001"), &bytes(&env, &[1u8; 64]));
+}
+
+#[test]
+fn test_multisig_same_signer_twice_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer1.clone());
+    signers.push_back(signer2.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_DS_002"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &2,
+    );
+
+    client.sign_multisig_payment(&signer1, &str(&env, "MS_DS_002"), &bytes(&env, &[1u8; 64]));
+
+    // Same signer signing again must fail
+    let result = client.try_sign_multisig_payment(
+        &signer1,
+        &str(&env, "MS_DS_002"),
+        &bytes(&env, &[1u8; 64]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MultisigAlreadySigned)));
+}
+
+#[test]
+fn test_multisig_different_signer_success() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer1.clone());
+    signers.push_back(signer2.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_DS_003"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &2,
+    );
+
+    client.sign_multisig_payment(&signer1, &str(&env, "MS_DS_003"), &bytes(&env, &[1u8; 64]));
+    // Different signer should succeed
+    client.sign_multisig_payment(&signer2, &str(&env, "MS_DS_003"), &bytes(&env, &[2u8; 64]));
+}
+
+#[test]
+fn test_multisig_non_listed_signer_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer1 = Address::generate(&env);
+    let outsider = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer1.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_DS_004"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+    );
+
+    // Non-listed address must be rejected
+    let result = client.try_sign_multisig_payment(
+        &outsider,
+        &str(&env, "MS_DS_004"),
+        &bytes(&env, &[9u8; 64]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
 // ── Global stats tests ────────────────────────────────────────────────────────
 
 #[test]

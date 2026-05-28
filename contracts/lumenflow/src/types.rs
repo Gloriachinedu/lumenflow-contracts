@@ -97,6 +97,7 @@ pub struct MultisigPayment {
     pub required_signatures: u32,
     pub signers: Vec<Address>,
     pub signatures: Vec<Bytes>,
+    pub signed_by: Vec<Address>,
     pub executed: bool,
     pub created_at: u64,
 }
