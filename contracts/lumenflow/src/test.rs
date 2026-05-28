@@ -597,3 +597,421 @@ fn test_is_registered() {
     
     assert!(client.is_registered(&merchant));
 }
+
+// ── Error variant coverage (Issue #33) ───────────────────────────────────────
+
+mod error_cases {
+    use super::*;
+
+    // Auth errors
+
+    #[test]
+    fn test_error_admin_already_set() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.set_admin(&admin);
+        assert_eq!(
+            client.try_set_admin(&admin),
+            Err(Ok(PaymentError::AdminAlreadySet))
+        );
+    }
+
+    #[test]
+    fn test_error_invalid_admin_address() {
+        let (env, client) = setup();
+        let contract_addr = env.register(PaymentProcessingContract, ());
+        assert_eq!(
+            client.try_set_admin(&contract_addr),
+            Err(Ok(PaymentError::InvalidAdminAddress))
+        );
+    }
+
+    #[test]
+    fn test_error_unauthorized_get_payment() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        make_payment(&env, &client, &merchant, &payer, &token, "AUTH_001", 100);
+        let stranger = Address::generate(&env);
+        assert_eq!(
+            client.try_get_payment_by_id(&stranger, &str(&env, "AUTH_001")),
+            Err(Ok(PaymentError::Unauthorized))
+        );
+    }
+
+    // Merchant errors
+
+    #[test]
+    fn test_error_merchant_not_found() {
+        let (env, client) = setup();
+        let unknown = Address::generate(&env);
+        assert_eq!(
+            client.try_get_merchant(&unknown),
+            Err(Ok(PaymentError::MerchantNotFound))
+        );
+    }
+
+    #[test]
+    fn test_error_merchant_already_registered() {
+        let (env, client) = setup();
+        let merchant = Address::generate(&env);
+        client.register_merchant(
+            &merchant,
+            &str(&env, "Store"),
+            &str(&env, ""),
+            &str(&env, ""),
+            &MerchantCategory::Other,
+        );
+        assert_eq!(
+            client.try_register_merchant(
+                &merchant,
+                &str(&env, "Store"),
+                &str(&env, ""),
+                &str(&env, ""),
+                &MerchantCategory::Other,
+            ),
+            Err(Ok(PaymentError::MerchantAlreadyRegistered))
+        );
+    }
+
+    #[test]
+    fn test_error_merchant_inactive() {
+        let (env, client, admin, merchant, payer, token) = setup_payment_env();
+        client.deactivate_merchant(&admin, &merchant);
+        assert_eq!(
+            client.try_process_payment_with_signature(
+                &payer,
+                &str(&env, "INACT_001"),
+                &merchant,
+                &token,
+                &100,
+                &str(&env, ""),
+                &None,
+                &bytes(&env, &[0u8; 64]),
+                &bytes(&env, &[0u8; 32]),
+            ),
+            Err(Ok(PaymentError::MerchantInactive))
+        );
+    }
+
+    // Payment errors
+
+    #[test]
+    fn test_error_payment_not_found() {
+        let (env, client, _admin, _merchant, payer, _token) = setup_payment_env();
+        assert_eq!(
+            client.try_get_payment_by_id(&payer, &str(&env, "NOPE")),
+            Err(Ok(PaymentError::PaymentNotFound))
+        );
+    }
+
+    #[test]
+    fn test_error_payment_already_exists() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        make_payment(&env, &client, &merchant, &payer, &token, "DUP_001", 100);
+        assert_eq!(
+            client.try_process_payment_with_signature(
+                &payer,
+                &str(&env, "DUP_001"),
+                &merchant,
+                &token,
+                &100,
+                &str(&env, ""),
+                &None,
+                &bytes(&env, &[0u8; 64]),
+                &bytes(&env, &[0u8; 32]),
+            ),
+            Err(Ok(PaymentError::PaymentAlreadyExists))
+        );
+    }
+
+    #[test]
+    fn test_error_invalid_amount_zero() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        assert_eq!(
+            client.try_process_payment_with_signature(
+                &payer,
+                &str(&env, "ZERO_001"),
+                &merchant,
+                &token,
+                &0,
+                &str(&env, ""),
+                &None,
+                &bytes(&env, &[0u8; 64]),
+                &bytes(&env, &[0u8; 32]),
+            ),
+            Err(Ok(PaymentError::InvalidAmount))
+        );
+    }
+
+    #[test]
+    fn test_error_invalid_amount_negative() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        assert_eq!(
+            client.try_process_payment_with_signature(
+                &payer,
+                &str(&env, "NEG_001"),
+                &merchant,
+                &token,
+                &-1,
+                &str(&env, ""),
+                &None,
+                &bytes(&env, &[0u8; 64]),
+                &bytes(&env, &[0u8; 32]),
+            ),
+            Err(Ok(PaymentError::InvalidAmount))
+        );
+    }
+
+    // Refund errors
+
+    #[test]
+    fn test_error_refund_not_found() {
+        let (env, client) = setup();
+        assert_eq!(
+            client.try_get_refund(&str(&env, "NOPE")),
+            Err(Ok(PaymentError::RefundNotFound))
+        );
+    }
+
+    #[test]
+    fn test_error_refund_already_exists() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        make_payment(&env, &client, &merchant, &payer, &token, "REF_DUP", 500);
+        client.initiate_refund(
+            &payer,
+            &str(&env, "REFDUP_001"),
+            &str(&env, "REF_DUP"),
+            &100,
+            &str(&env, "reason"),
+        );
+        assert_eq!(
+            client.try_initiate_refund(
+                &payer,
+                &str(&env, "REFDUP_001"),
+                &str(&env, "REF_DUP"),
+                &100,
+                &str(&env, "reason"),
+            ),
+            Err(Ok(PaymentError::RefundAlreadyExists))
+        );
+    }
+
+    #[test]
+    fn test_error_refund_window_expired() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        make_payment(&env, &client, &merchant, &payer, &token, "REF_EXP", 500);
+        env.ledger().with_mut(|l| l.timestamp += 31 * 24 * 3600);
+        assert_eq!(
+            client.try_initiate_refund(
+                &payer,
+                &str(&env, "REFEXP_001"),
+                &str(&env, "REF_EXP"),
+                &100,
+                &str(&env, "late"),
+            ),
+            Err(Ok(PaymentError::RefundWindowExpired))
+        );
+    }
+
+    #[test]
+    fn test_error_refund_exceeds_original() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        make_payment(&env, &client, &merchant, &payer, &token, "REF_OVR", 200);
+        assert_eq!(
+            client.try_initiate_refund(
+                &payer,
+                &str(&env, "REFOVR_001"),
+                &str(&env, "REF_OVR"),
+                &300,
+                &str(&env, "too much"),
+            ),
+            Err(Ok(PaymentError::RefundExceedsOriginal))
+        );
+    }
+
+    #[test]
+    fn test_error_refund_not_approved() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        make_payment(&env, &client, &merchant, &payer, &token, "REF_NAPR", 500);
+        client.initiate_refund(
+            &payer,
+            &str(&env, "REFNAPR_001"),
+            &str(&env, "REF_NAPR"),
+            &100,
+            &str(&env, "reason"),
+        );
+        // Execute without approval
+        assert_eq!(
+            client.try_execute_refund(&str(&env, "REFNAPR_001")),
+            Err(Ok(PaymentError::RefundNotApproved))
+        );
+    }
+
+    #[test]
+    fn test_error_refund_already_completed() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        make_payment(&env, &client, &merchant, &payer, &token, "REF_COMP", 500);
+        client.initiate_refund(
+            &payer,
+            &str(&env, "REFCOMP_001"),
+            &str(&env, "REF_COMP"),
+            &100,
+            &str(&env, "reason"),
+        );
+        client.approve_refund(&merchant, &str(&env, "REFCOMP_001"));
+        // Approve again on an already-approved refund
+        assert_eq!(
+            client.try_approve_refund(&merchant, &str(&env, "REFCOMP_001")),
+            Err(Ok(PaymentError::RefundAlreadyCompleted))
+        );
+    }
+
+    // Multisig errors
+
+    #[test]
+    fn test_error_multisig_not_found() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+        assert_eq!(
+            client.try_sign_multisig_payment(
+                &signer,
+                &str(&env, "NOPE"),
+                &bytes(&env, &[0u8; 64]),
+            ),
+            Err(Ok(PaymentError::MultisigNotFound))
+        );
+    }
+
+    #[test]
+    fn test_error_multisig_already_signed() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        let signer = Address::generate(&env);
+        let mut signers = Vec::new(&env);
+        signers.push_back(signer.clone());
+        signers.push_back(Address::generate(&env));
+
+        client.initiate_multisig_payment(
+            &payer,
+            &str(&env, "MS_ERR_001"),
+            &merchant,
+            &token,
+            &500,
+            &signers,
+            &2,
+        );
+        client.sign_multisig_payment(&signer, &str(&env, "MS_ERR_001"), &bytes(&env, &[1u8; 64]));
+        assert_eq!(
+            client.try_sign_multisig_payment(
+                &signer,
+                &str(&env, "MS_ERR_001"),
+                &bytes(&env, &[1u8; 64]),
+            ),
+            Err(Ok(PaymentError::MultisigAlreadySigned))
+        );
+    }
+
+    #[test]
+    fn test_error_multisig_already_executed() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        let signer = Address::generate(&env);
+        let mut signers = Vec::new(&env);
+        signers.push_back(signer.clone());
+
+        client.initiate_multisig_payment(
+            &payer,
+            &str(&env, "MS_ERR_002"),
+            &merchant,
+            &token,
+            &500,
+            &signers,
+            &1,
+        );
+        client.sign_multisig_payment(&signer, &str(&env, "MS_ERR_002"), &bytes(&env, &[1u8; 64]));
+        client.execute_multisig_payment(&payer, &str(&env, "MS_ERR_002"));
+        assert_eq!(
+            client.try_execute_multisig_payment(&payer, &str(&env, "MS_ERR_002")),
+            Err(Ok(PaymentError::MultisigAlreadyExecuted))
+        );
+    }
+
+    #[test]
+    fn test_error_insufficient_signatures() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        let signer = Address::generate(&env);
+        let mut signers = Vec::new(&env);
+        signers.push_back(signer.clone());
+
+        client.initiate_multisig_payment(
+            &payer,
+            &str(&env, "MS_ERR_003"),
+            &merchant,
+            &token,
+            &500,
+            &signers,
+            &2,
+        );
+        // Only 1 signature, need 2
+        client.sign_multisig_payment(&signer, &str(&env, "MS_ERR_003"), &bytes(&env, &[1u8; 64]));
+        assert_eq!(
+            client.try_execute_multisig_payment(&payer, &str(&env, "MS_ERR_003")),
+            Err(Ok(PaymentError::InsufficientSignatures))
+        );
+    }
+
+    // General errors
+
+    #[test]
+    fn test_error_invalid_input_empty_order_id() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        assert_eq!(
+            client.try_process_payment_with_signature(
+                &payer,
+                &str(&env, ""),
+                &merchant,
+                &token,
+                &100,
+                &str(&env, ""),
+                &None,
+                &bytes(&env, &[0u8; 64]),
+                &bytes(&env, &[0u8; 32]),
+            ),
+            Err(Ok(PaymentError::InvalidInput))
+        );
+    }
+
+    #[test]
+    fn test_error_pagination_limit_exceeded() {
+        let (env, client, _admin, merchant, _payer, _token) = setup_payment_env();
+        assert_eq!(
+            client.try_get_merchant_payment_history(
+                &merchant,
+                &None,
+                &101,
+                &None,
+                &SortField::Date,
+                &SortOrder::Ascending,
+            ),
+            Err(Ok(PaymentError::PaginationLimitExceeded))
+        );
+    }
+
+    #[test]
+    fn test_error_batch_size_exceeded() {
+        let (env, client, _admin, merchant, _payer, token) = setup_payment_env();
+        let mut payments = Vec::new(&env);
+        for _ in 0..11 {
+            payments.push_back(BatchPaymentItem {
+                order_id: str(&env, "X"),
+                merchant_address: merchant.clone(),
+                token_address: token.clone(),
+                amount: 1,
+                memo: str(&env, ""),
+                signature: bytes(&env, &[0u8; 64]),
+                merchant_public_key: bytes(&env, &[0u8; 32]),
+            });
+        }
+        assert_eq!(
+            client.try_batch_payment(&merchant, &payments),
+            Err(Ok(PaymentError::BatchSizeExceeded))
+        );
+    }
+}
