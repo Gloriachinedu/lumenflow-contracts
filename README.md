@@ -372,6 +372,10 @@ Need help or want to discuss LumenFlow?
 
 ---
 
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for planned features and milestones.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). All contributions are welcome — bug fixes, features, documentation, and tests.
