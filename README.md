@@ -190,6 +190,43 @@ stellar contract invoke --id $CONTRACT_ID --source-account $CALLER_KEY --network
 
 ### Payment Processing
 
+#### Signature payload format
+
+`process_payment_with_signature` and `batch_payment` verify an ed25519 signature over a deterministic payload:
+
+```
+payload = XDR(order_id) || amount_be_i128
+```
+
+Byte layout:
+
+| Bytes | Content |
+|-------|---------|
+| `[0..3]` | `u32` big-endian — UTF-8 length of `order_id` (XDR String length prefix) |
+| `[4..4+N)` | UTF-8 bytes of `order_id` (N = length prefix value) |
+| `[4+N..4+N+P)` | 0–3 zero-padding bytes so the XDR block is a multiple of 4 |
+| `[4+N+P..4+N+P+16]` | `i128` big-endian — payment amount (16 bytes) |
+
+Example — `order_id = "ORD1"` (4 bytes), `amount = 1000`:
+
+```
+00 00 00 04  4F 52 44 31  00 00 00 00 00 00 00 00 00 00 03 E8
+^-- len=4    ^-- "ORD1"   ^-- no padding  ^-- 1000 as i128 BE
+```
+
+Off-chain signing (pseudocode, works in any language):
+
+```python
+import struct, hashlib
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+order_id_bytes = order_id.encode("utf-8")
+n = len(order_id_bytes)
+padding = (4 - (n % 4)) % 4
+payload = struct.pack(">I", n) + order_id_bytes + b"\x00" * padding + amount.to_bytes(16, "big", signed=True)
+signature = private_key.sign(payload)
+```
+
 ```bash
 # Process payment with signature
 stellar contract invoke --id $CONTRACT_ID --source-account $PAYER_KEY --network $NETWORK \
