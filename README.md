@@ -135,21 +135,26 @@ Test coverage includes:
 
 ## Local Network Setup
 
+A `docker-compose.yml` is provided to spin up a local Stellar node with Soroban RPC enabled.
+
 ```bash
-# 1. Start Docker Desktop, then:
-stellar network container start local
+# 1. Start the local node and deploy the contract in one step
+SOURCE_ACCOUNT=<secret-key> ./scripts/local_up.sh
 
-# 2. Build and deploy
-NETWORK=local SOURCE_ACCOUNT=<secret-key> ./scripts/deploy.sh
-
-# 3. Initialise admin
+# 2. Initialise admin (use the CONTRACT_ID printed by the script)
 stellar contract invoke \
   --id <CONTRACT_ID> \
   --source-account <admin-secret-key> \
-  --network local \
+  --rpc-url http://localhost:8000/soroban/rpc \
+  --network-passphrase "Standalone Network ; February 2017" \
   -- set_admin \
   --admin <admin-address>
+
+# Stop the node when done
+docker compose down
 ```
+
+Works on Linux and macOS (requires Docker Desktop or Docker Engine with Compose v2).
 
 ---
 
