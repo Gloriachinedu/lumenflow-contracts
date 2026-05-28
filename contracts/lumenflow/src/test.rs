@@ -409,6 +409,60 @@ fn test_reject_refund() {
     assert!(matches!(refund.status, crate::types::RefundStatus::Rejected));
 }
 
+#[test]
+fn test_multiple_sequential_partial_refunds() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    // Make a payment of 1000
+    make_payment(&env, &client, &merchant, &payer, &token, "SEQ_REFUND", 1_000);
+
+    // First partial refund 400
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REFUND_SEQ_1"),
+        &str(&env, "SEQ_REFUND"),
+        &400,
+        &str(&env, "First partial"),
+    );
+    client.approve_refund(&merchant, &str(&env, "REFUND_SEQ_1"));
+    client.execute_refund(&str(&env, "REFUND_SEQ_1"));
+
+    // Second partial refund 600 -> should reach full refund
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REFUND_SEQ_2"),
+        &str(&env, "SEQ_REFUND"),
+        &600,
+        &str(&env, "Second partial"),
+    );
+    client.approve_refund(&merchant, &str(&env, "REFUND_SEQ_2"));
+    client.execute_refund(&str(&env, "REFUND_SEQ_2"));
+
+    // Payment should be fully refunded
+    let p = client.get_payment_by_id(&payer, &str(&env, "SEQ_REFUND"));
+    assert!(matches!(p.status, crate::types::PaymentStatus::FullyRefunded));
+
+    // Third refund attempt should fail with RefundExceedsOriginal
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "REFUND_SEQ_3"),
+        &str(&env, "SEQ_REFUND"),
+        &1,
+        &str(&env, "Too late"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundExceedsOriginal)));
+
+    // Archive the payment record and verify refund after archive returns PaymentNotFound
+    client.archive_payment_record(&admin, &str(&env, "SEQ_REFUND"));
+    let result2 = client.try_initiate_refund(
+        &payer,
+        &str(&env, "REFUND_SEQ_4"),
+        &str(&env, "SEQ_REFUND"),
+        &1,
+        &str(&env, "After archive"),
+    );
+    assert_eq!(result2, Err(Ok(PaymentError::PaymentNotFound)));
+}
+
 // ── Payment history tests ─────────────────────────────────────────────────────
 
 #[test]
