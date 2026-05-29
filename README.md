@@ -5,6 +5,7 @@
 [![CI](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml/badge.svg)](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Stellar](https://img.shields.io/badge/Stellar-Soroban-blueviolet)](https://soroban.stellar.org)
+[![Audited by](https://img.shields.io/badge/Audited%20By-TBD-lightgrey)](docs/audit/audit-report.md)
 [![Discord](https://img.shields.io/discord/123456789012345678?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/lumenflow)
 
 ---
@@ -19,6 +20,27 @@ LumenFlow is a production-grade payment processing smart contract for the [Stell
 - **Multi-signature payments** — configurable threshold approvals
 - **Payment history queries** — paginated, filtered, and sorted
 - **Admin controls** — global stats, archiving, automated cleanup
+
+## Security & Docs
+
+- Audit plan and scope published in `docs/audit/audit-report.md`
+- Refund lifecycle state diagram available in `docs/refund-lifecycle.md`
+- Testing guidance available in `docs/testing-guide.md`
+
+## Refund lifecycle overview
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending
+    Pending --> Approved : merchant approves
+    Pending --> Rejected : merchant rejects
+    Approved --> Completed : merchant executes refund
+    Rejected --> [*]
+```
+
+## Notes
+
+This contract uses saturating accumulation for global payment and refund volumes to prevent runtime panics in release mode.
 
 ---
 
