@@ -597,3 +597,37 @@ fn test_is_registered() {
     
     assert!(client.is_registered(&merchant));
 }
+
+// ── Payment note tests ────────────────────────────────────────────────────────
+
+#[test]
+fn test_add_payment_note_success() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "NOTE_001", 100);
+
+    client.add_payment_note(&merchant, &str(&env, "NOTE_001"), &str(&env, "Tracking: XYZ123"));
+
+    let payment = client.get_payment_by_id(&merchant, &str(&env, "NOTE_001"));
+    assert_eq!(payment.note, Some(str(&env, "Tracking: XYZ123")));
+}
+
+#[test]
+fn test_add_payment_note_wrong_merchant_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "NOTE_002", 100);
+
+    let other = Address::generate(&env);
+    let result = client.try_add_payment_note(&other, &str(&env, "NOTE_002"), &str(&env, "note"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_add_payment_note_too_long_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "NOTE_003", 100);
+
+    let long_str = "x".repeat(513);
+    let long_note = str(&env, &long_str);
+    let result = client.try_add_payment_note(&merchant, &str(&env, "NOTE_003"), &long_note);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
