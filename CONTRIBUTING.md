@@ -91,3 +91,7 @@ Do **not** open a public issue for security vulnerabilities. See [SECURITY.md](S
 ## Questions
 
 Open a [GitHub Discussion](../../discussions) for questions, ideas, or general feedback.
+
+## Governance
+
+See [GOVERNANCE.md](GOVERNANCE.md) for how project decisions are made, the RFC process, and how to become a maintainer.
