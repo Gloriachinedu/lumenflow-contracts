@@ -376,6 +376,10 @@ Need help or want to discuss LumenFlow?
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). All contributions are welcome — bug fixes, features, documentation, and tests.
 
+## Governance
+
+See [GOVERNANCE.md](GOVERNANCE.md) for project decision-making, the RFC process, and maintainer responsibilities.
+
 ## Security
 
 See [SECURITY.md](SECURITY.md) for responsible disclosure instructions.
