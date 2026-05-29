@@ -398,9 +398,10 @@ impl PaymentProcessingContract {
         order_id: String,
     ) -> Result<(), PaymentError> {
         require_admin(&env, &admin)?;
-        if storage::get_payment(&env, &order_id).is_none() {
-            return Err(PaymentError::PaymentNotFound);
-        }
+        let payment = storage::get_payment(&env, &order_id)
+            .ok_or(PaymentError::PaymentNotFound)?;
+        storage::remove_merchant_payment_id(&env, &payment.merchant_address, &order_id);
+        storage::remove_payer_payment_id(&env, &payment.payer, &order_id);
         storage::remove_payment(&env, &order_id);
         env.events()
             .publish(("lumenflow", "payment_archived"), order_id);

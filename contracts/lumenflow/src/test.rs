@@ -581,6 +581,40 @@ fn test_cleanup_expired_payments() {
 }
 
 #[test]
+fn test_archive_payment_removes_from_index() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ARCH_001", 100);
+    make_payment(&env, &client, &merchant, &payer, &token, "ARCH_002", 200);
+
+    // Archive the first payment
+    client.archive_payment_record(&admin, &str(&env, "ARCH_001"));
+
+    // Merchant history should only contain ARCH_002
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page.total, 1);
+    assert_eq!(page.payments.get(0).unwrap().order_id, str(&env, "ARCH_002"));
+
+    // Payer history should only contain ARCH_002
+    let payer_page = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(payer_page.total, 1);
+    assert_eq!(payer_page.payments.get(0).unwrap().order_id, str(&env, "ARCH_002"));
+}
+
+#[test]
 fn test_is_registered() {
     let (env, client) = setup();
     let merchant = Address::generate(&env);
