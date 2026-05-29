@@ -580,6 +580,64 @@ fn test_cleanup_expired_payments() {
     assert_eq!(removed, 1);
 }
 
+// ── Memo / reason length tests ───────────────────────────────────────────────
+
+#[test]
+fn test_memo_at_limit_succeeds() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+    // 256-char memo — exactly at the limit
+    let memo = str(&env, &"a".repeat(256));
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "MEMO_OK"),
+        &merchant,
+        &token,
+        &100,
+        &memo,
+        &None,
+        &sig,
+        &pub_key,
+    );
+}
+
+#[test]
+fn test_memo_over_limit_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+    // 257-char memo — one over the limit
+    let memo = str(&env, &"a".repeat(257));
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "MEMO_FAIL"),
+        &merchant,
+        &token,
+        &100,
+        &memo,
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_refund_reason_over_limit_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "REASON_ORDER", 500);
+    let long_reason = str(&env, &"r".repeat(257));
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "REASON_REFUND"),
+        &str(&env, "REASON_ORDER"),
+        &100,
+        &long_reason,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
 #[test]
 fn test_is_registered() {
     let (env, client) = setup();
