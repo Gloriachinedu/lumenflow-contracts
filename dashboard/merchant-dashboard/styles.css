@@ -13,3 +13,7 @@ th,td{padding:8px;border-bottom:1px solid #eee;text-align:left}
 
 /* Simple responsive */
 @media (max-width:600px){table,thead,tbody,tr,th,td{display:block}}
+
+.skip-link{position:absolute;left:-999px;top:auto;width:1px;height:1px;overflow:hidden}
+.skip-link:focus{left:8px;top:8px;width:auto;height:auto;padding:8px;background:#fff;border:1px solid #ccc}
+.visually-hidden{position:absolute!important;height:1px;width:1px;overflow:hidden;clip:rect(1px,1px,1px,1px);white-space:nowrap}

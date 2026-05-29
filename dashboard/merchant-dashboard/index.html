@@ -7,8 +7,9 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <a href="#content" class="skip-link">Skip to content</a>
   <header class="site-header">
-    <h1>Merchant Refunds</h1>
+    <h1 id="pageTitle">Merchant Refunds</h1>
     <div id="account" class="account">Not connected</div>
   </header>
 
@@ -29,11 +30,11 @@
       <table id="refundsTable" role="table" aria-label="Refund requests table">
         <thead>
           <tr>
-            <th id="col-id">ID</th>
-            <th id="col-customer">Customer</th>
-            <th id="col-amount">Amount</th>
-            <th id="col-status">Status</th>
-            <th id="col-actions">Actions</th>
+            <th id="col-id" scope="col">ID</th>
+            <th id="col-customer" scope="col">Customer</th>
+            <th id="col-amount" scope="col">Amount</th>
+            <th id="col-status" scope="col">Status</th>
+            <th id="col-actions" scope="col">Actions</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -42,17 +43,18 @@
   </main>
 
   <!-- Wallet + Confirm modals -->
-  <div id="walletModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+  <div id="walletModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="walletTitle">
     <div class="modal-content">
-      <h2>Connect Wallet</h2>
+      <h2 id="walletTitle">Connect Wallet</h2>
       <button id="freighter">Freighter</button>
       <button id="albedo">Albedo</button>
       <button id="walletClose">Close</button>
     </div>
   </div>
 
-  <div id="confirmModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+  <div id="confirmModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="confirmTitle">
     <div class="modal-content">
+      <h2 id="confirmTitle" class="visually-hidden">Confirmation</h2>
       <p id="confirmText">Are you sure?</p>
       <button id="confirmYes">Yes</button>
       <button id="confirmNo">No</button>
