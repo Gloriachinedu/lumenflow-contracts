@@ -119,6 +119,25 @@ cargo test test_successful_refund_flow
 ./scripts/test.sh
 ```
 
+## Code Coverage
+
+Install `cargo-llvm-cov` once:
+
+```bash
+cargo install cargo-llvm-cov
+rustup component add llvm-tools-preview
+```
+
+Generate a local HTML report:
+
+```bash
+COVERAGE=1 ./scripts/test.sh
+# Report: coverage/index.html
+# lcov data: lcov.info
+```
+
+CI enforces a minimum **80% line coverage** threshold and uploads both the HTML report and `lcov.info` as build artifacts.
+
 Test coverage includes:
 
 - Merchant registration and deactivation
