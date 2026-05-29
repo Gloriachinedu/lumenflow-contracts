@@ -597,3 +597,74 @@ fn test_is_registered() {
     
     assert!(client.is_registered(&merchant));
 }
+
+// ── Subscription tests ────────────────────────────────────────────────────────
+
+#[test]
+fn test_subscription_full_lifecycle() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    client.create_subscription_plan(
+        &merchant,
+        &str(&env, "PLAN_001"),
+        &token,
+        &100,
+        &60,  // 60 second interval
+        &3,   // max 3 cycles
+    );
+
+    client.subscribe(&payer, &str(&env, "SUB_001"), &str(&env, "PLAN_001"));
+
+    // First charge
+    client.charge_subscription(&str(&env, "SUB_001"));
+
+    // Advance time past interval
+    env.ledger().with_mut(|l| l.timestamp += 61);
+    client.charge_subscription(&str(&env, "SUB_001"));
+
+    env.ledger().with_mut(|l| l.timestamp += 61);
+    client.charge_subscription(&str(&env, "SUB_001"));
+
+    // Max cycles reached — next charge should fail
+    env.ledger().with_mut(|l| l.timestamp += 61);
+    let result = client.try_charge_subscription(&str(&env, "SUB_001"));
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionMaxCyclesReached)));
+}
+
+#[test]
+fn test_subscription_interval_not_elapsed_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    client.create_subscription_plan(&merchant, &str(&env, "PLAN_002"), &token, &100, &3600, &5);
+    client.subscribe(&payer, &str(&env, "SUB_002"), &str(&env, "PLAN_002"));
+    client.charge_subscription(&str(&env, "SUB_002"));
+
+    // Try to charge again immediately
+    let result = client.try_charge_subscription(&str(&env, "SUB_002"));
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionIntervalNotElapsed)));
+}
+
+#[test]
+fn test_cancel_subscription() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    client.create_subscription_plan(&merchant, &str(&env, "PLAN_003"), &token, &100, &60, &10);
+    client.subscribe(&payer, &str(&env, "SUB_003"), &str(&env, "PLAN_003"));
+    client.cancel_subscription(&payer, &str(&env, "SUB_003"));
+
+    // Charging a cancelled subscription should fail
+    let result = client.try_charge_subscription(&str(&env, "SUB_003"));
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionNotActive)));
+}
+
+#[test]
+fn test_cancel_subscription_wrong_subscriber_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    client.create_subscription_plan(&merchant, &str(&env, "PLAN_004"), &token, &100, &60, &10);
+    client.subscribe(&payer, &str(&env, "SUB_004"), &str(&env, "PLAN_004"));
+
+    let other = Address::generate(&env);
+    let result = client.try_cancel_subscription(&other, &str(&env, "SUB_004"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}

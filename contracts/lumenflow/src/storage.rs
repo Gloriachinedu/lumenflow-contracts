@@ -1,6 +1,6 @@
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
 
-use crate::types::{GlobalStats, Merchant, MultisigPayment, PaymentOrder, PaymentRequest, RefundRecord};
+use crate::types::{GlobalStats, Merchant, MultisigPayment, PaymentOrder, PaymentRequest, RefundRecord, SubscriptionPlan, Subscription};
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -18,6 +18,8 @@ pub enum DataKey {
     Multisig(String),
     PaymentRequest(String),
     LargePaymentThreshold,
+    SubscriptionPlan(String),
+    Subscription(String),
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -191,4 +193,26 @@ pub fn remove_payment_request(env: &Env, request_id: &String) {
     env.storage()
         .temporary()
         .remove(&DataKey::PaymentRequest(request_id.clone()));
+}
+
+// ── Subscription ──────────────────────────────────────────────────────────────
+
+pub fn get_subscription_plan(env: &Env, plan_id: &String) -> Option<SubscriptionPlan> {
+    env.storage().persistent().get(&DataKey::SubscriptionPlan(plan_id.clone()))
+}
+
+pub fn set_subscription_plan(env: &Env, plan: &SubscriptionPlan) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::SubscriptionPlan(plan.plan_id.clone()), plan);
+}
+
+pub fn get_subscription(env: &Env, subscription_id: &String) -> Option<Subscription> {
+    env.storage().persistent().get(&DataKey::Subscription(subscription_id.clone()))
+}
+
+pub fn set_subscription(env: &Env, sub: &Subscription) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::Subscription(sub.subscription_id.clone()), sub);
 }

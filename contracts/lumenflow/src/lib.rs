@@ -21,7 +21,7 @@ use helper::{
 use types::{
     BatchPaymentItem, GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder,
     PaymentPage, PaymentStatus, RefundRecord, RefundStatus, SortField, SortOrder,
-    StatusFilter, Merchant, SuspiciousActivityReason,
+    StatusFilter, Merchant, SuspiciousActivityReason, SubscriptionPlan, Subscription, SubscriptionStatus,
 };
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -703,6 +703,139 @@ impl PaymentProcessingContract {
 
         env.events()
             .publish(("lumenflow", "multisig_executed"), payment_id);
+        Ok(())
+    }
+
+    // ── Subscriptions ─────────────────────────────────────────────────────────
+
+    /// Create a recurring payment plan. Merchant only.
+    pub fn create_subscription_plan(
+        env: Env,
+        merchant: Address,
+        plan_id: String,
+        token: Address,
+        amount: i128,
+        interval_secs: u64,
+        max_cycles: u32,
+    ) -> Result<(), PaymentError> {
+        merchant.require_auth();
+        require_positive(amount)?;
+        require_non_empty_string(&plan_id)?;
+
+        if storage::get_subscription_plan(&env, &plan_id).is_some() {
+            return Err(PaymentError::SubscriptionPlanAlreadyExists);
+        }
+
+        let m = storage::get_merchant(&env, &merchant).ok_or(PaymentError::MerchantNotFound)?;
+        if !m.active {
+            return Err(PaymentError::MerchantInactive);
+        }
+
+        let plan = SubscriptionPlan { plan_id, merchant, token, amount, interval_secs, max_cycles };
+        storage::set_subscription_plan(&env, &plan);
+        Ok(())
+    }
+
+    /// Subscribe to a plan.
+    pub fn subscribe(
+        env: Env,
+        subscriber: Address,
+        subscription_id: String,
+        plan_id: String,
+    ) -> Result<(), PaymentError> {
+        subscriber.require_auth();
+        require_non_empty_string(&subscription_id)?;
+
+        if storage::get_subscription(&env, &subscription_id).is_some() {
+            return Err(PaymentError::SubscriptionAlreadyExists);
+        }
+        storage::get_subscription_plan(&env, &plan_id)
+            .ok_or(PaymentError::SubscriptionPlanNotFound)?;
+
+        let now = env.ledger().timestamp();
+        let sub = Subscription {
+            subscription_id,
+            plan_id,
+            subscriber,
+            cycles_charged: 0,
+            last_charged_at: 0,
+            status: SubscriptionStatus::Active,
+            created_at: now,
+        };
+        storage::set_subscription(&env, &sub);
+        Ok(())
+    }
+
+    /// Charge the next cycle of a subscription. Anyone can trigger (merchant typically).
+    pub fn charge_subscription(
+        env: Env,
+        subscription_id: String,
+    ) -> Result<(), PaymentError> {
+        let mut sub = storage::get_subscription(&env, &subscription_id)
+            .ok_or(PaymentError::SubscriptionNotFound)?;
+
+        if !matches!(sub.status, SubscriptionStatus::Active) {
+            return Err(PaymentError::SubscriptionNotActive);
+        }
+
+        let plan = storage::get_subscription_plan(&env, &sub.plan_id)
+            .ok_or(PaymentError::SubscriptionPlanNotFound)?;
+
+        if sub.cycles_charged >= plan.max_cycles {
+            sub.status = SubscriptionStatus::Completed;
+            storage::set_subscription(&env, &sub);
+            return Err(PaymentError::SubscriptionMaxCyclesReached);
+        }
+
+        let now = env.ledger().timestamp();
+        if sub.last_charged_at > 0 && now < sub.last_charged_at + plan.interval_secs {
+            return Err(PaymentError::SubscriptionIntervalNotElapsed);
+        }
+
+        let token_client = token::Client::new(&env, &plan.token);
+        token_client.transfer(&sub.subscriber, &plan.merchant, &plan.amount);
+
+        sub.cycles_charged += 1;
+        sub.last_charged_at = now;
+        if sub.cycles_charged >= plan.max_cycles {
+            sub.status = SubscriptionStatus::Completed;
+        }
+        storage::set_subscription(&env, &sub);
+
+        let mut stats = storage::get_global_stats(&env);
+        stats.total_payments += 1;
+        stats.total_volume += plan.amount;
+        storage::set_global_stats(&env, &stats);
+
+        env.events().publish(
+            ("lumenflow", "subscription_charged"),
+            (subscription_id, sub.cycles_charged),
+        );
+        Ok(())
+    }
+
+    /// Cancel an active subscription. Subscriber only.
+    pub fn cancel_subscription(
+        env: Env,
+        subscriber: Address,
+        subscription_id: String,
+    ) -> Result<(), PaymentError> {
+        subscriber.require_auth();
+        let mut sub = storage::get_subscription(&env, &subscription_id)
+            .ok_or(PaymentError::SubscriptionNotFound)?;
+
+        if sub.subscriber != subscriber {
+            return Err(PaymentError::Unauthorized);
+        }
+        if !matches!(sub.status, SubscriptionStatus::Active) {
+            return Err(PaymentError::SubscriptionNotActive);
+        }
+
+        sub.status = SubscriptionStatus::Cancelled;
+        storage::set_subscription(&env, &sub);
+
+        env.events()
+            .publish(("lumenflow", "subscription_cancelled"), subscription_id);
         Ok(())
     }
 

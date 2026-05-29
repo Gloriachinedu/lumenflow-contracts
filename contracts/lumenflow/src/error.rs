@@ -40,4 +40,13 @@ pub enum PaymentError {
     InvalidInput = 50,
     PaginationLimitExceeded = 51,
     BatchSizeExceeded = 52,
+
+    // Subscription
+    SubscriptionPlanNotFound = 70,
+    SubscriptionPlanAlreadyExists = 71,
+    SubscriptionNotFound = 72,
+    SubscriptionAlreadyExists = 73,
+    SubscriptionNotActive = 74,
+    SubscriptionIntervalNotElapsed = 75,
+    SubscriptionMaxCyclesReached = 76,
 }
