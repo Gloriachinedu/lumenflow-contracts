@@ -534,6 +534,26 @@ fn test_multisig_insufficient_signatures_fails() {
     assert_eq!(result, Err(Ok(PaymentError::InsufficientSignatures)));
 }
 
+#[test]
+fn test_multisig_duplicate_signers_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+    signers.push_back(signer.clone()); // duplicate
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_DUP"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &2,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
 // ── Global stats tests ────────────────────────────────────────────────────────
 
 #[test]
