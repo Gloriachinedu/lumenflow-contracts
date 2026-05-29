@@ -319,6 +319,8 @@ stellar contract invoke --id $CONTRACT_ID --source-account $PAYER_KEY --network 
 
 ## Events
 
+Full event payload documentation and subscription guides can be found in [docs/events-reference.md](docs/events-reference.md).
+
 | Event name | Trigger |
 |---|---|
 | `lumenflow/admin_set` | Admin initialised |
@@ -331,6 +333,8 @@ stellar contract invoke --id $CONTRACT_ID --source-account $PAYER_KEY --network 
 | `lumenflow/refund_executed` | Refund transfer completed |
 | `lumenflow/multisig_initiated` | Multisig payment created |
 | `lumenflow/multisig_executed` | Multisig payment executed |
+| `lumenflow/payment_request_paid` | Payment request completed |
+| `lumenflow/suspicious_activity` | Safety threshold exceeded |
 
 ---
 
