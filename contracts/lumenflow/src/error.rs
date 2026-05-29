@@ -40,4 +40,9 @@ pub enum PaymentError {
     InvalidInput = 50,
     PaginationLimitExceeded = 51,
     BatchSizeExceeded = 52,
+
+    // Dispute
+    DisputeAlreadyExists = 60,
+    DisputeNotFound = 61,
+    RefundNotRejected = 62,
 }

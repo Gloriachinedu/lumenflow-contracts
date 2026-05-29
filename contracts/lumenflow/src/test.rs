@@ -597,3 +597,66 @@ fn test_is_registered() {
     
     assert!(client.is_registered(&merchant));
 }
+
+// ── Dispute tests ─────────────────────────────────────────────────────────────
+
+#[test]
+fn test_dispute_refund_full_lifecycle() {
+    use crate::types::DisputeOutcome;
+
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "D_ORDER_001", 500);
+
+    client.initiate_refund(&payer, &str(&env, "D_REF_001"), &str(&env, "D_ORDER_001"), &200, &str(&env, "wrong item"));
+    client.reject_refund(&merchant, &str(&env, "D_REF_001"));
+
+    // Payer disputes the rejection
+    client.dispute_refund(&payer, &str(&env, "D_REF_001"), &str(&env, "photo evidence"));
+
+    // Admin resolves in favour of payer
+    client.resolve_dispute(&admin, &str(&env, "D_REF_001"), &DisputeOutcome::FavorPayer);
+
+    let refund = client.get_refund(&str(&env, "D_REF_001"));
+    assert!(matches!(refund.status, crate::types::RefundStatus::Completed));
+}
+
+#[test]
+fn test_dispute_resolve_favor_merchant() {
+    use crate::types::DisputeOutcome;
+
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "D_ORDER_002", 500);
+
+    client.initiate_refund(&payer, &str(&env, "D_REF_002"), &str(&env, "D_ORDER_002"), &200, &str(&env, "reason"));
+    client.reject_refund(&merchant, &str(&env, "D_REF_002"));
+    client.dispute_refund(&payer, &str(&env, "D_REF_002"), &str(&env, "evidence"));
+
+    client.resolve_dispute(&admin, &str(&env, "D_REF_002"), &DisputeOutcome::FavorMerchant);
+
+    let refund = client.get_refund(&str(&env, "D_REF_002"));
+    assert!(matches!(refund.status, crate::types::RefundStatus::Rejected));
+}
+
+#[test]
+fn test_dispute_non_rejected_refund_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "D_ORDER_003", 500);
+
+    client.initiate_refund(&payer, &str(&env, "D_REF_003"), &str(&env, "D_ORDER_003"), &200, &str(&env, "reason"));
+    // Refund is still Pending — disputing should fail
+    let result = client.try_dispute_refund(&payer, &str(&env, "D_REF_003"), &str(&env, "evidence"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundNotRejected)));
+}
+
+#[test]
+fn test_dispute_wrong_payer_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "D_ORDER_004", 500);
+
+    client.initiate_refund(&payer, &str(&env, "D_REF_004"), &str(&env, "D_ORDER_004"), &200, &str(&env, "reason"));
+    client.reject_refund(&merchant, &str(&env, "D_REF_004"));
+
+    let other = Address::generate(&env);
+    let result = client.try_dispute_refund(&other, &str(&env, "D_REF_004"), &str(&env, "evidence"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}

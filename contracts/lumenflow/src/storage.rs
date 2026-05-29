@@ -1,6 +1,6 @@
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
 
-use crate::types::{GlobalStats, Merchant, MultisigPayment, PaymentOrder, PaymentRequest, RefundRecord};
+use crate::types::{DisputeRecord, GlobalStats, Merchant, MultisigPayment, PaymentOrder, PaymentRequest, RefundRecord};
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -18,6 +18,7 @@ pub enum DataKey {
     Multisig(String),
     PaymentRequest(String),
     LargePaymentThreshold,
+    Dispute(String),
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -191,4 +192,16 @@ pub fn remove_payment_request(env: &Env, request_id: &String) {
     env.storage()
         .temporary()
         .remove(&DataKey::PaymentRequest(request_id.clone()));
+}
+
+// ── Dispute ───────────────────────────────────────────────────────────────────
+
+pub fn get_dispute(env: &Env, refund_id: &String) -> Option<DisputeRecord> {
+    env.storage().persistent().get(&DataKey::Dispute(refund_id.clone()))
+}
+
+pub fn set_dispute(env: &Env, dispute: &DisputeRecord) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::Dispute(dispute.refund_id.clone()), dispute);
 }

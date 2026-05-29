@@ -71,6 +71,7 @@ pub enum RefundStatus {
     Approved,
     Rejected,
     Completed,
+    Disputed,
 }
 
 #[contracttype]
@@ -82,6 +83,25 @@ pub struct RefundRecord {
     pub amount: i128,
     pub reason: String,
     pub status: RefundStatus,
+    pub created_at: u64,
+}
+
+// ── Dispute ───────────────────────────────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DisputeOutcome {
+    FavorPayer,
+    FavorMerchant,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeRecord {
+    pub refund_id: String,
+    pub payer: Address,
+    pub evidence: String,
+    pub outcome: Option<DisputeOutcome>,
     pub created_at: u64,
 }
 
