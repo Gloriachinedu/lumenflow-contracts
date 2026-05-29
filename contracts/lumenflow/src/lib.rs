@@ -98,6 +98,7 @@ impl PaymentProcessingContract {
             contact_info,
             category,
             active: true,
+            verified: false,
             registered_at: env.ledger().timestamp(),
             total_received: 0,
         };
@@ -131,6 +132,38 @@ impl PaymentProcessingContract {
             stats.active_merchants -= 1;
         }
         storage::set_global_stats(&env, &stats);
+        Ok(())
+    }
+
+    /// Verify a merchant (admin only).
+    pub fn verify_merchant(
+        env: Env,
+        admin: Address,
+        merchant_address: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        let mut merchant = storage::get_merchant(&env, &merchant_address)
+            .ok_or(PaymentError::MerchantNotFound)?;
+        merchant.verified = true;
+        storage::set_merchant(&env, &merchant);
+        env.events()
+            .publish(("lumenflow", "merchant_verified"), merchant_address);
+        Ok(())
+    }
+
+    /// Remove merchant verification (admin only).
+    pub fn unverify_merchant(
+        env: Env,
+        admin: Address,
+        merchant_address: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        let mut merchant = storage::get_merchant(&env, &merchant_address)
+            .ok_or(PaymentError::MerchantNotFound)?;
+        merchant.verified = false;
+        storage::set_merchant(&env, &merchant);
+        env.events()
+            .publish(("lumenflow", "merchant_unverified"), merchant_address);
         Ok(())
     }
 
