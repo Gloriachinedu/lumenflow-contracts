@@ -372,6 +372,12 @@ Need help or want to discuss LumenFlow?
 
 ---
 
+## Webhook / Off-Chain Notifications
+
+Merchants can receive real-time payment event notifications in their backend systems via the Horizon event stream. See [docs/webhook-integration.md](docs/webhook-integration.md) for a full guide including a Node.js example server and idempotency best practices.
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). All contributions are welcome — bug fixes, features, documentation, and tests.
