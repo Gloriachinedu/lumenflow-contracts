@@ -194,3 +194,36 @@ pub enum SuspiciousActivityReason {
     RapidRefunds = 2,
     ManyAuthFailures = 3,
 }
+
+// ── Subscription ──────────────────────────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubscriptionPlan {
+    pub plan_id: String,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub interval_secs: u64,
+    pub max_cycles: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SubscriptionStatus {
+    Active,
+    Cancelled,
+    Completed,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Subscription {
+    pub subscription_id: String,
+    pub plan_id: String,
+    pub subscriber: Address,
+    pub cycles_charged: u32,
+    pub last_charged_at: u64,
+    pub status: SubscriptionStatus,
+    pub created_at: u64,
+}
