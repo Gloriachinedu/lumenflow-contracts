@@ -5,6 +5,7 @@
 [![CI](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml/badge.svg)](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Stellar](https://img.shields.io/badge/Stellar-Soroban-blueviolet)](https://soroban.stellar.org)
+[![Audited by](https://img.shields.io/badge/Audited%20By-TBD-lightgrey)](docs/audit/audit-report.md)
 [![Discord](https://img.shields.io/discord/123456789012345678?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/lumenflow)
 
 ---
@@ -19,6 +20,27 @@ LumenFlow is a production-grade payment processing smart contract for the [Stell
 - **Multi-signature payments** — configurable threshold approvals
 - **Payment history queries** — paginated, filtered, and sorted
 - **Admin controls** — global stats, archiving, automated cleanup
+
+## Security & Docs
+
+- Audit plan and scope published in `docs/audit/audit-report.md`
+- Refund lifecycle state diagram available in `docs/refund-lifecycle.md`
+- Testing guidance available in `docs/testing-guide.md`
+
+## Refund lifecycle overview
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending
+    Pending --> Approved : merchant approves
+    Pending --> Rejected : merchant rejects
+    Approved --> Completed : merchant executes refund
+    Rejected --> [*]
+```
+
+## Notes
+
+This contract uses saturating accumulation for global payment and refund volumes to prevent runtime panics in release mode.
 
 ---
 
@@ -119,6 +141,25 @@ cargo test test_successful_refund_flow
 ./scripts/test.sh
 ```
 
+## Code Coverage
+
+Install `cargo-llvm-cov` once:
+
+```bash
+cargo install cargo-llvm-cov
+rustup component add llvm-tools-preview
+```
+
+Generate a local HTML report:
+
+```bash
+COVERAGE=1 ./scripts/test.sh
+# Report: coverage/index.html
+# lcov data: lcov.info
+```
+
+CI enforces a minimum **80% line coverage** threshold and uploads both the HTML report and `lcov.info` as build artifacts.
+
 Test coverage includes:
 
 - Merchant registration and deactivation
@@ -187,12 +228,14 @@ stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network 
 stellar contract invoke --id $CONTRACT_ID --source-account $CALLER_KEY --network $NETWORK \
   -- get_merchant --merchant_address <address>
 ```
-
 ### Payment Processing
+
+For detailed information on the signature payload format and how to build it in various languages, see **[docs/signature-format.md](docs/signature-format.md)**.
 
 ```bash
 # Process payment with signature
 stellar contract invoke --id $CONTRACT_ID --source-account $PAYER_KEY --network $NETWORK \
+...
   -- process_payment_with_signature \
   --payer <payer-address> \
   --order_id "ORDER_001" \
@@ -319,6 +362,10 @@ stellar contract invoke --id $CONTRACT_ID --source-account $PAYER_KEY --network 
 
 ## Events
 
+Full event payload documentation and subscription guides can be found in [docs/events-reference.md](docs/events-reference.md).
+
+For production monitoring — Horizon SSE streaming, alert thresholds, and example code — see [docs/monitoring.md](docs/monitoring.md).
+
 | Event name | Trigger |
 |---|---|
 | `lumenflow/admin_set` | Admin initialised |
@@ -331,6 +378,8 @@ stellar contract invoke --id $CONTRACT_ID --source-account $PAYER_KEY --network 
 | `lumenflow/refund_executed` | Refund transfer completed |
 | `lumenflow/multisig_initiated` | Multisig payment created |
 | `lumenflow/multisig_executed` | Multisig payment executed |
+| `lumenflow/payment_request_paid` | Payment request completed |
+| `lumenflow/suspicious_activity` | Safety threshold exceeded |
 
 ---
 
@@ -375,6 +424,10 @@ Need help or want to discuss LumenFlow?
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). All contributions are welcome — bug fixes, features, documentation, and tests.
+
+## Governance
+
+See [GOVERNANCE.md](GOVERNANCE.md) for project decision-making, the RFC process, and maintainer responsibilities.
 
 ## Security
 

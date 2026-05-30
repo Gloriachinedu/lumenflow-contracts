@@ -21,6 +21,7 @@ pub enum PaymentError {
     InvalidSignature = 23,
     PaymentExpired = 24,
     InsufficientBalance = 25,
+    TokenNotAllowed = 26,
 
     // Refund
     RefundNotFound = 30,
@@ -29,6 +30,7 @@ pub enum PaymentError {
     RefundExceedsOriginal = 33,
     RefundNotApproved = 34,
     RefundAlreadyCompleted = 35,
+    TooManyRefunds = 36,
 
     // Multisig
     MultisigNotFound = 40,
@@ -40,9 +42,5 @@ pub enum PaymentError {
     InvalidInput = 50,
     PaginationLimitExceeded = 51,
     BatchSizeExceeded = 52,
-
-    // Dispute
-    DisputeAlreadyExists = 60,
-    DisputeNotFound = 61,
-    RefundNotRejected = 62,
+    InvalidTags = 53,
 }
