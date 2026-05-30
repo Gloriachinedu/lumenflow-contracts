@@ -321,6 +321,8 @@ stellar contract invoke --id $CONTRACT_ID --source-account $PAYER_KEY --network 
 
 Full event payload documentation and subscription guides can be found in [docs/events-reference.md](docs/events-reference.md).
 
+For production monitoring — Horizon SSE streaming, alert thresholds, and example code — see [docs/monitoring.md](docs/monitoring.md).
+
 | Event name | Trigger |
 |---|---|
 | `lumenflow/admin_set` | Admin initialised |
