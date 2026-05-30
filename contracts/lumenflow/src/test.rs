@@ -634,6 +634,31 @@ fn test_multisig_payment_appears_in_history() {
 // ── Global stats tests ────────────────────────────────────────────────────────
 
 #[test]
+fn test_deactivate_merchant_decrements_active_stats() {
+    let (env, client, admin, merchant, _payer, _token) = setup_payment_env();
+
+    // After setup, 1 merchant is registered → active_merchants = 1
+    let stats = client.get_global_payment_stats(&admin, &None, &None);
+    assert_eq!(stats.active_merchants, 1);
+
+    // Deactivate → active_merchants = 0
+    client.deactivate_merchant(&admin, &merchant);
+    let stats = client.get_global_payment_stats(&admin, &None, &None);
+    assert_eq!(stats.active_merchants, 0);
+}
+
+#[test]
+fn test_deactivate_already_inactive_merchant_no_underflow() {
+    let (env, client, admin, merchant, _payer, _token) = setup_payment_env();
+
+    client.deactivate_merchant(&admin, &merchant);
+    // Deactivating again must not underflow (stays at 0)
+    client.deactivate_merchant(&admin, &merchant);
+    let stats = client.get_global_payment_stats(&admin, &None, &None);
+    assert_eq!(stats.active_merchants, 0);
+}
+
+#[test]
 fn test_global_stats_updated() {
     let (env, client, admin, merchant, payer, token) = setup_payment_env();
     make_payment(&env, &client, &merchant, &payer, &token, "STAT_001", 1_000);
