@@ -31,6 +31,13 @@ pub struct PaymentProcessingContract;
 
 #[contractimpl]
 impl PaymentProcessingContract {
+    // ── Versioning ────────────────────────────────────────────────────────────
+
+    /// Returns the contract version.
+    pub fn get_contract_version(_env: Env) -> String {
+        String::from_str(&_env, env!("CARGO_PKG_VERSION"))
+    }
+
     // ── Admin ─────────────────────────────────────────────────────────────────
 
     /// One-time admin initialisation.
