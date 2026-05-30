@@ -747,6 +747,29 @@ impl PaymentProcessingContract {
         ms.executed = true;
         storage::set_multisig(&env, &ms);
 
+        // Record payment in history so it appears in merchant/payer queries
+        let payment = PaymentOrder {
+            order_id: payment_id.clone(),
+            merchant_address: ms.merchant_address.clone(),
+            payer: payer.clone(),
+            token: ms.token.clone(),
+            amount: ms.amount,
+            status: PaymentStatus::Completed,
+            paid_at: env.ledger().timestamp(),
+            refunded_amount: 0,
+            memo: String::from_str(&env, ""),
+            tags: None,
+        };
+        storage::set_payment(&env, &payment);
+        storage::add_merchant_payment_id(&env, &ms.merchant_address, &payment_id);
+        storage::add_payer_payment_id(&env, &payer, &payment_id);
+
+        // Update merchant total
+        if let Some(mut merchant) = storage::get_merchant(&env, &ms.merchant_address) {
+            merchant.total_received += ms.amount;
+            storage::set_merchant(&env, &merchant);
+        }
+
         let mut stats = storage::get_global_stats(&env);
         stats.total_payments += 1;
         stats.total_volume += ms.amount;

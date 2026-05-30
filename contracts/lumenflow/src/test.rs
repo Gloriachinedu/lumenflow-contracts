@@ -582,6 +582,53 @@ fn test_multisig_insufficient_signatures_fails() {
     assert_eq!(result, Err(Ok(PaymentError::InsufficientSignatures)));
 }
 
+#[test]
+fn test_multisig_payment_appears_in_history() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer1.clone());
+    signers.push_back(signer2.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_HIST"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &2,
+    );
+    client.sign_multisig_payment(&signer1, &str(&env, "MS_HIST"), &bytes(&env, &[1u8; 64]));
+    client.sign_multisig_payment(&signer2, &str(&env, "MS_HIST"), &bytes(&env, &[2u8; 64]));
+    client.execute_multisig_payment(&payer, &str(&env, "MS_HIST"));
+
+    // Verify payment appears in merchant history
+    let merchant_page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+    assert_eq!(merchant_page.payments.len(), 1);
+    assert_eq!(merchant_page.payments.get(0).unwrap().order_id, str(&env, "MS_HIST"));
+
+    // Verify payment appears in payer history
+    let payer_page = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+    assert_eq!(payer_page.payments.len(), 1);
+    assert_eq!(payer_page.payments.get(0).unwrap().order_id, str(&env, "MS_HIST"));
+}
+
 // ── Global stats tests ────────────────────────────────────────────────────────
 
 #[test]
