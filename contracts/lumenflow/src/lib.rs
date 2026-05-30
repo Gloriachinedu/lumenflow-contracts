@@ -656,6 +656,102 @@ impl PaymentProcessingContract {
         storage::get_refund(&env, &refund_id).ok_or(PaymentError::RefundNotFound)
     }
 
+    /// Payer disputes a rejected refund, providing evidence.
+    pub fn dispute_refund(
+        env: Env,
+        payer: Address,
+        refund_id: String,
+        evidence: String,
+    ) -> Result<(), PaymentError> {
+        payer.require_auth();
+
+        let mut refund = storage::get_refund(&env, &refund_id)
+            .ok_or(PaymentError::RefundNotFound)?;
+
+        if refund.initiator != payer {
+            return Err(PaymentError::Unauthorized);
+        }
+        if !matches!(refund.status, RefundStatus::Rejected) {
+            return Err(PaymentError::RefundNotRejected);
+        }
+        if storage::get_dispute(&env, &refund_id).is_some() {
+            return Err(PaymentError::DisputeAlreadyExists);
+        }
+
+        refund.status = RefundStatus::Disputed;
+        storage::set_refund(&env, &refund);
+
+        let dispute = DisputeRecord {
+            refund_id: refund_id.clone(),
+            payer: payer.clone(),
+            evidence,
+            outcome: None,
+            created_at: env.ledger().timestamp(),
+        };
+        storage::set_dispute(&env, &dispute);
+
+        env.events()
+            .publish(("lumenflow", "refund_disputed"), (refund_id, payer));
+        Ok(())
+    }
+
+    /// Admin resolves a dispute, either favouring the payer (executes refund) or the merchant.
+    pub fn resolve_dispute(
+        env: Env,
+        admin: Address,
+        refund_id: String,
+        outcome: DisputeOutcome,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+
+        let mut dispute = storage::get_dispute(&env, &refund_id)
+            .ok_or(PaymentError::DisputeNotFound)?;
+
+        if dispute.outcome.is_some() {
+            return Err(PaymentError::RefundAlreadyCompleted);
+        }
+
+        let mut refund = storage::get_refund(&env, &refund_id)
+            .ok_or(PaymentError::RefundNotFound)?;
+
+        match outcome {
+            DisputeOutcome::FavorPayer => {
+                // Approve and execute the refund
+                let mut payment = storage::get_payment(&env, &refund.order_id)
+                    .ok_or(PaymentError::PaymentNotFound)?;
+
+                let token_client = token::Client::new(&env, &payment.token);
+                token_client.transfer(&payment.merchant_address, &refund.initiator, &refund.amount);
+
+                payment.refunded_amount += refund.amount;
+                payment.status = if payment.refunded_amount >= payment.amount {
+                    PaymentStatus::FullyRefunded
+                } else {
+                    PaymentStatus::PartiallyRefunded
+                };
+                storage::set_payment(&env, &payment);
+
+                refund.status = RefundStatus::Completed;
+
+                let mut stats = storage::get_global_stats(&env);
+                stats.total_refunds += 1;
+                stats.total_refund_volume += refund.amount;
+                storage::set_global_stats(&env, &stats);
+            }
+            DisputeOutcome::FavorMerchant => {
+                refund.status = RefundStatus::Rejected;
+            }
+        }
+
+        storage::set_refund(&env, &refund);
+        dispute.outcome = Some(outcome);
+        storage::set_dispute(&env, &dispute);
+
+        env.events()
+            .publish(("lumenflow", "dispute_resolved"), refund_id);
+        Ok(())
+    }
+
     // ── Multi-signature payments ──────────────────────────────────────────────
 
     /// Initiate a multisig payment requiring `required_signatures` approvals.
