@@ -141,6 +141,7 @@ fn setup_payment_env() -> (
     let token = create_token(&env, &token_admin);
 
     client.set_admin(&admin);
+    client.add_allowed_token(&admin, &token);
     client.register_merchant(
         &merchant,
         &str(&env, "Shop"),
@@ -597,3 +598,68 @@ fn test_is_registered() {
     
     assert!(client.is_registered(&merchant));
 }
+
+// ── Whitelist tests ───────────────────────────────────────────────────────────
+
+#[test]
+fn test_token_whitelist_enforced() {
+    let (env, client, admin, merchant, payer, _token) = setup_payment_env();
+    let other_token = create_token(&env, &Address::generate(&env));
+    
+    // pub_key and sig for process_payment_with_signature
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // Try payment with non-whitelisted token
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "W_001"),
+        &merchant,
+        &other_token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+
+    // Whitelist it and try again
+    client.add_allowed_token(&admin, &other_token);
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "W_001"),
+        &merchant,
+        &other_token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+}
+
+#[test]
+fn test_remove_token_from_whitelist() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    
+    // Token is whitelisted in setup_payment_env
+    client.remove_allowed_token(&admin, &token);
+
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "W_002"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+}
+

@@ -73,6 +73,30 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Add a token to the whitelist (admin only).
+    pub fn add_allowed_token(
+        env: Env,
+        admin: Address,
+        token: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_token_allowed(&env, &token, true);
+        env.events().publish(("lumenflow", "token_allowed"), token);
+        Ok(())
+    }
+
+    /// Remove a token from the whitelist (admin only).
+    pub fn remove_allowed_token(
+        env: Env,
+        admin: Address,
+        token: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_token_allowed(&env, &token, false);
+        env.events().publish(("lumenflow", "token_removed"), token);
+        Ok(())
+    }
+
     // ── Merchant management ───────────────────────────────────────────────────
 
     /// Register a new merchant.
@@ -198,6 +222,10 @@ impl PaymentProcessingContract {
         require_non_empty_string(&order_id)?;
         validate_tags(&tags)?;
 
+        if !storage::is_token_allowed(&env, &token_address) {
+            return Err(PaymentError::TokenNotAllowed);
+        }
+
         if storage::get_payment(&env, &order_id).is_some() {
             return Err(PaymentError::PaymentAlreadyExists);
         }
@@ -277,6 +305,10 @@ impl PaymentProcessingContract {
         for item in payments.iter() {
             require_positive(item.amount)?;
             require_non_empty_string(&item.order_id)?;
+
+            if !storage::is_token_allowed(&env, &item.token_address) {
+                return Err(PaymentError::TokenNotAllowed);
+            }
 
             if storage::get_payment(&env, &item.order_id).is_some() {
                 return Err(PaymentError::PaymentAlreadyExists);
@@ -647,6 +679,10 @@ impl PaymentProcessingContract {
         require_positive(amount)?;
         require_non_empty_string(&payment_id)?;
 
+        if !storage::is_token_allowed(&env, &token_address) {
+            return Err(PaymentError::TokenNotAllowed);
+        }
+
         if storage::get_multisig(&env, &payment_id).is_some() {
             return Err(PaymentError::PaymentAlreadyExists);
         }
@@ -900,6 +936,10 @@ impl PaymentProcessingContract {
         merchant.require_auth();
         require_positive(amount)?;
         require_non_empty_string(&request_id)?;
+
+        if !storage::is_token_allowed(&env, &token) {
+            return Err(PaymentError::TokenNotAllowed);
+        }
 
         if storage::get_payment_request(&env, &request_id).is_some() {
             return Err(PaymentError::PaymentAlreadyExists);
