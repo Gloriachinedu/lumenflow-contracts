@@ -823,6 +823,17 @@ fn test_cleanup_removes_from_index_lists() {
 }
 
 #[test]
+fn test_cleanup_period_set_event() {
+    let (env, client, admin, _, _, _) = setup_payment_env();
+    client.set_payment_cleanup_period(&admin, &86400);
+    let events = env.events().all();
+    let event = events.iter().find(|e| {
+        e.topics.get(1).unwrap() == soroban_sdk::Symbol::new(&env, "cleanup_period_set")
+    });
+    assert!(event.is_some());
+}
+
+#[test]
 fn test_is_registered() {
     let (env, client) = setup();
     let merchant = Address::generate(&env);
