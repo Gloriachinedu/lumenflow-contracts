@@ -843,6 +843,7 @@ impl PaymentProcessingContract {
             required_signatures,
             signers,
             signatures: Vec::new(&env),
+            signed_by: Vec::new(&env),
             executed: false,
             created_at: env.ledger().timestamp(),
         };
@@ -873,12 +874,13 @@ impl PaymentProcessingContract {
             return Err(PaymentError::Unauthorized);
         }
 
-        // Prevent double-signing (simple check: signature count vs signer index)
-        if ms.signatures.len() >= ms.signers.len() {
+        // Prevent double-signing: check if this signer has already signed
+        if ms.signed_by.contains(&signer) {
             return Err(PaymentError::MultisigAlreadySigned);
         }
 
         ms.signatures.push_back(signature);
+        ms.signed_by.push_back(signer);
         storage::set_multisig(&env, &ms);
         Ok(())
     }
