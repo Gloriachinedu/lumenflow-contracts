@@ -219,3 +219,17 @@ pub fn remove_payment_request(env: &Env, request_id: &String) {
         .temporary()
         .remove(&DataKey::PaymentRequest(request_id.clone()));
 }
+
+// ── Allowed Tokens ────────────────────────────────────────────────────────────
+
+pub fn is_token_allowed(env: &Env, token: &Address) -> bool {
+    env.storage().instance().has(&DataKey::AllowedToken(token.clone()))
+}
+
+pub fn set_token_allowed(env: &Env, token: &Address, allowed: bool) {
+    if allowed {
+        env.storage().instance().set(&DataKey::AllowedToken(token.clone()), &());
+    } else {
+        env.storage().instance().remove(&DataKey::AllowedToken(token.clone()));
+    }
+}

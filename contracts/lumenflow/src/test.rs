@@ -141,6 +141,7 @@ fn setup_payment_env() -> (
     let token = create_token(&env, &token_admin);
 
     client.set_admin(&admin);
+    client.add_allowed_token(&admin, &token);
     client.register_merchant(
         &merchant,
         &str(&env, "Shop"),
