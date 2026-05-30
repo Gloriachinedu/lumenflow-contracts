@@ -49,6 +49,7 @@ pub struct PaymentOrder {
     pub refunded_amount: i128,
     pub memo: String,
     pub tags: Option<Vec<String>>,
+    pub note: Option<String>,
 }
 
 #[contracttype]

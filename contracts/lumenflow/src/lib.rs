@@ -246,6 +246,7 @@ impl PaymentProcessingContract {
             refunded_amount: 0,
             memo,
             tags,
+            note: None,
         };
 
         storage::set_payment(&env, &payment);
@@ -326,6 +327,8 @@ impl PaymentProcessingContract {
                 paid_at: now,
                 refunded_amount: 0,
                 memo: item.memo.clone(),
+                tags: None,
+                note: None,
             };
 
             storage::set_payment(&env, &payment);
@@ -366,6 +369,29 @@ impl PaymentProcessingContract {
             return Err(PaymentError::Unauthorized);
         }
         Ok(payment)
+    }
+
+    /// Attach or update a merchant note on a completed payment (max 512 chars).
+    pub fn add_payment_note(
+        env: Env,
+        merchant: Address,
+        order_id: String,
+        note: String,
+    ) -> Result<(), PaymentError> {
+        merchant.require_auth();
+        if note.len() > 512 {
+            return Err(PaymentError::InvalidInput);
+        }
+        let mut payment = storage::get_payment(&env, &order_id)
+            .ok_or(PaymentError::PaymentNotFound)?;
+        if payment.merchant_address != merchant {
+            return Err(PaymentError::Unauthorized);
+        }
+        payment.note = Some(note);
+        storage::set_payment(&env, &payment);
+        env.events()
+            .publish(("lumenflow", "payment_note_added"), order_id);
+        Ok(())
     }
 
     /// Get a public summary of a payment by order ID. No auth required.
@@ -1247,6 +1273,8 @@ impl PaymentProcessingContract {
             paid_at: now,
             refunded_amount: 0,
             memo: pr.memo,
+            tags: None,
+            note: None,
         };
 
         storage::set_payment(&env, &payment);
