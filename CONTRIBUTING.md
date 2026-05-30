@@ -21,6 +21,25 @@ We pin the Rust toolchain to a specific stable version in `rust-toolchain.toml` 
 2. Update the `toolchain` version and the `Verify toolchain version` step in `.github/workflows/ci.yml`.
 3. Update this document if the recommended setup changes.
 
+### GitHub Actions Pinning Policy
+
+All `uses:` entries in workflow files **must** reference a full commit SHA, not a mutable tag or branch:
+
+```yaml
+# ✅ correct
+- uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+
+# ❌ wrong — tag is mutable
+- uses: actions/checkout@v4
+```
+
+This prevents supply-chain attacks where a tag is silently moved to malicious code.
+
+To update a pinned action:
+1. Find the new commit SHA for the desired release on the action's GitHub releases page.
+2. Replace the SHA in the workflow file and update the version comment.
+3. Dependabot is configured to open PRs for these updates automatically (weekly).
+
 ## Development Setup
 
 ```bash
@@ -54,6 +73,12 @@ cargo build --target wasm32-unknown-unknown --release
 - Every new feature or bug fix must include a test.
 - Tests live in `src/test.rs` using `soroban-sdk` testutils.
 - Use `mock_all_auths()` for unit tests; integration tests should use real auth.
+
+### Reproducible Builds
+
+- `Cargo.lock` must be committed to the repository.
+- CI enforces that the lock file is up-to-date with `Cargo.toml` using `cargo update --locked`.
+- Always use the `--locked` flag with cargo commands in production or CI environments.
 
 ### Commits
 
@@ -91,3 +116,7 @@ Do **not** open a public issue for security vulnerabilities. See [SECURITY.md](S
 ## Questions
 
 Open a [GitHub Discussion](../../discussions) for questions, ideas, or general feedback.
+
+## Governance
+
+See [GOVERNANCE.md](GOVERNANCE.md) for how project decisions are made, the RFC process, and how to become a maintainer.
