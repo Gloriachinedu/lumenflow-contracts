@@ -8,6 +8,8 @@
 [![Audited by](https://img.shields.io/badge/Audited%20By-TBD-lightgrey)](docs/audit/audit-report.md)
 [![Discord](https://img.shields.io/discord/123456789012345678?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/lumenflow)
 
+[English](README.md) | [Español](README.es.md) | [Português](README.pt.md)
+
 ---
 
 ## Overview
