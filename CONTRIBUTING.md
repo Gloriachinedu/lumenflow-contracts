@@ -21,6 +21,25 @@ We pin the Rust toolchain to a specific stable version in `rust-toolchain.toml` 
 2. Update the `toolchain` version and the `Verify toolchain version` step in `.github/workflows/ci.yml`.
 3. Update this document if the recommended setup changes.
 
+### GitHub Actions Pinning Policy
+
+All `uses:` entries in workflow files **must** reference a full commit SHA, not a mutable tag or branch:
+
+```yaml
+# ✅ correct
+- uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+
+# ❌ wrong — tag is mutable
+- uses: actions/checkout@v4
+```
+
+This prevents supply-chain attacks where a tag is silently moved to malicious code.
+
+To update a pinned action:
+1. Find the new commit SHA for the desired release on the action's GitHub releases page.
+2. Replace the SHA in the workflow file and update the version comment.
+3. Dependabot is configured to open PRs for these updates automatically (weekly).
+
 ## Development Setup
 
 ```bash

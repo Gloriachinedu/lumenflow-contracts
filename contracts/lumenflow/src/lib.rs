@@ -73,6 +73,17 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Set the maximum number of pending refunds allowed per order (default 5). Admin only.
+    pub fn set_max_refunds_per_order(
+        env: Env,
+        admin: Address,
+        max: u32,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_max_refunds_per_order(&env, max);
+        Ok(())
+    }
+
     // ── Merchant management ───────────────────────────────────────────────────
 
     /// Register a new merchant.
@@ -517,6 +528,12 @@ impl PaymentProcessingContract {
             return Err(PaymentError::RefundExceedsOriginal);
         }
 
+        // Rate limit: cap pending refunds per order
+        let max = storage::get_max_refunds_per_order(&env);
+        if storage::get_order_refund_count(&env, &order_id) >= max {
+            return Err(PaymentError::TooManyRefunds);
+        }
+
         let refund = RefundRecord {
             refund_id: refund_id.clone(),
             order_id,
@@ -527,6 +544,7 @@ impl PaymentProcessingContract {
             created_at: now,
         };
         storage::set_refund(&env, &refund);
+        storage::increment_order_refund_count(&env, &order_id);
 
         env.events()
             .publish(("lumenflow", "refund_initiated"), refund_id);
@@ -728,6 +746,29 @@ impl PaymentProcessingContract {
 
         ms.executed = true;
         storage::set_multisig(&env, &ms);
+
+        // Record payment in history so it appears in merchant/payer queries
+        let payment = PaymentOrder {
+            order_id: payment_id.clone(),
+            merchant_address: ms.merchant_address.clone(),
+            payer: payer.clone(),
+            token: ms.token.clone(),
+            amount: ms.amount,
+            status: PaymentStatus::Completed,
+            paid_at: env.ledger().timestamp(),
+            refunded_amount: 0,
+            memo: String::from_str(&env, ""),
+            tags: None,
+        };
+        storage::set_payment(&env, &payment);
+        storage::add_merchant_payment_id(&env, &ms.merchant_address, &payment_id);
+        storage::add_payer_payment_id(&env, &payer, &payment_id);
+
+        // Update merchant total
+        if let Some(mut merchant) = storage::get_merchant(&env, &ms.merchant_address) {
+            merchant.total_received += ms.amount;
+            storage::set_merchant(&env, &merchant);
+        }
 
         let mut stats = storage::get_global_stats(&env);
         stats.total_payments += 1;
