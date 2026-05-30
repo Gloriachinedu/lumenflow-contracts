@@ -73,6 +73,17 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Set the maximum number of pending refunds allowed per order (default 5). Admin only.
+    pub fn set_max_refunds_per_order(
+        env: Env,
+        admin: Address,
+        max: u32,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_max_refunds_per_order(&env, max);
+        Ok(())
+    }
+
     // ── Merchant management ───────────────────────────────────────────────────
 
     /// Register a new merchant.
@@ -517,6 +528,12 @@ impl PaymentProcessingContract {
             return Err(PaymentError::RefundExceedsOriginal);
         }
 
+        // Rate limit: cap pending refunds per order
+        let max = storage::get_max_refunds_per_order(&env);
+        if storage::get_order_refund_count(&env, &order_id) >= max {
+            return Err(PaymentError::TooManyRefunds);
+        }
+
         let refund = RefundRecord {
             refund_id: refund_id.clone(),
             order_id,
@@ -527,6 +544,7 @@ impl PaymentProcessingContract {
             created_at: now,
         };
         storage::set_refund(&env, &refund);
+        storage::increment_order_refund_count(&env, &order_id);
 
         env.events()
             .publish(("lumenflow", "refund_initiated"), refund_id);
