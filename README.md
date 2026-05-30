@@ -206,12 +206,14 @@ stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network 
 stellar contract invoke --id $CONTRACT_ID --source-account $CALLER_KEY --network $NETWORK \
   -- get_merchant --merchant_address <address>
 ```
-
 ### Payment Processing
+
+For detailed information on the signature payload format and how to build it in various languages, see **[docs/signature-format.md](docs/signature-format.md)**.
 
 ```bash
 # Process payment with signature
 stellar contract invoke --id $CONTRACT_ID --source-account $PAYER_KEY --network $NETWORK \
+...
   -- process_payment_with_signature \
   --payer <payer-address> \
   --order_id "ORDER_001" \
