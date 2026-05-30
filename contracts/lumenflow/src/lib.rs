@@ -224,7 +224,21 @@ impl PaymentProcessingContract {
             return Err(PaymentError::MerchantInactive);
         }
 
-        // Build payload: order_id bytes + amount bytes
+        // Build signature payload: XDR-encoded order_id followed by big-endian amount.
+        //
+        // Byte layout:
+        //   [0..3]   u32 big-endian — length prefix of the UTF-8 order_id string (XDR String)
+        //   [4..4+N) UTF-8 bytes of order_id (N = length prefix value)
+        //   [4+N..4+N+P) 0–3 padding bytes so total XDR length is a multiple of 4
+        //   [4+N+P..4+N+P+16] i128 big-endian — payment amount (16 bytes)
+        //
+        // Example — order_id "ORD1" (4 bytes), amount 1000:
+        //   00 00 00 04  4F 52 44 31  00 00 00 00 00 00 00 00 00 00 03 E8
+        //   ^-- len=4   ^-- "ORD1"   ^-- no padding  ^-- 1000 as i128 BE
+        //
+        // Off-chain signing (any language):
+        //   payload = len_be_u32(order_id) + order_id_utf8 + padding_to_4 + amount_be_i128
+        //   signature = ed25519_sign(merchant_private_key, payload)
         let mut payload = Bytes::new(&env);
         payload.append(&order_id.clone().to_xdr(&env));
         payload.append(&Bytes::from_slice(&env, &amount.to_be_bytes()));
@@ -306,7 +320,7 @@ impl PaymentProcessingContract {
                 return Err(PaymentError::MerchantInactive);
             }
 
-            // Build payload: order_id bytes + amount bytes
+            // Build payload: XDR-encoded order_id + big-endian amount (same format as process_payment_with_signature)
             let mut payload = Bytes::new(&env);
             payload.append(&item.order_id.clone().to_xdr(&env));
             payload.append(&Bytes::from_slice(&env, &item.amount.to_be_bytes()));
