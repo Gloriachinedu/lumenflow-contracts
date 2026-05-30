@@ -26,6 +26,7 @@ LumenFlow is a production-grade payment processing smart contract for the [Stell
 - Audit plan and scope published in `docs/audit/audit-report.md`
 - Refund lifecycle state diagram available in `docs/refund-lifecycle.md`
 - Testing guidance available in `docs/testing-guide.md`
+- Multisig payment flow guide available in `docs/multisig-guide.md`
 
 ## Refund lifecycle overview
 
