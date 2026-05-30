@@ -140,6 +140,17 @@ jobs:
             --release \
             --package lumenflow
 
+      - name: Check WASM size
+        run: |
+          WASM=target/wasm32-unknown-unknown/release/lumenflow.wasm
+          SIZE=$(wc -c < "$WASM")
+          LIMIT=$((100 * 1024))
+          echo "WASM size: ${SIZE} bytes (limit: ${LIMIT} bytes)"
+          if [ "$SIZE" -gt "$LIMIT" ]; then
+            echo "ERROR: WASM binary exceeds 100 KB limit (${SIZE} > ${LIMIT})"
+            exit 1
+          fi
+
       - name: Upload WASM artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:

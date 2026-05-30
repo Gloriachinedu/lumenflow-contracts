@@ -126,6 +126,14 @@ The compiled WASM is at:
 target/wasm32-unknown-unknown/release/lumenflow.wasm
 ```
 
+**Current binary size:** ~55 KB (well within Soroban's 128 KB contract size limit).
+
+CI enforces a 100 KB threshold — the build fails if the WASM exceeds this size. To check locally:
+
+```bash
+wc -c target/wasm32-unknown-unknown/release/lumenflow.wasm
+```
+
 ---
 
 ## Testing
