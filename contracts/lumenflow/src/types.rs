@@ -21,6 +21,7 @@ pub struct Merchant {
     pub contact_info: String,
     pub category: MerchantCategory,
     pub active: bool,
+    pub verified: bool,
     pub registered_at: u64,
     pub total_received: i128,
 }
@@ -48,6 +49,28 @@ pub struct PaymentOrder {
     pub refunded_amount: i128,
     pub memo: String,
     pub tags: Option<Vec<String>>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaymentSummary {
+    pub order_id: String,
+    pub merchant_address: Address,
+    pub amount: i128,
+    pub token: Address,
+    pub status: PaymentStatus,
+    pub paid_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaymentRequest {
+    pub request_id: String,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub memo: String,
+    pub expires_at: u64,
 }
 
 #[contracttype]
@@ -152,8 +175,12 @@ pub struct PaymentPage {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GlobalStats {
     pub total_payments: u32,
+    /// Aggregate volume of completed payments. Uses saturating arithmetic to avoid
+    /// runtime panics when approaching i128::MAX.
     pub total_volume: i128,
     pub total_refunds: u32,
+    /// Aggregate volume of executed refunds. Uses saturating arithmetic to avoid
+    /// runtime panics when approaching i128::MAX.
     pub total_refund_volume: i128,
     pub active_merchants: u32,
 }
