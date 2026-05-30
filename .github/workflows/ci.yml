@@ -29,6 +29,9 @@ jobs:
       - name: Verify toolchain version
         run: rustc --version | grep "1.87.0"
 
+      - name: Reproducibility check
+        run: cargo update --locked
+
       - name: Cache cargo registry
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
@@ -43,7 +46,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
   test:
     name: Test
@@ -73,7 +76,7 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Run tests
-        run: cargo test --all-features
+        run: cargo test --locked --all-features
 
   auth-tests:
     name: Auth Tests
@@ -132,7 +135,7 @@ jobs:
 
       - name: Build WASM
         run: |
-          cargo build \
+          cargo build --locked \
             --target wasm32-unknown-unknown \
             --release \
             --package lumenflow
