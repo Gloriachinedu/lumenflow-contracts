@@ -55,6 +55,12 @@ cargo build --target wasm32-unknown-unknown --release
 - Tests live in `src/test.rs` using `soroban-sdk` testutils.
 - Use `mock_all_auths()` for unit tests; integration tests should use real auth.
 
+### Reproducible Builds
+
+- `Cargo.lock` must be committed to the repository.
+- CI enforces that the lock file is up-to-date with `Cargo.toml` using `cargo update --locked`.
+- Always use the `--locked` flag with cargo commands in production or CI environments.
+
 ### Commits
 
 Follow [Conventional Commits](https://www.conventionalcommits.org/):
