@@ -690,6 +690,15 @@ impl PaymentProcessingContract {
             return Err(PaymentError::MerchantInactive);
         }
 
+        // Check for duplicate signers (#85)
+        for i in 0..signers.len() {
+            for j in (i + 1)..signers.len() {
+                if signers.get(i).unwrap() == signers.get(j).unwrap() {
+                    return Err(PaymentError::InvalidInput);
+                }
+            }
+        }
+
         let ms = MultisigPayment {
             payment_id: payment_id.clone(),
             merchant_address,
