@@ -194,6 +194,29 @@ stellar contract invoke \
 
 ---
 
+## Smoke Test
+
+After deploying to testnet, run the smoke test to verify the contract is functional:
+
+```bash
+CONTRACT_ID=<id> \
+ADMIN_KEY=<admin-secret> \
+MERCHANT_KEY=<merchant-secret> \
+PAYER_KEY=<payer-secret> \
+TOKEN_ADDRESS=<sac-token-address> \
+ADMIN_ADDRESS=<admin-address> \
+MERCHANT_ADDRESS=<merchant-address> \
+PAYER_ADDRESS=<payer-address> \
+NETWORK=testnet \
+./scripts/smoke_test.sh
+```
+
+The script calls `set_admin`, `register_merchant`, `process_payment_with_signature`, and `get_merchant` in sequence. It exits non-zero on any failure.
+
+You can also trigger it from GitHub Actions via **Actions → Smoke Test (Testnet) → Run workflow**, providing the deployed contract ID. Required secrets: `TESTNET_ADMIN_KEY`, `TESTNET_MERCHANT_KEY`, `TESTNET_PAYER_KEY`, `TESTNET_TOKEN_ADDRESS`, `TESTNET_ADMIN_ADDRESS`, `TESTNET_MERCHANT_ADDRESS`, `TESTNET_PAYER_ADDRESS`.
+
+---
+
 ## Contract API
 
 ### Admin
