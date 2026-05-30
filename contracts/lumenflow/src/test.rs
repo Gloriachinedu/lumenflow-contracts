@@ -485,6 +485,54 @@ fn test_pagination_limit() {
     assert!(page.next_cursor.is_some());
 }
 
+// ── Refund rate limit tests ───────────────────────────────────────────────────
+
+#[test]
+fn test_refund_rate_limit_enforced() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "RL_001", 10_000);
+
+    // Default limit is 5; initiate 5 refunds successfully
+    for rid in ["R0", "R1", "R2", "R3", "R4"] {
+        client.initiate_refund(&payer, &str(&env, rid), &str(&env, "RL_001"), &100, &str(&env, "reason"));
+    }
+
+    // 6th must fail
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "R5"),
+        &str(&env, "RL_001"),
+        &100,
+        &str(&env, "reason"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TooManyRefunds)));
+
+    // Admin raises limit — next call succeeds
+    client.set_max_refunds_per_order(&admin, &10);
+    client.initiate_refund(&payer, &str(&env, "R5"), &str(&env, "RL_001"), &100, &str(&env, "reason"));
+}
+
+#[test]
+fn test_refund_rate_limit_boundary() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "RL_002", 10_000);
+
+    // Set limit to 2
+    client.set_max_refunds_per_order(&admin, &2);
+
+    client.initiate_refund(&payer, &str(&env, "RA"), &str(&env, "RL_002"), &100, &str(&env, "r"));
+    client.initiate_refund(&payer, &str(&env, "RB"), &str(&env, "RL_002"), &100, &str(&env, "r"));
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "RC"),
+        &str(&env, "RL_002"),
+        &100,
+        &str(&env, "r"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TooManyRefunds)));
+}
+
 // ── Multisig tests ────────────────────────────────────────────────────────────
 
 #[test]
