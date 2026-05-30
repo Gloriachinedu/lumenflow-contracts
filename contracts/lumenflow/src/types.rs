@@ -175,8 +175,12 @@ pub struct PaymentPage {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GlobalStats {
     pub total_payments: u32,
+    /// Aggregate volume of completed payments. Uses saturating arithmetic to avoid
+    /// runtime panics when approaching i128::MAX.
     pub total_volume: i128,
     pub total_refunds: u32,
+    /// Aggregate volume of executed refunds. Uses saturating arithmetic to avoid
+    /// runtime panics when approaching i128::MAX.
     pub total_refund_volume: i128,
     pub active_merchants: u32,
 }

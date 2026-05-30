@@ -260,10 +260,7 @@ impl PaymentProcessingContract {
         // Update global stats
         let mut stats = storage::get_global_stats(&env);
         stats.total_payments += 1;
-        stats.total_volume += amount;
-        storage::set_global_stats(&env, &stats);
-
-        // Check for suspicious activity (Issue #96)
+            stats.total_volume = stats.total_volume.saturating_add(amount);
         let threshold = storage::get_large_payment_threshold(&env);
         if amount >= threshold {
             env.events().publish(
@@ -343,7 +340,7 @@ impl PaymentProcessingContract {
             // Update global stats
             let mut stats = storage::get_global_stats(&env);
             stats.total_payments += 1;
-            stats.total_volume += item.amount;
+            stats.total_volume = stats.total_volume.saturating_add(item.amount);
             storage::set_global_stats(&env, &stats);
 
             env.events().publish(
@@ -646,7 +643,7 @@ impl PaymentProcessingContract {
 
         let mut stats = storage::get_global_stats(&env);
         stats.total_refunds += 1;
-        stats.total_refund_volume += r.amount;
+        stats.total_refund_volume = stats.total_refund_volume.saturating_add(r.amount);
         storage::set_global_stats(&env, &stats);
 
         env.events()
@@ -796,7 +793,7 @@ impl PaymentProcessingContract {
 
         let mut stats = storage::get_global_stats(&env);
         stats.total_payments += 1;
-        stats.total_volume += ms.amount;
+        stats.total_volume = stats.total_volume.saturating_add(ms.amount);
         storage::set_global_stats(&env, &stats);
 
         env.events()
@@ -1030,7 +1027,7 @@ impl PaymentProcessingContract {
         // Update stats
         let mut stats = storage::get_global_stats(&env);
         stats.total_payments += 1;
-        stats.total_volume += pr.amount;
+        stats.total_volume = stats.total_volume.saturating_add(pr.amount);
         storage::set_global_stats(&env, &stats);
 
         // Remove the request as it's paid

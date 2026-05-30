@@ -8,6 +8,7 @@ use soroban_sdk::{
 
 use crate::{
     error::PaymentError,
+    storage,
     types::{BatchPaymentItem, MerchantCategory, PaymentFilter, SortField, SortOrder, StatusFilter},
     PaymentProcessingContract, PaymentProcessingContractClient,
 };
@@ -642,6 +643,20 @@ fn test_global_stats_updated() {
     assert_eq!(stats.total_payments, 2);
     assert_eq!(stats.total_volume, 3_000);
     assert_eq!(stats.active_merchants, 1);
+}
+
+#[test]
+fn test_total_volume_saturates_at_i128_max() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut stats = storage::get_global_stats(&env);
+    stats.total_volume = i128::MAX - 500;
+    storage::set_global_stats(&env, &stats);
+
+    make_payment(&env, &client, &merchant, &payer, &token, "SATURATE_001", 1_000);
+
+    let stats = storage::get_global_stats(&env);
+    assert_eq!(stats.total_volume, i128::MAX);
 }
 
 #[test]
