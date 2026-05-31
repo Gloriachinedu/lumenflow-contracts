@@ -20,6 +20,8 @@ pub enum DataKey {
     LargePaymentThreshold,
     MaxRefundsPerOrder,
     OrderRefundCount(String),
+    AllowedToken(Address),
+    PayerNonce(Address),
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -271,4 +273,20 @@ pub fn set_token_allowed(env: &Env, token: &Address, allowed: bool) {
     } else {
         env.storage().instance().remove(&DataKey::AllowedToken(token.clone()));
     }
+}
+
+// ── Payer Nonce ───────────────────────────────────────────────────────────────
+
+pub fn get_payer_nonce(env: &Env, payer: &Address) -> u64 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::PayerNonce(payer.clone()))
+        .unwrap_or(0)
+}
+
+pub fn increment_payer_nonce(env: &Env, payer: &Address) {
+    let nonce = get_payer_nonce(env, payer) + 1;
+    env.storage()
+        .persistent()
+        .set(&DataKey::PayerNonce(payer.clone()), &nonce);
 }

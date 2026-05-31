@@ -232,6 +232,8 @@ You can also trigger it from GitHub Actions via **Actions → Smoke Test (Testne
 
 ## Contract API
 
+For a complete list of contract error codes, their descriptions, and remediation steps, see **[docs/errors.md](docs/errors.md)**.
+
 ### Admin
 
 ```bash
