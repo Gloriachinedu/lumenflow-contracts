@@ -145,6 +145,65 @@ fn test_register_merchant_duplicate_fails() {
 }
 
 #[test]
+fn test_persistent_storage_ttl_preserves_merchant_after_ledger_advance() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+
+    client.register_merchant(
+        &merchant,
+        &str(&env, "TTL Shop"),
+        &str(&env, "Ledger TTL test"),
+        &str(&env, "ttl@shop.com"),
+        &MerchantCategory::Retail,
+    );
+
+    env.ledger().with_mut(|l| {
+        l.timestamp += 365 * 24 * 3600;
+    });
+
+    let m = client.get_merchant(&merchant);
+    assert_eq!(m.name, str(&env, "TTL Shop"));
+    assert_eq!(m.contact_email, str(&env, "ttl@shop.com"));
+}
+
+#[test]
+fn test_persistent_storage_ttl_preserves_payment_after_ledger_advance() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    make_payment(&env, &client, &merchant, &payer, &token, "TTL_ORDER", 1_000);
+
+    env.ledger().with_mut(|l| {
+        l.timestamp += 365 * 24 * 3600;
+    });
+
+    let payment = client.get_payment_by_id(&payer, &str(&env, "TTL_ORDER"));
+    assert_eq!(payment.amount, 1_000);
+    assert_eq!(payment.order_id, str(&env, "TTL_ORDER"));
+}
+
+#[test]
+fn test_persistent_storage_ttl_preserves_refund_after_ledger_advance() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    make_payment(&env, &client, &merchant, &payer, &token, "TTL_REFUND_ORDER", 1_000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "TTL_REFUND_001"),
+        &str(&env, "TTL_REFUND_ORDER"),
+        &500,
+        &str(&env, "TTL refund test"),
+    );
+
+    env.ledger().with_mut(|l| {
+        l.timestamp += 365 * 24 * 3600;
+    });
+
+    let refund = client.get_refund(&str(&env, "TTL_REFUND_001"));
+    assert_eq!(refund.refund_id, str(&env, "TTL_REFUND_001"));
+    assert_eq!(refund.amount, 500);
+}
+
+#[test]
 fn test_deactivate_merchant() {
     let (env, client) = setup();
     let admin = Address::generate(&env);

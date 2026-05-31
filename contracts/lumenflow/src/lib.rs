@@ -19,9 +19,10 @@ use helper::{
     require_valid_limit, validate_memo_length, validate_tags, verify_signature, REFUND_WINDOW_SECS,
 };
 use types::{
-    BatchPaymentItem, GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder,
-    PaymentPage, PaymentStatus, RefundRecord, RefundStatus, SortField, SortOrder,
-    StatusFilter, Merchant, SuspiciousActivityReason, SubscriptionPlan, Subscription, SubscriptionStatus,
+    BatchPaymentItem, DisputeOutcome, DisputeRecord, GlobalStats, MerchantCategory, MultisigPayment,
+    PaymentFilter, PaymentOrder, PaymentPage, PaymentStatus, PaymentSummary, RefundRecord,
+    RefundStatus, SortField, SortOrder, StatusFilter, Merchant, SuspiciousActivityReason,
+    SubscriptionPlan, Subscription, SubscriptionStatus,
 };
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -82,6 +83,24 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         require_admin(&env, &admin)?;
         storage::set_max_refunds_per_order(&env, max);
+        Ok(())
+    }
+
+    /// Allow or disallow a token for payments. Admin only.
+    pub fn add_allowed_token(env: Env, admin: Address, token: Address) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_token_allowed(&env, &token, true);
+        Ok(())
+    }
+
+    /// Remove a token from the allowed list. Admin only.
+    pub fn remove_allowed_token(
+        env: Env,
+        admin: Address,
+        token: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_token_allowed(&env, &token, false);
         Ok(())
     }
 
@@ -341,6 +360,7 @@ impl PaymentProcessingContract {
             refunded_amount: 0,
             memo,
             tags,
+            note: None,
         };
 
         storage::set_payment(&env, &payment);
@@ -355,7 +375,7 @@ impl PaymentProcessingContract {
         // Update global stats
         let mut stats = storage::get_global_stats(&env);
         stats.total_payments += 1;
-        stats.total_volume += amount;
+        stats.total_volume = stats.total_volume.saturating_add(amount);
         storage::set_global_stats(&env, &stats);
 
         // Increment payer nonce on success
@@ -671,7 +691,7 @@ impl PaymentProcessingContract {
             created_at: now,
         };
         storage::set_refund(&env, &refund);
-        storage::increment_order_refund_count(&env, &order_id);
+        storage::increment_order_refund_count(&env, &refund.order_id);
 
         env.events()
             .publish(("lumenflow", "refund_initiated"), refund_id);
@@ -854,7 +874,7 @@ impl PaymentProcessingContract {
 
                 let mut stats = storage::get_global_stats(&env);
                 stats.total_refunds += 1;
-                stats.total_refund_volume += refund.amount;
+                stats.total_refund_volume = stats.total_refund_volume.saturating_add(refund.amount);
                 storage::set_global_stats(&env, &stats);
             }
             DisputeOutcome::FavorMerchant => {
@@ -997,6 +1017,7 @@ impl PaymentProcessingContract {
             refunded_amount: 0,
             memo: String::from_str(&env, ""),
             tags: None,
+            note: None,
         };
         storage::set_payment(&env, &payment);
         storage::add_merchant_payment_id(&env, &ms.merchant_address, &payment_id);
@@ -1116,7 +1137,7 @@ impl PaymentProcessingContract {
 
         let mut stats = storage::get_global_stats(&env);
         stats.total_payments += 1;
-        stats.total_volume += plan.amount;
+        stats.total_volume = stats.total_volume.saturating_add(plan.amount);
         storage::set_global_stats(&env, &stats);
 
         env.events().publish(
