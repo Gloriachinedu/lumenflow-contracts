@@ -218,6 +218,34 @@ fn test_successful_payment_with_signature() {
 }
 
 #[test]
+fn test_payment_history_limit_exceeded() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let merchant = Address::generate(&env);
+    let payer = Address::generate(&env);
+
+    let mut merchant_ids: Vec<String> = Vec::new(&env);
+    let mut payer_ids: Vec<String> = Vec::new(&env);
+    for _ in 0..storage::MAX_PAYMENT_IDS_PER_ACCOUNT {
+        merchant_ids.push_back(str(&env, "EXISTING_ORDER"));
+        payer_ids.push_back(str(&env, "EXISTING_ORDER"));
+    }
+
+    env.storage()
+        .persistent()
+        .set(&storage::DataKey::MerchantPayments(merchant.clone()), &merchant_ids);
+    env.storage()
+        .persistent()
+        .set(&storage::DataKey::PayerPayments(payer.clone()), &payer_ids);
+
+    let merchant_result = storage::add_merchant_payment_id(&env, &merchant, &str(&env, "NEW_ORDER"));
+    assert_eq!(merchant_result, Err(PaymentError::PaymentHistoryLimitExceeded));
+
+    let payer_result = storage::add_payer_payment_id(&env, &payer, &str(&env, "NEW_ORDER"));
+    assert_eq!(payer_result, Err(PaymentError::PaymentHistoryLimitExceeded));
+}
+
+#[test]
 fn test_duplicate_order_id_fails() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
     let pub_key = bytes(&env, &[0u8; 32]);

@@ -1,6 +1,11 @@
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
 
-use crate::types::{GlobalStats, Merchant, MultisigPayment, PaymentOrder, PaymentRequest, RefundRecord, SubscriptionPlan, Subscription};
+use crate::{error::PaymentError, types::{GlobalStats, Merchant, MultisigPayment, PaymentOrder, PaymentRequest, RefundRecord, SubscriptionPlan, Subscription}};
+
+/// Maximum number of payment IDs stored in the merchant or payer history index.
+/// This cap bounds Soroban persistent storage growth and limits excessive index
+/// reads/writes during history queries.
+pub const MAX_PAYMENT_IDS_PER_ACCOUNT: u32 = 1000;
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -127,12 +132,16 @@ pub fn get_merchant_payment_ids(env: &Env, merchant: &Address) -> Vec<String> {
         .unwrap_or(Vec::new(env))
 }
 
-pub fn add_merchant_payment_id(env: &Env, merchant: &Address, order_id: &String) {
+pub fn add_merchant_payment_id(env: &Env, merchant: &Address, order_id: &String) -> Result<(), PaymentError> {
     let mut ids = get_merchant_payment_ids(env, merchant);
+    if ids.len() >= MAX_PAYMENT_IDS_PER_ACCOUNT as usize {
+        return Err(PaymentError::PaymentHistoryLimitExceeded);
+    }
     ids.push_back(order_id.clone());
     env.storage()
         .persistent()
         .set(&DataKey::MerchantPayments(merchant.clone()), &ids);
+    Ok(())
 }
 
 pub fn remove_merchant_payment_id(env: &Env, merchant: &Address, order_id: &String) {
@@ -155,25 +164,16 @@ pub fn get_payer_payment_ids(env: &Env, payer: &Address) -> Vec<String> {
         .unwrap_or(Vec::new(env))
 }
 
-pub fn add_payer_payment_id(env: &Env, payer: &Address, order_id: &String) {
+pub fn add_payer_payment_id(env: &Env, payer: &Address, order_id: &String) -> Result<(), PaymentError> {
     let mut ids = get_payer_payment_ids(env, payer);
+    if ids.len() >= MAX_PAYMENT_IDS_PER_ACCOUNT as usize {
+        return Err(PaymentError::PaymentHistoryLimitExceeded);
+    }
     ids.push_back(order_id.clone());
     env.storage()
         .persistent()
         .set(&DataKey::PayerPayments(payer.clone()), &ids);
-}
-
-pub fn remove_merchant_payment_id(env: &Env, merchant: &Address, order_id: &String) {
-    let ids = get_merchant_payment_ids(env, merchant);
-    let mut new_ids: Vec<String> = Vec::new(env);
-    for id in ids.iter() {
-        if id != *order_id {
-            new_ids.push_back(id);
-        }
-    }
-    env.storage()
-        .persistent()
-        .set(&DataKey::MerchantPayments(merchant.clone()), &new_ids);
+    Ok(())
 }
 
 pub fn remove_payer_payment_id(env: &Env, payer: &Address, order_id: &String) {

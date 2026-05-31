@@ -26,6 +26,7 @@ LumenFlow is a production-grade payment processing smart contract for the [Stell
 - Audit plan and scope published in `docs/audit/audit-report.md`
 - Refund lifecycle state diagram available in `docs/refund-lifecycle.md`
 - Testing guidance available in `docs/testing-guide.md`
+- Merchant/payer history indexes are capped at `MAX_PAYMENT_IDS_PER_ACCOUNT = 1000` to prevent unbounded Soroban storage growth
 
 ## Refund lifecycle overview
 
