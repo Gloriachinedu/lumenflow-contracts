@@ -145,6 +145,42 @@ fn test_register_merchant_duplicate_fails() {
 }
 
 #[test]
+fn test_verify_signature_invalid_public_key_length() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let payload = Bytes::from_slice(&env, b"payload");
+    let public_key = Bytes::from_slice(&env, &[0u8; 31]);
+    let signature = Bytes::from_slice(&env, &[0u8; 64]);
+
+    let result = crate::helper::verify_signature(&env, &public_key, &payload, &signature);
+    assert_eq!(result, Err(PaymentError::InvalidSignature));
+}
+
+#[test]
+fn test_verify_signature_invalid_signature_length() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let payload = Bytes::from_slice(&env, b"payload");
+    let public_key = Bytes::from_slice(&env, &[0u8; 32]);
+    let signature = Bytes::from_slice(&env, &[0u8; 63]);
+
+    let result = crate::helper::verify_signature(&env, &public_key, &payload, &signature);
+    assert_eq!(result, Err(PaymentError::InvalidSignature));
+}
+
+#[test]
+fn test_verify_signature_valid_lengths_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let payload = Bytes::from_slice(&env, b"payload");
+    let public_key = Bytes::from_slice(&env, &[0u8; 32]);
+    let signature = Bytes::from_slice(&env, &[0u8; 64]);
+
+    let result = crate::helper::verify_signature(&env, &public_key, &payload, &signature);
+    assert_eq!(result, Ok(()));
+}
+
+#[test]
 fn test_persistent_storage_ttl_preserves_merchant_after_ledger_advance() {
     let (env, client) = setup();
     let merchant = Address::generate(&env);
