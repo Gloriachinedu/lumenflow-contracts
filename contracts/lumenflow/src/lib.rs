@@ -16,7 +16,7 @@ use soroban_sdk::{
 use error::PaymentError;
 use helper::{
     require_admin, require_admin_or, require_non_empty_string, require_positive,
-    require_valid_limit, validate_memo_length, validate_tags, verify_signature, REFUND_WINDOW_SECS,
+    require_valid_id, require_valid_limit, validate_memo_length, validate_tags, verify_signature, REFUND_WINDOW_SECS,
 };
 use types::{
     BatchPaymentItem, GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder,
@@ -207,7 +207,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         payer.require_auth();
         require_positive(amount)?;
-        require_non_empty_string(&order_id)?;
+        require_valid_id(&order_id)?;
         validate_memo_length(&memo)?;
         validate_tags(&tags)?;
 
@@ -306,7 +306,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         payer.require_auth();
         require_positive(amount)?;
-        require_non_empty_string(&order_id)?;
+        require_valid_id(&order_id)?;
         validate_tags(&tags)?;
 
         // Check nonce against stored per-payer nonce
@@ -381,7 +381,7 @@ impl PaymentProcessingContract {
 
         for item in payments.iter() {
             require_positive(item.amount)?;
-            require_non_empty_string(&item.order_id)?;
+            require_valid_id(&item.order_id)?;
 
             if !storage::is_token_allowed(&env, &item.token_address) {
                 return Err(PaymentError::TokenNotAllowed);
@@ -629,7 +629,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         caller.require_auth();
         require_positive(amount)?;
-        require_non_empty_string(&refund_id)?;
+        require_valid_id(&refund_id)?;
         validate_memo_length(&reason)?;
 
         if storage::get_refund(&env, &refund_id).is_some() {
@@ -886,7 +886,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         initiator.require_auth();
         require_positive(amount)?;
-        require_non_empty_string(&payment_id)?;
+        require_valid_id(&payment_id)?;
 
         if !storage::is_token_allowed(&env, &token_address) {
             return Err(PaymentError::TokenNotAllowed);

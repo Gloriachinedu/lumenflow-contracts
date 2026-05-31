@@ -6,6 +6,7 @@ use crate::storage;
 pub const MAX_PAGE_LIMIT: u32 = 100;
 pub const REFUND_WINDOW_SECS: u64 = 30 * 24 * 3600; // 30 days
 pub const MAX_MEMO_LENGTH: u32 = 256;
+pub const MAX_ID_LENGTH: u32 = 64;
 
 /// Require that `caller` is the stored admin.
 pub fn require_admin(env: &Env, caller: &Address) -> Result<(), PaymentError> {
@@ -72,6 +73,15 @@ pub fn verify_signature(
 /// Validate a non-empty string field.
 pub fn require_non_empty_string(s: &String) -> Result<(), PaymentError> {
     if s.len() == 0 {
+        Err(PaymentError::InvalidInput)
+    } else {
+        Ok(())
+    }
+}
+
+/// Validate an ID field (non-empty and within max length).
+pub fn require_valid_id(s: &String) -> Result<(), PaymentError> {
+    if s.len() == 0 || s.len() > MAX_ID_LENGTH {
         Err(PaymentError::InvalidInput)
     } else {
         Ok(())

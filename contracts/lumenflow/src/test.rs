@@ -1245,3 +1245,136 @@ fn test_execute_cancelled_multisig_fails() {
     let result = client.try_execute_multisig_payment(&payer, &str(&env, "CANCEL_006"));
     assert_eq!(result, Err(Ok(PaymentError::MultisigAlreadyCancelled)));
 }
+
+#[test]
+fn test_order_id_64_chars_accepted() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // 64-character order ID should be accepted
+    let order_id_64 = String::from_str(&env, "1234567890123456789012345678901234567890123456789012345678901234");
+    assert_eq!(order_id_64.len(), 64);
+
+    client.process_payment_with_signature(
+        &payer,
+        &order_id_64,
+        &merchant,
+        &token,
+        &1_000,
+        &str(&env, "Test payment"),
+        &None,
+        &sig,
+        &pub_key,
+    );
+}
+
+#[test]
+fn test_order_id_65_chars_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // 65-character order ID should be rejected
+    let order_id_65 = String::from_str(&env, "12345678901234567890123456789012345678901234567890123456789012345");
+    assert_eq!(order_id_65.len(), 65);
+
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &order_id_65,
+        &merchant,
+        &token,
+        &1_000,
+        &str(&env, "Test payment"),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_refund_id_64_chars_accepted() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_REF_ID", 1_000);
+
+    // 64-character refund ID should be accepted
+    let refund_id_64 = String::from_str(&env, "1234567890123456789012345678901234567890123456789012345678901234");
+    assert_eq!(refund_id_64.len(), 64);
+
+    client.initiate_refund(
+        &payer,
+        &refund_id_64,
+        &str(&env, "ORDER_REF_ID"),
+        &500,
+        &str(&env, "Test refund"),
+    );
+}
+
+#[test]
+fn test_refund_id_65_chars_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_REF_ID2", 1_000);
+
+    // 65-character refund ID should be rejected
+    let refund_id_65 = String::from_str(&env, "12345678901234567890123456789012345678901234567890123456789012345");
+    assert_eq!(refund_id_65.len(), 65);
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &refund_id_65,
+        &str(&env, "ORDER_REF_ID2"),
+        &500,
+        &str(&env, "Test refund"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_multisig_payment_id_64_chars_accepted() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer1.clone());
+    signers.push_back(signer2.clone());
+
+    // 64-character payment ID should be accepted
+    let payment_id_64 = String::from_str(&env, "1234567890123456789012345678901234567890123456789012345678901234");
+    assert_eq!(payment_id_64.len(), 64);
+
+    client.initiate_multisig_payment(
+        &payer,
+        &payment_id_64,
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &2,
+    );
+}
+
+#[test]
+fn test_multisig_payment_id_65_chars_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer1.clone());
+    signers.push_back(signer2.clone());
+
+    // 65-character payment ID should be rejected
+    let payment_id_65 = String::from_str(&env, "12345678901234567890123456789012345678901234567890123456789012345");
+    assert_eq!(payment_id_65.len(), 65);
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &payment_id_65,
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &2,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
