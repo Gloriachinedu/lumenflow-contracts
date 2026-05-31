@@ -1018,6 +1018,27 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Get multisig payment details. Admin, merchant, or allowed signer only.
+    pub fn get_multisig_payment(
+        env: Env,
+        caller: Address,
+        payment_id: String,
+    ) -> Result<MultisigPayment, PaymentError> {
+        caller.require_auth();
+        let ms = storage::get_multisig(&env, &payment_id)
+            .ok_or(PaymentError::MultisigNotFound)?;
+
+        let is_admin = storage::get_admin(&env).map_or(false, |a| a == caller);
+        let is_merchant = caller == ms.merchant_address;
+        let is_signer = ms.signers.contains(&caller);
+
+        if !is_admin && !is_merchant && !is_signer {
+            return Err(PaymentError::Unauthorized);
+        }
+
+        Ok(ms)
+    }
+
     // ── Subscriptions ─────────────────────────────────────────────────────────
 
     /// Create a recurring payment plan. Merchant only.

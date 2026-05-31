@@ -723,6 +723,58 @@ fn test_multisig_payment_appears_in_history() {
     assert_eq!(payer_page.payments.get(0).unwrap().order_id, str(&env, "MS_HIST"));
 }
 
+#[test]
+fn test_get_multisig_payment_by_authorized_parties() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer1.clone());
+    signers.push_back(signer2.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_Q1"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &2,
+    );
+
+    let by_merchant = client.get_multisig_payment(&merchant, &str(&env, "MS_Q1"));
+    assert_eq!(by_merchant.payment_id, str(&env, "MS_Q1"));
+    assert_eq!(by_merchant.amount, 1_000);
+    assert_eq!(by_merchant.merchant_address, merchant);
+    assert!(!by_merchant.executed);
+
+    let by_signer = client.get_multisig_payment(&signer1, &str(&env, "MS_Q1"));
+    assert_eq!(by_signer.payment_id, str(&env, "MS_Q1"));
+    assert!(by_signer.signers.contains(&signer2));
+}
+
+#[test]
+fn test_get_multisig_payment_unauthorized_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_Q2"),
+        &merchant,
+        &token,
+        &600,
+        &signers,
+        &1,
+    );
+
+    let result = client.try_get_multisig_payment(&stranger, &str(&env, "MS_Q2"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
 // ── Global stats tests ────────────────────────────────────────────────────────
 
 #[test]
