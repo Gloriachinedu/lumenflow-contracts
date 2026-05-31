@@ -144,6 +144,9 @@ impl PaymentProcessingContract {
             stats.active_merchants -= 1;
         }
         storage::set_global_stats(&env, &stats);
+
+        env.events()
+            .publish(("lumenflow", "merchant_deactivated"), merchant_address);
         Ok(())
     }
 
