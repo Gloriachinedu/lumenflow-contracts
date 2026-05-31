@@ -762,6 +762,157 @@ fn test_global_stats_updated() {
     assert_eq!(stats.active_merchants, 1);
 }
 
+// ── Date-range filtering tests ────────────────────────────────────────────────
+
+#[test]
+fn test_stats_no_filter_returns_all_time_totals() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "DR_001", 1_000);
+    make_payment(&env, &client, &merchant, &payer, &token, "DR_002", 2_000);
+
+    let stats = client.get_global_payment_stats(&admin, &None, &None);
+    assert_eq!(stats.total_payments, 2);
+    assert_eq!(stats.total_volume, 3_000);
+}
+
+#[test]
+fn test_stats_start_only_filter() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    // t=0: payment 1
+    make_payment(&env, &client, &merchant, &payer, &token, "DR_S1", 500);
+
+    // advance to t=100
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    make_payment(&env, &client, &merchant, &payer, &token, "DR_S2", 1_500);
+
+    // start_only at t=100 → only DR_S2 matches
+    let stats = client.get_global_payment_stats(&admin, &Some(100), &None);
+    assert_eq!(stats.total_payments, 1);
+    assert_eq!(stats.total_volume, 1_500);
+}
+
+#[test]
+fn test_stats_end_only_filter() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    make_payment(&env, &client, &merchant, &payer, &token, "DR_E1", 400);
+
+    env.ledger().with_mut(|l| l.timestamp += 200);
+    make_payment(&env, &client, &merchant, &payer, &token, "DR_E2", 600);
+
+    // end_only at t=50 → only DR_E1 (t=0) matches
+    let stats = client.get_global_payment_stats(&admin, &None, &Some(50));
+    assert_eq!(stats.total_payments, 1);
+    assert_eq!(stats.total_volume, 400);
+}
+
+#[test]
+fn test_stats_both_bounds_filter() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    // t=0
+    make_payment(&env, &client, &merchant, &payer, &token, "DR_B1", 100);
+    // t=100
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    make_payment(&env, &client, &merchant, &payer, &token, "DR_B2", 200);
+    // t=200
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    make_payment(&env, &client, &merchant, &payer, &token, "DR_B3", 300);
+
+    // window [100, 200] → DR_B2 + DR_B3
+    let stats = client.get_global_payment_stats(&admin, &Some(100), &Some(200));
+    assert_eq!(stats.total_payments, 2);
+    assert_eq!(stats.total_volume, 500);
+}
+
+#[test]
+fn test_stats_boundary_inclusive() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    // t=0: boundary start
+    make_payment(&env, &client, &merchant, &payer, &token, "DR_BI1", 111);
+    env.ledger().with_mut(|l| l.timestamp += 50);
+    make_payment(&env, &client, &merchant, &payer, &token, "DR_BI2", 222);
+    // t=100: boundary end
+    env.ledger().with_mut(|l| l.timestamp += 50);
+    make_payment(&env, &client, &merchant, &payer, &token, "DR_BI3", 333);
+
+    // Exact boundary [0, 100] → all three
+    let stats = client.get_global_payment_stats(&admin, &Some(0), &Some(100));
+    assert_eq!(stats.total_payments, 3);
+    assert_eq!(stats.total_volume, 666);
+}
+
+#[test]
+fn test_stats_no_payments_in_window_returns_zeros() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    make_payment(&env, &client, &merchant, &payer, &token, "DR_NM1", 999);
+
+    // Window entirely in the future
+    let stats = client.get_global_payment_stats(&admin, &Some(9_999_999), &Some(99_999_999));
+    assert_eq!(stats.total_payments, 0);
+    assert_eq!(stats.total_volume, 0);
+    assert_eq!(stats.total_refunds, 0);
+    assert_eq!(stats.total_refund_volume, 0);
+}
+
+#[test]
+fn test_stats_invalid_range_start_after_end_fails() {
+    let (env, client, admin, _, _, _) = setup_payment_env();
+    let result = client.try_get_global_payment_stats(&admin, &Some(200), &Some(100));
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_stats_single_timestamp_window() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    // t=0
+    make_payment(&env, &client, &merchant, &payer, &token, "DR_ST1", 777);
+    env.ledger().with_mut(|l| l.timestamp += 1);
+    make_payment(&env, &client, &merchant, &payer, &token, "DR_ST2", 888);
+
+    // Exact single-timestamp window [0, 0] → only DR_ST1
+    let stats = client.get_global_payment_stats(&admin, &Some(0), &Some(0));
+    assert_eq!(stats.total_payments, 1);
+    assert_eq!(stats.total_volume, 777);
+}
+
+#[test]
+fn test_stats_refund_totals_in_window() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    // t=0: payment with a completed refund
+    make_payment(&env, &client, &merchant, &payer, &token, "DR_RF1", 1_000);
+    client.initiate_refund(&payer, &str(&env, "DR_RFR1"), &str(&env, "DR_RF1"), &300, &str(&env, "r"));
+    client.approve_refund(&merchant, &str(&env, "DR_RFR1"));
+    client.execute_refund(&str(&env, "DR_RFR1"));
+
+    // t=500: payment outside the window
+    env.ledger().with_mut(|l| l.timestamp += 500);
+    make_payment(&env, &client, &merchant, &payer, &token, "DR_RF2", 2_000);
+
+    // Window [0, 100] → only DR_RF1 with its refund
+    let stats = client.get_global_payment_stats(&admin, &Some(0), &Some(100));
+    assert_eq!(stats.total_payments, 1);
+    assert_eq!(stats.total_volume, 1_000);
+    assert_eq!(stats.total_refunds, 1);
+    assert_eq!(stats.total_refund_volume, 300);
+}
+
+#[test]
+fn test_stats_active_merchants_unaffected_by_date_filter() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "DR_AM1", 100);
+
+    // active_merchants is a global count, not date-filtered
+    let all_time = client.get_global_payment_stats(&admin, &None, &None);
+    let filtered = client.get_global_payment_stats(&admin, &Some(9_999_999), &None);
+    assert_eq!(filtered.active_merchants, all_time.active_merchants);
+}
+
 #[test]
 fn test_total_volume_saturates_at_i128_max() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();

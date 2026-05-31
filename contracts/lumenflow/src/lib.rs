@@ -606,14 +606,59 @@ impl PaymentProcessingContract {
     }
 
     /// Global payment statistics. Admin only.
+    ///
+    /// When both `date_start` and `date_end` are `None` the cached all-time
+    /// totals are returned unchanged (O(1)).  When either bound is supplied the
+    /// function iterates all stored payments and aggregates only those whose
+    /// `paid_at` timestamp falls within the inclusive window.
     pub fn get_global_payment_stats(
         env: Env,
         admin: Address,
-        _date_start: Option<u64>,
-        _date_end: Option<u64>,
+        date_start: Option<u64>,
+        date_end: Option<u64>,
     ) -> Result<GlobalStats, PaymentError> {
         require_admin(&env, &admin)?;
-        Ok(storage::get_global_stats(&env))
+
+        // Validate bounds when both are present.
+        if let (Some(start), Some(end)) = (date_start, date_end) {
+            if start > end {
+                return Err(PaymentError::InvalidInput);
+            }
+        }
+
+        // No filter → return cached all-time stats (fast path).
+        if date_start.is_none() && date_end.is_none() {
+            return Ok(storage::get_global_stats(&env));
+        }
+
+        // Filtered path: iterate every payment and aggregate within the window.
+        let mut stats = GlobalStats {
+            total_payments: 0,
+            total_volume: 0,
+            total_refunds: 0,
+            total_refund_volume: 0,
+            active_merchants: storage::get_global_stats(&env).active_merchants,
+        };
+
+        for merchant_addr in storage::get_merchant_list(&env).iter() {
+            for order_id in storage::get_merchant_payment_ids(&env, &merchant_addr).iter() {
+                if let Some(payment) = storage::get_payment(&env, &order_id) {
+                    let ts = payment.paid_at;
+                    if date_start.map_or(true, |s| ts >= s) && date_end.map_or(true, |e| ts <= e) {
+                        stats.total_payments += 1;
+                        stats.total_volume = stats.total_volume.saturating_add(payment.amount);
+                        if payment.refunded_amount > 0 {
+                            stats.total_refunds += 1;
+                            stats.total_refund_volume = stats
+                                .total_refund_volume
+                                .saturating_add(payment.refunded_amount);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(stats)
     }
 
     // ── Refunds ───────────────────────────────────────────────────────────────
