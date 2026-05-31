@@ -143,6 +143,8 @@ pub struct MultisigPayment {
     pub signatures: Vec<Bytes>,
     pub signed_by: Vec<Address>,
     pub executed: bool,
+    pub cancelled: bool,
+    pub initiator: Address,
     pub created_at: u64,
 }
 

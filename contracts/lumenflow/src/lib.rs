@@ -921,6 +921,8 @@ impl PaymentProcessingContract {
             signatures: Vec::new(&env),
             signed_by: Vec::new(&env),
             executed: false,
+            cancelled: false,
+            initiator: initiator.clone(),
             created_at: env.ledger().timestamp(),
         };
         storage::set_multisig(&env, &ms);
@@ -975,6 +977,10 @@ impl PaymentProcessingContract {
             return Err(PaymentError::MultisigAlreadyExecuted);
         }
 
+        if ms.cancelled {
+            return Err(PaymentError::MultisigAlreadyCancelled);
+        }
+
         if ms.signatures.len() < ms.required_signatures {
             return Err(PaymentError::InsufficientSignatures);
         }
@@ -1015,6 +1021,38 @@ impl PaymentProcessingContract {
 
         env.events()
             .publish(("lumenflow", "multisig_executed"), payment_id);
+        Ok(())
+    }
+
+    /// Cancel a pending multisig payment. Only the initiator or admin can cancel.
+    pub fn cancel_multisig_payment(
+        env: Env,
+        caller: Address,
+        payment_id: String,
+    ) -> Result<(), PaymentError> {
+        caller.require_auth();
+        let mut ms = storage::get_multisig(&env, &payment_id)
+            .ok_or(PaymentError::MultisigNotFound)?;
+
+        if ms.executed {
+            return Err(PaymentError::MultisigAlreadyExecuted);
+        }
+
+        if ms.cancelled {
+            return Err(PaymentError::MultisigAlreadyCancelled);
+        }
+
+        // Only initiator or admin can cancel
+        let is_admin = storage::get_admin(&env).map_or(false, |a| a == caller);
+        if !is_admin && caller != ms.initiator {
+            return Err(PaymentError::Unauthorized);
+        }
+
+        ms.cancelled = true;
+        storage::set_multisig(&env, &ms);
+
+        env.events()
+            .publish(("lumenflow", "multisig_cancelled"), payment_id);
         Ok(())
     }
 
