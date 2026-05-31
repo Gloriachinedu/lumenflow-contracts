@@ -31,6 +31,11 @@ pub enum PaymentError {
     RefundNotApproved = 34,
     RefundAlreadyCompleted = 35,
     TooManyRefunds = 36,
+    RefundNotRejected = 37,
+
+    // Dispute
+    DisputeAlreadyExists = 38,
+    DisputeNotFound = 39,
 
     // Multisig
     MultisigNotFound = 40,
@@ -43,4 +48,14 @@ pub enum PaymentError {
     PaginationLimitExceeded = 51,
     BatchSizeExceeded = 52,
     InvalidTags = 53,
+    InvalidNonce = 54,
+
+    // Subscription
+    SubscriptionPlanAlreadyExists = 60,
+    SubscriptionAlreadyExists = 61,
+    SubscriptionPlanNotFound = 62,
+    SubscriptionNotFound = 63,
+    SubscriptionNotActive = 64,
+    SubscriptionMaxCyclesReached = 65,
+    SubscriptionIntervalNotElapsed = 66,
 }

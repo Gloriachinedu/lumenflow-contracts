@@ -19,9 +19,10 @@ use helper::{
     require_valid_limit, validate_memo_length, validate_tags, verify_signature, REFUND_WINDOW_SECS,
 };
 use types::{
-    BatchPaymentItem, GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder,
-    PaymentPage, PaymentStatus, RefundRecord, RefundStatus, SortField, SortOrder,
-    StatusFilter, Merchant, SuspiciousActivityReason, SubscriptionPlan, Subscription, SubscriptionStatus,
+    BatchPaymentItem, DisputeOutcome, DisputeRecord, GlobalStats, MerchantCategory, MultisigPayment,
+    PaymentFilter, PaymentOrder, PaymentPage, PaymentRequest, PaymentStatus, PaymentSummary,
+    RefundRecord, RefundStatus, SortField, SortOrder, StatusFilter, Merchant,
+    SuspiciousActivityReason, SubscriptionPlan, Subscription, SubscriptionStatus,
 };
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -82,6 +83,20 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         require_admin(&env, &admin)?;
         storage::set_max_refunds_per_order(&env, max);
+        Ok(())
+    }
+
+    /// Allow or disallow a token for payments. Admin only.
+    pub fn add_allowed_token(env: Env, admin: Address, token: Address) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_token_allowed(&env, &token, true);
+        Ok(())
+    }
+
+    /// Remove a token from the allowed list. Admin only.
+    pub fn remove_allowed_token(env: Env, admin: Address, token: Address) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_token_allowed(&env, &token, false);
         Ok(())
     }
 
@@ -501,28 +516,6 @@ impl PaymentProcessingContract {
             status: payment.status,
             paid_at: payment.paid_at,
         })
-    }
-
-    /// Update payment status after a partial refund.
-    pub fn update_payment_status(
-        env: Env,
-        caller: Address,
-        order_id: String,
-        refunded_amount: i128,
-    ) -> Result<(), PaymentError> {
-        let mut payment = storage::get_payment(&env, &order_id)
-            .ok_or(PaymentError::PaymentNotFound)?;
-
-        require_admin_or(&env, &caller, &payment.merchant_address.clone())?;
-
-        payment.refunded_amount = refunded_amount;
-        payment.status = if refunded_amount >= payment.amount {
-            PaymentStatus::FullyRefunded
-        } else {
-            PaymentStatus::PartiallyRefunded
-        };
-        storage::set_payment(&env, &payment);
-        Ok(())
     }
 
     /// Archive (remove) a payment record. Admin only.

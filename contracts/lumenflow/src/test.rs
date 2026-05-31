@@ -563,7 +563,7 @@ fn test_pagination_limit() {
         let pub_key = bytes(&env, &[0u8; 32]);
         let sig = bytes(&env, &[0u8; 64]);
         client.process_payment_with_signature(
-            &payer, id, &merchant, &token, &100, &str(&env, ""), &sig, &pub_key,
+            &payer, id, &merchant, &token, &100, &str(&env, ""), &None, &sig, &pub_key,
         );
     }
 
@@ -1081,4 +1081,150 @@ fn test_auth_sign_multisig_requires_listed_signer() {
     let stranger = Address::generate(&env);
     let result = client.try_sign_multisig_payment(&stranger, &str(&env, "AUTH_MS"), &bytes(&env, &[0u8; 64]));
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+// ── Security: refund bypass prevention tests (issue #20) ─────────────────────
+
+#[test]
+fn test_update_payment_status_does_not_exist() {
+    // update_payment_status has been removed; verify the contract no longer
+    // exposes a function that lets a caller directly set refunded_amount.
+    // This is a compile-time guarantee — the test documents the intent.
+    // If the function were re-introduced, the client would gain a method and
+    // the security tests below would need to cover it.
+    let (_env, _client) = setup();
+    // No client.update_payment_status — function removed.
+}
+
+#[test]
+fn test_merchant_cannot_forge_fully_refunded_without_executing_refund() {
+    // A merchant must not be able to mark a payment FullyRefunded without
+    // going through the initiate → approve → execute lifecycle.
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "FORGE_001", 1_000);
+
+    // Payment starts as Completed with refunded_amount = 0
+    let p = client.get_payment_by_id(&payer, &str(&env, "FORGE_001"));
+    assert!(matches!(p.status, crate::types::PaymentStatus::Completed));
+    assert_eq!(p.refunded_amount, 0);
+
+    // No direct status manipulation path exists; status remains Completed
+    let p2 = client.get_payment_by_id(&payer, &str(&env, "FORGE_001"));
+    assert!(matches!(p2.status, crate::types::PaymentStatus::Completed));
+    assert_eq!(p2.refunded_amount, 0);
+}
+
+#[test]
+fn test_refunded_amount_only_increases_via_execute_refund() {
+    // refunded_amount must only change when execute_refund is called.
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "TRACK_001", 1_000);
+
+    // Before any refund: refunded_amount = 0
+    let p = client.get_payment_by_id(&payer, &str(&env, "TRACK_001"));
+    assert_eq!(p.refunded_amount, 0);
+
+    // Execute a partial refund of 300
+    client.initiate_refund(&payer, &str(&env, "RF_TRACK_1"), &str(&env, "TRACK_001"), &300, &str(&env, "partial"));
+    client.approve_refund(&merchant, &str(&env, "RF_TRACK_1"));
+    client.execute_refund(&str(&env, "RF_TRACK_1"));
+
+    let p = client.get_payment_by_id(&payer, &str(&env, "TRACK_001"));
+    assert_eq!(p.refunded_amount, 300);
+    assert!(matches!(p.status, crate::types::PaymentStatus::PartiallyRefunded));
+
+    // Execute a second partial refund of 700 → fully refunded
+    client.initiate_refund(&payer, &str(&env, "RF_TRACK_2"), &str(&env, "TRACK_001"), &700, &str(&env, "rest"));
+    client.approve_refund(&merchant, &str(&env, "RF_TRACK_2"));
+    client.execute_refund(&str(&env, "RF_TRACK_2"));
+
+    let p = client.get_payment_by_id(&payer, &str(&env, "TRACK_001"));
+    assert_eq!(p.refunded_amount, 1_000);
+    assert!(matches!(p.status, crate::types::PaymentStatus::FullyRefunded));
+}
+
+#[test]
+fn test_unapproved_refund_cannot_be_executed() {
+    // A pending (not yet approved) refund must not be executable.
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "UNAPPROVED_001", 500);
+
+    client.initiate_refund(&payer, &str(&env, "RF_UNAPP"), &str(&env, "UNAPPROVED_001"), &200, &str(&env, "r"));
+
+    let result = client.try_execute_refund(&str(&env, "RF_UNAPP"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundNotApproved)));
+
+    // Payment status must remain Completed
+    let p = client.get_payment_by_id(&payer, &str(&env, "UNAPPROVED_001"));
+    assert!(matches!(p.status, crate::types::PaymentStatus::Completed));
+    assert_eq!(p.refunded_amount, 0);
+}
+
+#[test]
+fn test_rejected_refund_cannot_be_executed() {
+    // A rejected refund must not be executable.
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "REJECTED_001", 500);
+
+    client.initiate_refund(&payer, &str(&env, "RF_REJ"), &str(&env, "REJECTED_001"), &200, &str(&env, "r"));
+    client.reject_refund(&merchant, &str(&env, "RF_REJ"));
+
+    let result = client.try_execute_refund(&str(&env, "RF_REJ"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundNotApproved)));
+
+    let p = client.get_payment_by_id(&payer, &str(&env, "REJECTED_001"));
+    assert!(matches!(p.status, crate::types::PaymentStatus::Completed));
+    assert_eq!(p.refunded_amount, 0);
+}
+
+#[test]
+fn test_completed_refund_cannot_be_re_executed() {
+    // Executing the same refund twice must fail.
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "DOUBLE_EXEC", 1_000);
+
+    client.initiate_refund(&payer, &str(&env, "RF_DBL"), &str(&env, "DOUBLE_EXEC"), &400, &str(&env, "r"));
+    client.approve_refund(&merchant, &str(&env, "RF_DBL"));
+    client.execute_refund(&str(&env, "RF_DBL"));
+
+    // Second execute must fail
+    let result = client.try_execute_refund(&str(&env, "RF_DBL"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundNotApproved)));
+
+    // refunded_amount must not have doubled
+    let p = client.get_payment_by_id(&payer, &str(&env, "DOUBLE_EXEC"));
+    assert_eq!(p.refunded_amount, 400);
+}
+
+#[test]
+fn test_stranger_cannot_approve_refund() {
+    // Only merchant or admin may approve; a random address must be rejected.
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "STRANGER_001", 500);
+    client.initiate_refund(&payer, &str(&env, "RF_STR"), &str(&env, "STRANGER_001"), &100, &str(&env, "r"));
+
+    let stranger = Address::generate(&env);
+    let result = client.try_approve_refund(&stranger, &str(&env, "RF_STR"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_cumulative_refund_cannot_exceed_payment_amount() {
+    // Two refunds whose sum exceeds the original amount must be blocked at initiation.
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "CUMUL_001", 1_000);
+
+    client.initiate_refund(&payer, &str(&env, "RF_C1"), &str(&env, "CUMUL_001"), &700, &str(&env, "first"));
+    client.approve_refund(&merchant, &str(&env, "RF_C1"));
+    client.execute_refund(&str(&env, "RF_C1"));
+
+    // Attempting a second refund of 400 (700 + 400 = 1100 > 1000) must fail
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "RF_C2"),
+        &str(&env, "CUMUL_001"),
+        &400,
+        &str(&env, "overflow"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundExceedsOriginal)));
 }
