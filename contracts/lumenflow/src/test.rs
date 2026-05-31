@@ -1082,3 +1082,126 @@ fn test_auth_sign_multisig_requires_listed_signer() {
     let result = client.try_sign_multisig_payment(&stranger, &str(&env, "AUTH_MS"), &bytes(&env, &[0u8; 64]));
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
+
+// ── build_page sort tests ─────────────────────────────────────────────────────
+
+#[test]
+fn test_sort_by_amount_ascending() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "SA_1", 300);
+    make_payment(&env, &client, &merchant, &payer, &token, "SA_2", 100);
+    make_payment(&env, &client, &merchant, &payer, &token, "SA_3", 200);
+
+    let page = client.get_merchant_payment_history(
+        &merchant, &None, &10, &None, &SortField::Amount, &SortOrder::Ascending,
+    );
+    assert_eq!(page.payments.get(0).unwrap().amount, 100);
+    assert_eq!(page.payments.get(1).unwrap().amount, 200);
+    assert_eq!(page.payments.get(2).unwrap().amount, 300);
+}
+
+#[test]
+fn test_sort_by_amount_descending() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "SD_1", 300);
+    make_payment(&env, &client, &merchant, &payer, &token, "SD_2", 100);
+    make_payment(&env, &client, &merchant, &payer, &token, "SD_3", 200);
+
+    let page = client.get_merchant_payment_history(
+        &merchant, &None, &10, &None, &SortField::Amount, &SortOrder::Descending,
+    );
+    assert_eq!(page.payments.get(0).unwrap().amount, 300);
+    assert_eq!(page.payments.get(1).unwrap().amount, 200);
+    assert_eq!(page.payments.get(2).unwrap().amount, 100);
+}
+
+#[test]
+fn test_sort_by_date_descending() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "DD_1", 100);
+    env.ledger().with_mut(|l| l.timestamp += 10);
+    make_payment(&env, &client, &merchant, &payer, &token, "DD_2", 200);
+    env.ledger().with_mut(|l| l.timestamp += 10);
+    make_payment(&env, &client, &merchant, &payer, &token, "DD_3", 300);
+
+    let page = client.get_merchant_payment_history(
+        &merchant, &None, &10, &None, &SortField::Date, &SortOrder::Descending,
+    );
+    // Most recent first
+    assert_eq!(page.payments.get(0).unwrap().order_id, str(&env, "DD_3"));
+    assert_eq!(page.payments.get(2).unwrap().order_id, str(&env, "DD_1"));
+}
+
+#[test]
+fn test_empty_dataset_returns_empty_page() {
+    let (env, client, _admin, merchant, _payer, _token) = setup_payment_env();
+
+    let page = client.get_merchant_payment_history(
+        &merchant, &None, &10, &None, &SortField::Date, &SortOrder::Ascending,
+    );
+    assert_eq!(page.payments.len(), 0);
+    assert_eq!(page.total, 0);
+    assert!(page.next_cursor.is_none());
+}
+
+#[test]
+fn test_single_item_page() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "SINGLE", 42);
+
+    let page = client.get_merchant_payment_history(
+        &merchant, &None, &10, &None, &SortField::Amount, &SortOrder::Ascending,
+    );
+    assert_eq!(page.payments.len(), 1);
+    assert_eq!(page.payments.get(0).unwrap().amount, 42);
+    assert!(page.next_cursor.is_none());
+}
+
+#[test]
+fn test_pagination_cursor_continues_correctly() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    // Insert 5 payments with distinct amounts so sort order is deterministic
+    for (id, amt) in [("PC_1", 10i128), ("PC_2", 20), ("PC_3", 30), ("PC_4", 40), ("PC_5", 50)] {
+        make_payment(&env, &client, &merchant, &payer, &token, id, amt);
+    }
+
+    // Page 1: first 3 ascending by amount
+    let page1 = client.get_merchant_payment_history(
+        &merchant, &None, &3, &None, &SortField::Amount, &SortOrder::Ascending,
+    );
+    assert_eq!(page1.payments.len(), 3);
+    assert_eq!(page1.payments.get(0).unwrap().amount, 10);
+    assert!(page1.next_cursor.is_some());
+
+    // Page 2: next 2 using cursor
+    let page2 = client.get_merchant_payment_history(
+        &merchant, &page1.next_cursor, &3, &None, &SortField::Amount, &SortOrder::Ascending,
+    );
+    assert_eq!(page2.payments.len(), 2);
+    assert_eq!(page2.payments.get(0).unwrap().amount, 40);
+    assert_eq!(page2.payments.get(1).unwrap().amount, 50);
+    assert!(page2.next_cursor.is_none());
+}
+
+#[test]
+fn test_large_dataset_sort_correctness() {
+    // 20 payments with amounts 20..1 (reverse insertion order) — verifies the
+    // O(n log n) sort produces the correct ascending sequence without hitting
+    // Soroban instruction limits that the old O(n²) insertion sort would reach.
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let ids = [
+        "LD_20","LD_19","LD_18","LD_17","LD_16","LD_15","LD_14","LD_13","LD_12","LD_11",
+        "LD_10","LD_09","LD_08","LD_07","LD_06","LD_05","LD_04","LD_03","LD_02","LD_01",
+    ];
+    for (i, id_str) in ids.iter().enumerate() {
+        let amount = (20 - i) as i128; // 20, 19, 18, ... 1
+        make_payment(&env, &client, &merchant, &payer, &token, id_str, amount);
+    }
+
+    let page = client.get_merchant_payment_history(
+        &merchant, &None, &20, &None, &SortField::Amount, &SortOrder::Ascending,
+    );
+    assert_eq!(page.total, 20);
+    assert_eq!(page.payments.get(0).unwrap().amount, 1);
+    assert_eq!(page.payments.get(19).unwrap().amount, 20);
+}

@@ -43,4 +43,21 @@ pub enum PaymentError {
     PaginationLimitExceeded = 51,
     BatchSizeExceeded = 52,
     InvalidTags = 53,
+
+    // Nonce
+    InvalidNonce = 60,
+
+    // Dispute
+    RefundNotRejected = 70,
+    DisputeAlreadyExists = 71,
+    DisputeNotFound = 72,
+
+    // Subscription
+    SubscriptionPlanAlreadyExists = 80,
+    SubscriptionAlreadyExists = 81,
+    SubscriptionPlanNotFound = 82,
+    SubscriptionNotFound = 83,
+    SubscriptionNotActive = 84,
+    SubscriptionMaxCyclesReached = 85,
+    SubscriptionIntervalNotElapsed = 86,
 }

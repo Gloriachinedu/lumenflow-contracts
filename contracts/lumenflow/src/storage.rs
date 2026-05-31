@@ -1,6 +1,9 @@
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
 
-use crate::types::{GlobalStats, Merchant, MultisigPayment, PaymentOrder, PaymentRequest, RefundRecord, SubscriptionPlan, Subscription};
+use crate::types::{
+    DisputeRecord, GlobalStats, Merchant, MultisigPayment, PaymentOrder, PaymentRequest,
+    RefundRecord, Subscription, SubscriptionPlan,
+};
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -15,11 +18,16 @@ pub enum DataKey {
     MerchantPayments(Address),
     PayerPayments(Address),
     Refund(String),
+    Dispute(String),
     Multisig(String),
     PaymentRequest(String),
     LargePaymentThreshold,
     MaxRefundsPerOrder,
     OrderRefundCount(String),
+    AllowedToken(Address),
+    SubscriptionPlan(String),
+    Subscription(String),
+    PayerNonce(Address),
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -38,7 +46,7 @@ pub fn get_cleanup_period(env: &Env) -> u64 {
     env.storage()
         .instance()
         .get(&DataKey::CleanupPeriod)
-        .unwrap_or(30 * 24 * 3600) // 30 days default
+        .unwrap_or(30 * 24 * 3600)
 }
 
 pub fn set_cleanup_period(env: &Env, period: u64) {
@@ -51,7 +59,7 @@ pub fn get_large_payment_threshold(env: &Env) -> i128 {
     env.storage()
         .instance()
         .get(&DataKey::LargePaymentThreshold)
-        .unwrap_or(10_000_000) // Default 10M units
+        .unwrap_or(10_000_000)
 }
 
 pub fn set_large_payment_threshold(env: &Env, threshold: i128) {
@@ -163,19 +171,6 @@ pub fn add_payer_payment_id(env: &Env, payer: &Address, order_id: &String) {
         .set(&DataKey::PayerPayments(payer.clone()), &ids);
 }
 
-pub fn remove_merchant_payment_id(env: &Env, merchant: &Address, order_id: &String) {
-    let ids = get_merchant_payment_ids(env, merchant);
-    let mut new_ids: Vec<String> = Vec::new(env);
-    for id in ids.iter() {
-        if id != *order_id {
-            new_ids.push_back(id);
-        }
-    }
-    env.storage()
-        .persistent()
-        .set(&DataKey::MerchantPayments(merchant.clone()), &new_ids);
-}
-
 pub fn remove_payer_payment_id(env: &Env, payer: &Address, order_id: &String) {
     let ids = get_payer_payment_ids(env, payer);
     let mut new_ids: Vec<String> = Vec::new(env);
@@ -226,6 +221,18 @@ pub fn increment_order_refund_count(env: &Env, order_id: &String) {
         .set(&DataKey::OrderRefundCount(order_id.clone()), &count);
 }
 
+// ── Dispute ───────────────────────────────────────────────────────────────────
+
+pub fn get_dispute(env: &Env, refund_id: &String) -> Option<DisputeRecord> {
+    env.storage().persistent().get(&DataKey::Dispute(refund_id.clone()))
+}
+
+pub fn set_dispute(env: &Env, dispute: &DisputeRecord) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::Dispute(dispute.refund_id.clone()), dispute);
+}
+
 // ── Multisig ──────────────────────────────────────────────────────────────────
 
 pub fn get_multisig(env: &Env, payment_id: &String) -> Option<MultisigPayment> {
@@ -247,10 +254,9 @@ pub fn get_payment_request(env: &Env, request_id: &String) -> Option<PaymentRequ
 }
 
 pub fn set_payment_request(env: &Env, pr: &PaymentRequest) {
-    env.storage().temporary().set(
-        &DataKey::PaymentRequest(pr.request_id.clone()),
-        pr,
-    );
+    env.storage()
+        .temporary()
+        .set(&DataKey::PaymentRequest(pr.request_id.clone()), pr);
 }
 
 pub fn remove_payment_request(env: &Env, request_id: &String) {
@@ -267,8 +273,56 @@ pub fn is_token_allowed(env: &Env, token: &Address) -> bool {
 
 pub fn set_token_allowed(env: &Env, token: &Address, allowed: bool) {
     if allowed {
-        env.storage().instance().set(&DataKey::AllowedToken(token.clone()), &());
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(token.clone()), &());
     } else {
-        env.storage().instance().remove(&DataKey::AllowedToken(token.clone()));
+        env.storage()
+            .instance()
+            .remove(&DataKey::AllowedToken(token.clone()));
     }
+}
+
+// ── Subscription Plan ─────────────────────────────────────────────────────────
+
+pub fn get_subscription_plan(env: &Env, plan_id: &String) -> Option<SubscriptionPlan> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::SubscriptionPlan(plan_id.clone()))
+}
+
+pub fn set_subscription_plan(env: &Env, plan: &SubscriptionPlan) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::SubscriptionPlan(plan.plan_id.clone()), plan);
+}
+
+// ── Subscription ──────────────────────────────────────────────────────────────
+
+pub fn get_subscription(env: &Env, subscription_id: &String) -> Option<Subscription> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Subscription(subscription_id.clone()))
+}
+
+pub fn set_subscription(env: &Env, sub: &Subscription) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::Subscription(sub.subscription_id.clone()), sub);
+}
+
+// ── Payer Nonce ───────────────────────────────────────────────────────────────
+
+pub fn get_payer_nonce(env: &Env, payer: &Address) -> u64 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::PayerNonce(payer.clone()))
+        .unwrap_or(0)
+}
+
+pub fn increment_payer_nonce(env: &Env, payer: &Address) {
+    let nonce = get_payer_nonce(env, payer) + 1;
+    env.storage()
+        .persistent()
+        .set(&DataKey::PayerNonce(payer.clone()), &nonce);
 }
