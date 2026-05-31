@@ -579,6 +579,83 @@ fn test_pagination_limit() {
     assert!(page.next_cursor.is_some());
 }
 
+#[test]
+fn test_pagination_cursor_continuity_no_gaps() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let ids = ["P_001", "P_002", "P_003", "P_004", "P_005"];
+    for id_str in ids {
+        let id = String::from_str(&env, id_str);
+        let pub_key = bytes(&env, &[0u8; 32]);
+        let sig = bytes(&env, &[0u8; 64]);
+        client.process_payment_with_signature(
+            &payer, id, &merchant, &token, &100, &str(&env, ""), &sig, &pub_key,
+        );
+    }
+
+    // Fetch page 1: limit 2
+    let page1 = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &2,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page1.payments.len(), 2);
+    let mut page1_ids: Vec<String> = Vec::new(&env);
+    for p in page1.payments.iter() {
+        page1_ids.push_back(p.order_id.clone());
+    }
+    assert!(page1.next_cursor.is_some());
+
+    // Fetch page 2 using cursor from page 1
+    let page2 = client.get_merchant_payment_history(
+        &merchant,
+        &page1.next_cursor,
+        &2,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page2.payments.len(), 2);
+    let mut page2_ids: Vec<String> = Vec::new(&env);
+    for p in page2.payments.iter() {
+        page2_ids.push_back(p.order_id.clone());
+    }
+
+    // Fetch page 3
+    let page3 = client.get_merchant_payment_history(
+        &merchant,
+        &page2.next_cursor,
+        &2,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page3.payments.len(), 1);
+    let mut page3_ids: Vec<String> = Vec::new(&env);
+    for p in page3.payments.iter() {
+        page3_ids.push_back(p.order_id.clone());
+    }
+
+    // Verify no duplicates between page 1 and page 2
+    for id1 in page1_ids.iter() {
+        for id2 in page2_ids.iter() {
+            assert_ne!(id1, id2);
+        }
+    }
+
+    // Verify no duplicates between page 2 and page 3
+    for id2 in page2_ids.iter() {
+        for id3 in page3_ids.iter() {
+            assert_ne!(id2, id3);
+        }
+    }
+
+    // Verify total count is 5 records across all pages
+    assert_eq!(page1_ids.len() + page2_ids.len() + page3_ids.len(), 5);
+}
+
 // ── Refund rate limit tests ───────────────────────────────────────────────────
 
 #[test]
