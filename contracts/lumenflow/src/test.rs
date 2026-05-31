@@ -185,6 +185,112 @@ fn test_deactivate_merchant_emits_event() {
     assert!(event.is_some());
 }
 
+#[test]
+fn test_update_merchant_success() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Old Name"),
+        &str(&env, "Old Description"),
+        &str(&env, "old@email.com"),
+        &MerchantCategory::Retail,
+    );
+
+    client.update_merchant(
+        &merchant,
+        &str(&env, "New Name"),
+        &str(&env, "New Description"),
+        &str(&env, "new@email.com"),
+        &MerchantCategory::Food,
+    );
+
+    let m = client.get_merchant(&merchant);
+    assert_eq!(m.name, str(&env, "New Name"));
+    assert_eq!(m.description, str(&env, "New Description"));
+    assert_eq!(m.contact_info, str(&env, "new@email.com"));
+    assert_eq!(m.category, MerchantCategory::Food);
+}
+
+#[test]
+fn test_update_merchant_unauthorized_fails() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    let stranger = Address::generate(&env);
+
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+
+    let result = client.try_update_merchant(
+        &stranger,
+        &str(&env, "New Name"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_update_merchant_inactive_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+    client.deactivate_merchant(&admin, &merchant);
+
+    let result = client.try_update_merchant(
+        &merchant,
+        &str(&env, "New Name"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MerchantInactive)));
+}
+
+#[test]
+fn test_update_merchant_emits_event() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+
+    client.update_merchant(
+        &merchant,
+        &str(&env, "New Name"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+
+    let events = env.events().all();
+    let event = events.iter().find(|e| {
+        e.topics.get(1).unwrap() == soroban_sdk::Symbol::new(&env, "merchant_updated")
+    });
+    assert!(event.is_some());
+}
+
 // ── Payment tests ─────────────────────────────────────────────────────────────
 
 fn setup_payment_env() -> (

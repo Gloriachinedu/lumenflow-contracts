@@ -127,6 +127,37 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Update merchant profile (merchant only).
+    pub fn update_merchant(
+        env: Env,
+        merchant_address: Address,
+        name: String,
+        description: String,
+        contact_info: String,
+        category: MerchantCategory,
+    ) -> Result<(), PaymentError> {
+        merchant_address.require_auth();
+        require_non_empty_string(&name)?;
+
+        let mut merchant = storage::get_merchant(&env, &merchant_address)
+            .ok_or(PaymentError::MerchantNotFound)?;
+
+        if !merchant.active {
+            return Err(PaymentError::MerchantInactive);
+        }
+
+        merchant.name = name;
+        merchant.description = description;
+        merchant.contact_info = contact_info;
+        merchant.category = category;
+
+        storage::set_merchant(&env, &merchant);
+
+        env.events()
+            .publish(("lumenflow", "merchant_updated"), merchant_address);
+        Ok(())
+    }
+
     /// Deactivate a merchant (admin only).
     pub fn deactivate_merchant(
         env: Env,
