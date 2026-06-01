@@ -21,6 +21,7 @@ pub enum DataKey {
     LargePaymentThreshold,
     MaxRefundsPerOrder,
     OrderRefundCount(String),
+    RefundWindow,
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -231,6 +232,19 @@ pub fn get_max_refunds_per_order(env: &Env) -> u32 {
 
 pub fn set_max_refunds_per_order(env: &Env, max: u32) {
     env.storage().instance().set(&DataKey::MaxRefundsPerOrder, &max);
+}
+
+// ── Refund Window ───────────────────────────────────────────────────────────────
+
+pub fn get_refund_window(env: &Env) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::RefundWindow)
+        .unwrap_or(30 * 24 * 3600) // 30 days default
+}
+
+pub fn set_refund_window(env: &Env, window_secs: u64) {
+    env.storage().instance().set(&DataKey::RefundWindow, &window_secs);
 }
 
 pub fn get_order_refund_count(env: &Env, order_id: &String) -> u32 {

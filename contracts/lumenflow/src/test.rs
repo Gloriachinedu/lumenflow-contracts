@@ -432,6 +432,103 @@ fn test_refund_window_expired_fails() {
 }
 
 #[test]
+fn test_set_refund_window() {
+    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
+
+    // Set refund window to 7 days
+    client.set_refund_window(&admin, &7 * 24 * 3600);
+}
+
+#[test]
+fn test_set_refund_window_unauthorized() {
+    let (env, client, _admin, merchant, _payer, _token) = setup_payment_env();
+
+    // Non-admin should not be able to set refund window
+    let result = client.try_set_refund_window(&merchant, &7 * 24 * 3600);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_refund_window_respected_after_change() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_RW1", 1_000);
+
+    // Set refund window to 5 days
+    client.set_refund_window(&admin, &5 * 24 * 3600);
+
+    // Advance ledger past 5-day window but within default 30-day window
+    env.ledger().with_mut(|l| {
+        l.timestamp += 6 * 24 * 3600;
+    });
+
+    // Should fail because new window is 5 days
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "REFUND_RW1"),
+        &str(&env, "ORDER_RW1"),
+        &100,
+        &str(&env, "Late"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundWindowExpired)));
+}
+
+#[test]
+fn test_refund_window_extended_allows_refund() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_RW2", 1_000);
+
+    // Set refund window to 60 days
+    client.set_refund_window(&admin, &60 * 24 * 3600);
+
+    // Advance ledger past default 30-day window but within new 60-day window
+    env.ledger().with_mut(|l| {
+        l.timestamp += 45 * 24 * 3600;
+    });
+
+    // Should succeed because new window is 60 days
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REFUND_RW2"),
+        &str(&env, "ORDER_RW2"),
+        &100,
+        &str(&env, "Reason"),
+    );
+}
+
+#[test]
+fn test_default_refund_window_is_30_days() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_RW3", 1_000);
+
+    // Advance ledger to 29 days - should succeed
+    env.ledger().with_mut(|l| {
+        l.timestamp += 29 * 24 * 3600;
+    });
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REFUND_RW3"),
+        &str(&env, "ORDER_RW3"),
+        &100,
+        &str(&env, "Reason"),
+    );
+
+    // Advance ledger to 31 days - should fail
+    env.ledger().with_mut(|l| {
+        l.timestamp += 2 * 24 * 3600;
+    });
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "REFUND_RW4"),
+        &str(&env, "ORDER_RW3"),
+        &100,
+        &str(&env, "Late"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundWindowExpired)));
+}
+
+#[test]
 fn test_reject_refund() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
     make_payment(&env, &client, &merchant, &payer, &token, "ORDER_R4", 1_000);

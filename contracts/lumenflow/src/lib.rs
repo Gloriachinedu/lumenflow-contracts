@@ -16,7 +16,7 @@ use soroban_sdk::{
 use error::PaymentError;
 use helper::{
     require_admin, require_admin_or, require_non_empty_string, require_positive,
-    require_valid_limit, validate_memo_length, validate_tags, verify_signature, REFUND_WINDOW_SECS,
+    require_valid_limit, validate_memo_length, validate_tags, verify_signature,
 };
 use types::{
     BatchPaymentItem, GlobalStats, MerchantCategory, MerchantStats, MultisigPayment, PaymentFilter, PaymentOrder,
@@ -82,6 +82,18 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         require_admin(&env, &admin)?;
         storage::set_max_refunds_per_order(&env, max);
+        Ok(())
+    }
+
+    /// Set the refund window in seconds (default 30 days). Admin only.
+    pub fn set_refund_window(
+        env: Env,
+        admin: Address,
+        window_secs: u64,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_refund_window(&env, window_secs);
+        env.events().publish(("lumenflow", "refund_window_set"), window_secs);
         Ok(())
     }
 
@@ -673,7 +685,8 @@ impl PaymentProcessingContract {
 
         // Refund window check
         let now = env.ledger().timestamp();
-        if now > payment.paid_at + REFUND_WINDOW_SECS {
+        let refund_window = storage::get_refund_window(&env);
+        if now > payment.paid_at + refund_window {
             return Err(PaymentError::RefundWindowExpired);
         }
 
