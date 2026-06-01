@@ -15,7 +15,7 @@ use soroban_sdk::{
 
 use error::PaymentError;
 use helper::{
-    require_admin, require_admin_or, require_non_empty_string, require_positive,
+    require_admin, require_admin_or, require_non_empty_string, require_not_paused, require_positive,
     require_valid_limit, validate_memo_length, validate_tags, verify_signature, REFUND_WINDOW_SECS,
 };
 use types::{
@@ -85,6 +85,22 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Pause the contract. All state-mutating functions will return ContractPaused. Admin only.
+    pub fn pause_contract(env: Env, admin: Address) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_paused(&env, true);
+        env.events().publish(("lumenflow", "contract_paused"), ());
+        Ok(())
+    }
+
+    /// Unpause the contract. Admin only.
+    pub fn unpause_contract(env: Env, admin: Address) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_paused(&env, false);
+        env.events().publish(("lumenflow", "contract_unpaused"), ());
+        Ok(())
+    }
+
     // ── Merchant management ───────────────────────────────────────────────────
 
     /// Register a new merchant.
@@ -96,6 +112,7 @@ impl PaymentProcessingContract {
         contact_info: String,
         category: MerchantCategory,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         merchant_address.require_auth();
         require_non_empty_string(&name)?;
 
@@ -133,6 +150,7 @@ impl PaymentProcessingContract {
         admin: Address,
         merchant_address: Address,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         require_admin(&env, &admin)?;
         let mut merchant = storage::get_merchant(&env, &merchant_address)
             .ok_or(PaymentError::MerchantNotFound)?;
@@ -153,6 +171,7 @@ impl PaymentProcessingContract {
         admin: Address,
         merchant_address: Address,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         require_admin(&env, &admin)?;
         let mut merchant = storage::get_merchant(&env, &merchant_address)
             .ok_or(PaymentError::MerchantNotFound)?;
@@ -169,6 +188,7 @@ impl PaymentProcessingContract {
         admin: Address,
         merchant_address: Address,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         require_admin(&env, &admin)?;
         let mut merchant = storage::get_merchant(&env, &merchant_address)
             .ok_or(PaymentError::MerchantNotFound)?;
@@ -205,6 +225,7 @@ impl PaymentProcessingContract {
         signature: Bytes,
         merchant_public_key: Bytes,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         payer.require_auth();
         require_positive(amount)?;
         require_non_empty_string(&order_id)?;
@@ -304,6 +325,7 @@ impl PaymentProcessingContract {
         tags: Option<Vec<String>>,
         nonce: u64,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         payer.require_auth();
         require_positive(amount)?;
         require_non_empty_string(&order_id)?;
@@ -374,6 +396,7 @@ impl PaymentProcessingContract {
         payer: Address,
         payments: Vec<BatchPaymentItem>,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         payer.require_auth();
         if payments.len() > 10 {
             return Err(PaymentError::BatchSizeExceeded);
@@ -469,6 +492,7 @@ impl PaymentProcessingContract {
         order_id: String,
         note: String,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         merchant.require_auth();
         if note.len() > 512 {
             return Err(PaymentError::InvalidInput);
@@ -510,6 +534,7 @@ impl PaymentProcessingContract {
         order_id: String,
         refunded_amount: i128,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         let mut payment = storage::get_payment(&env, &order_id)
             .ok_or(PaymentError::PaymentNotFound)?;
 
@@ -531,6 +556,7 @@ impl PaymentProcessingContract {
         admin: Address,
         order_id: String,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         require_admin(&env, &admin)?;
         let payment = storage::get_payment(&env, &order_id)
             .ok_or(PaymentError::PaymentNotFound)?;
@@ -544,6 +570,7 @@ impl PaymentProcessingContract {
 
     /// Remove payments older than the cleanup period. Admin only.
     pub fn cleanup_expired_payments(env: Env, admin: Address) -> Result<u32, PaymentError> {
+        require_not_paused(&env)?;
         require_admin(&env, &admin)?;
         let cutoff = env
             .ledger()
@@ -627,6 +654,7 @@ impl PaymentProcessingContract {
         amount: i128,
         reason: String,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         caller.require_auth();
         require_positive(amount)?;
         require_non_empty_string(&refund_id)?;
@@ -684,6 +712,7 @@ impl PaymentProcessingContract {
         caller: Address,
         refund_id: String,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         let refund = storage::get_refund(&env, &refund_id)
             .ok_or(PaymentError::RefundNotFound)?;
         let payment = storage::get_payment(&env, &refund.order_id)
@@ -710,6 +739,7 @@ impl PaymentProcessingContract {
         caller: Address,
         refund_id: String,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         let refund = storage::get_refund(&env, &refund_id)
             .ok_or(PaymentError::RefundNotFound)?;
         let payment = storage::get_payment(&env, &refund.order_id)
@@ -732,6 +762,7 @@ impl PaymentProcessingContract {
 
     /// Execute an approved refund — transfers tokens from merchant to payer.
     pub fn execute_refund(env: Env, refund_id: String) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         let refund = storage::get_refund(&env, &refund_id)
             .ok_or(PaymentError::RefundNotFound)?;
 
@@ -782,6 +813,7 @@ impl PaymentProcessingContract {
         refund_id: String,
         evidence: String,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         payer.require_auth();
 
         let mut refund = storage::get_refund(&env, &refund_id)
@@ -821,6 +853,7 @@ impl PaymentProcessingContract {
         refund_id: String,
         outcome: DisputeOutcome,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         require_admin(&env, &admin)?;
 
         let mut dispute = storage::get_dispute(&env, &refund_id)
@@ -884,6 +917,7 @@ impl PaymentProcessingContract {
         signers: Vec<Address>,
         required_signatures: u32,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         initiator.require_auth();
         require_positive(amount)?;
         require_non_empty_string(&payment_id)?;
@@ -937,6 +971,7 @@ impl PaymentProcessingContract {
         payment_id: String,
         signature: Bytes,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         signer.require_auth();
         let mut ms = storage::get_multisig(&env, &payment_id)
             .ok_or(PaymentError::MultisigNotFound)?;
@@ -967,6 +1002,7 @@ impl PaymentProcessingContract {
         payer: Address,
         payment_id: String,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         payer.require_auth();
         let mut ms = storage::get_multisig(&env, &payment_id)
             .ok_or(PaymentError::MultisigNotFound)?;
@@ -1030,6 +1066,7 @@ impl PaymentProcessingContract {
         interval_secs: u64,
         max_cycles: u32,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         merchant.require_auth();
         require_positive(amount)?;
         require_non_empty_string(&plan_id)?;
@@ -1055,6 +1092,7 @@ impl PaymentProcessingContract {
         subscription_id: String,
         plan_id: String,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         subscriber.require_auth();
         require_non_empty_string(&subscription_id)?;
 
@@ -1083,6 +1121,7 @@ impl PaymentProcessingContract {
         env: Env,
         subscription_id: String,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         let mut sub = storage::get_subscription(&env, &subscription_id)
             .ok_or(PaymentError::SubscriptionNotFound)?;
 
@@ -1132,6 +1171,7 @@ impl PaymentProcessingContract {
         subscriber: Address,
         subscription_id: String,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         subscriber.require_auth();
         let mut sub = storage::get_subscription(&env, &subscription_id)
             .ok_or(PaymentError::SubscriptionNotFound)?;
@@ -1309,6 +1349,7 @@ impl PaymentProcessingContract {
         memo: String,
         ttl: u64,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         merchant.require_auth();
         require_positive(amount)?;
         require_non_empty_string(&request_id)?;
@@ -1342,6 +1383,7 @@ impl PaymentProcessingContract {
         payer: Address,
         request_id: String,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         payer.require_auth();
 
         let pr = storage::get_payment_request(&env, &request_id)

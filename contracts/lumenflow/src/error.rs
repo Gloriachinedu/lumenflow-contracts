@@ -43,4 +43,7 @@ pub enum PaymentError {
     PaginationLimitExceeded = 51,
     BatchSizeExceeded = 52,
     InvalidTags = 53,
+
+    // Emergency pause
+    ContractPaused = 60,
 }

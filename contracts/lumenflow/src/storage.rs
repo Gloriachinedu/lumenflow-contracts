@@ -7,6 +7,7 @@ use crate::types::{GlobalStats, Merchant, MultisigPayment, PaymentOrder, Payment
 #[contracttype]
 pub enum DataKey {
     Admin,
+    Paused,
     CleanupPeriod,
     GlobalStats,
     Merchant(Address),
@@ -30,6 +31,16 @@ pub fn get_admin(env: &Env) -> Option<Address> {
 
 pub fn set_admin(env: &Env, admin: &Address) {
     env.storage().instance().set(&DataKey::Admin, admin);
+}
+
+// ── Pause ─────────────────────────────────────────────────────────────────────
+
+pub fn get_paused(env: &Env) -> bool {
+    env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
+}
+
+pub fn set_paused(env: &Env, paused: bool) {
+    env.storage().instance().set(&DataKey::Paused, &paused);
 }
 
 // ── Cleanup period ────────────────────────────────────────────────────────────
@@ -161,19 +172,6 @@ pub fn add_payer_payment_id(env: &Env, payer: &Address, order_id: &String) {
     env.storage()
         .persistent()
         .set(&DataKey::PayerPayments(payer.clone()), &ids);
-}
-
-pub fn remove_merchant_payment_id(env: &Env, merchant: &Address, order_id: &String) {
-    let ids = get_merchant_payment_ids(env, merchant);
-    let mut new_ids: Vec<String> = Vec::new(env);
-    for id in ids.iter() {
-        if id != *order_id {
-            new_ids.push_back(id);
-        }
-    }
-    env.storage()
-        .persistent()
-        .set(&DataKey::MerchantPayments(merchant.clone()), &new_ids);
 }
 
 pub fn remove_payer_payment_id(env: &Env, payer: &Address, order_id: &String) {
