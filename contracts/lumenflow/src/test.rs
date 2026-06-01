@@ -450,6 +450,67 @@ fn test_reject_refund() {
 }
 
 #[test]
+fn test_get_refunds_for_order_returns_all_refunds() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_LIST", 10_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REF_A"),
+        &str(&env, "ORDER_LIST"),
+        &100,
+        &str(&env, "r1"),
+    );
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REF_B"),
+        &str(&env, "ORDER_LIST"),
+        &200,
+        &str(&env, "r2"),
+    );
+    client.initiate_refund(
+        &merchant,
+        &str(&env, "REF_C"),
+        &str(&env, "ORDER_LIST"),
+        &300,
+        &str(&env, "r3"),
+    );
+
+    let payer_refunds = client.get_refunds_for_order(&payer, &str(&env, "ORDER_LIST"));
+    assert_eq!(payer_refunds.len(), 3);
+
+    let merchant_refunds = client.get_refunds_for_order(&merchant, &str(&env, "ORDER_LIST"));
+    assert_eq!(merchant_refunds.len(), 3);
+
+    let admin_refunds = client.get_refunds_for_order(&admin, &str(&env, "ORDER_LIST"));
+    assert_eq!(admin_refunds.len(), 3);
+}
+
+#[test]
+fn test_get_refunds_for_order_unauthorized() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_AUTH", 1_000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REF_AUTH"),
+        &str(&env, "ORDER_AUTH"),
+        &100,
+        &str(&env, "r"),
+    );
+
+    let stranger = Address::generate(&env);
+    let result = client.try_get_refunds_for_order(&stranger, &str(&env, "ORDER_AUTH"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_get_refunds_for_order_payment_not_found() {
+    let (env, client, _admin, merchant, _payer, _token) = setup_payment_env();
+    let result = client.try_get_refunds_for_order(&merchant, &str(&env, "MISSING_ORDER"));
+    assert_eq!(result, Err(Ok(PaymentError::PaymentNotFound)));
+}
+
+#[test]
 fn test_multiple_sequential_partial_refunds() {
     let (env, client, admin, merchant, payer, token) = setup_payment_env();
     // Make a payment of 1000

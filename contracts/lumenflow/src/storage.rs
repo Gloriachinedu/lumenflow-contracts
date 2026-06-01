@@ -20,6 +20,7 @@ pub enum DataKey {
     LargePaymentThreshold,
     MaxRefundsPerOrder,
     OrderRefundCount(String),
+    OrderRefunds(String),
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -224,6 +225,21 @@ pub fn increment_order_refund_count(env: &Env, order_id: &String) {
     env.storage()
         .persistent()
         .set(&DataKey::OrderRefundCount(order_id.clone()), &count);
+}
+
+pub fn get_order_refund_ids(env: &Env, order_id: &String) -> Vec<String> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::OrderRefunds(order_id.clone()))
+        .unwrap_or(Vec::new(env))
+}
+
+pub fn add_order_refund_id(env: &Env, order_id: &String, refund_id: &String) {
+    let mut ids = get_order_refund_ids(env, order_id);
+    ids.push_back(refund_id.clone());
+    env.storage()
+        .persistent()
+        .set(&DataKey::OrderRefunds(order_id.clone()), &ids);
 }
 
 // ── Multisig ──────────────────────────────────────────────────────────────────
