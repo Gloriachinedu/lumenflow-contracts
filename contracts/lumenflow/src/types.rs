@@ -50,6 +50,7 @@ pub struct PaymentOrder {
     pub memo: String,
     pub tags: Option<Vec<String>>,
     pub note: Option<String>,
+    pub platform_fee: i128,
 }
 
 #[contracttype]

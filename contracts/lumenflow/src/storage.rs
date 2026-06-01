@@ -20,6 +20,8 @@ pub enum DataKey {
     LargePaymentThreshold,
     MaxRefundsPerOrder,
     OrderRefundCount(String),
+    PlatformFeeBps,
+    FeeRecipient,
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -271,4 +273,22 @@ pub fn set_token_allowed(env: &Env, token: &Address, allowed: bool) {
     } else {
         env.storage().instance().remove(&DataKey::AllowedToken(token.clone()));
     }
+}
+
+// ── Platform Fee ──────────────────────────────────────────────────────────────
+
+pub fn get_platform_fee_bps(env: &Env) -> u32 {
+    env.storage().instance().get(&DataKey::PlatformFeeBps).unwrap_or(0)
+}
+
+pub fn set_platform_fee_bps(env: &Env, bps: u32) {
+    env.storage().instance().set(&DataKey::PlatformFeeBps, &bps);
+}
+
+pub fn get_fee_recipient(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::FeeRecipient)
+}
+
+pub fn set_fee_recipient(env: &Env, recipient: &Address) {
+    env.storage().instance().set(&DataKey::FeeRecipient, recipient);
 }
