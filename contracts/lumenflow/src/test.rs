@@ -940,6 +940,61 @@ fn test_cleanup_removes_from_index_lists() {
 }
 
 #[test]
+fn test_cleanup_merchant_history_total_reflects_live_only() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EXP_A", 100);
+    make_payment(&env, &client, &merchant, &payer, &token, "EXP_B", 200);
+
+    client.set_payment_cleanup_period(&admin, &1);
+    env.ledger().with_mut(|l| l.timestamp += 10);
+
+    // Two live payments added after the cutoff
+    make_payment(&env, &client, &merchant, &payer, &token, "LIVE_A", 300);
+    make_payment(&env, &client, &merchant, &payer, &token, "LIVE_B", 400);
+
+    let removed = client.cleanup_expired_payments(&admin);
+    assert_eq!(removed, 2);
+
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    // total must equal the number of live payments, not the original count
+    assert_eq!(page.total, 2);
+    let ids: Vec<String> = page.payments.iter().map(|p| p.order_id.clone()).collect();
+    assert!(ids.contains(&str(&env, "LIVE_A")));
+    assert!(ids.contains(&str(&env, "LIVE_B")));
+}
+
+#[test]
+fn test_cleanup_payer_history_total_reflects_live_only() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "PEXP_A", 100);
+
+    client.set_payment_cleanup_period(&admin, &1);
+    env.ledger().with_mut(|l| l.timestamp += 10);
+
+    make_payment(&env, &client, &merchant, &payer, &token, "PLIVE_A", 200);
+
+    client.cleanup_expired_payments(&admin);
+
+    let page = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page.total, 1);
+    assert_eq!(page.payments.get(0).unwrap().order_id, str(&env, "PLIVE_A"));
+}
+
+#[test]
 fn test_cleanup_period_set_event() {
     let (env, client, admin, _, _, _) = setup_payment_env();
     client.set_payment_cleanup_period(&admin, &86400);
