@@ -332,6 +332,11 @@ stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network 
 **Sort orders:** `Ascending` | `Descending`  
 **Pagination:** cursor-based using `order_id`; max 100 results per page.
 
+`PaymentPage` response fields:
+- `payments`: records returned for the current page
+- `next_cursor`: cursor to request the next page (or `null` if none)
+- `total_matching`: total count of records that match the query before applying `limit`
+
 ### Refunds
 
 Refund rules:

@@ -374,7 +374,7 @@ fn test_batch_payment_atomic_failure() {
 
     // Verify 1st item was NOT recorded (atomicity)
     let check = client.get_payer_payment_history(&payer, &None, &10, &None, &SortField::Date, &SortOrder::Ascending);
-    assert_eq!(check.total, 0);
+    assert_eq!(check.total_matching, 0);
 }
 
 #[test]
@@ -520,7 +520,7 @@ fn test_get_merchant_payment_history() {
         &SortField::Amount,
         &SortOrder::Ascending,
     );
-    assert_eq!(page.total, 3);
+    assert_eq!(page.total_matching, 3);
     assert_eq!(page.payments.get(0).unwrap().amount, 100);
     assert_eq!(page.payments.get(2).unwrap().amount, 300);
 }
@@ -550,7 +550,7 @@ fn test_get_payer_payment_history_with_filter() {
         &SortField::Amount,
         &SortOrder::Descending,
     );
-    assert_eq!(page.total, 1);
+    assert_eq!(page.total_matching, 1);
     assert_eq!(page.payments.get(0).unwrap().amount, 500);
 }
 
@@ -884,7 +884,7 @@ fn test_archive_payment_removes_from_index() {
         &SortField::Date,
         &SortOrder::Ascending,
     );
-    assert_eq!(page.total, 1);
+    assert_eq!(page.total_matching, 1);
     assert_eq!(page.payments.get(0).unwrap().order_id, str(&env, "ARCH_002"));
 
     // Payer history should only contain ARCH_002
@@ -896,7 +896,7 @@ fn test_archive_payment_removes_from_index() {
         &SortField::Date,
         &SortOrder::Ascending,
     );
-    assert_eq!(payer_page.total, 1);
+    assert_eq!(payer_page.total_matching, 1);
     assert_eq!(payer_page.payments.get(0).unwrap().order_id, str(&env, "ARCH_002"));
 }
 
