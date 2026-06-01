@@ -85,6 +85,20 @@ fn test_set_admin_success() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
     client.set_admin(&admin);
+
+    // Verify admin is correctly stored and retrievable
+    assert_eq!(storage::get_admin(&env), Some(admin.clone()));
+
+    // Verify admin_set event was published
+    let events = env.events().all();
+    let admin_set_event = events.iter().find(|e| {
+        e.topics.get(1).unwrap() == soroban_sdk::Symbol::new(&env, "admin_set")
+    });
+    assert!(admin_set_event.is_some());
+
+    // Verify a second set_admin call returns AdminAlreadySet
+    let result = client.try_set_admin(&admin);
+    assert_eq!(result, Err(Ok(PaymentError::AdminAlreadySet)));
 }
 
 #[test]
