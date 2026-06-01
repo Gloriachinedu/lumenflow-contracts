@@ -162,6 +162,51 @@ fn test_deactivate_merchant() {
     assert!(!m.active);
 }
 
+#[test]
+fn test_register_merchant_custom_category() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Niche Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Custom(str(&env, "Artisan")),
+    );
+    let m = client.get_merchant(&merchant);
+    assert_eq!(m.category, MerchantCategory::Custom(str(&env, "Artisan")));
+}
+
+#[test]
+fn test_register_merchant_custom_category_empty_fails() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Custom(str(&env, "")),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_register_merchant_custom_category_too_long_fails() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    // 33-character string
+    let long = str(&env, "123456789012345678901234567890123");
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Custom(long),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
 // ── Payment tests ─────────────────────────────────────────────────────────────
 
 fn setup_payment_env() -> (
