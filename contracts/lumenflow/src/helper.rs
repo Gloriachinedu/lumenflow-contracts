@@ -6,6 +6,8 @@ use crate::storage;
 pub const MAX_PAGE_LIMIT: u32 = 100;
 pub const REFUND_WINDOW_SECS: u64 = 30 * 24 * 3600; // 30 days
 pub const MAX_MEMO_LENGTH: u32 = 256;
+/// Default minimum refund amount (100 stroops) to prevent dust refunds.
+pub const MIN_REFUND_AMOUNT: i128 = 100;
 
 /// Require that `caller` is the stored admin.
 pub fn require_admin(env: &Env, caller: &Address) -> Result<(), PaymentError> {
@@ -30,6 +32,15 @@ pub fn require_admin_or(env: &Env, caller: &Address, allowed: &Address) -> Resul
 /// Validate that `amount` is strictly positive.
 pub fn require_positive(amount: i128) -> Result<(), PaymentError> {
     if amount > 0 {
+        Ok(())
+    } else {
+        Err(PaymentError::InvalidAmount)
+    }
+}
+
+/// Validate that `amount` meets the configured minimum refund threshold.
+pub fn require_min_refund_amount(env: &Env, amount: i128) -> Result<(), PaymentError> {
+    if amount >= storage::get_min_refund_amount(env) {
         Ok(())
     } else {
         Err(PaymentError::InvalidAmount)

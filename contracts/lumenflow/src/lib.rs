@@ -15,8 +15,9 @@ use soroban_sdk::{
 
 use error::PaymentError;
 use helper::{
-    require_admin, require_admin_or, require_non_empty_string, require_positive,
-    require_valid_limit, validate_memo_length, validate_tags, verify_signature, REFUND_WINDOW_SECS,
+    require_admin, require_admin_or, require_min_refund_amount, require_non_empty_string,
+    require_positive, require_valid_limit, validate_memo_length, validate_tags, verify_signature,
+    REFUND_WINDOW_SECS,
 };
 use types::{
     BatchPaymentItem, GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder,
@@ -82,6 +83,18 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         require_admin(&env, &admin)?;
         storage::set_max_refunds_per_order(&env, max);
+        Ok(())
+    }
+
+    /// Set the minimum refund amount (default 100 stroops). Admin only.
+    pub fn set_min_refund_amount(
+        env: Env,
+        admin: Address,
+        amount: i128,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        require_positive(amount)?;
+        storage::set_min_refund_amount(&env, amount);
         Ok(())
     }
 
@@ -629,6 +642,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         caller.require_auth();
         require_positive(amount)?;
+        require_min_refund_amount(&env, amount)?;
         require_non_empty_string(&refund_id)?;
         validate_memo_length(&reason)?;
 

@@ -336,6 +336,7 @@ stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network 
 
 Refund rules:
 - Window: 30 days from `paid_at`
+- Minimum refund amount: 100 stroops by default (admin-configurable via `set_min_refund_amount`)
 - Partial refunds allowed; cumulative total cannot exceed original amount
 - Initiator: payer or merchant
 - Approver/Rejector: merchant or admin

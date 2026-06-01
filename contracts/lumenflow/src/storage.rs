@@ -1,5 +1,6 @@
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
 
+use crate::helper::MIN_REFUND_AMOUNT;
 use crate::types::{GlobalStats, Merchant, MultisigPayment, PaymentOrder, PaymentRequest, RefundRecord, SubscriptionPlan, Subscription};
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
@@ -18,6 +19,7 @@ pub enum DataKey {
     Multisig(String),
     PaymentRequest(String),
     LargePaymentThreshold,
+    MinRefundAmount,
     MaxRefundsPerOrder,
     OrderRefundCount(String),
 }
@@ -58,6 +60,19 @@ pub fn set_large_payment_threshold(env: &Env, threshold: i128) {
     env.storage()
         .instance()
         .set(&DataKey::LargePaymentThreshold, &threshold);
+}
+
+pub fn get_min_refund_amount(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MinRefundAmount)
+        .unwrap_or(MIN_REFUND_AMOUNT)
+}
+
+pub fn set_min_refund_amount(env: &Env, amount: i128) {
+    env.storage()
+        .instance()
+        .set(&DataKey::MinRefundAmount, &amount);
 }
 
 // ── Global stats ──────────────────────────────────────────────────────────────
