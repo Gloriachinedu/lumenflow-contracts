@@ -33,7 +33,17 @@ pub struct PaymentProcessingContract;
 impl PaymentProcessingContract {
     // ── Admin ─────────────────────────────────────────────────────────────────
 
-    /// One-time admin initialisation.
+    /// One-time admin initialisation. Can only be called once; subsequent calls fail.
+    ///
+    /// # Arguments
+    /// * `admin` - The address to designate as the contract administrator.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::AdminAlreadySet`] — an admin has already been configured.
+    /// * [`PaymentError::InvalidAdminAddress`] — `admin` is a contract address.
     pub fn set_admin(env: Env, admin: Address) -> Result<(), PaymentError> {
         if storage::get_admin(&env).is_some() {
             return Err(PaymentError::AdminAlreadySet);
@@ -51,6 +61,17 @@ impl PaymentProcessingContract {
     }
 
     /// Set how long (seconds) before a payment record is eligible for cleanup.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator address.
+    /// * `period` - Minimum age in seconds a payment must reach before it can be removed
+    ///   by [`cleanup_expired_payments`].
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
     pub fn set_payment_cleanup_period(
         env: Env,
         admin: Address,
@@ -63,6 +84,20 @@ impl PaymentProcessingContract {
     }
 
     /// Set the threshold for unusually large payments (emits suspicious_activity event).
+    ///
+    /// Payments whose amount is greater than or equal to `threshold` will cause a
+    /// `lumenflow/suspicious_activity` event to be emitted.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator address.
+    /// * `threshold` - Minimum amount (inclusive) that triggers the suspicious-activity event.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    /// * [`PaymentError::InvalidAmount`] — `threshold` is not positive.
     pub fn set_large_payment_threshold(
         env: Env,
         admin: Address,
@@ -75,6 +110,16 @@ impl PaymentProcessingContract {
     }
 
     /// Set the maximum number of pending refunds allowed per order (default 5). Admin only.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator address.
+    /// * `max` - New maximum number of concurrent pending refunds per order.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
     pub fn set_max_refunds_per_order(
         env: Env,
         admin: Address,
@@ -88,6 +133,20 @@ impl PaymentProcessingContract {
     // ── Merchant management ───────────────────────────────────────────────────
 
     /// Register a new merchant.
+    ///
+    /// # Arguments
+    /// * `merchant_address` - The address of the merchant being registered. Must sign the call.
+    /// * `name` - Non-empty display name for the merchant.
+    /// * `description` - Free-text description of the merchant's business.
+    /// * `contact_info` - Contact details (email, URL, etc.).
+    /// * `category` - Business category from [`MerchantCategory`].
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::MerchantAlreadyRegistered`] — the address is already registered.
+    /// * [`PaymentError::InvalidInput`] — `name` is empty.
     pub fn register_merchant(
         env: Env,
         merchant_address: Address,
@@ -128,6 +187,20 @@ impl PaymentProcessingContract {
     }
 
     /// Deactivate a merchant (admin only).
+    ///
+    /// Deactivated merchants cannot receive new payments. The global active-merchant
+    /// count is decremented (saturating at zero).
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator address.
+    /// * `merchant_address` - Address of the merchant to deactivate.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    /// * [`PaymentError::MerchantNotFound`] — no merchant is registered at `merchant_address`.
     pub fn deactivate_merchant(
         env: Env,
         admin: Address,
@@ -148,6 +221,20 @@ impl PaymentProcessingContract {
     }
 
     /// Verify a merchant (admin only).
+    ///
+    /// Sets the `verified` flag on the merchant profile and emits a
+    /// `lumenflow/merchant_verified` event.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator address.
+    /// * `merchant_address` - Address of the merchant to verify.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    /// * [`PaymentError::MerchantNotFound`] — no merchant is registered at `merchant_address`.
     pub fn verify_merchant(
         env: Env,
         admin: Address,
@@ -164,6 +251,20 @@ impl PaymentProcessingContract {
     }
 
     /// Remove merchant verification (admin only).
+    ///
+    /// Clears the `verified` flag on the merchant profile and emits a
+    /// `lumenflow/merchant_unverified` event.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator address.
+    /// * `merchant_address` - Address of the merchant to unverify.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    /// * [`PaymentError::MerchantNotFound`] — no merchant is registered at `merchant_address`.
     pub fn unverify_merchant(
         env: Env,
         admin: Address,
@@ -180,11 +281,26 @@ impl PaymentProcessingContract {
     }
 
     /// Get merchant details.
+    ///
+    /// # Arguments
+    /// * `merchant_address` - Address of the merchant to look up.
+    ///
+    /// # Returns
+    /// The [`Merchant`] profile on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::MerchantNotFound`] — no merchant is registered at `merchant_address`.
     pub fn get_merchant(env: Env, merchant_address: Address) -> Result<Merchant, PaymentError> {
         storage::get_merchant(&env, &merchant_address).ok_or(PaymentError::MerchantNotFound)
     }
 
     /// Check if a merchant address is already registered.
+    ///
+    /// # Arguments
+    /// * `merchant_address` - Address to check.
+    ///
+    /// # Returns
+    /// `true` if a merchant profile exists for `merchant_address`, `false` otherwise.
     pub fn is_registered(env: Env, merchant_address: Address) -> bool {
         storage::get_merchant(&env, &merchant_address).is_some()
     }
@@ -193,6 +309,35 @@ impl PaymentProcessingContract {
     // ── Payment processing ────────────────────────────────────────────────────
 
     /// Process a payment with an ed25519 signature from the merchant's key.
+    ///
+    /// Transfers `amount` tokens from `payer` to `merchant_address` after verifying
+    /// the merchant's ed25519 signature over the canonical payload
+    /// (`XDR(order_id) || amount_be_i128`). See the inline comment for the exact
+    /// byte layout.
+    ///
+    /// # Arguments
+    /// * `payer` - Address funding the payment. Must sign the call.
+    /// * `order_id` - Unique, non-empty identifier for this payment.
+    /// * `merchant_address` - Registered, active merchant receiving the funds.
+    /// * `token_address` - Allowed token contract address.
+    /// * `amount` - Positive token amount (in the token's smallest unit).
+    /// * `memo` - Optional free-text note; maximum 256 characters.
+    /// * `tags` - Optional list of string tags; each tag ≤ 32 characters, max 10 tags.
+    /// * `signature` - 64-byte ed25519 signature produced by the merchant's private key.
+    /// * `merchant_public_key` - 32-byte ed25519 public key corresponding to the signature.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::InvalidAmount`] — `amount` is not positive.
+    /// * [`PaymentError::InvalidInput`] — `order_id` is empty, `memo` exceeds 256 chars,
+    ///   or tags are invalid.
+    /// * [`PaymentError::TokenNotAllowed`] — `token_address` is not on the allow-list.
+    /// * [`PaymentError::PaymentAlreadyExists`] — a payment with `order_id` already exists.
+    /// * [`PaymentError::MerchantNotFound`] — no merchant registered at `merchant_address`.
+    /// * [`PaymentError::MerchantInactive`] — the merchant has been deactivated.
+    /// * [`PaymentError::InvalidSignature`] — the ed25519 signature verification failed.
     pub fn process_payment_with_signature(
         env: Env,
         payer: Address,
@@ -293,6 +438,30 @@ impl PaymentProcessingContract {
     }
 
     /// Process a payment with an explicit payer nonce for replay protection.
+    ///
+    /// The `nonce` must equal the current per-payer nonce stored on-chain. On success
+    /// the nonce is incremented, preventing replay of the same call.
+    ///
+    /// # Arguments
+    /// * `payer` - Address funding the payment. Must sign the call.
+    /// * `order_id` - Unique, non-empty identifier for this payment.
+    /// * `merchant_address` - Registered, active merchant receiving the funds.
+    /// * `token_address` - Token contract address (not validated against allow-list here).
+    /// * `amount` - Positive token amount.
+    /// * `memo` - Optional free-text note.
+    /// * `tags` - Optional list of string tags.
+    /// * `nonce` - Must match the current on-chain nonce for `payer`.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::InvalidAmount`] — `amount` is not positive.
+    /// * [`PaymentError::InvalidInput`] — `order_id` is empty or tags are invalid.
+    /// * [`PaymentError::InvalidNonce`] — `nonce` does not match the stored payer nonce.
+    /// * [`PaymentError::PaymentAlreadyExists`] — a payment with `order_id` already exists.
+    /// * [`PaymentError::MerchantNotFound`] — no merchant registered at `merchant_address`.
+    /// * [`PaymentError::MerchantInactive`] — the merchant has been deactivated.
     pub fn process_payment_with_nonce(
         env: Env,
         payer: Address,
@@ -369,6 +538,28 @@ impl PaymentProcessingContract {
     }
 
     /// Pay multiple merchants in one transaction. Maximum 10 items. Atomic.
+    ///
+    /// All items are validated and transferred atomically — if any item fails the
+    /// entire batch is rolled back.
+    ///
+    /// # Arguments
+    /// * `payer` - Address funding all payments. Must sign the call.
+    /// * `payments` - List of up to 10 [`BatchPaymentItem`] entries, each containing
+    ///   `order_id`, `merchant_address`, `token_address`, `amount`, `memo`,
+    ///   `signature`, and `merchant_public_key`.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::BatchSizeExceeded`] — more than 10 items provided.
+    /// * [`PaymentError::InvalidAmount`] — any item has a non-positive amount.
+    /// * [`PaymentError::InvalidInput`] — any item has an empty `order_id`.
+    /// * [`PaymentError::TokenNotAllowed`] — any item's token is not on the allow-list.
+    /// * [`PaymentError::PaymentAlreadyExists`] — any item's `order_id` already exists.
+    /// * [`PaymentError::MerchantNotFound`] — any item's merchant is not registered.
+    /// * [`PaymentError::MerchantInactive`] — any item's merchant is deactivated.
+    /// * [`PaymentError::InvalidSignature`] — any item's signature verification fails.
     pub fn batch_payment(
         env: Env,
         payer: Address,
@@ -446,6 +637,17 @@ impl PaymentProcessingContract {
     }
 
     /// Get a single payment by order ID. Caller must be payer, merchant, or admin.
+    ///
+    /// # Arguments
+    /// * `caller` - Address requesting the payment. Must sign the call.
+    /// * `order_id` - The unique order identifier to look up.
+    ///
+    /// # Returns
+    /// The [`PaymentOrder`] on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::PaymentNotFound`] — no payment exists with `order_id`.
+    /// * [`PaymentError::Unauthorized`] — `caller` is not the payer, merchant, or admin.
     pub fn get_payment_by_id(
         env: Env,
         caller: Address,
@@ -463,6 +665,19 @@ impl PaymentProcessingContract {
     }
 
     /// Attach or update a merchant note on a completed payment (max 512 chars).
+    ///
+    /// # Arguments
+    /// * `merchant` - Must be the merchant on the payment. Must sign the call.
+    /// * `order_id` - The order to annotate.
+    /// * `note` - Note text; maximum 512 characters.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::InvalidInput`] — `note` exceeds 512 characters.
+    /// * [`PaymentError::PaymentNotFound`] — no payment exists with `order_id`.
+    /// * [`PaymentError::Unauthorized`] — `merchant` is not the payment's merchant.
     pub fn add_payment_note(
         env: Env,
         merchant: Address,
@@ -486,6 +701,18 @@ impl PaymentProcessingContract {
     }
 
     /// Get a public summary of a payment by order ID. No auth required.
+    ///
+    /// Returns a reduced view of the payment that omits payer identity and private fields.
+    ///
+    /// # Arguments
+    /// * `order_id` - The unique order identifier to look up.
+    ///
+    /// # Returns
+    /// A [`PaymentSummary`] containing `order_id`, `merchant_address`, `amount`, `token`,
+    /// `status`, and `paid_at`.
+    ///
+    /// # Errors
+    /// * [`PaymentError::PaymentNotFound`] — no payment exists with `order_id`.
     pub fn get_payment_summary(
         env: Env,
         order_id: String,
@@ -504,6 +731,21 @@ impl PaymentProcessingContract {
     }
 
     /// Update payment status after a partial refund.
+    ///
+    /// Sets `refunded_amount` and transitions the payment status to
+    /// [`PaymentStatus::PartiallyRefunded`] or [`PaymentStatus::FullyRefunded`].
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the admin or the payment's merchant. Must sign the call.
+    /// * `order_id` - The order to update.
+    /// * `refunded_amount` - Cumulative refunded amount so far.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::PaymentNotFound`] — no payment exists with `order_id`.
+    /// * [`PaymentError::Unauthorized`] — `caller` is not the admin or the payment's merchant.
     pub fn update_payment_status(
         env: Env,
         caller: Address,
@@ -526,6 +768,20 @@ impl PaymentProcessingContract {
     }
 
     /// Archive (remove) a payment record. Admin only.
+    ///
+    /// Removes the payment from storage and from the merchant and payer index lists,
+    /// then emits a `lumenflow/payment_archived` event.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator address.
+    /// * `order_id` - The order to archive.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    /// * [`PaymentError::PaymentNotFound`] — no payment exists with `order_id`.
     pub fn archive_payment_record(
         env: Env,
         admin: Address,
@@ -543,6 +799,19 @@ impl PaymentProcessingContract {
     }
 
     /// Remove payments older than the cleanup period. Admin only.
+    ///
+    /// Iterates all merchant payment indexes and deletes any payment whose `paid_at`
+    /// timestamp is older than `now - cleanup_period`. Also removes the payment from
+    /// the corresponding payer index.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator address.
+    ///
+    /// # Returns
+    /// The number of payment records removed.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
     pub fn cleanup_expired_payments(env: Env, admin: Address) -> Result<u32, PaymentError> {
         require_admin(&env, &admin)?;
         let cutoff = env
@@ -572,6 +841,27 @@ impl PaymentProcessingContract {
     // ── Payment history queries ───────────────────────────────────────────────
 
     /// Paginated payment history for a merchant.
+    ///
+    /// Returns a page of payments received by `merchant`, optionally filtered and sorted.
+    /// Pagination is cursor-based: pass the `next_cursor` from the previous page to
+    /// retrieve the next one.
+    ///
+    /// # Arguments
+    /// * `merchant` - Merchant address. Must sign the call.
+    /// * `cursor` - Optional `order_id` to start after (exclusive). `None` starts from
+    ///   the beginning.
+    /// * `limit` - Number of results per page; must be between 1 and 100 inclusive.
+    /// * `filter` - Optional [`PaymentFilter`] to restrict results by date, amount,
+    ///   token, status, or tag.
+    /// * `sort_field` - [`SortField::Date`] or [`SortField::Amount`].
+    /// * `sort_order` - [`SortOrder::Ascending`] or [`SortOrder::Descending`].
+    ///
+    /// # Returns
+    /// A [`PaymentPage`] containing the matching payments, a `next_cursor` if more
+    /// results exist, and the total count of matching payments.
+    ///
+    /// # Errors
+    /// * [`PaymentError::InvalidInput`] — `limit` is 0 or exceeds 100.
     pub fn get_merchant_payment_history(
         env: Env,
         merchant: Address,
@@ -589,6 +879,27 @@ impl PaymentProcessingContract {
     }
 
     /// Paginated payment history for a payer.
+    ///
+    /// Returns a page of payments made by `payer`, optionally filtered and sorted.
+    /// Pagination is cursor-based: pass the `next_cursor` from the previous page to
+    /// retrieve the next one.
+    ///
+    /// # Arguments
+    /// * `payer` - Payer address. Must sign the call.
+    /// * `cursor` - Optional `order_id` to start after (exclusive). `None` starts from
+    ///   the beginning.
+    /// * `limit` - Number of results per page; must be between 1 and 100 inclusive.
+    /// * `filter` - Optional [`PaymentFilter`] to restrict results by date, amount,
+    ///   token, status, or tag.
+    /// * `sort_field` - [`SortField::Date`] or [`SortField::Amount`].
+    /// * `sort_order` - [`SortOrder::Ascending`] or [`SortOrder::Descending`].
+    ///
+    /// # Returns
+    /// A [`PaymentPage`] containing the matching payments, a `next_cursor` if more
+    /// results exist, and the total count of matching payments.
+    ///
+    /// # Errors
+    /// * [`PaymentError::InvalidInput`] — `limit` is 0 or exceeds 100.
     pub fn get_payer_payment_history(
         env: Env,
         payer: Address,
@@ -606,6 +917,18 @@ impl PaymentProcessingContract {
     }
 
     /// Global payment statistics. Admin only.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator address.
+    /// * `_date_start` - Reserved for future date-range filtering (currently unused).
+    /// * `_date_end` - Reserved for future date-range filtering (currently unused).
+    ///
+    /// # Returns
+    /// A [`GlobalStats`] snapshot with `total_payments`, `total_volume`,
+    /// `total_refunds`, `total_refund_volume`, and `active_merchants`.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
     pub fn get_global_payment_stats(
         env: Env,
         admin: Address,
@@ -619,6 +942,31 @@ impl PaymentProcessingContract {
     // ── Refunds ───────────────────────────────────────────────────────────────
 
     /// Initiate a refund request.
+    ///
+    /// Creates a [`RefundRecord`] in `Pending` state. The refund must subsequently be
+    /// approved by the merchant or admin before it can be executed.
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the payer or merchant of the original payment. Must sign.
+    /// * `refund_id` - Unique, non-empty identifier for this refund request.
+    /// * `order_id` - The order being refunded.
+    /// * `amount` - Positive amount to refund; cumulative refunded amount must not
+    ///   exceed the original payment amount.
+    /// * `reason` - Human-readable reason; maximum 256 characters.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::InvalidAmount`] — `amount` is not positive.
+    /// * [`PaymentError::InvalidInput`] — `refund_id` is empty or `reason` exceeds 256 chars.
+    /// * [`PaymentError::RefundAlreadyExists`] — a refund with `refund_id` already exists.
+    /// * [`PaymentError::PaymentNotFound`] — no payment exists with `order_id`.
+    /// * [`PaymentError::Unauthorized`] — `caller` is not the payer or merchant.
+    /// * [`PaymentError::RefundWindowExpired`] — more than 30 days have passed since payment.
+    /// * [`PaymentError::RefundExceedsOriginal`] — cumulative refund would exceed the
+    ///   original payment amount.
+    /// * [`PaymentError::TooManyRefunds`] — the per-order refund limit has been reached.
     pub fn initiate_refund(
         env: Env,
         caller: Address,
@@ -679,6 +1027,22 @@ impl PaymentProcessingContract {
     }
 
     /// Approve a refund. Merchant or admin only.
+    ///
+    /// Transitions the refund from `Pending` to `Approved`. The refund can then be
+    /// executed by the merchant via [`execute_refund`].
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the payment's merchant or the admin. Must sign the call.
+    /// * `refund_id` - The refund to approve.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::RefundNotFound`] — no refund exists with `refund_id`.
+    /// * [`PaymentError::PaymentNotFound`] — the associated payment no longer exists.
+    /// * [`PaymentError::Unauthorized`] — `caller` is not the merchant or admin.
+    /// * [`PaymentError::RefundAlreadyCompleted`] — the refund is not in `Pending` state.
     pub fn approve_refund(
         env: Env,
         caller: Address,
@@ -705,6 +1069,22 @@ impl PaymentProcessingContract {
     }
 
     /// Reject a refund. Merchant or admin only.
+    ///
+    /// Transitions the refund from `Pending` to `Rejected`. The payer may subsequently
+    /// open a dispute via [`dispute_refund`].
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the payment's merchant or the admin. Must sign the call.
+    /// * `refund_id` - The refund to reject.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::RefundNotFound`] — no refund exists with `refund_id`.
+    /// * [`PaymentError::PaymentNotFound`] — the associated payment no longer exists.
+    /// * [`PaymentError::Unauthorized`] — `caller` is not the merchant or admin.
+    /// * [`PaymentError::RefundAlreadyCompleted`] — the refund is not in `Pending` state.
     pub fn reject_refund(
         env: Env,
         caller: Address,
@@ -731,6 +1111,21 @@ impl PaymentProcessingContract {
     }
 
     /// Execute an approved refund — transfers tokens from merchant to payer.
+    ///
+    /// The merchant must authorise the token transfer. On success the refund status
+    /// transitions to `Completed`, the payment's `refunded_amount` is updated, and
+    /// global refund statistics are incremented.
+    ///
+    /// # Arguments
+    /// * `refund_id` - The refund to execute. Must be in `Approved` state.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::RefundNotFound`] — no refund exists with `refund_id`.
+    /// * [`PaymentError::RefundNotApproved`] — the refund is not in `Approved` state.
+    /// * [`PaymentError::PaymentNotFound`] — the associated payment no longer exists.
     pub fn execute_refund(env: Env, refund_id: String) -> Result<(), PaymentError> {
         let refund = storage::get_refund(&env, &refund_id)
             .ok_or(PaymentError::RefundNotFound)?;
@@ -771,11 +1166,37 @@ impl PaymentProcessingContract {
     }
 
     /// Get refund status.
+    ///
+    /// # Arguments
+    /// * `refund_id` - The refund identifier to look up.
+    ///
+    /// # Returns
+    /// The [`RefundRecord`] on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::RefundNotFound`] — no refund exists with `refund_id`.
     pub fn get_refund(env: Env, refund_id: String) -> Result<RefundRecord, PaymentError> {
         storage::get_refund(&env, &refund_id).ok_or(PaymentError::RefundNotFound)
     }
 
     /// Payer disputes a rejected refund, providing evidence.
+    ///
+    /// Transitions the refund to `Disputed` and creates a [`DisputeRecord`]. The admin
+    /// can then resolve the dispute via [`resolve_dispute`].
+    ///
+    /// # Arguments
+    /// * `payer` - Must be the original initiator of the refund. Must sign the call.
+    /// * `refund_id` - The refund to dispute.
+    /// * `evidence` - Free-text evidence supporting the dispute.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::RefundNotFound`] — no refund exists with `refund_id`.
+    /// * [`PaymentError::Unauthorized`] — `payer` is not the refund initiator.
+    /// * [`PaymentError::RefundNotRejected`] — the refund is not in `Rejected` state.
+    /// * [`PaymentError::DisputeAlreadyExists`] — a dispute for this refund already exists.
     pub fn dispute_refund(
         env: Env,
         payer: Address,
@@ -815,6 +1236,26 @@ impl PaymentProcessingContract {
     }
 
     /// Admin resolves a dispute, either favouring the payer (executes refund) or the merchant.
+    ///
+    /// If `outcome` is [`DisputeOutcome::FavorPayer`], the refund amount is transferred
+    /// from the merchant to the payer and the refund is marked `Completed`. If
+    /// [`DisputeOutcome::FavorMerchant`], the refund is marked `Rejected`.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator address.
+    /// * `refund_id` - The disputed refund to resolve.
+    /// * `outcome` - [`DisputeOutcome::FavorPayer`] or [`DisputeOutcome::FavorMerchant`].
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    /// * [`PaymentError::DisputeNotFound`] — no dispute exists for `refund_id`.
+    /// * [`PaymentError::RefundAlreadyCompleted`] — the dispute has already been resolved.
+    /// * [`PaymentError::RefundNotFound`] — the associated refund no longer exists.
+    /// * [`PaymentError::PaymentNotFound`] — the associated payment no longer exists
+    ///   (only relevant when favouring the payer).
     pub fn resolve_dispute(
         env: Env,
         admin: Address,
@@ -874,6 +1315,31 @@ impl PaymentProcessingContract {
     // ── Multi-signature payments ──────────────────────────────────────────────
 
     /// Initiate a multisig payment requiring `required_signatures` approvals.
+    ///
+    /// Creates a [`MultisigPayment`] record. Signers must call [`sign_multisig_payment`]
+    /// until the threshold is met, then anyone can call [`execute_multisig_payment`].
+    ///
+    /// # Arguments
+    /// * `initiator` - Address creating the multisig payment. Must sign the call.
+    /// * `payment_id` - Unique, non-empty identifier for this multisig payment.
+    /// * `merchant_address` - Registered, active merchant to receive the funds.
+    /// * `token_address` - Allowed token contract address.
+    /// * `amount` - Positive token amount.
+    /// * `signers` - List of addresses authorised to sign; must contain no duplicates.
+    /// * `required_signatures` - Minimum number of signatures needed to execute.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::InvalidAmount`] — `amount` is not positive.
+    /// * [`PaymentError::InvalidInput`] — `payment_id` is empty or `signers` contains
+    ///   duplicates.
+    /// * [`PaymentError::TokenNotAllowed`] — `token_address` is not on the allow-list.
+    /// * [`PaymentError::PaymentAlreadyExists`] — a multisig payment with `payment_id`
+    ///   already exists.
+    /// * [`PaymentError::MerchantNotFound`] — no merchant registered at `merchant_address`.
+    /// * [`PaymentError::MerchantInactive`] — the merchant has been deactivated.
     pub fn initiate_multisig_payment(
         env: Env,
         initiator: Address,
@@ -931,6 +1397,23 @@ impl PaymentProcessingContract {
     }
 
     /// Add a signature to a multisig payment.
+    ///
+    /// Each listed signer may call this once. Once `required_signatures` signatures
+    /// are collected, the payment can be executed.
+    ///
+    /// # Arguments
+    /// * `signer` - Must be in the payment's `signers` list. Must sign the call.
+    /// * `payment_id` - The multisig payment to sign.
+    /// * `signature` - The signer's signature bytes.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::MultisigNotFound`] — no multisig payment exists with `payment_id`.
+    /// * [`PaymentError::MultisigAlreadyExecuted`] — the payment has already been executed.
+    /// * [`PaymentError::Unauthorized`] — `signer` is not in the allowed signers list.
+    /// * [`PaymentError::MultisigAlreadySigned`] — `signer` has already signed this payment.
     pub fn sign_multisig_payment(
         env: Env,
         signer: Address,
@@ -962,6 +1445,21 @@ impl PaymentProcessingContract {
     }
 
     /// Execute a multisig payment once enough signatures are collected.
+    ///
+    /// Transfers `amount` tokens from `payer` to the merchant, records the payment in
+    /// history indexes, and emits a `lumenflow/multisig_executed` event.
+    ///
+    /// # Arguments
+    /// * `payer` - Address funding the transfer. Must sign the call.
+    /// * `payment_id` - The multisig payment to execute.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::MultisigNotFound`] — no multisig payment exists with `payment_id`.
+    /// * [`PaymentError::MultisigAlreadyExecuted`] — the payment has already been executed.
+    /// * [`PaymentError::InsufficientSignatures`] — fewer signatures than required.
     pub fn execute_multisig_payment(
         env: Env,
         payer: Address,
@@ -1021,6 +1519,24 @@ impl PaymentProcessingContract {
     // ── Subscriptions ─────────────────────────────────────────────────────────
 
     /// Create a recurring payment plan. Merchant only.
+    ///
+    /// # Arguments
+    /// * `merchant` - Registered, active merchant creating the plan. Must sign the call.
+    /// * `plan_id` - Unique, non-empty identifier for this plan.
+    /// * `token` - Token contract address used for charges.
+    /// * `amount` - Positive amount charged per cycle.
+    /// * `interval_secs` - Minimum seconds between consecutive charges.
+    /// * `max_cycles` - Total number of billing cycles before the plan completes.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::InvalidAmount`] — `amount` is not positive.
+    /// * [`PaymentError::InvalidInput`] — `plan_id` is empty.
+    /// * [`PaymentError::SubscriptionPlanAlreadyExists`] — a plan with `plan_id` exists.
+    /// * [`PaymentError::MerchantNotFound`] — `merchant` is not registered.
+    /// * [`PaymentError::MerchantInactive`] — the merchant has been deactivated.
     pub fn create_subscription_plan(
         env: Env,
         merchant: Address,
@@ -1049,6 +1565,23 @@ impl PaymentProcessingContract {
     }
 
     /// Subscribe to a plan.
+    ///
+    /// Creates an `Active` [`Subscription`] linked to the given plan. The first charge
+    /// can be triggered immediately via [`charge_subscription`].
+    ///
+    /// # Arguments
+    /// * `subscriber` - Address subscribing to the plan. Must sign the call.
+    /// * `subscription_id` - Unique, non-empty identifier for this subscription.
+    /// * `plan_id` - The plan to subscribe to.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::InvalidInput`] — `subscription_id` is empty.
+    /// * [`PaymentError::SubscriptionAlreadyExists`] — a subscription with `subscription_id`
+    ///   already exists.
+    /// * [`PaymentError::SubscriptionPlanNotFound`] — no plan exists with `plan_id`.
     pub fn subscribe(
         env: Env,
         subscriber: Address,
@@ -1079,6 +1612,24 @@ impl PaymentProcessingContract {
     }
 
     /// Charge the next cycle of a subscription. Anyone can trigger (merchant typically).
+    ///
+    /// Transfers the plan amount from the subscriber to the merchant, increments
+    /// `cycles_charged`, and marks the subscription `Completed` when `max_cycles` is
+    /// reached.
+    ///
+    /// # Arguments
+    /// * `subscription_id` - The subscription to charge.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::SubscriptionNotFound`] — no subscription exists with `subscription_id`.
+    /// * [`PaymentError::SubscriptionNotActive`] — the subscription is not in `Active` state.
+    /// * [`PaymentError::SubscriptionPlanNotFound`] — the associated plan no longer exists.
+    /// * [`PaymentError::SubscriptionMaxCyclesReached`] — all cycles have been charged.
+    /// * [`PaymentError::SubscriptionIntervalNotElapsed`] — not enough time has passed since
+    ///   the last charge.
     pub fn charge_subscription(
         env: Env,
         subscription_id: String,
@@ -1127,6 +1678,21 @@ impl PaymentProcessingContract {
     }
 
     /// Cancel an active subscription. Subscriber only.
+    ///
+    /// Transitions the subscription to `Cancelled` and emits a
+    /// `lumenflow/subscription_cancelled` event. No further charges can be made.
+    ///
+    /// # Arguments
+    /// * `subscriber` - Must be the subscription's owner. Must sign the call.
+    /// * `subscription_id` - The subscription to cancel.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::SubscriptionNotFound`] — no subscription exists with `subscription_id`.
+    /// * [`PaymentError::Unauthorized`] — `subscriber` is not the subscription owner.
+    /// * [`PaymentError::SubscriptionNotActive`] — the subscription is not in `Active` state.
     pub fn cancel_subscription(
         env: Env,
         subscriber: Address,
@@ -1300,6 +1866,26 @@ impl PaymentProcessingContract {
     // ── Payment Requests ──────────────────────────────────────────────────────
 
     /// Create a payment request that can be shared as a link.
+    ///
+    /// The request expires after `ttl` seconds. A payer can fulfil it via
+    /// [`pay_payment_request`] before expiry.
+    ///
+    /// # Arguments
+    /// * `merchant` - Merchant creating the request. Must sign the call.
+    /// * `request_id` - Unique, non-empty identifier for this request.
+    /// * `token` - Allowed token contract address.
+    /// * `amount` - Positive amount the payer must send.
+    /// * `memo` - Optional description attached to the resulting payment record.
+    /// * `ttl` - Time-to-live in seconds from the current ledger timestamp.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::InvalidAmount`] — `amount` is not positive.
+    /// * [`PaymentError::InvalidInput`] — `request_id` is empty.
+    /// * [`PaymentError::TokenNotAllowed`] — `token` is not on the allow-list.
+    /// * [`PaymentError::PaymentAlreadyExists`] — a request with `request_id` already exists.
     pub fn create_payment_request(
         env: Env,
         merchant: Address,
@@ -1337,6 +1923,21 @@ impl PaymentProcessingContract {
     }
 
     /// Pay a previously created payment request.
+    ///
+    /// Transfers the requested amount from `payer` to the merchant, records the
+    /// payment in history indexes, updates global stats, removes the request, and
+    /// emits a `lumenflow/payment_request_paid` event.
+    ///
+    /// # Arguments
+    /// * `payer` - Address funding the payment. Must sign the call.
+    /// * `request_id` - The payment request to fulfil.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::PaymentNotFound`] — no request exists with `request_id`.
+    /// * [`PaymentError::PaymentExpired`] — the request TTL has elapsed (request is removed).
     pub fn pay_payment_request(
         env: Env,
         payer: Address,

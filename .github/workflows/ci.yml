@@ -48,6 +48,9 @@ jobs:
       - name: Run clippy
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
+      - name: Check documentation
+        run: cargo doc --no-deps --locked 2>&1 | (! grep "^warning")
+
   test:
     name: Test
     runs-on: ubuntu-latest
