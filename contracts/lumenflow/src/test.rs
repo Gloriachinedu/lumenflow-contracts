@@ -1082,3 +1082,123 @@ fn test_auth_sign_multisig_requires_listed_signer() {
     let result = client.try_sign_multisig_payment(&stranger, &str(&env, "AUTH_MS"), &bytes(&env, &[0u8; 64]));
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
+
+// ── Merchant Stats tests ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_merchant_stats_initialized_to_zero() {
+    let (env, client, _admin, merchant, _payer, _token) = setup_payment_env();
+
+    let stats = client.get_merchant_stats(&merchant);
+    assert_eq!(stats.total_payments, 0);
+    assert_eq!(stats.total_volume, 0);
+    assert_eq!(stats.total_refunds, 0);
+    assert_eq!(stats.total_refund_volume, 0);
+}
+
+#[test]
+fn test_merchant_stats_updated_after_payment() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_001", 1_000);
+
+    let stats = client.get_merchant_stats(&merchant);
+    assert_eq!(stats.total_payments, 1);
+    assert_eq!(stats.total_volume, 1_000);
+    assert_eq!(stats.total_refunds, 0);
+    assert_eq!(stats.total_refund_volume, 0);
+}
+
+#[test]
+fn test_merchant_stats_updated_after_multiple_payments() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_001", 500);
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_002", 1_500);
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_003", 2_000);
+
+    let stats = client.get_merchant_stats(&merchant);
+    assert_eq!(stats.total_payments, 3);
+    assert_eq!(stats.total_volume, 4_000);
+    assert_eq!(stats.total_refunds, 0);
+    assert_eq!(stats.total_refund_volume, 0);
+}
+
+#[test]
+fn test_merchant_stats_updated_after_refund() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_001", 1_000);
+
+    client.initiate_refund(&payer, &str(&env, "REFUND_001"), &str(&env, "ORDER_001"), &300, &str(&env, "Reason"));
+    client.approve_refund(&merchant, &str(&env, "REFUND_001"));
+    client.execute_refund(&str(&env, "REFUND_001"));
+
+    let stats = client.get_merchant_stats(&merchant);
+    assert_eq!(stats.total_payments, 1);
+    assert_eq!(stats.total_volume, 1_000);
+    assert_eq!(stats.total_refunds, 1);
+    assert_eq!(stats.total_refund_volume, 300);
+}
+
+#[test]
+fn test_merchant_stats_accuracy_after_multiple_payments_and_refunds() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Multiple payments
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_001", 1_000);
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_002", 2_000);
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_003", 3_000);
+
+    // Multiple refunds
+    client.initiate_refund(&payer, &str(&env, "REFUND_001"), &str(&env, "ORDER_001"), &200, &str(&env, "Reason"));
+    client.approve_refund(&merchant, &str(&env, "REFUND_001"));
+    client.execute_refund(&str(&env, "REFUND_001"));
+
+    client.initiate_refund(&payer, &str(&env, "REFUND_002"), &str(&env, "ORDER_002"), &500, &str(&env, "Reason"));
+    client.approve_refund(&merchant, &str(&env, "REFUND_002"));
+    client.execute_refund(&str(&env, "REFUND_002"));
+
+    let stats = client.get_merchant_stats(&merchant);
+    assert_eq!(stats.total_payments, 3);
+    assert_eq!(stats.total_volume, 6_000);
+    assert_eq!(stats.total_refunds, 2);
+    assert_eq!(stats.total_refund_volume, 700);
+}
+
+#[test]
+fn test_merchant_stats_isolated_per_merchant() {
+    let (env, client, admin, merchant1, payer, token) = setup_payment_env();
+    let merchant2 = Address::generate(&env);
+
+    client.register_merchant(
+        &merchant2,
+        &str(&env, "Store 2"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+    mint(&env, &token, &admin, &merchant2, 10_000);
+
+    // Payments to merchant1
+    make_payment(&env, &client, &merchant1, &payer, &token, "ORDER_001", 1_000);
+
+    // Payments to merchant2
+    make_payment(&env, &client, &merchant2, &payer, &token, "ORDER_002", 2_000);
+
+    let stats1 = client.get_merchant_stats(&merchant1);
+    assert_eq!(stats1.total_payments, 1);
+    assert_eq!(stats1.total_volume, 1_000);
+
+    let stats2 = client.get_merchant_stats(&merchant2);
+    assert_eq!(stats2.total_payments, 1);
+    assert_eq!(stats2.total_volume, 2_000);
+}
+
+#[test]
+fn test_auth_get_merchant_stats_requires_merchant() {
+    let (env, client, _admin, merchant, _payer, _token) = setup_payment_env();
+    let stranger = Address::generate(&env);
+    let result = client.try_get_merchant_stats(&stranger);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}

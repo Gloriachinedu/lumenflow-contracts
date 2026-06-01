@@ -19,7 +19,7 @@ use helper::{
     require_valid_limit, validate_memo_length, validate_tags, verify_signature, REFUND_WINDOW_SECS,
 };
 use types::{
-    BatchPaymentItem, GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder,
+    BatchPaymentItem, GlobalStats, MerchantCategory, MerchantStats, MultisigPayment, PaymentFilter, PaymentOrder,
     PaymentPage, PaymentStatus, RefundRecord, RefundStatus, SortField, SortOrder,
     StatusFilter, Merchant, SuspiciousActivityReason, SubscriptionPlan, Subscription, SubscriptionStatus,
 };
@@ -273,6 +273,12 @@ impl PaymentProcessingContract {
         m.total_received += amount;
         storage::set_merchant(&env, &m);
 
+        // Update merchant stats
+        let mut merchant_stats = storage::get_merchant_stats(&env, &merchant_address);
+        merchant_stats.total_payments += 1;
+        merchant_stats.total_volume = merchant_stats.total_volume.saturating_add(amount);
+        storage::set_merchant_stats(&env, &merchant_address, &merchant_stats);
+
         // Update global stats
         let mut stats = storage::get_global_stats(&env);
         stats.total_payments += 1;
@@ -352,6 +358,12 @@ impl PaymentProcessingContract {
         m.total_received += amount;
         storage::set_merchant(&env, &m);
 
+        // Update merchant stats
+        let mut merchant_stats = storage::get_merchant_stats(&env, &merchant_address);
+        merchant_stats.total_payments += 1;
+        merchant_stats.total_volume = merchant_stats.total_volume.saturating_add(amount);
+        storage::set_merchant_stats(&env, &merchant_address, &merchant_stats);
+
         // Update global stats
         let mut stats = storage::get_global_stats(&env);
         stats.total_payments += 1;
@@ -430,6 +442,12 @@ impl PaymentProcessingContract {
             let mut m = merchant;
             m.total_received += item.amount;
             storage::set_merchant(&env, &m);
+
+            // Update merchant stats
+            let mut merchant_stats = storage::get_merchant_stats(&env, &item.merchant_address);
+            merchant_stats.total_payments += 1;
+            merchant_stats.total_volume = merchant_stats.total_volume.saturating_add(item.amount);
+            storage::set_merchant_stats(&env, &item.merchant_address, &merchant_stats);
 
             // Update global stats
             let mut stats = storage::get_global_stats(&env);
@@ -616,6 +634,15 @@ impl PaymentProcessingContract {
         Ok(storage::get_global_stats(&env))
     }
 
+    /// Get payment statistics for a specific merchant.
+    pub fn get_merchant_stats(
+        env: Env,
+        merchant: Address,
+    ) -> Result<MerchantStats, PaymentError> {
+        merchant.require_auth();
+        Ok(storage::get_merchant_stats(&env, &merchant))
+    }
+
     // ── Refunds ───────────────────────────────────────────────────────────────
 
     /// Initiate a refund request.
@@ -760,6 +787,12 @@ impl PaymentProcessingContract {
         r.status = RefundStatus::Completed;
         storage::set_refund(&env, &r);
 
+        // Update merchant stats
+        let mut merchant_stats = storage::get_merchant_stats(&env, &payment.merchant_address);
+        merchant_stats.total_refunds += 1;
+        merchant_stats.total_refund_volume = merchant_stats.total_refund_volume.saturating_add(r.amount);
+        storage::set_merchant_stats(&env, &payment.merchant_address, &merchant_stats);
+
         let mut stats = storage::get_global_stats(&env);
         stats.total_refunds += 1;
         stats.total_refund_volume = stats.total_refund_volume.saturating_add(r.amount);
@@ -851,6 +884,12 @@ impl PaymentProcessingContract {
                 storage::set_payment(&env, &payment);
 
                 refund.status = RefundStatus::Completed;
+
+                // Update merchant stats
+                let mut merchant_stats = storage::get_merchant_stats(&env, &payment.merchant_address);
+                merchant_stats.total_refunds += 1;
+                merchant_stats.total_refund_volume = merchant_stats.total_refund_volume.saturating_add(refund.amount);
+                storage::set_merchant_stats(&env, &payment.merchant_address, &merchant_stats);
 
                 let mut stats = storage::get_global_stats(&env);
                 stats.total_refunds += 1;
