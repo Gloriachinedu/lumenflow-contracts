@@ -162,6 +162,98 @@ fn test_deactivate_merchant() {
     assert!(!m.active);
 }
 
+#[test]
+fn test_reactivate_merchant_success() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+    client.deactivate_merchant(&admin, &merchant);
+    let m = client.get_merchant(&merchant);
+    assert!(!m.active);
+
+    client.reactivate_merchant(&admin, &merchant);
+    let m = client.get_merchant(&merchant);
+    assert!(m.active);
+}
+
+#[test]
+fn test_reactivate_merchant_not_found() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_reactivate_merchant(&admin, &merchant);
+    assert_eq!(result, Err(Ok(PaymentError::MerchantNotFound)));
+}
+
+#[test]
+fn test_reactivate_merchant_already_active() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+    let m = client.get_merchant(&merchant);
+    assert!(m.active);
+
+    let result = client.try_reactivate_merchant(&admin, &merchant);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_reactivate_merchant_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+    client.deactivate_merchant(&admin, &merchant);
+
+    let result = client.try_reactivate_merchant(&non_admin, &merchant);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_reactivate_merchant_increments_active_stats() {
+    let (env, client, admin, merchant, _payer, _token) = setup_payment_env();
+
+    // After setup, 1 merchant is registered → active_merchants = 1
+    let stats = client.get_global_payment_stats(&admin, &None, &None);
+    assert_eq!(stats.active_merchants, 1);
+
+    // Deactivate → active_merchants = 0
+    client.deactivate_merchant(&admin, &merchant);
+    let stats = client.get_global_payment_stats(&admin, &None, &None);
+    assert_eq!(stats.active_merchants, 0);
+
+    // Reactivate → active_merchants = 1
+    client.reactivate_merchant(&admin, &merchant);
+    let stats = client.get_global_payment_stats(&admin, &None, &None);
+    assert_eq!(stats.active_merchants, 1);
+}
+
 // ── Payment tests ─────────────────────────────────────────────────────────────
 
 fn setup_payment_env() -> (

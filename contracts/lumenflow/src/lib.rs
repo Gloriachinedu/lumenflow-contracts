@@ -159,6 +159,30 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Reactivate a merchant (admin only).
+    pub fn reactivate_merchant(
+        env: Env,
+        admin: Address,
+        merchant_address: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        let mut merchant = storage::get_merchant(&env, &merchant_address)
+            .ok_or(PaymentError::MerchantNotFound)?;
+        if merchant.active {
+            return Err(PaymentError::InvalidInput);
+        }
+        merchant.active = true;
+        storage::set_merchant(&env, &merchant);
+
+        let mut stats = storage::get_global_stats(&env);
+        stats.active_merchants += 1;
+        storage::set_global_stats(&env, &stats);
+
+        env.events()
+            .publish(("lumenflow", "merchant_reactivated"), merchant_address);
+        Ok(())
+    }
+
     /// Verify a merchant (admin only).
     pub fn verify_merchant(
         env: Env,
