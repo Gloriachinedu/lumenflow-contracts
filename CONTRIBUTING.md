@@ -109,6 +109,23 @@ To ensure high-quality reviews and maintainability, the project is organized int
 
 Pull requests are automatically assigned to the relevant CODEOWNERS. At least one approval from a CODEOWNER is required for all PRs merging into `main`.
 
+## Release Checklist
+
+Use `scripts/release.sh <version>` to automate steps 1–4. Complete the remaining steps manually.
+
+- [ ] All issues and PRs for the milestone are merged into `main`
+- [ ] `cargo test --all-features` passes locally
+- [ ] Run `./scripts/release.sh <new-version>` — this will:
+  - [ ] Bump `version` in `contracts/lumenflow/Cargo.toml`
+  - [ ] Update `Cargo.lock`
+  - [ ] Prepend a new section to `CHANGELOG.md`
+  - [ ] Commit the changes as `chore: release v<version>`
+  - [ ] Create an annotated (or signed) git tag `v<version>`
+- [ ] Fill in the release notes in `CHANGELOG.md` and amend the commit if needed
+- [ ] Push branch and tag: `git push origin main && git push origin v<version>`
+- [ ] Verify the `release.yml` CI workflow completes and the GitHub Release is created
+- [ ] Announce the release in Discord / GitHub Discussions
+
 ## Reporting Security Issues
 
 Do **not** open a public issue for security vulnerabilities. See [SECURITY.md](SECURITY.md).
