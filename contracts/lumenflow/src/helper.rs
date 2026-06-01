@@ -38,7 +38,9 @@ pub fn require_positive(amount: i128) -> Result<(), PaymentError> {
 
 /// Validate that `limit` does not exceed the page cap.
 pub fn require_valid_limit(limit: u32) -> Result<(), PaymentError> {
-    if limit == 0 || limit > MAX_PAGE_LIMIT {
+    if limit == 0 {
+        Err(PaymentError::InvalidInput)
+    } else if limit > MAX_PAGE_LIMIT {
         Err(PaymentError::PaginationLimitExceeded)
     } else {
         Ok(())

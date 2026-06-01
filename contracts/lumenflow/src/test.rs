@@ -676,6 +676,38 @@ fn test_pagination_limit() {
     assert!(page.next_cursor.is_some());
 }
 
+#[test]
+fn test_pagination_limit_zero_returns_invalid_input() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "LIMIT_0", 100);
+
+    let result = client.try_get_merchant_payment_history(
+        &merchant,
+        &None,
+        &0,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_pagination_limit_exceeded_returns_pagination_error() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "LIMIT_MAX", 100);
+
+    let result = client.try_get_merchant_payment_history(
+        &merchant,
+        &None,
+        &101,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::PaginationLimitExceeded)));
+}
+
 // ── Refund rate limit tests ───────────────────────────────────────────────────
 
 #[test]
