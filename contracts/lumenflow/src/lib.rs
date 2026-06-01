@@ -19,8 +19,8 @@ use helper::{
     require_valid_limit, validate_memo_length, validate_tags, verify_signature, REFUND_WINDOW_SECS,
 };
 use types::{
-    BatchPaymentItem, GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder,
-    PaymentPage, PaymentStatus, RefundRecord, RefundStatus, SortField, SortOrder,
+    BatchPaymentItem, GlobalStats, MerchantCategory, MerchantPage, MultisigPayment, PaymentFilter,
+    PaymentOrder, PaymentPage, PaymentStatus, RefundRecord, RefundStatus, SortField, SortOrder,
     StatusFilter, Merchant, SuspiciousActivityReason, SubscriptionPlan, Subscription, SubscriptionStatus,
 };
 
@@ -189,6 +189,18 @@ impl PaymentProcessingContract {
         storage::get_merchant(&env, &merchant_address).is_some()
     }
 
+    /// Paginated list of registered merchants. Admin only.
+    pub fn get_merchants(
+        env: Env,
+        admin: Address,
+        cursor: Option<Address>,
+        limit: u32,
+    ) -> Result<MerchantPage, PaymentError> {
+        require_admin(&env, &admin)?;
+        require_valid_limit(limit)?;
+        let list = storage::get_merchant_list(&env);
+        Self::build_merchant_page(&env, list, cursor, limit)
+    }
 
     // ── Payment processing ────────────────────────────────────────────────────
 
@@ -1152,6 +1164,46 @@ impl PaymentProcessingContract {
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
+
+    fn build_merchant_page(
+        env: &Env,
+        addresses: Vec<Address>,
+        cursor: Option<Address>,
+        limit: u32,
+    ) -> Result<MerchantPage, PaymentError> {
+        let mut merchants: Vec<Merchant> = Vec::new(env);
+        let mut skip = cursor.is_some();
+
+        for addr in addresses.iter() {
+            if skip {
+                if cursor.as_ref() == Some(&addr) {
+                    skip = false;
+                }
+                continue;
+            }
+            if let Some(m) = storage::get_merchant(env, &addr) {
+                merchants.push_back(m);
+            }
+        }
+
+        let total = merchants.len();
+        let mut result: Vec<Merchant> = Vec::new(env);
+        let mut next_cursor: Option<Address> = None;
+
+        for (i, m) in merchants.iter().enumerate() {
+            if i as u32 >= limit {
+                next_cursor = Some(m.address.clone());
+                break;
+            }
+            result.push_back(m.clone());
+        }
+
+        Ok(MerchantPage {
+            merchants: result,
+            next_cursor,
+            total,
+        })
+    }
 
     fn build_page(
         env: &Env,

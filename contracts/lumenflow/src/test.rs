@@ -145,6 +145,97 @@ fn test_register_merchant_duplicate_fails() {
 }
 
 #[test]
+fn test_get_merchants_empty_list() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let page = client.get_merchants(&admin, &None, &10);
+    assert_eq!(page.total, 0);
+    assert_eq!(page.merchants.len(), 0);
+    assert!(page.next_cursor.is_none());
+}
+
+#[test]
+fn test_get_merchants_single_page() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let mut addresses: Vec<Address> = Vec::new(&env);
+    for i in 0..3 {
+        let merchant = Address::generate(&env);
+        client.register_merchant(
+            &merchant,
+            &str(&env, &format!("Store {i}")),
+            &str(&env, ""),
+            &str(&env, ""),
+            &MerchantCategory::Retail,
+        );
+        addresses.push_back(merchant);
+    }
+
+    let page = client.get_merchants(&admin, &None, &10);
+    assert_eq!(page.total, 3);
+    assert_eq!(page.merchants.len(), 3);
+    assert!(page.next_cursor.is_none());
+    assert_eq!(page.merchants.get(0).unwrap().address, addresses.get(0).unwrap());
+}
+
+#[test]
+fn test_get_merchants_multi_page() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let mut addresses: Vec<Address> = Vec::new(&env);
+    for i in 0..7 {
+        let merchant = Address::generate(&env);
+        client.register_merchant(
+            &merchant,
+            &str(&env, &format!("Store {i}")),
+            &str(&env, ""),
+            &str(&env, ""),
+            &MerchantCategory::Retail,
+        );
+        addresses.push_back(merchant);
+    }
+
+    let page1 = client.get_merchants(&admin, &None, &2);
+    assert_eq!(page1.total, 7);
+    assert_eq!(page1.merchants.len(), 2);
+    assert_eq!(page1.merchants.get(0).unwrap().address, addresses.get(0).unwrap());
+    assert_eq!(page1.merchants.get(1).unwrap().address, addresses.get(1).unwrap());
+    let cursor1 = page1.next_cursor.unwrap();
+
+    let page2 = client.get_merchants(&admin, &Some(cursor1), &2);
+    assert_eq!(page2.total, 4);
+    assert_eq!(page2.merchants.len(), 2);
+    assert_eq!(page2.merchants.get(0).unwrap().address, addresses.get(3).unwrap());
+    assert_eq!(page2.merchants.get(1).unwrap().address, addresses.get(4).unwrap());
+    let cursor2 = page2.next_cursor.unwrap();
+
+    assert_eq!(cursor2, addresses.get(5).unwrap());
+
+    let page3 = client.get_merchants(&admin, &Some(cursor2), &2);
+    assert_eq!(page3.total, 1);
+    assert_eq!(page3.merchants.len(), 1);
+    assert_eq!(page3.merchants.get(0).unwrap().address, addresses.get(6).unwrap());
+    assert!(page3.next_cursor.is_none());
+}
+
+#[test]
+fn test_get_merchants_requires_admin() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_get_merchants(&non_admin, &None, &10);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
 fn test_deactivate_merchant() {
     let (env, client) = setup();
     let admin = Address::generate(&env);

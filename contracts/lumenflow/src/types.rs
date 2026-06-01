@@ -185,6 +185,14 @@ pub struct PaymentFilter {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantPage {
+    pub merchants: Vec<Merchant>,
+    pub next_cursor: Option<Address>,
+    pub total: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PaymentPage {
     pub payments: Vec<PaymentOrder>,
     pub next_cursor: Option<String>,
