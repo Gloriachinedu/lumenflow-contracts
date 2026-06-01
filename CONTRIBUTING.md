@@ -8,6 +8,8 @@ Be respectful, inclusive, and constructive. We follow the [Contributor Covenant]
 
 ## Getting Started
 
+New to the project? Follow the step-by-step [Developer Onboarding Guide](docs/ONBOARDING.md) to go from zero to running tests locally.
+
 1. Fork the repository and clone your fork.
 2. Install prerequisites (see README).
 3. Create a feature branch: `git checkout -b feat/your-feature`.
