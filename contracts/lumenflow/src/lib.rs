@@ -635,10 +635,10 @@ impl PaymentProcessingContract {
         // Merchant must authorise the transfer
         payment.merchant_address.require_auth();
 
-        let token_client = token::Client::new(&env, &payment.token);
-        token_client.transfer(&payment.merchant_address, &payment.payer, &refund.amount);
+        // Effects: update all internal state before external interaction (checks-effects-interactions)
+        let refund_amount = refund.amount;
 
-        payment.refunded_amount += refund.amount;
+        payment.refunded_amount += refund_amount;
         payment.status = if payment.refunded_amount >= payment.amount {
             PaymentStatus::FullyRefunded
         } else {
@@ -652,8 +652,12 @@ impl PaymentProcessingContract {
 
         let mut stats = storage::get_global_stats(&env);
         stats.total_refunds += 1;
-        stats.total_refund_volume += r.amount;
+        stats.total_refund_volume = stats.total_refund_volume.saturating_add(refund_amount);
         storage::set_global_stats(&env, &stats);
+
+        // Interaction: external token transfer happens after all state changes
+        let token_client = token::Client::new(&env, &payment.token);
+        token_client.transfer(&payment.merchant_address, &payment.payer, &refund_amount);
 
         env.events()
             .publish(("lumenflow", "refund_executed"), refund_id);
