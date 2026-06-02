@@ -1102,3 +1102,63 @@ fn test_remove_token_from_whitelist() {
     );
     assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
 }
+
+// ── E2E: multisig payment in history (#39) ────────────────────────────────────
+
+#[test]
+fn test_e2e_multisig_payment_in_history_and_global_stats() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer1.clone());
+    signers.push_back(signer2.clone());
+
+    // Initiate multisig payment
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_E2E"),
+        &merchant,
+        &token,
+        &2_000,
+        &signers,
+        &2,
+    );
+
+    // Sign — threshold met after both signers
+    client.sign_multisig_payment(&signer1, &str(&env, "MS_E2E"), &bytes(&env, &[1u8; 64]));
+    client.sign_multisig_payment(&signer2, &str(&env, "MS_E2E"), &bytes(&env, &[2u8; 64]));
+
+    // Execute
+    client.execute_multisig_payment(&payer, &str(&env, "MS_E2E"));
+
+    // Verify payment appears in get_merchant_payment_history
+    let merchant_page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+    assert_eq!(merchant_page.total, 1);
+    assert_eq!(merchant_page.payments.get(0).unwrap().order_id, str(&env, "MS_E2E"));
+    assert_eq!(merchant_page.payments.get(0).unwrap().amount, 2_000);
+
+    // Verify payment appears in get_payer_payment_history
+    let payer_page = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+    assert_eq!(payer_page.total, 1);
+    assert_eq!(payer_page.payments.get(0).unwrap().order_id, str(&env, "MS_E2E"));
+
+    // Verify global stats are updated
+    let stats = client.get_global_payment_stats(&admin, &None, &None);
+    assert_eq!(stats.total_payments, 1);
+    assert_eq!(stats.total_volume, 2_000);
+}
