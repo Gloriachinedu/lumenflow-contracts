@@ -49,7 +49,6 @@ pub struct PaymentOrder {
     pub refunded_amount: i128,
     pub memo: String,
     pub tags: Option<Vec<String>>,
-    pub note: Option<String>,
 }
 
 #[contracttype]
@@ -95,7 +94,6 @@ pub enum RefundStatus {
     Approved,
     Rejected,
     Completed,
-    Disputed,
 }
 
 #[contracttype]
@@ -107,25 +105,6 @@ pub struct RefundRecord {
     pub amount: i128,
     pub reason: String,
     pub status: RefundStatus,
-    pub created_at: u64,
-}
-
-// ── Dispute ───────────────────────────────────────────────────────────────────
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DisputeOutcome {
-    FavorPayer,
-    FavorMerchant,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DisputeRecord {
-    pub refund_id: String,
-    pub payer: Address,
-    pub evidence: String,
-    pub outcome: Option<DisputeOutcome>,
     pub created_at: u64,
 }
 
@@ -144,6 +123,7 @@ pub struct MultisigPayment {
     pub signed_by: Vec<Address>,
     pub executed: bool,
     pub created_at: u64,
+    pub expires_at: Option<u64>,
 }
 
 // ── Query helpers ─────────────────────────────────────────────────────────────
@@ -197,12 +177,8 @@ pub struct PaymentPage {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GlobalStats {
     pub total_payments: u32,
-    /// Aggregate volume of completed payments. Uses saturating arithmetic to avoid
-    /// runtime panics when approaching i128::MAX.
     pub total_volume: i128,
     pub total_refunds: u32,
-    /// Aggregate volume of executed refunds. Uses saturating arithmetic to avoid
-    /// runtime panics when approaching i128::MAX.
     pub total_refund_volume: i128,
     pub active_merchants: u32,
 }
@@ -215,37 +191,4 @@ pub enum SuspiciousActivityReason {
     LargePayment = 1,
     RapidRefunds = 2,
     ManyAuthFailures = 3,
-}
-
-// ── Subscription ──────────────────────────────────────────────────────────────
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SubscriptionPlan {
-    pub plan_id: String,
-    pub merchant: Address,
-    pub token: Address,
-    pub amount: i128,
-    pub interval_secs: u64,
-    pub max_cycles: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum SubscriptionStatus {
-    Active,
-    Cancelled,
-    Completed,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Subscription {
-    pub subscription_id: String,
-    pub plan_id: String,
-    pub subscriber: Address,
-    pub cycles_charged: u32,
-    pub last_charged_at: u64,
-    pub status: SubscriptionStatus,
-    pub created_at: u64,
 }
