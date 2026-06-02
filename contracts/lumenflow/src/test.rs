@@ -371,6 +371,69 @@ fn test_successful_refund_flow() {
 }
 
 #[test]
+fn test_execute_pending_refund_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_R5", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REFUND_005"),
+        &str(&env, "ORDER_R5"),
+        &200,
+        &str(&env, "Pending refund"),
+    );
+
+    let result = client.try_execute_refund(&str(&env, "REFUND_005"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundNotApproved)));
+
+    let refund = client.get_refund(&str(&env, "REFUND_005"));
+    assert!(matches!(refund.status, crate::types::RefundStatus::Pending));
+}
+
+#[test]
+fn test_execute_rejected_refund_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_R6", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REFUND_006"),
+        &str(&env, "ORDER_R6"),
+        &200,
+        &str(&env, "Reject refund"),
+    );
+    client.reject_refund(&merchant, &str(&env, "REFUND_006"));
+
+    let result = client.try_execute_refund(&str(&env, "REFUND_006"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundNotApproved)));
+
+    let refund = client.get_refund(&str(&env, "REFUND_006"));
+    assert!(matches!(refund.status, crate::types::RefundStatus::Rejected));
+}
+
+#[test]
+fn test_execute_completed_refund_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_R7", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REFUND_007"),
+        &str(&env, "ORDER_R7"),
+        &200,
+        &str(&env, "Completed refund"),
+    );
+    client.approve_refund(&merchant, &str(&env, "REFUND_007"));
+    client.execute_refund(&str(&env, "REFUND_007"));
+
+    let result = client.try_execute_refund(&str(&env, "REFUND_007"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundNotApproved)));
+
+    let refund = client.get_refund(&str(&env, "REFUND_007"));
+    assert!(matches!(refund.status, crate::types::RefundStatus::Completed));
+}
+
+#[test]
 fn test_refund_exceeds_original_fails() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
     make_payment(&env, &client, &merchant, &payer, &token, "ORDER_R2", 500);
