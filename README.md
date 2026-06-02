@@ -23,6 +23,7 @@ LumenFlow is a production-grade payment processing smart contract for the [Stell
 
 ## Security & Docs
 
+- Architecture overview available in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Audit plan and scope published in `docs/audit/audit-report.md`
 - Refund lifecycle state diagram available in `docs/refund-lifecycle.md`
 - Testing guidance available in `docs/testing-guide.md`
@@ -466,6 +467,8 @@ Merchants can receive real-time payment event notifications in their backend sys
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). All contributions are welcome — bug fixes, features, documentation, and tests.
+
+New contributors should start with the [Developer Onboarding Guide](docs/ONBOARDING.md).
 
 ## Governance
 
