@@ -683,6 +683,17 @@ impl PaymentProcessingContract {
         require_positive(amount)?;
         require_non_empty_string(&payment_id)?;
 
+        // Validate multisig configuration
+        if signers.len() == 0 {
+            return Err(PaymentError::InvalidInput);
+        }
+        if required_signatures == 0 {
+            return Err(PaymentError::InvalidInput);
+        }
+        if required_signatures > signers.len() {
+            return Err(PaymentError::InvalidInput);
+        }
+
         if !storage::is_token_allowed(&env, &token_address) {
             return Err(PaymentError::TokenNotAllowed);
         }

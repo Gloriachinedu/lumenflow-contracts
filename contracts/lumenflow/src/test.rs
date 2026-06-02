@@ -541,8 +541,10 @@ fn test_initiate_multisig_payment_success() {
 fn test_multisig_insufficient_signatures_fails() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
     let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
     let mut signers = Vec::new(&env);
     signers.push_back(signer1.clone());
+    signers.push_back(signer2.clone());
 
     client.initiate_multisig_payment(
         &payer,
@@ -555,6 +557,7 @@ fn test_multisig_insufficient_signatures_fails() {
         &None,
     );
 
+    // Only one of the two required signers signs
     client.sign_multisig_payment(&signer1, &str(&env, "MS_002"), &bytes(&env, &[1u8; 64]));
 
     let result = client.try_execute_multisig_payment(&payer, &str(&env, "MS_002"));
@@ -795,6 +798,103 @@ fn test_multisig_unique_signers_only() {
 
     // Payment can execute with 2 of 3 signatures
     client.execute_multisig_payment(&payer, &str(&env, "MS_UNIQUE"));
+}
+
+#[test]
+fn test_multisig_rejects_empty_signers() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signers = Vec::new(&env); // empty
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_EMPTY"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+        &None,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_multisig_rejects_zero_required_signatures() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer);
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_ZERO"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &0, // zero required
+        &None,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_multisig_rejects_required_exceeds_signers() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer);
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_EXCEED"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &2, // required > len(signers)
+        &None,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_multisig_accepts_valid_boundary_cases() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // 1-of-1 (minimum valid)
+    let signer1 = Address::generate(&env);
+    let mut signers1 = Vec::new(&env);
+    signers1.push_back(signer1.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_1_OF_1"),
+        &merchant,
+        &token,
+        &100,
+        &signers1,
+        &1,
+        &None,
+    );
+
+    // N-of-N (required equals signers)
+    let signer2 = Address::generate(&env);
+    let signer3 = Address::generate(&env);
+    let mut signers2 = Vec::new(&env);
+    signers2.push_back(signer2.clone());
+    signers2.push_back(signer3.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_2_OF_2"),
+        &merchant,
+        &token,
+        &200,
+        &signers2,
+        &2,
+        &None,
+    );
 }
 
 // ── Global stats tests ────────────────────────────────────────────────────────
