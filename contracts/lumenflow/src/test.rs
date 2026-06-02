@@ -729,6 +729,74 @@ fn test_multisig_explicit_expiry_overrides_default() {
     assert_eq!(result, Err(Ok(PaymentError::PaymentExpired)));
 }
 
+#[test]
+fn test_multisig_prevents_double_signing() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer1.clone());
+    signers.push_back(signer2.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_DOUBLE"),
+        &merchant,
+        &token,
+        &1000,
+        &signers,
+        &2,
+        &None,
+    );
+
+    // First signature from signer1 succeeds
+    client.sign_multisig_payment(&signer1, &str(&env, "MS_DOUBLE"), &bytes(&env, &[1u8; 64]));
+
+    // Attempt to sign again with same signer should fail
+    let result = client.try_sign_multisig_payment(
+        &signer1,
+        &str(&env, "MS_DOUBLE"),
+        &bytes(&env, &[2u8; 64]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MultisigAlreadySigned)));
+
+    // Different signer can still sign
+    client.sign_multisig_payment(&signer2, &str(&env, "MS_DOUBLE"), &bytes(&env, &[3u8; 64]));
+
+    // Payment can be executed with 2 unique signatures
+    client.execute_multisig_payment(&payer, &str(&env, "MS_DOUBLE"));
+}
+
+#[test]
+fn test_multisig_unique_signers_only() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+    let signer3 = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer1.clone());
+    signers.push_back(signer2.clone());
+    signers.push_back(signer3.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_UNIQUE"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &2,
+        &None,
+    );
+
+    // All three signers can sign once
+    client.sign_multisig_payment(&signer1, &str(&env, "MS_UNIQUE"), &bytes(&env, &[1u8; 64]));
+    client.sign_multisig_payment(&signer2, &str(&env, "MS_UNIQUE"), &bytes(&env, &[2u8; 64]));
+
+    // Payment can execute with 2 of 3 signatures
+    client.execute_multisig_payment(&payer, &str(&env, "MS_UNIQUE"));
+}
+
 // ── Global stats tests ────────────────────────────────────────────────────────
 
 #[test]
