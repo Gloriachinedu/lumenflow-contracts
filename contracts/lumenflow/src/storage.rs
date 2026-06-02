@@ -13,6 +13,7 @@ pub enum DataKey {
     GlobalStats,
     Merchant(Address),
     MerchantList,
+    MerchantStats(Address),
     Payment(String),
     MerchantPayments(Address),
     PayerPayments(Address),
@@ -81,6 +82,26 @@ pub fn get_global_stats(env: &Env) -> GlobalStats {
 
 pub fn set_global_stats(env: &Env, stats: &GlobalStats) {
     env.storage().instance().set(&DataKey::GlobalStats, stats);
+}
+
+// ── Merchant stats ─────────────────────────────────────────────────────────────
+
+pub fn get_merchant_stats(env: &Env, merchant: &Address) -> MerchantStats {
+    env.storage()
+        .instance()
+        .get(&DataKey::MerchantStats(merchant.clone()))
+        .unwrap_or(MerchantStats {
+            total_payments: 0,
+            total_volume: 0,
+            total_refunds: 0,
+            total_refund_volume: 0,
+        })
+}
+
+pub fn set_merchant_stats(env: &Env, merchant: &Address, stats: &MerchantStats) {
+    env.storage()
+        .instance()
+        .set(&DataKey::MerchantStats(merchant.clone()), stats);
 }
 
 // ── Merchant ──────────────────────────────────────────────────────────────────

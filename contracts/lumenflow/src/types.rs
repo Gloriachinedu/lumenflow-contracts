@@ -183,6 +183,19 @@ pub struct GlobalStats {
     pub active_merchants: u32,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantStats {
+    pub total_payments: u32,
+    /// Aggregate volume of completed payments for this merchant. Uses saturating
+    /// arithmetic to avoid runtime panics when approaching i128::MAX.
+    pub total_volume: i128,
+    pub total_refunds: u32,
+    /// Aggregate volume of executed refunds for this merchant. Uses saturating
+    /// arithmetic to avoid runtime panics when approaching i128::MAX.
+    pub total_refund_volume: i128,
+}
+
 // ── Suspicious Activity ───────────────────────────────────────────────────────
 
 #[contracttype]
