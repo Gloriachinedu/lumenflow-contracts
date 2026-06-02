@@ -8,8 +8,11 @@ Be respectful, inclusive, and constructive. We follow the [Contributor Covenant]
 
 ## Getting Started
 
+New to the project? Follow the step-by-step [Developer Onboarding Guide](docs/ONBOARDING.md) to go from zero to running tests locally.
+
 1. Fork the repository and clone your fork.
 2. Install prerequisites (see README).
+3. Run `scripts/install_hooks.sh` after cloning to install the local pre-commit hook.
 3. Create a feature branch: `git checkout -b feat/your-feature`.
 4. Make your changes, add tests, and ensure everything passes.
 5. Open a pull request against `main`.
