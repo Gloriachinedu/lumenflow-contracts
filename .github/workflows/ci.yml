@@ -14,6 +14,8 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_DIR: target/cargo-lint
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
         with:
@@ -39,8 +41,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-lint-
+            ${{ runner.os }}-cargo-
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -54,6 +58,8 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_DIR: target/cargo-test
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
         with:
@@ -75,8 +81,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+            ${{ runner.os }}-cargo-
 
       - name: Run tests
         run: cargo test --locked --all-features
@@ -84,6 +92,8 @@ jobs:
   auth-tests:
     name: Auth Tests
     runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_DIR: target/cargo-auth
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
         with:
@@ -102,8 +112,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-auth-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-auth-
+            ${{ runner.os }}-cargo-
 
       - name: Run auth tests
         run: cargo test --all-features auth
@@ -112,6 +124,8 @@ jobs:
     name: Build WASM
     runs-on: ubuntu-latest
     needs: [lint, test]
+    env:
+      CARGO_TARGET_DIR: target/cargo-wasm
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
         with:
@@ -134,7 +148,9 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-wasm-
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-
+            ${{ runner.os }}-cargo-
 
       - name: Build WASM
         run: |
@@ -145,18 +161,18 @@ jobs:
 
       - name: Check WASM size
         run: |
-          WASM=target/wasm32-unknown-unknown/release/lumenflow.wasm
+          WASM=target/cargo-wasm/wasm32-unknown-unknown/release/lumenflow.wasm
           SIZE=$(wc -c < "$WASM")
           LIMIT=$((100 * 1024))
-          echo "WASM size: ${SIZE} bytes (limit: ${LIMIT} bytes)"
+          echo "WASM size: ${SIZE} bytes (limit: ${LIMIT})"
           if [ "$SIZE" -gt "$LIMIT" ]; then
             echo "ERROR: WASM binary exceeds 100 KB limit (${SIZE} > ${LIMIT})"
             exit 1
           fi
 
       - name: Upload WASM artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae6567c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: lumenflow-wasm
-          path: target/wasm32-unknown-unknown/release/lumenflow.wasm
+          path: target/cargo-wasm/wasm32-unknown-unknown/release/lumenflow.wasm
           retention-days: 30
