@@ -104,6 +104,20 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Set the platform fee in basis points and the fee recipient address (admin only).
+    /// Fee is deducted from each payment processed via `process_payment_with_signature`.
+    pub fn set_platform_fee(
+        env: Env,
+        admin: Address,
+        fee_bps: u32,
+        fee_recipient: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_platform_fee_bps(&env, fee_bps);
+        storage::set_fee_recipient(&env, &fee_recipient);
+        Ok(())
+    }
+
     /// Set the threshold for unusually large payments (emits suspicious_activity event).
     ///
     /// Payments whose amount is greater than or equal to `threshold` will cause a
@@ -447,9 +461,21 @@ impl PaymentProcessingContract {
         payload.append(&Bytes::from_slice(&env, &amount.to_be_bytes()));
         verify_signature(&env, &merchant_public_key, &payload, &signature)?;
 
-        // Transfer tokens from payer to merchant
+        // Transfer tokens from payer to merchant (minus platform fee)
         let token_client = token::Client::new(&env, &token_address);
-        token_client.transfer(&payer, &merchant_address, &amount);
+        let fee_bps = storage::get_platform_fee_bps(&env);
+        let platform_fee: i128 = if fee_bps > 0 {
+            amount * (fee_bps as i128) / 10_000
+        } else {
+            0
+        };
+        let merchant_amount = amount - platform_fee;
+        token_client.transfer(&payer, &merchant_address, &merchant_amount);
+        if platform_fee > 0 {
+            if let Some(recipient) = storage::get_fee_recipient(&env) {
+                token_client.transfer(&payer, &recipient, &platform_fee);
+            }
+        }
 
         let now = env.ledger().timestamp();
         let payment = PaymentOrder {

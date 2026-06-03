@@ -333,6 +333,52 @@ fn test_successful_payment_with_signature() {
 }
 
 #[test]
+fn test_platform_fee_deducted() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let fee_recipient = Address::generate(&env);
+    // Set 100 bps = 1% fee
+    client.set_platform_fee(&admin, &100u32, &fee_recipient);
+    mint(&env, &token, &Address::generate(&env), &payer, 10_000);
+
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "FEE_ORDER_1"),
+        &merchant,
+        &token,
+        &1_000,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+
+    let payment = client.get_payment_by_id(&payer, &str(&env, "FEE_ORDER_1"));
+    assert_eq!(payment.platform_fee, 10); // 1% of 1000
+}
+
+#[test]
+fn test_zero_fee_case() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "NOFEE_ORDER"),
+        &merchant,
+        &token,
+        &500,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    let payment = client.get_payment_by_id(&payer, &str(&env, "NOFEE_ORDER"));
+    assert_eq!(payment.platform_fee, 0);
+}
+
+#[test]
 fn test_duplicate_order_id_fails() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
     let pub_key = bytes(&env, &[0u8; 32]);
