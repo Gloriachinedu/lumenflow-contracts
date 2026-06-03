@@ -1676,3 +1676,47 @@ fn test_total_volume_accumulates_correctly() {
     assert_eq!(stats.total_volume, 6_000);
     assert_eq!(stats.total_payments, 3);
 }
+
+// ── Refund auth security tests (#45) ─────────────────────────────────────────
+
+#[test]
+fn test_payer_cannot_approve_own_refund() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "SEC_R1", 1_000);
+    client.initiate_refund(&payer, &str(&env, "SEC_RF1"), &str(&env, "SEC_R1"), &100, &str(&env, "r"));
+
+    let result = client.try_approve_refund(&payer, &str(&env, "SEC_RF1"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_payer_cannot_reject_own_refund() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "SEC_R2", 1_000);
+    client.initiate_refund(&payer, &str(&env, "SEC_RF2"), &str(&env, "SEC_R2"), &100, &str(&env, "r"));
+
+    let result = client.try_reject_refund(&payer, &str(&env, "SEC_RF2"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_unrelated_address_cannot_approve_refund() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "SEC_R3", 1_000);
+    client.initiate_refund(&payer, &str(&env, "SEC_RF3"), &str(&env, "SEC_R3"), &100, &str(&env, "r"));
+
+    let unrelated = Address::generate(&env);
+    let result = client.try_approve_refund(&unrelated, &str(&env, "SEC_RF3"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_unrelated_address_cannot_reject_refund() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "SEC_R4", 1_000);
+    client.initiate_refund(&payer, &str(&env, "SEC_RF4"), &str(&env, "SEC_R4"), &100, &str(&env, "r"));
+
+    let unrelated = Address::generate(&env);
+    let result = client.try_reject_refund(&unrelated, &str(&env, "SEC_RF4"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
