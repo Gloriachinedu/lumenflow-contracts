@@ -219,6 +219,21 @@ pub fn set_refund(env: &Env, refund: &RefundRecord) {
         .set(&DataKey::Refund(refund.refund_id.clone()), refund);
 }
 
+pub fn get_order_refund_ids(env: &Env, order_id: &String) -> Vec<String> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::OrderRefunds(order_id.clone()))
+        .unwrap_or(Vec::new(env))
+}
+
+pub fn add_order_refund_id(env: &Env, order_id: &String, refund_id: &String) {
+    let mut ids = get_order_refund_ids(env, order_id);
+    ids.push_back(refund_id.clone());
+    env.storage()
+        .persistent()
+        .set(&DataKey::OrderRefunds(order_id.clone()), &ids);
+}
+
 // ── Multisig ──────────────────────────────────────────────────────────────────
 
 pub fn get_multisig(env: &Env, payment_id: &String) -> Option<MultisigPayment> {

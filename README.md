@@ -377,6 +377,10 @@ stellar contract invoke --id $CONTRACT_ID --source-account $MERCHANT_KEY --netwo
 # Get refund status
 stellar contract invoke --id $CONTRACT_ID --source-account $CALLER_KEY --network $NETWORK \
   -- get_refund --refund_id "REFUND_001"
+
+# List all refunds for an order (payer, merchant, or admin only)
+stellar contract invoke --id $CONTRACT_ID --source-account $CALLER_KEY --network $NETWORK \
+  -- get_refunds_for_order --caller <caller-address> --order_id "ORDER_001"
 ```
 
 ### Multi-Signature Payments

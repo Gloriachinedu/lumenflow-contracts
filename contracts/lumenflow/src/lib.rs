@@ -1018,6 +1018,31 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// List all refunds for an order. Caller must be payer, merchant, or admin.
+    pub fn get_refunds_for_order(
+        env: Env,
+        caller: Address,
+        order_id: String,
+    ) -> Result<Vec<RefundRecord>, PaymentError> {
+        caller.require_auth();
+        let payment = storage::get_payment(&env, &order_id)
+            .ok_or(PaymentError::PaymentNotFound)?;
+
+        let is_admin = storage::get_admin(&env).map_or(false, |a| a == caller);
+        if !is_admin && caller != payment.payer && caller != payment.merchant_address {
+            return Err(PaymentError::Unauthorized);
+        }
+
+        let refund_ids = storage::get_order_refund_ids(&env, &order_id);
+        let mut refunds: Vec<RefundRecord> = Vec::new(&env);
+        for id in refund_ids.iter() {
+            if let Some(refund) = storage::get_refund(&env, &id) {
+                refunds.push_back(refund);
+            }
+        }
+        Ok(refunds)
+    }
+
     /// Approve a refund. Merchant or admin only.
     ///
     /// Transitions the refund from `Pending` to `Approved`. The refund can then be
