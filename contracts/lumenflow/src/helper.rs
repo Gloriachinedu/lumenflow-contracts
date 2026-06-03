@@ -5,7 +5,6 @@ use crate::storage;
 
 pub const MAX_PAGE_LIMIT: u32 = 100;
 pub const REFUND_WINDOW_SECS: u64 = 30 * 24 * 3600; // 30 days
-pub const MAX_MEMO_LENGTH: u32 = 256;
 
 /// Require that `caller` is the stored admin.
 pub fn require_admin(env: &Env, caller: &Address) -> Result<(), PaymentError> {
@@ -17,7 +16,11 @@ pub fn require_admin(env: &Env, caller: &Address) -> Result<(), PaymentError> {
 }
 
 /// Require that `caller` is either the stored admin or `allowed`.
-pub fn require_admin_or(env: &Env, caller: &Address, allowed: &Address) -> Result<(), PaymentError> {
+pub fn require_admin_or(
+    env: &Env,
+    caller: &Address,
+    allowed: &Address,
+) -> Result<(), PaymentError> {
     caller.require_auth();
     let is_admin = storage::get_admin(env).map_or(false, |a| a == *caller);
     if is_admin || caller == allowed {
@@ -38,7 +41,9 @@ pub fn require_positive(amount: i128) -> Result<(), PaymentError> {
 
 /// Validate that `limit` does not exceed the page cap.
 pub fn require_valid_limit(limit: u32) -> Result<(), PaymentError> {
-    if limit == 0 || limit > MAX_PAGE_LIMIT {
+    if limit == 0 {
+        Err(PaymentError::InvalidInput)
+    } else if limit > MAX_PAGE_LIMIT {
         Err(PaymentError::PaginationLimitExceeded)
     } else {
         Ok(())
@@ -53,8 +58,14 @@ pub fn verify_signature(
     payload: &Bytes,
     signature: &Bytes,
 ) -> Result<(), PaymentError> {
-    let pk_bytes: soroban_sdk::BytesN<32> = public_key.clone().try_into().map_err(|_| PaymentError::InvalidSignature)?;
-    let sig_bytes: soroban_sdk::BytesN<64> = signature.clone().try_into().map_err(|_| PaymentError::InvalidSignature)?;
+    let pk_bytes: soroban_sdk::BytesN<32> = public_key
+        .clone()
+        .try_into()
+        .map_err(|_| PaymentError::InvalidSignature)?;
+    let sig_bytes: soroban_sdk::BytesN<64> = signature
+        .clone()
+        .try_into()
+        .map_err(|_| PaymentError::InvalidSignature)?;
 
     #[cfg(test)]
     {
@@ -64,22 +75,13 @@ pub fn verify_signature(
         }
     }
 
-    env.crypto()
-        .ed25519_verify(&pk_bytes, payload, &sig_bytes);
+    env.crypto().ed25519_verify(&pk_bytes, payload, &sig_bytes);
     Ok(())
 }
 
 /// Validate a non-empty string field.
 pub fn require_non_empty_string(s: &String) -> Result<(), PaymentError> {
     if s.len() == 0 {
-        Err(PaymentError::InvalidInput)
-    } else {
-        Ok(())
-    }
-}
-
-pub fn validate_memo_length(s: &String) -> Result<(), PaymentError> {
-    if s.len() > MAX_MEMO_LENGTH {
         Err(PaymentError::InvalidInput)
     } else {
         Ok(())
