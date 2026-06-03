@@ -51,14 +51,6 @@ pub enum PaymentError {
     RefundNotApproved = 34,
     /// The refund has already been executed. Remediation: No action needed; the refund is complete.
     RefundAlreadyCompleted = 35,
-    /// The maximum number of partial refunds for a single payment has been reached. Remediation: Consolidate refund amounts or resolve off-chain.
-    TooManyRefunds = 36,
-    /// The refund cannot be disputed because it was not rejected. Remediation: Only rejected refunds can be disputed.
-    RefundNotRejected = 37,
-    /// A dispute already exists for this refund. Remediation: Check the existing dispute status.
-    DisputeAlreadyExists = 38,
-    /// The requested dispute was not found. Remediation: Verify the refund ID.
-    DisputeNotFound = 39,
 
     // Multisig
     /// The multi-signature payment request was not found. Remediation: Verify the payment ID.

@@ -8,6 +8,8 @@
 [![Audited by](https://img.shields.io/badge/Audited%20By-TBD-lightgrey)](docs/audit/audit-report.md)
 [![Discord](https://img.shields.io/discord/123456789012345678?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/lumenflow)
 
+[English](README.md) | [Español](README.es.md) | [Português](README.pt.md)
+
 ---
 
 ## Overview
@@ -23,9 +25,11 @@ LumenFlow is a production-grade payment processing smart contract for the [Stell
 
 ## Security & Docs
 
+- Architecture overview available in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Audit plan and scope published in `docs/audit/audit-report.md`
 - Refund lifecycle state diagram available in `docs/refund-lifecycle.md`
 - Testing guidance available in `docs/testing-guide.md`
+- Multisig payment flow guide available in `docs/multisig-guide.md`
 
 ## Refund lifecycle overview
 
@@ -468,6 +472,8 @@ Merchants can receive real-time payment event notifications in their backend sys
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). All contributions are welcome — bug fixes, features, documentation, and tests.
+
+New contributors should start with the [Developer Onboarding Guide](docs/ONBOARDING.md).
 
 ## Governance
 
