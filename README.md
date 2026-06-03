@@ -269,6 +269,10 @@ stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network 
 # Get merchant info
 stellar contract invoke --id $CONTRACT_ID --source-account $CALLER_KEY --network $NETWORK \
   -- get_merchant --merchant_address <address>
+
+# List merchants (admin only, cursor-based pagination)
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- get_merchants --admin <admin-address> --cursor null --limit 10
 ```
 ### Payment Processing
 
