@@ -1,50 +1,33 @@
 import nacl from "tweetnacl";
 import { buildPaymentPayload, signPaymentPayload } from "./signPaymentPayload";
+import { xdr, Address, hash } from "@stellar/stellar-sdk";
 
 // Known-good keypair (seed = 32 zero bytes)
 const SEED = new Uint8Array(32);
 const KEYPAIR = nacl.sign.keyPair.fromSeed(SEED);
 
+const NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
+const CONTRACT_ID = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
+
 describe("buildPaymentPayload", () => {
   it("produces correct byte layout for a simple order", () => {
-    const payload = buildPaymentPayload("ORDER_001", 1000n);
+    const payload = buildPaymentPayload(NETWORK_PASSPHRASE, CONTRACT_ID, "ORDER_001", 1000n);
 
-    // discriminant: ScVal::String = 14
-    expect(payload.readUInt32BE(0)).toBe(14);
-    // length prefix
-    expect(payload.readUInt32BE(4)).toBe(9); // "ORDER_001".length
-    // orderId bytes
-    expect(payload.slice(8, 17).toString("utf8")).toBe("ORDER_001");
-    // padded to 12 bytes (ceil(9/4)*4 = 12)
-    // amount starts at offset 4+4+12 = 20
-    expect(payload.length).toBe(4 + 4 + 12 + 16);
-  });
-
-  it("pads orderId to 4-byte boundary", () => {
-    // "AB" = 2 bytes → padded to 4
-    const payload = buildPaymentPayload("AB", 0n);
-    expect(payload.length).toBe(4 + 4 + 4 + 16);
-  });
-
-  it("encodes amount as big-endian i128", () => {
-    const payload = buildPaymentPayload("X", 256n);
-    const amountOffset = 4 + 4 + 4; // discriminant + len + padded "X" (4 bytes)
-    // 256 = 0x0000...0100
-    expect(payload[amountOffset + 14]).toBe(1);
-    expect(payload[amountOffset + 15]).toBe(0);
+    expect(payload.length).toBe(104);
+    const networkId = hash(Buffer.from(NETWORK_PASSPHRASE));
+    expect(payload.slice(0, 32).equals(networkId)).toBe(true);
   });
 
   it("encodes zero amount correctly", () => {
-    const payload = buildPaymentPayload("X", 0n);
-    const amountOffset = 4 + 4 + 4;
-    const amountBytes = payload.slice(amountOffset, amountOffset + 16);
+    const payload = buildPaymentPayload(NETWORK_PASSPHRASE, CONTRACT_ID, "X", 0n);
+    const amountBytes = payload.slice(payload.length - 16, payload.length);
     expect(amountBytes.every((b) => b === 0)).toBe(true);
   });
 });
 
 describe("signPaymentPayload", () => {
   it("returns a 64-byte buffer", () => {
-    const sig = signPaymentPayload("ORDER_001", 1000n, KEYPAIR);
+    const sig = signPaymentPayload(NETWORK_PASSPHRASE, CONTRACT_ID, "ORDER_001", 1000n, KEYPAIR);
     expect(sig).toBeInstanceOf(Buffer);
     expect(sig.length).toBe(64);
   });
@@ -52,34 +35,41 @@ describe("signPaymentPayload", () => {
   it("produces a valid ed25519 signature", () => {
     const orderId = "ORDER_001";
     const amount = 1000n;
-    const sig = signPaymentPayload(orderId, amount, KEYPAIR);
-    const payload = buildPaymentPayload(orderId, amount);
+    const sig = signPaymentPayload(NETWORK_PASSPHRASE, CONTRACT_ID, orderId, amount, KEYPAIR);
+    const payload = buildPaymentPayload(NETWORK_PASSPHRASE, CONTRACT_ID, orderId, amount);
     const valid = nacl.sign.detached.verify(payload, sig, KEYPAIR.publicKey);
     expect(valid).toBe(true);
   });
 
   it("produces a known-good signature for a fixed input", () => {
     // Deterministic: same inputs → same signature
-    const sig1 = signPaymentPayload("ORDER_001", 1000n, KEYPAIR);
-    const sig2 = signPaymentPayload("ORDER_001", 1000n, KEYPAIR);
+    const sig1 = signPaymentPayload(NETWORK_PASSPHRASE, CONTRACT_ID, "ORDER_001", 1000n, KEYPAIR);
+    const sig2 = signPaymentPayload(NETWORK_PASSPHRASE, CONTRACT_ID, "ORDER_001", 1000n, KEYPAIR);
     expect(sig1.equals(sig2)).toBe(true);
   });
 
   it("different orderId produces different signature", () => {
-    const sig1 = signPaymentPayload("ORDER_001", 1000n, KEYPAIR);
-    const sig2 = signPaymentPayload("ORDER_002", 1000n, KEYPAIR);
+    const sig1 = signPaymentPayload(NETWORK_PASSPHRASE, CONTRACT_ID, "ORDER_001", 1000n, KEYPAIR);
+    const sig2 = signPaymentPayload(NETWORK_PASSPHRASE, CONTRACT_ID, "ORDER_002", 1000n, KEYPAIR);
     expect(sig1.equals(sig2)).toBe(false);
   });
 
   it("different amount produces different signature", () => {
-    const sig1 = signPaymentPayload("ORDER_001", 1000n, KEYPAIR);
-    const sig2 = signPaymentPayload("ORDER_001", 2000n, KEYPAIR);
+    const sig1 = signPaymentPayload(NETWORK_PASSPHRASE, CONTRACT_ID, "ORDER_001", 1000n, KEYPAIR);
+    const sig2 = signPaymentPayload(NETWORK_PASSPHRASE, CONTRACT_ID, "ORDER_001", 2000n, KEYPAIR);
+    expect(sig1.equals(sig2)).toBe(false);
+  });
+
+  it("different contract produces different signature", () => {
+    const contractId2 = Address.contract(Buffer.alloc(32, 1)).toString();
+    const sig1 = signPaymentPayload(NETWORK_PASSPHRASE, CONTRACT_ID, "ORDER_001", 1000n, KEYPAIR);
+    const sig2 = signPaymentPayload(NETWORK_PASSPHRASE, contractId2, "ORDER_001", 1000n, KEYPAIR);
     expect(sig1.equals(sig2)).toBe(false);
   });
 
   it("invalid signature fails verification", () => {
-    const sig = signPaymentPayload("ORDER_001", 1000n, KEYPAIR);
-    const payload = buildPaymentPayload("ORDER_001", 999n); // different amount
+    const sig = signPaymentPayload(NETWORK_PASSPHRASE, CONTRACT_ID, "ORDER_001", 1000n, KEYPAIR);
+    const payload = buildPaymentPayload(NETWORK_PASSPHRASE, CONTRACT_ID, "ORDER_001", 999n); // different amount
     const valid = nacl.sign.detached.verify(payload, sig, KEYPAIR.publicKey);
     expect(valid).toBe(false);
   });
