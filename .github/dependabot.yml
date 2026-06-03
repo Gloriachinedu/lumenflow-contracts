@@ -1,8 +1,22 @@
 version: 2
 updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    reviewers:
+      - "maintainer-team" # As requested in the issue description
+
+  - package-ecosystem: "cargo"
+    directory: "/contracts/lumenflow"
+    schedule:
+      interval: "weekly"
+    reviewers:
+      - "maintainer-team"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
-    commit-message:
-      prefix: "ci"
+    reviewers:
+      - "maintainer-team"
