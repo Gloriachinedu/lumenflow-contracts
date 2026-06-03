@@ -1764,3 +1764,146 @@ fn test_unrelated_address_cannot_reject_refund() {
     let result = client.try_reject_refund(&unrelated, &str(&env, "SEC_RF4"));
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
+
+// ── Pause / unpause tests ─────────────────────────────────────────────────────
+
+#[test]
+fn test_pause_and_unpause_contract() {
+    let (env, client, admin, _, _, _) = setup_payment_env();
+    // Pause
+    client.pause_contract(&admin);
+    // Unpause
+    client.unpause_contract(&admin);
+}
+
+#[test]
+fn test_pause_requires_admin() {
+    let (env, client) = setup();
+    let non_admin = Address::generate(&env);
+    let result = client.try_pause_contract(&non_admin);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_unpause_requires_admin() {
+    let (env, client, admin, _, _, _) = setup_payment_env();
+    client.pause_contract(&admin);
+    let non_admin = Address::generate(&env);
+    let result = client.try_unpause_contract(&non_admin);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_paused_blocks_register_merchant() {
+    let (env, client, admin, _, _, _) = setup_payment_env();
+    client.pause_contract(&admin);
+    let new_merchant = Address::generate(&env);
+    let result = client.try_register_merchant(
+        &new_merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
+}
+
+#[test]
+fn test_paused_blocks_process_payment() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.pause_contract(&admin);
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "PAUSED_ORD"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &bytes(&env, &[0u8; 64]),
+        &bytes(&env, &[0u8; 32]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
+}
+
+#[test]
+fn test_paused_blocks_initiate_refund() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "PAUSE_R1", 1_000);
+    client.pause_contract(&admin);
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "PAUSE_RF1"),
+        &str(&env, "PAUSE_R1"),
+        &100,
+        &str(&env, "reason"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
+}
+
+#[test]
+fn test_get_functions_accessible_while_paused() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "READ_ORD", 500);
+    client.pause_contract(&admin);
+    // Read-only functions should still work
+    let m = client.get_merchant(&merchant);
+    assert!(m.active);
+    let p = client.get_payment_by_id(&payer, &str(&env, "READ_ORD"));
+    assert_eq!(p.amount, 500);
+}
+
+#[test]
+fn test_unpause_restores_operations() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.pause_contract(&admin);
+    // Blocked while paused
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "RESTORE_ORD"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &bytes(&env, &[0u8; 64]),
+        &bytes(&env, &[0u8; 32]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
+    // Unpaused — should succeed
+    client.unpause_contract(&admin);
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "RESTORE_ORD"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &bytes(&env, &[0u8; 64]),
+        &bytes(&env, &[0u8; 32]),
+    );
+}
+
+#[test]
+fn test_pause_emits_event() {
+    let (env, client, admin, _, _, _) = setup_payment_env();
+    client.pause_contract(&admin);
+    let events = env.events().all();
+    let paused = events.iter().find(|e| {
+        e.topics.get(1).unwrap() == soroban_sdk::Symbol::new(&env, "contract_paused")
+    });
+    assert!(paused.is_some());
+}
+
+#[test]
+fn test_unpause_emits_event() {
+    let (env, client, admin, _, _, _) = setup_payment_env();
+    client.pause_contract(&admin);
+    client.unpause_contract(&admin);
+    let events = env.events().all();
+    let unpaused = events.iter().find(|e| {
+        e.topics.get(1).unwrap() == soroban_sdk::Symbol::new(&env, "contract_unpaused")
+    });
+    assert!(unpaused.is_some());
+}

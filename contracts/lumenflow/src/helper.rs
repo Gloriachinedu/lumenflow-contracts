@@ -7,6 +7,15 @@ use crate::types::MerchantCategory;
 pub const MAX_PAGE_LIMIT: u32 = 100;
 pub const REFUND_WINDOW_SECS: u64 = 30 * 24 * 3600; // 30 days
 
+/// Return ContractPaused if the contract is currently paused.
+pub fn require_not_paused(env: &Env) -> Result<(), PaymentError> {
+    if storage::get_paused(env) {
+        Err(PaymentError::ContractPaused)
+    } else {
+        Ok(())
+    }
+}
+
 /// Require that `caller` is the stored admin.
 pub fn require_admin(env: &Env, caller: &Address) -> Result<(), PaymentError> {
     caller.require_auth();

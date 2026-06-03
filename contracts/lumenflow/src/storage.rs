@@ -9,6 +9,7 @@ use crate::types::{
 #[contracttype]
 pub enum DataKey {
     Admin,
+    Paused,
     CleanupPeriod,
     GlobalStats,
     Merchant(Address),
@@ -33,6 +34,16 @@ pub fn get_admin(env: &Env) -> Option<Address> {
 
 pub fn set_admin(env: &Env, admin: &Address) {
     env.storage().instance().set(&DataKey::Admin, admin);
+}
+
+// ── Pause ─────────────────────────────────────────────────────────────────────
+
+pub fn get_paused(env: &Env) -> bool {
+    env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
+}
+
+pub fn set_paused(env: &Env, paused: bool) {
+    env.storage().instance().set(&DataKey::Paused, &paused);
 }
 
 // ── Cleanup period ────────────────────────────────────────────────────────────
