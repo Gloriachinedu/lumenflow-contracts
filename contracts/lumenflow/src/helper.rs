@@ -49,6 +49,15 @@ pub fn require_positive(amount: i128) -> Result<(), PaymentError> {
     }
 }
 
+/// Validate that `amount` meets the configured minimum refund threshold.
+pub fn require_min_refund_amount(env: &Env, amount: i128) -> Result<(), PaymentError> {
+    if amount >= storage::get_min_refund_amount(env) {
+        Ok(())
+    } else {
+        Err(PaymentError::InvalidAmount)
+    }
+}
+
 /// Validate that `limit` does not exceed the page cap.
 pub fn require_valid_limit(limit: u32) -> Result<(), PaymentError> {
     if limit == 0 {

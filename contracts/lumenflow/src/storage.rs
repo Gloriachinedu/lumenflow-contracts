@@ -76,6 +76,19 @@ pub fn set_large_payment_threshold(env: &Env, threshold: i128) {
         .set(&DataKey::LargePaymentThreshold, &threshold);
 }
 
+pub fn get_min_refund_amount(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MinRefundAmount)
+        .unwrap_or(MIN_REFUND_AMOUNT)
+}
+
+pub fn set_min_refund_amount(env: &Env, amount: i128) {
+    env.storage()
+        .instance()
+        .set(&DataKey::MinRefundAmount, &amount);
+}
+
 // ── Global stats ──────────────────────────────────────────────────────────────
 
 pub fn get_global_stats(env: &Env) -> GlobalStats {

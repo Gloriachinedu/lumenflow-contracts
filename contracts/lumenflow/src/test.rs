@@ -631,6 +631,60 @@ fn test_execute_completed_refund_fails() {
 }
 
 #[test]
+fn test_refund_below_min_amount_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_MIN", 1_000);
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "REFUND_DUST"),
+        &str(&env, "ORDER_MIN"),
+        &99,
+        &str(&env, "dust"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+}
+
+#[test]
+fn test_refund_at_min_amount_succeeds() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_MIN_OK", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REFUND_MIN_OK"),
+        &str(&env, "ORDER_MIN_OK"),
+        &100,
+        &str(&env, "minimum"),
+    );
+}
+
+#[test]
+fn test_refund_respects_admin_min_amount() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_CUSTOM_MIN", 10_000);
+
+    client.set_min_refund_amount(&admin, &500);
+
+    let below = client.try_initiate_refund(
+        &payer,
+        &str(&env, "REFUND_BELOW"),
+        &str(&env, "ORDER_CUSTOM_MIN"),
+        &499,
+        &str(&env, "below"),
+    );
+    assert_eq!(below, Err(Ok(PaymentError::InvalidAmount)));
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REFUND_AT"),
+        &str(&env, "ORDER_CUSTOM_MIN"),
+        &500,
+        &str(&env, "at"),
+    );
+}
+
+#[test]
 fn test_refund_exceeds_original_fails() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
     make_payment(&env, &client, &merchant, &payer, &token, "ORDER_R2", 500);

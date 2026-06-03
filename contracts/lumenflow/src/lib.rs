@@ -206,6 +206,18 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Set the minimum refund amount (default 100 stroops). Admin only.
+    pub fn set_min_refund_amount(
+        env: Env,
+        admin: Address,
+        amount: i128,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        require_positive(amount)?;
+        storage::set_min_refund_amount(&env, amount);
+        Ok(())
+    }
+
     // ── Merchant management ───────────────────────────────────────────────────
 
     /// Register a new merchant.
@@ -964,6 +976,7 @@ impl PaymentProcessingContract {
         require_not_paused(&env)?;
         caller.require_auth();
         require_positive(amount)?;
+        require_min_refund_amount(&env, amount)?;
         require_non_empty_string(&refund_id)?;
 
         if storage::get_refund(&env, &refund_id).is_some() {
