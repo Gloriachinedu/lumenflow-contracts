@@ -2,6 +2,7 @@ use soroban_sdk::{Address, Bytes, Env, String, Vec};
 
 use crate::error::PaymentError;
 use crate::storage;
+use crate::types::MerchantCategory;
 
 pub const MAX_PAGE_LIMIT: u32 = 100;
 pub const REFUND_WINDOW_SECS: u64 = 30 * 24 * 3600; // 30 days
@@ -97,6 +98,16 @@ pub fn validate_tags(tags: &Option<Vec<String>>) -> Result<(), PaymentError> {
             if tag.len() == 0 || tag.len() > 32 {
                 return Err(PaymentError::InvalidTags);
             }
+        }
+    }
+    Ok(())
+}
+
+/// Validate a MerchantCategory. Custom variant must be non-empty and ≤ 32 chars.
+pub fn validate_merchant_category(category: &MerchantCategory) -> Result<(), PaymentError> {
+    if let MerchantCategory::Custom(ref s) = category {
+        if s.len() == 0 || s.len() > 32 {
+            return Err(PaymentError::InvalidInput);
         }
     }
     Ok(())
