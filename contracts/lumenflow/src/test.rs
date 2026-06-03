@@ -45,6 +45,13 @@ fn bytes(env: &Env, data: &[u8]) -> Bytes {
 // ── Admin tests ───────────────────────────────────────────────────────────────
 
 #[test]
+fn test_get_contract_version() {
+    let (env, client) = setup();
+    let version = client.get_contract_version();
+    assert_eq!(version, str(&env, "1.0.0"));
+}
+
+#[test]
 fn test_set_admin_success() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
