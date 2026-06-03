@@ -200,6 +200,14 @@
                           "lo": 0
                         }
                       }
+                    },
+                    {
+                      "key": {
+                        "symbol": "verified"
+                      },
+                      "val": {
+                        "bool": false
+                      }
                     }
                   ]
                 }
