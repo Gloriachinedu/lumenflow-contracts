@@ -426,6 +426,8 @@ For production monitoring — Horizon SSE streaming, alert thresholds, and examp
 |---|---|
 | `lumenflow/admin_set` | Admin initialised |
 | `lumenflow/merchant_registered` | New merchant registered |
+| `lumenflow/merchant_updated` | Merchant profile updated |
+| `lumenflow/merchant_deactivated` | Merchant deactivated |
 | `lumenflow/payment_processed` | Payment completed |
 | `lumenflow/payment_archived` | Payment record removed |
 | `lumenflow/refund_initiated` | Refund request opened |

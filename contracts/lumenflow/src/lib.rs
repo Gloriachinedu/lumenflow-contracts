@@ -296,6 +296,37 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Update merchant profile (merchant only).
+    pub fn update_merchant(
+        env: Env,
+        merchant_address: Address,
+        name: String,
+        description: String,
+        contact_info: String,
+        category: MerchantCategory,
+    ) -> Result<(), PaymentError> {
+        merchant_address.require_auth();
+        require_non_empty_string(&name)?;
+
+        let mut merchant = storage::get_merchant(&env, &merchant_address)
+            .ok_or(PaymentError::MerchantNotFound)?;
+
+        if !merchant.active {
+            return Err(PaymentError::MerchantInactive);
+        }
+
+        merchant.name = name;
+        merchant.description = description;
+        merchant.contact_info = contact_info;
+        merchant.category = category;
+
+        storage::set_merchant(&env, &merchant);
+
+        env.events()
+            .publish(("lumenflow", "merchant_updated"), merchant_address);
+        Ok(())
+    }
+
     /// Deactivate a merchant (admin only).
     ///
     /// Deactivated merchants cannot receive new payments. The global active-merchant
@@ -328,6 +359,9 @@ impl PaymentProcessingContract {
             stats.active_merchants -= 1;
         }
         storage::set_global_stats(&env, &stats);
+
+        env.events()
+            .publish(("lumenflow", "merchant_deactivated"), merchant_address);
         Ok(())
     }
 
@@ -622,7 +656,7 @@ impl PaymentProcessingContract {
 
         for item in payments.iter() {
             require_positive(item.amount)?;
-            require_non_empty_string(&item.order_id)?;
+            require_valid_id(&item.order_id)?;
 
             if !storage::is_token_allowed(&env, &item.token_address) {
                 return Err(PaymentError::TokenNotAllowed);
@@ -1245,7 +1279,7 @@ impl PaymentProcessingContract {
         require_not_paused(&env)?;
         initiator.require_auth();
         require_positive(amount)?;
-        require_non_empty_string(&payment_id)?;
+        require_valid_id(&payment_id)?;
 
         // Validate multisig configuration
         if signers.len() == 0 {
