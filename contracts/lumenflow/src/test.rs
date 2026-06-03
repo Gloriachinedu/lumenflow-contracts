@@ -90,6 +90,44 @@ fn test_set_admin_zero_address_fails() {
     assert_eq!(result, Err(Ok(PaymentError::InvalidAdminAddress)));
 }
 
+#[test]
+fn test_transfer_admin_success() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.transfer_admin(&admin, &new_admin);
+    
+    // Old admin should fail
+    let result = client.try_set_payment_cleanup_period(&admin, &86400);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+    
+    // New admin should succeed
+    let result2 = client.try_set_payment_cleanup_period(&new_admin, &86400);
+    assert_eq!(result2, Ok(Ok(())));
+}
+
+#[test]
+fn test_transfer_admin_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let result = client.try_transfer_admin(&non_admin, &new_admin);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_transfer_admin_self() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.transfer_admin(&admin, &admin);
+    let result = client.try_set_payment_cleanup_period(&admin, &86400);
+    assert_eq!(result, Ok(Ok(())));
+}
+
 // ── Merchant tests ────────────────────────────────────────────────────────────
 
 #[test]

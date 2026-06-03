@@ -64,6 +64,24 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Transfer admin rights to a new address.
+    pub fn transfer_admin(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &current_admin)?;
+
+        if new_admin.contract_id().is_some() {
+            return Err(PaymentError::InvalidAdminAddress);
+        }
+
+        storage::set_admin(&env, &new_admin);
+        env.events()
+            .publish(("lumenflow", "admin_transferred"), (current_admin, new_admin));
+        Ok(())
+    }
+
     /// Set how long (seconds) before a payment record is eligible for cleanup.
     ///
     /// # Arguments
@@ -422,6 +440,9 @@ impl PaymentProcessingContract {
 
         // Build payload: order_id bytes + amount bytes
         let mut payload = Bytes::new(&env);
+        let network_id_bytes: Bytes = env.ledger().network_id().into();
+        payload.append(&network_id_bytes);
+        payload.append(&env.current_contract_address().to_xdr(&env));
         payload.append(&order_id.clone().to_xdr(&env));
         payload.append(&Bytes::from_slice(&env, &amount.to_be_bytes()));
         verify_signature(&env, &merchant_public_key, &payload, &signature)?;
@@ -538,6 +559,9 @@ impl PaymentProcessingContract {
 
             // Build payload: order_id bytes + amount bytes
             let mut payload = Bytes::new(&env);
+            let network_id_bytes: Bytes = env.ledger().network_id().into();
+            payload.append(&network_id_bytes);
+            payload.append(&env.current_contract_address().to_xdr(&env));
             payload.append(&item.order_id.clone().to_xdr(&env));
             payload.append(&Bytes::from_slice(&env, &item.amount.to_be_bytes()));
             verify_signature(&env, &item.merchant_public_key, &payload, &item.signature)?;
