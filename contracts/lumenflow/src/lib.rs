@@ -64,6 +64,24 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Transfer admin rights to a new address.
+    pub fn transfer_admin(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &current_admin)?;
+
+        if new_admin.contract_id().is_some() {
+            return Err(PaymentError::InvalidAdminAddress);
+        }
+
+        storage::set_admin(&env, &new_admin);
+        env.events()
+            .publish(("lumenflow", "admin_transferred"), (current_admin, new_admin));
+        Ok(())
+    }
+
     /// Set how long (seconds) before a payment record is eligible for cleanup.
     ///
     /// # Arguments
@@ -83,6 +101,20 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         require_admin(&env, &admin)?;
         storage::set_cleanup_period(&env, period);
+        Ok(())
+    }
+
+    /// Set the platform fee in basis points and the fee recipient address (admin only).
+    /// Fee is deducted from each payment processed via `process_payment_with_signature`.
+    pub fn set_platform_fee(
+        env: Env,
+        admin: Address,
+        fee_bps: u32,
+        fee_recipient: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_platform_fee_bps(&env, fee_bps);
+        storage::set_fee_recipient(&env, &fee_recipient);
         Ok(())
     }
 
@@ -185,6 +217,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         merchant_address.require_auth();
         require_non_empty_string(&name)?;
+        validate_merchant_category(&category)?;
 
         if storage::get_merchant(&env, &merchant_address).is_some() {
             return Err(PaymentError::MerchantAlreadyRegistered);
@@ -422,13 +455,28 @@ impl PaymentProcessingContract {
 
         // Build payload: order_id bytes + amount bytes
         let mut payload = Bytes::new(&env);
+        let network_id_bytes: Bytes = env.ledger().network_id().into();
+        payload.append(&network_id_bytes);
+        payload.append(&env.current_contract_address().to_xdr(&env));
         payload.append(&order_id.clone().to_xdr(&env));
         payload.append(&Bytes::from_slice(&env, &amount.to_be_bytes()));
         verify_signature(&env, &merchant_public_key, &payload, &signature)?;
 
-        // Transfer tokens from payer to merchant
+        // Transfer tokens from payer to merchant (minus platform fee)
         let token_client = token::Client::new(&env, &token_address);
-        token_client.transfer(&payer, &merchant_address, &amount);
+        let fee_bps = storage::get_platform_fee_bps(&env);
+        let platform_fee: i128 = if fee_bps > 0 {
+            amount * (fee_bps as i128) / 10_000
+        } else {
+            0
+        };
+        let merchant_amount = amount - platform_fee;
+        token_client.transfer(&payer, &merchant_address, &merchant_amount);
+        if platform_fee > 0 {
+            if let Some(recipient) = storage::get_fee_recipient(&env) {
+                token_client.transfer(&payer, &recipient, &platform_fee);
+            }
+        }
 
         let now = env.ledger().timestamp();
         let payment = PaymentOrder {
@@ -538,6 +586,9 @@ impl PaymentProcessingContract {
 
             // Build payload: order_id bytes + amount bytes
             let mut payload = Bytes::new(&env);
+            let network_id_bytes: Bytes = env.ledger().network_id().into();
+            payload.append(&network_id_bytes);
+            payload.append(&env.current_contract_address().to_xdr(&env));
             payload.append(&item.order_id.clone().to_xdr(&env));
             payload.append(&Bytes::from_slice(&env, &item.amount.to_be_bytes()));
             verify_signature(&env, &item.merchant_public_key, &payload, &item.signature)?;

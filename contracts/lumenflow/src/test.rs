@@ -90,6 +90,44 @@ fn test_set_admin_zero_address_fails() {
     assert_eq!(result, Err(Ok(PaymentError::InvalidAdminAddress)));
 }
 
+#[test]
+fn test_transfer_admin_success() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.transfer_admin(&admin, &new_admin);
+    
+    // Old admin should fail
+    let result = client.try_set_payment_cleanup_period(&admin, &86400);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+    
+    // New admin should succeed
+    let result2 = client.try_set_payment_cleanup_period(&new_admin, &86400);
+    assert_eq!(result2, Ok(Ok(())));
+}
+
+#[test]
+fn test_transfer_admin_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let result = client.try_transfer_admin(&non_admin, &new_admin);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_transfer_admin_self() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.transfer_admin(&admin, &admin);
+    let result = client.try_set_payment_cleanup_period(&admin, &86400);
+    assert_eq!(result, Ok(Ok(())));
+}
+
 // ── Merchant tests ────────────────────────────────────────────────────────────
 
 #[test]
@@ -292,6 +330,52 @@ fn test_successful_payment_with_signature() {
 
     let payment = client.get_payment_by_id(&payer, &str(&env, "ORDER_001"));
     assert_eq!(payment.amount, 1_000);
+}
+
+#[test]
+fn test_platform_fee_deducted() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let fee_recipient = Address::generate(&env);
+    // Set 100 bps = 1% fee
+    client.set_platform_fee(&admin, &100u32, &fee_recipient);
+    mint(&env, &token, &Address::generate(&env), &payer, 10_000);
+
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "FEE_ORDER_1"),
+        &merchant,
+        &token,
+        &1_000,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+
+    let payment = client.get_payment_by_id(&payer, &str(&env, "FEE_ORDER_1"));
+    assert_eq!(payment.platform_fee, 10); // 1% of 1000
+}
+
+#[test]
+fn test_zero_fee_case() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "NOFEE_ORDER"),
+        &merchant,
+        &token,
+        &500,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    let payment = client.get_payment_by_id(&payer, &str(&env, "NOFEE_ORDER"));
+    assert_eq!(payment.platform_fee, 0);
 }
 
 #[test]
@@ -1591,4 +1675,48 @@ fn test_total_volume_accumulates_correctly() {
     let stats = client.get_global_payment_stats(&admin, &None, &None);
     assert_eq!(stats.total_volume, 6_000);
     assert_eq!(stats.total_payments, 3);
+}
+
+// ── Refund auth security tests (#45) ─────────────────────────────────────────
+
+#[test]
+fn test_payer_cannot_approve_own_refund() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "SEC_R1", 1_000);
+    client.initiate_refund(&payer, &str(&env, "SEC_RF1"), &str(&env, "SEC_R1"), &100, &str(&env, "r"));
+
+    let result = client.try_approve_refund(&payer, &str(&env, "SEC_RF1"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_payer_cannot_reject_own_refund() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "SEC_R2", 1_000);
+    client.initiate_refund(&payer, &str(&env, "SEC_RF2"), &str(&env, "SEC_R2"), &100, &str(&env, "r"));
+
+    let result = client.try_reject_refund(&payer, &str(&env, "SEC_RF2"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_unrelated_address_cannot_approve_refund() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "SEC_R3", 1_000);
+    client.initiate_refund(&payer, &str(&env, "SEC_RF3"), &str(&env, "SEC_R3"), &100, &str(&env, "r"));
+
+    let unrelated = Address::generate(&env);
+    let result = client.try_approve_refund(&unrelated, &str(&env, "SEC_RF3"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_unrelated_address_cannot_reject_refund() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "SEC_R4", 1_000);
+    client.initiate_refund(&payer, &str(&env, "SEC_RF4"), &str(&env, "SEC_R4"), &100, &str(&env, "r"));
+
+    let unrelated = Address::generate(&env);
+    let result = client.try_reject_refund(&unrelated, &str(&env, "SEC_RF4"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
