@@ -945,7 +945,7 @@ fn test_get_merchant_payment_history() {
         &SortField::Amount,
         &SortOrder::Ascending,
     );
-    assert_eq!(page.total, 3);
+    assert_eq!(page.total_matching, 3);
     assert_eq!(page.payments.get(0).unwrap().amount, 100);
     assert_eq!(page.payments.get(2).unwrap().amount, 300);
 }
@@ -975,7 +975,7 @@ fn test_get_payer_payment_history_with_filter() {
         &SortField::Amount,
         &SortOrder::Descending,
     );
-    assert_eq!(page.total, 1);
+    assert_eq!(page.total_matching, 1);
     assert_eq!(page.payments.get(0).unwrap().amount, 500);
 }
 

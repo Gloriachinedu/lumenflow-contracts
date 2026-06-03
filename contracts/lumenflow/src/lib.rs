@@ -1473,7 +1473,7 @@ impl PaymentProcessingContract {
             sorted = new_vec;
         }
 
-        let total = sorted.len();
+        let total_matching = sorted.len();
         let mut result: Vec<PaymentOrder> = Vec::new(env);
         let mut next_cursor: Option<String> = None;
 
@@ -1488,7 +1488,7 @@ impl PaymentProcessingContract {
         Ok(PaymentPage {
             payments: result,
             next_cursor,
-            total,
+            total_matching,
         })
     }
 

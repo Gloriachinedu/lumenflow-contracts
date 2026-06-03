@@ -178,7 +178,8 @@ pub struct MerchantPage {
 pub struct PaymentPage {
     pub payments: Vec<PaymentOrder>,
     pub next_cursor: Option<String>,
-    pub total: u32,
+    /// Total number of records matching the query before page limit is applied.
+    pub total_matching: u32,
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
