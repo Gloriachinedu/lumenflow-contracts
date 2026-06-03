@@ -138,9 +138,13 @@ pub fn get_merchant(env: &Env, address: &Address) -> Option<Merchant> {
 }
 
 pub fn set_merchant(env: &Env, merchant: &Merchant) {
+    let key = DataKey::Merchant(merchant.address.clone());
+    env.storage().persistent().set(&key, merchant);
+    // Extend TTL so the merchant profile remains accessible for 2 years from
+    // the last write. This prevents silent expiry of active merchant accounts.
     env.storage()
         .persistent()
-        .set(&DataKey::Merchant(merchant.address.clone()), merchant);
+        .extend_ttl(&key, MERCHANT_TTL_LEDGERS, MERCHANT_TTL_LEDGERS);
 }
 
 pub fn get_merchant_list(env: &Env) -> Vec<Address> {
@@ -165,9 +169,13 @@ pub fn get_payment(env: &Env, order_id: &String) -> Option<PaymentOrder> {
 }
 
 pub fn set_payment(env: &Env, payment: &PaymentOrder) {
+    let key = DataKey::Payment(payment.order_id.clone());
+    env.storage().persistent().set(&key, payment);
+    // Extend TTL to 2 years on every write so payment records survive audits,
+    // refund windows (30 days), and dispute resolution periods.
     env.storage()
         .persistent()
-        .set(&DataKey::Payment(payment.order_id.clone()), payment);
+        .extend_ttl(&key, PAYMENT_TTL_LEDGERS, PAYMENT_TTL_LEDGERS);
 }
 
 pub fn remove_payment(env: &Env, order_id: &String) {
@@ -189,6 +197,9 @@ pub fn add_merchant_payment_id(env: &Env, merchant: &Address, order_id: &String)
         return Err(PaymentError::PaymentHistoryLimitExceeded);
     }
     ids.push_back(order_id.clone());
+    let key = DataKey::MerchantPayments(merchant.clone());
+    env.storage().persistent().set(&key, &ids);
+    // Index lists must outlive the records they reference; extend to 2 years.
     env.storage()
         .persistent()
         .set(&DataKey::MerchantPayments(merchant.clone()), &ids);
@@ -208,6 +219,9 @@ pub fn add_payer_payment_id(env: &Env, payer: &Address, order_id: &String) -> Re
         return Err(PaymentError::PaymentHistoryLimitExceeded);
     }
     ids.push_back(order_id.clone());
+    let key = DataKey::PayerPayments(payer.clone());
+    env.storage().persistent().set(&key, &ids);
+    // Index lists must outlive the records they reference; extend to 2 years.
     env.storage()
         .persistent()
         .set(&DataKey::PayerPayments(payer.clone()), &ids);
@@ -222,9 +236,13 @@ pub fn get_refund(env: &Env, refund_id: &String) -> Option<RefundRecord> {
 }
 
 pub fn set_refund(env: &Env, refund: &RefundRecord) {
+    let key = DataKey::Refund(refund.refund_id.clone());
+    env.storage().persistent().set(&key, refund);
+    // Extend TTL to 1 year; the full refund lifecycle (initiate → approve →
+    // execute) completes well within this window.
     env.storage()
         .persistent()
-        .set(&DataKey::Refund(refund.refund_id.clone()), refund);
+        .extend_ttl(&key, REFUND_TTL_LEDGERS, REFUND_TTL_LEDGERS);
 }
 
 pub fn get_order_refund_ids(env: &Env, order_id: &String) -> Vec<String> {
@@ -263,9 +281,13 @@ pub fn get_multisig(env: &Env, payment_id: &String) -> Option<MultisigPayment> {
 }
 
 pub fn set_multisig(env: &Env, ms: &MultisigPayment) {
+    let key = DataKey::Multisig(ms.payment_id.clone());
+    env.storage().persistent().set(&key, ms);
+    // Extend TTL to 1 year; multisig payments are typically executed quickly
+    // but the record is kept for history and potential refund initiation.
     env.storage()
         .persistent()
-        .set(&DataKey::Multisig(ms.payment_id.clone()), ms);
+        .extend_ttl(&key, MULTISIG_TTL_LEDGERS, MULTISIG_TTL_LEDGERS);
 }
 
 // ── Payment Request ───────────────────────────────────────────────────────────

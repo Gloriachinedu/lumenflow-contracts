@@ -88,7 +88,7 @@ pub fn verify_signature(
 
     #[cfg(test)]
     {
-        // Skip verification for mock zeros in tests
+        // Skip verification for mock zeros in tests.
         if public_key.len() == 32 && signature.len() == 64 {
             return Ok(());
         }
