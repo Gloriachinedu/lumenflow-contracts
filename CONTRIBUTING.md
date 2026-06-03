@@ -64,6 +64,15 @@ cargo build --target wasm32-unknown-unknown --release
 
 ## Contribution Guidelines
 
+### Translations
+
+We aim to make LumenFlow accessible to a global audience, particularly the Latin American Stellar community. We welcome contributions that:
+- Add translations for `README.md` and other key documentation to new languages.
+- Update existing translations to keep them in sync with the English versions.
+- Fix errors or improve clarity in translated documents.
+
+When adding a new translation, please follow the naming convention `README.[lang].md` and add a link in the language selector at the top of the main `README.md`.
+
 ### Code Style
 
 - Follow standard Rust idioms (`rustfmt` enforced in CI).
