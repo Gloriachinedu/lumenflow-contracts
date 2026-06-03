@@ -1,5 +1,7 @@
 #![no_std]
 
+extern crate alloc;
+
 mod error;
 mod helper;
 mod storage;
@@ -1454,23 +1456,35 @@ impl PaymentProcessingContract {
             }
         }
 
-        // Sort
+        // Sort — O(n log n) via alloc::vec::Vec::sort_unstable_by.
+        //
+        // The previous insertion sort was O(n²) in both time and Soroban
+        // instruction count: each insertion rebuilt the entire soroban_sdk::Vec,
+        // causing O(n) element copies per item. For a merchant with N payments
+        // this consumed O(n²) instructions, exhausting Soroban's per-transaction
+        // limit for datasets of ~1 000+ entries.
+        //
+        // The new approach:
+        //   1. Collect into a native alloc::vec::Vec (one pass, O(n)).
+        //   2. Sort in-place with sort_unstable_by (O(n log n), no extra alloc).
+        //   3. Rebuild the soroban_sdk::Vec from the sorted slice (one pass, O(n)).
+        //
+        // alloc::vec::Vec is available because soroban-sdk is compiled with the
+        // "alloc" feature, which re-exports the global allocator for no_std WASM.
+        let mut native: alloc::vec::Vec<PaymentOrder> = payments.iter().collect();
+        native.sort_unstable_by(|a, b| {
+            let cmp = match sort_field {
+                SortField::Date => a.paid_at.cmp(&b.paid_at),
+                SortField::Amount => a.amount.cmp(&b.amount),
+            };
+            match sort_order {
+                SortOrder::Ascending => cmp,
+                SortOrder::Descending => cmp.reverse(),
+            }
+        });
         let mut sorted: Vec<PaymentOrder> = Vec::new(env);
-        // Simple insertion sort (WASM-friendly, no std)
-        for p in payments.iter() {
-            let mut inserted = false;
-            let mut new_vec: Vec<PaymentOrder> = Vec::new(env);
-            for s in sorted.iter() {
-                if !inserted && Self::should_insert_before(&p, &s, &sort_field, &sort_order) {
-                    new_vec.push_back(p.clone());
-                    inserted = true;
-                }
-                new_vec.push_back(s);
-            }
-            if !inserted {
-                new_vec.push_back(p);
-            }
-            sorted = new_vec;
+        for p in native {
+            sorted.push_back(p);
         }
 
         let total_matching = sorted.len();
@@ -1551,22 +1565,6 @@ impl PaymentProcessingContract {
             }
         }
         true
-    }
-
-    fn should_insert_before(
-        a: &PaymentOrder,
-        b: &PaymentOrder,
-        field: &SortField,
-        order: &SortOrder,
-    ) -> bool {
-        let cmp = match field {
-            SortField::Date => a.paid_at.cmp(&b.paid_at),
-            SortField::Amount => a.amount.cmp(&b.amount),
-        };
-        match order {
-            SortOrder::Ascending => cmp == core::cmp::Ordering::Less,
-            SortOrder::Descending => cmp == core::cmp::Ordering::Greater,
-        }
     }
 
     // ── Payment Requests ──────────────────────────────────────────────────────

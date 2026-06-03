@@ -19,6 +19,7 @@ pub enum DataKey {
     MerchantPayments(Address),
     PayerPayments(Address),
     Refund(String),
+    Dispute(String),
     Multisig(String),
     PaymentRequest(String),
     LargePaymentThreshold,
@@ -52,7 +53,7 @@ pub fn get_cleanup_period(env: &Env) -> u64 {
     env.storage()
         .instance()
         .get(&DataKey::CleanupPeriod)
-        .unwrap_or(30 * 24 * 3600) // 30 days default
+        .unwrap_or(30 * 24 * 3600)
 }
 
 pub fn set_cleanup_period(env: &Env, period: u64) {
@@ -67,7 +68,7 @@ pub fn get_large_payment_threshold(env: &Env) -> i128 {
     env.storage()
         .instance()
         .get(&DataKey::LargePaymentThreshold)
-        .unwrap_or(10_000_000) // Default 10M units
+        .unwrap_or(10_000_000)
 }
 
 pub fn set_large_payment_threshold(env: &Env, threshold: i128) {
@@ -232,6 +233,18 @@ pub fn add_order_refund_id(env: &Env, order_id: &String, refund_id: &String) {
     env.storage()
         .persistent()
         .set(&DataKey::OrderRefunds(order_id.clone()), &ids);
+}
+
+// ── Dispute ───────────────────────────────────────────────────────────────────
+
+pub fn get_dispute(env: &Env, refund_id: &String) -> Option<DisputeRecord> {
+    env.storage().persistent().get(&DataKey::Dispute(refund_id.clone()))
+}
+
+pub fn set_dispute(env: &Env, dispute: &DisputeRecord) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::Dispute(dispute.refund_id.clone()), dispute);
 }
 
 // ── Multisig ──────────────────────────────────────────────────────────────────
