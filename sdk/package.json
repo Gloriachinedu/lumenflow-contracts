@@ -17,6 +17,7 @@
   "author": "LumenFlow Contributors",
   "license": "MIT",
   "dependencies": {
+    "@stellar/stellar-sdk": "^15.1.0",
     "tweetnacl": "1.0.3"
   },
   "devDependencies": {
