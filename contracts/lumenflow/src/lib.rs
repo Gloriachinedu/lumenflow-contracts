@@ -528,8 +528,8 @@ impl PaymentProcessingContract {
         };
 
         storage::set_payment(&env, &payment);
-        storage::add_merchant_payment_id(&env, &merchant_address, &order_id);
-        storage::add_payer_payment_id(&env, &payer, &order_id);
+        storage::add_merchant_payment_id(&env, &merchant_address, &order_id)?;
+        storage::add_payer_payment_id(&env, &payer, &order_id)?;
 
         // Update merchant total
         let mut m = merchant;
@@ -648,8 +648,8 @@ impl PaymentProcessingContract {
             };
 
             storage::set_payment(&env, &payment);
-            storage::add_merchant_payment_id(&env, &item.merchant_address, &item.order_id);
-            storage::add_payer_payment_id(&env, &payer, &item.order_id);
+            storage::add_merchant_payment_id(&env, &item.merchant_address, &item.order_id)?;
+            storage::add_payer_payment_id(&env, &payer, &item.order_id)?;
 
             // Update merchant total
             let mut m = merchant;
@@ -1679,8 +1679,8 @@ impl PaymentProcessingContract {
         };
 
         storage::set_payment(&env, &payment);
-        storage::add_merchant_payment_id(&env, &pr.merchant, &pr.request_id);
-        storage::add_payer_payment_id(&env, &payer, &pr.request_id);
+        storage::add_merchant_payment_id(&env, &pr.merchant, &pr.request_id)?;
+        storage::add_payer_payment_id(&env, &payer, &pr.request_id)?;
 
         // Update stats
         let mut stats = storage::get_global_stats(&env);

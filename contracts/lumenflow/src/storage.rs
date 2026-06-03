@@ -183,12 +183,16 @@ pub fn get_merchant_payment_ids(env: &Env, merchant: &Address) -> Vec<String> {
         .unwrap_or(Vec::new(env))
 }
 
-pub fn add_merchant_payment_id(env: &Env, merchant: &Address, order_id: &String) {
+pub fn add_merchant_payment_id(env: &Env, merchant: &Address, order_id: &String) -> Result<(), PaymentError> {
     let mut ids = get_merchant_payment_ids(env, merchant);
+    if ids.len() >= MAX_PAYMENT_IDS_PER_ACCOUNT as usize {
+        return Err(PaymentError::PaymentHistoryLimitExceeded);
+    }
     ids.push_back(order_id.clone());
     env.storage()
         .persistent()
         .set(&DataKey::MerchantPayments(merchant.clone()), &ids);
+    Ok(())
 }
 
 pub fn get_payer_payment_ids(env: &Env, payer: &Address) -> Vec<String> {
@@ -198,8 +202,11 @@ pub fn get_payer_payment_ids(env: &Env, payer: &Address) -> Vec<String> {
         .unwrap_or(Vec::new(env))
 }
 
-pub fn add_payer_payment_id(env: &Env, payer: &Address, order_id: &String) {
+pub fn add_payer_payment_id(env: &Env, payer: &Address, order_id: &String) -> Result<(), PaymentError> {
     let mut ids = get_payer_payment_ids(env, payer);
+    if ids.len() >= MAX_PAYMENT_IDS_PER_ACCOUNT as usize {
+        return Err(PaymentError::PaymentHistoryLimitExceeded);
+    }
     ids.push_back(order_id.clone());
     env.storage()
         .persistent()
