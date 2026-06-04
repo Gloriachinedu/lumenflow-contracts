@@ -1542,13 +1542,15 @@ impl PaymentProcessingContract {
         let total_matching = sorted.len();
         let mut result: Vec<PaymentOrder> = Vec::new(env);
         let mut next_cursor: Option<String> = None;
+        let mut last_included_id: Option<String> = None;
 
         for (i, p) in sorted.iter().enumerate() {
             if i as u32 >= limit {
-                next_cursor = Some(p.order_id.clone());
+                next_cursor = last_included_id;
                 break;
             }
             result.push_back(p);
+            last_included_id = Some(p.order_id.clone());
         }
 
         Ok(PaymentPage {
