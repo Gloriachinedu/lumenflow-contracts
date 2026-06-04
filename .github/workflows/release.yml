@@ -50,6 +50,35 @@ jobs:
             --release \
             --package lumenflow
 
+      - name: Install Stellar CLI
+        run: |
+          curl -fsSL https://github.com/stellar/stellar-cli/releases/download/v22.8.1/stellar-cli-22.8.1-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /usr/local/bin stellar
+
+      - name: Verify WASM artifact
+        run: |
+          WASM=target/wasm32-unknown-unknown/release/lumenflow.wasm
+
+          # Non-zero size check
+          SIZE=$(wc -c < "$WASM")
+          if [ "$SIZE" -eq 0 ]; then
+            echo "::error::WASM artifact is empty"
+            exit 1
+          fi
+          echo "WASM size: ${SIZE} bytes"
+
+          # Soroban 128 KB limit (131072 bytes); CI threshold is 100 KB
+          if [ "$SIZE" -gt 102400 ]; then
+            echo "::error::WASM size ${SIZE} exceeds 100 KB CI threshold"
+            exit 1
+          fi
+
+          # Validate contract and log exported functions
+          echo "### WASM Verification" >> "$GITHUB_STEP_SUMMARY"
+          echo "Size: ${SIZE} bytes" >> "$GITHUB_STEP_SUMMARY"
+          echo "#### Exported functions" >> "$GITHUB_STEP_SUMMARY"
+          stellar contract inspect --wasm "$WASM" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Rename artifact
         run: |
           cp target/wasm32-unknown-unknown/release/lumenflow.wasm \
