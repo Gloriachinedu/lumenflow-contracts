@@ -238,6 +238,20 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Allow or disallow a token for payments. Admin only.
+    pub fn add_allowed_token(env: Env, admin: Address, token: Address) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_token_allowed(&env, &token, true);
+        Ok(())
+    }
+
+    /// Remove a token from the allowed list. Admin only.
+    pub fn remove_allowed_token(env: Env, admin: Address, token: Address) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_token_allowed(&env, &token, false);
+        Ok(())
+    }
+
     // ── Merchant management ───────────────────────────────────────────────────
 
     /// Register a new merchant.
