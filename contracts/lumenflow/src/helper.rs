@@ -20,6 +20,9 @@ pub const MAX_MERCHANT_NAME_LEN: u32 = 64;
 pub const MAX_MERCHANT_DESCRIPTION_LEN: u32 = 256;
 pub const MAX_MERCHANT_CONTACT_INFO_LEN: u32 = 128;
 
+pub const MIN_REFUND_REASON_LEN: u32 = 10;
+pub const MAX_REFUND_REASON_LEN: u32 = 512;
+
 /// Require that `caller` is the stored admin.
 pub fn require_admin(env: &Env, caller: &Address) -> Result<(), PaymentError> {
     caller.require_auth();
