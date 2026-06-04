@@ -16,7 +16,8 @@ use soroban_sdk::{
 use error::PaymentError;
 use helper::{
     require_admin, require_admin_or, require_non_empty_string, require_positive,
-    require_valid_limit, validate_memo_length, validate_tags, verify_signature, REFUND_WINDOW_SECS,
+    require_valid_limit, validate_memo_length, validate_refund_reason, validate_tags,
+    verify_signature, REFUND_WINDOW_SECS,
 };
 use types::{
     BatchPaymentItem, GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder,
@@ -630,7 +631,7 @@ impl PaymentProcessingContract {
         caller.require_auth();
         require_positive(amount)?;
         require_non_empty_string(&refund_id)?;
-        validate_memo_length(&reason)?;
+        validate_refund_reason(&reason)?;
 
         if storage::get_refund(&env, &refund_id).is_some() {
             return Err(PaymentError::RefundAlreadyExists);

@@ -7,6 +7,9 @@ pub const MAX_PAGE_LIMIT: u32 = 100;
 pub const REFUND_WINDOW_SECS: u64 = 30 * 24 * 3600; // 30 days
 pub const MAX_MEMO_LENGTH: u32 = 256;
 
+pub const MIN_REFUND_REASON_LEN: u32 = 10;
+pub const MAX_REFUND_REASON_LEN: u32 = 512;
+
 /// Require that `caller` is the stored admin.
 pub fn require_admin(env: &Env, caller: &Address) -> Result<(), PaymentError> {
     caller.require_auth();
@@ -80,6 +83,15 @@ pub fn require_non_empty_string(s: &String) -> Result<(), PaymentError> {
 
 pub fn validate_memo_length(s: &String) -> Result<(), PaymentError> {
     if s.len() > MAX_MEMO_LENGTH {
+        Err(PaymentError::InvalidInput)
+    } else {
+        Ok(())
+    }
+}
+
+pub fn validate_refund_reason(reason: &String) -> Result<(), PaymentError> {
+    let len = reason.len();
+    if len < MIN_REFUND_REASON_LEN || len > MAX_REFUND_REASON_LEN {
         Err(PaymentError::InvalidInput)
     } else {
         Ok(())

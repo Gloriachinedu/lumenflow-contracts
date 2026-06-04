@@ -406,7 +406,7 @@ fn test_refund_exceeds_original_fails() {
         &str(&env, "REFUND_002"),
         &str(&env, "ORDER_R2"),
         &600,
-        &str(&env, "Too much"),
+        &str(&env, "Refund too much"),
     );
     assert_eq!(result, Err(Ok(PaymentError::RefundExceedsOriginal)));
 }
@@ -426,7 +426,7 @@ fn test_refund_window_expired_fails() {
         &str(&env, "REFUND_003"),
         &str(&env, "ORDER_R3"),
         &100,
-        &str(&env, "Late"),
+        &str(&env, "Late request"),
     );
     assert_eq!(result, Err(Ok(PaymentError::RefundWindowExpired)));
 }
@@ -441,7 +441,7 @@ fn test_reject_refund() {
         &str(&env, "REFUND_004"),
         &str(&env, "ORDER_R4"),
         &200,
-        &str(&env, "Reason"),
+        &str(&env, "Valid reason"),
     );
     client.reject_refund(&merchant, &str(&env, "REFUND_004"));
 
@@ -498,7 +498,7 @@ fn test_multiple_sequential_partial_refunds() {
         &str(&env, "REFUND_SEQ_4"),
         &str(&env, "SEQ_REFUND"),
         &1,
-        &str(&env, "After archive"),
+        &str(&env, "After archiving payment"),
     );
     assert_eq!(result2, Err(Ok(PaymentError::PaymentNotFound)));
 }
@@ -588,7 +588,7 @@ fn test_refund_rate_limit_enforced() {
 
     // Default limit is 5; initiate 5 refunds successfully
     for rid in ["R0", "R1", "R2", "R3", "R4"] {
-        client.initiate_refund(&payer, &str(&env, rid), &str(&env, "RL_001"), &100, &str(&env, "reason"));
+        client.initiate_refund(&payer, &str(&env, rid), &str(&env, "RL_001"), &100, &str(&env, "valid reason"));
     }
 
     // 6th must fail
@@ -597,13 +597,13 @@ fn test_refund_rate_limit_enforced() {
         &str(&env, "R5"),
         &str(&env, "RL_001"),
         &100,
-        &str(&env, "reason"),
+        &str(&env, "valid reason"),
     );
     assert_eq!(result, Err(Ok(PaymentError::TooManyRefunds)));
 
     // Admin raises limit — next call succeeds
     client.set_max_refunds_per_order(&admin, &10);
-    client.initiate_refund(&payer, &str(&env, "R5"), &str(&env, "RL_001"), &100, &str(&env, "reason"));
+    client.initiate_refund(&payer, &str(&env, "R5"), &str(&env, "RL_001"), &100, &str(&env, "valid reason"));
 }
 
 #[test]
@@ -614,17 +614,64 @@ fn test_refund_rate_limit_boundary() {
     // Set limit to 2
     client.set_max_refunds_per_order(&admin, &2);
 
-    client.initiate_refund(&payer, &str(&env, "RA"), &str(&env, "RL_002"), &100, &str(&env, "r"));
-    client.initiate_refund(&payer, &str(&env, "RB"), &str(&env, "RL_002"), &100, &str(&env, "r"));
+    client.initiate_refund(&payer, &str(&env, "RA"), &str(&env, "RL_002"), &100, &str(&env, "valid reason"));
+    client.initiate_refund(&payer, &str(&env, "RB"), &str(&env, "RL_002"), &100, &str(&env, "valid reason"));
 
     let result = client.try_initiate_refund(
         &payer,
         &str(&env, "RC"),
         &str(&env, "RL_002"),
         &100,
-        &str(&env, "r"),
+        &str(&env, "valid reason"),
     );
     assert_eq!(result, Err(Ok(PaymentError::TooManyRefunds)));
+}
+
+// ── Refund reason length tests ────────────────────────────────────────────────
+
+#[test]
+fn test_refund_reason_too_short_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "RR_001", 1_000);
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "RR_RF1"),
+        &str(&env, "RR_001"),
+        &100,
+        &str(&env, "short"),  // 5 chars, below 10
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_refund_reason_too_long_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "RR_002", 1_000);
+    let long_reason = str(&env, &"x".repeat(513));
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "RR_RF2"),
+        &str(&env, "RR_002"),
+        &100,
+        &long_reason,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_refund_reason_valid_boundary_succeeds() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "RR_003", 1_000);
+    // Exactly 10 chars
+    client.initiate_refund(
+        &payer,
+        &str(&env, "RR_RF3"),
+        &str(&env, "RR_003"),
+        &100,
+        &str(&env, "0123456789"),
+    );
+    let refund = client.get_refund(&str(&env, "RR_RF3"));
+    assert!(matches!(refund.status, crate::types::RefundStatus::Pending));
 }
 
 // ── Multisig tests ────────────────────────────────────────────────────────────
@@ -1040,7 +1087,7 @@ fn test_auth_get_payment_by_id_requires_participant() {
 fn test_auth_approve_refund_requires_admin_or_merchant() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
     make_payment(&env, &client, &merchant, &payer, &token, "AUTH_R", 1_000);
-    client.initiate_refund(&payer, &str(&env, "AUTH_RF"), &str(&env, "AUTH_R"), &100, &str(&env, "r"));
+    client.initiate_refund(&payer, &str(&env, "AUTH_RF"), &str(&env, "AUTH_R"), &100, &str(&env, "valid reason"));
     let stranger = Address::generate(&env);
     let result = client.try_approve_refund(&stranger, &str(&env, "AUTH_RF"));
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
@@ -1050,7 +1097,7 @@ fn test_auth_approve_refund_requires_admin_or_merchant() {
 fn test_auth_reject_refund_requires_admin_or_merchant() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
     make_payment(&env, &client, &merchant, &payer, &token, "AUTH_R2", 1_000);
-    client.initiate_refund(&payer, &str(&env, "AUTH_RF2"), &str(&env, "AUTH_R2"), &100, &str(&env, "r"));
+    client.initiate_refund(&payer, &str(&env, "AUTH_RF2"), &str(&env, "AUTH_R2"), &100, &str(&env, "valid reason"));
     let stranger = Address::generate(&env);
     let result = client.try_reject_refund(&stranger, &str(&env, "AUTH_RF2"));
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
@@ -1066,7 +1113,7 @@ fn test_auth_initiate_refund_requires_payer_or_merchant() {
         &str(&env, "AUTH_RF3"),
         &str(&env, "AUTH_R3"),
         &100,
-        &str(&env, "r"),
+        &str(&env, "valid reason"),
     );
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
