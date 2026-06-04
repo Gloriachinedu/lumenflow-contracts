@@ -7,6 +7,10 @@ pub const MAX_PAGE_LIMIT: u32 = 100;
 pub const REFUND_WINDOW_SECS: u64 = 30 * 24 * 3600; // 30 days
 pub const MAX_MEMO_LENGTH: u32 = 256;
 
+pub const MAX_MERCHANT_NAME_LEN: u32 = 64;
+pub const MAX_MERCHANT_DESCRIPTION_LEN: u32 = 256;
+pub const MAX_MERCHANT_CONTACT_INFO_LEN: u32 = 128;
+
 /// Require that `caller` is the stored admin.
 pub fn require_admin(env: &Env, caller: &Address) -> Result<(), PaymentError> {
     caller.require_auth();
@@ -84,6 +88,23 @@ pub fn validate_memo_length(s: &String) -> Result<(), PaymentError> {
     } else {
         Ok(())
     }
+}
+
+pub fn validate_merchant_fields(
+    name: &String,
+    description: &String,
+    contact_info: &String,
+) -> Result<(), PaymentError> {
+    if name.len() > MAX_MERCHANT_NAME_LEN {
+        return Err(PaymentError::InvalidInput);
+    }
+    if description.len() > MAX_MERCHANT_DESCRIPTION_LEN {
+        return Err(PaymentError::InvalidInput);
+    }
+    if contact_info.len() > MAX_MERCHANT_CONTACT_INFO_LEN {
+        return Err(PaymentError::InvalidInput);
+    }
+    Ok(())
 }
 
 pub fn validate_tags(tags: &Option<Vec<String>>) -> Result<(), PaymentError> {

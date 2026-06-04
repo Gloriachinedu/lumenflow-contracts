@@ -162,6 +162,67 @@ fn test_deactivate_merchant() {
     assert!(!m.active);
 }
 
+#[test]
+fn test_register_merchant_name_too_long_fails() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    let long_name = str(&env, &"a".repeat(65));
+    let result = client.try_register_merchant(
+        &merchant,
+        &long_name,
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Other,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_register_merchant_description_too_long_fails() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    let long_desc = str(&env, &"b".repeat(257));
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "Valid Name"),
+        &long_desc,
+        &str(&env, ""),
+        &MerchantCategory::Other,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_register_merchant_contact_info_too_long_fails() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    let long_contact = str(&env, &"c".repeat(129));
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "Valid Name"),
+        &str(&env, ""),
+        &long_contact,
+        &MerchantCategory::Other,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_register_merchant_boundary_values_succeed() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    // Exactly at limits: name=64, description=256, contact_info=128
+    client.register_merchant(
+        &merchant,
+        &str(&env, &"a".repeat(64)),
+        &str(&env, &"b".repeat(256)),
+        &str(&env, &"c".repeat(128)),
+        &MerchantCategory::Retail,
+    );
+    let m = client.get_merchant(&merchant);
+    assert!(m.active);
+}
+
 // ── Payment tests ─────────────────────────────────────────────────────────────
 
 fn setup_payment_env() -> (
