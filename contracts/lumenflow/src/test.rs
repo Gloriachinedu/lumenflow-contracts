@@ -1037,6 +1037,30 @@ fn test_auth_get_payment_by_id_requires_participant() {
 }
 
 #[test]
+fn test_get_payment_by_id_payer_succeeds() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "AUTH_PAYER", 100);
+    let p = client.get_payment_by_id(&payer, &str(&env, "AUTH_PAYER"));
+    assert_eq!(p.payer, payer);
+}
+
+#[test]
+fn test_get_payment_by_id_merchant_succeeds() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "AUTH_MERCH", 100);
+    let p = client.get_payment_by_id(&merchant, &str(&env, "AUTH_MERCH"));
+    assert_eq!(p.merchant_address, merchant);
+}
+
+#[test]
+fn test_get_payment_by_id_admin_succeeds() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "AUTH_ADMIN", 100);
+    let p = client.get_payment_by_id(&admin, &str(&env, "AUTH_ADMIN"));
+    assert_eq!(p.payer, payer);
+}
+
+#[test]
 fn test_auth_approve_refund_requires_admin_or_merchant() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
     make_payment(&env, &client, &merchant, &payer, &token, "AUTH_R", 1_000);
