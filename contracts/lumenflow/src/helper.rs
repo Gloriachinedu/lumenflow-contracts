@@ -16,6 +16,10 @@ pub fn require_not_paused(env: &Env) -> Result<(), PaymentError> {
     }
 }
 
+pub const MAX_MERCHANT_NAME_LEN: u32 = 64;
+pub const MAX_MERCHANT_DESCRIPTION_LEN: u32 = 256;
+pub const MAX_MERCHANT_CONTACT_INFO_LEN: u32 = 128;
+
 /// Require that `caller` is the stored admin.
 pub fn require_admin(env: &Env, caller: &Address) -> Result<(), PaymentError> {
     caller.require_auth();
