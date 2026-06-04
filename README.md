@@ -8,6 +8,8 @@
 [![Audited by](https://img.shields.io/badge/Audited%20By-TBD-lightgrey)](docs/audit/audit-report.md)
 [![Discord](https://img.shields.io/discord/123456789012345678?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/lumenflow)
 
+[English](README.md) | [Español](README.es.md) | [Português](README.pt.md)
+
 ---
 
 ## Overview
@@ -23,9 +25,11 @@ LumenFlow is a production-grade payment processing smart contract for the [Stell
 
 ## Security & Docs
 
+- Architecture overview available in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Audit plan and scope published in `docs/audit/audit-report.md`
 - Refund lifecycle state diagram available in `docs/refund-lifecycle.md`
 - Testing guidance available in `docs/testing-guide.md`
+- Multisig payment flow guide available in `docs/multisig-guide.md`
 
 ## Refund lifecycle overview
 
@@ -232,6 +236,8 @@ You can also trigger it from GitHub Actions via **Actions → Smoke Test (Testne
 
 ## Contract API
 
+For a complete list of contract error codes, their descriptions, and remediation steps, see **[docs/errors.md](docs/errors.md)**.
+
 ### Admin
 
 ```bash
@@ -263,6 +269,10 @@ stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network 
 # Get merchant info
 stellar contract invoke --id $CONTRACT_ID --source-account $CALLER_KEY --network $NETWORK \
   -- get_merchant --merchant_address <address>
+
+# List merchants (admin only, cursor-based pagination)
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- get_merchants --admin <admin-address> --cursor null --limit 10
 ```
 ### Payment Processing
 
@@ -332,10 +342,16 @@ stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network 
 **Sort orders:** `Ascending` | `Descending`  
 **Pagination:** cursor-based using `order_id`; max 100 results per page.
 
+`PaymentPage` response fields:
+- `payments`: records returned for the current page
+- `next_cursor`: cursor to request the next page (or `null` if none)
+- `total_matching`: total count of records that match the query before applying `limit`
+
 ### Refunds
 
 Refund rules:
 - Window: 30 days from `paid_at`
+- Minimum refund amount: 100 stroops by default (admin-configurable via `set_min_refund_amount`)
 - Partial refunds allowed; cumulative total cannot exceed original amount
 - Initiator: payer or merchant
 - Approver/Rejector: merchant or admin
@@ -366,6 +382,10 @@ stellar contract invoke --id $CONTRACT_ID --source-account $MERCHANT_KEY --netwo
 # Get refund status
 stellar contract invoke --id $CONTRACT_ID --source-account $CALLER_KEY --network $NETWORK \
   -- get_refund --refund_id "REFUND_001"
+
+# List all refunds for an order (payer, merchant, or admin only)
+stellar contract invoke --id $CONTRACT_ID --source-account $CALLER_KEY --network $NETWORK \
+  -- get_refunds_for_order --caller <caller-address> --order_id "ORDER_001"
 ```
 
 ### Multi-Signature Payments
@@ -406,6 +426,8 @@ For production monitoring — Horizon SSE streaming, alert thresholds, and examp
 |---|---|
 | `lumenflow/admin_set` | Admin initialised |
 | `lumenflow/merchant_registered` | New merchant registered |
+| `lumenflow/merchant_updated` | Merchant profile updated |
+| `lumenflow/merchant_deactivated` | Merchant deactivated |
 | `lumenflow/payment_processed` | Payment completed |
 | `lumenflow/payment_archived` | Payment record removed |
 | `lumenflow/refund_initiated` | Refund request opened |
@@ -466,6 +488,8 @@ Merchants can receive real-time payment event notifications in their backend sys
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). All contributions are welcome — bug fixes, features, documentation, and tests.
+
+New contributors should start with the [Developer Onboarding Guide](docs/ONBOARDING.md).
 
 ## Governance
 

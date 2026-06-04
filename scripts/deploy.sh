@@ -3,11 +3,23 @@
 set -euo pipefail
 
 NETWORK="${NETWORK:-testnet}"
-SOURCE_ACCOUNT="${SOURCE_ACCOUNT:-}"
 WASM="target/wasm32-unknown-unknown/release/lumenflow.wasm"
+
+# Load environment-specific config file if present, then fall back to .env.local
+for env_file in ".env.${NETWORK}" ".env.local"; do
+  if [[ -f "$env_file" ]]; then
+    # shellcheck disable=SC1090
+    set -a; source "$env_file"; set +a
+    echo "==> Loaded config from $env_file"
+    break
+  fi
+done
+
+SOURCE_ACCOUNT="${SOURCE_ACCOUNT:-}"
 
 usage() {
   echo "Usage: NETWORK=<local|testnet|mainnet> SOURCE_ACCOUNT=<secret-key> $0"
+  echo "       Or set SOURCE_ACCOUNT in .env.<NETWORK> or .env.local"
   exit 1
 }
 
