@@ -114,6 +114,15 @@ pub fn require_non_empty_string(s: &String) -> Result<(), PaymentError> {
     }
 }
 
+/// Validate an ID field: non-empty and at most 64 characters.
+pub fn require_valid_id(id: &String) -> Result<(), PaymentError> {
+    if id.len() == 0 || id.len() > 64 {
+        Err(PaymentError::InvalidInput)
+    } else {
+        Ok(())
+    }
+}
+
 pub fn validate_tags(tags: &Option<Vec<String>>) -> Result<(), PaymentError> {
     if let Some(ref t) = tags {
         if t.len() > 5 {

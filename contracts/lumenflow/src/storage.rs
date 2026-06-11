@@ -1,8 +1,26 @@
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
 
+use crate::error::PaymentError;
 use crate::types::{
-    GlobalStats, Merchant, MultisigPayment, PaymentOrder, PaymentRequest, RefundRecord,
+    DisputeRecord, GlobalStats, Merchant, MerchantStats, MultisigPayment, PaymentOrder,
+    PaymentRequest, RefundRecord,
 };
+
+// ── TTL / limit constants ─────────────────────────────────────────────────────
+
+/// Minimum refund amount in stroops (default).
+pub const MIN_REFUND_AMOUNT: i128 = 100;
+
+/// Maximum number of payment IDs stored per account index.
+pub const MAX_PAYMENT_IDS_PER_ACCOUNT: u32 = 10_000;
+
+// Approximate ledger-count equivalents (5-second ledgers):
+//   1 year  ≈ 6_307_200 ledgers
+//   2 years ≈ 12_614_400 ledgers
+pub const MERCHANT_TTL_LEDGERS: u32 = 12_614_400; // 2 years
+pub const PAYMENT_TTL_LEDGERS: u32 = 12_614_400;  // 2 years
+pub const REFUND_TTL_LEDGERS: u32 = 6_307_200;    // 1 year
+pub const MULTISIG_TTL_LEDGERS: u32 = 6_307_200;  // 1 year
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -19,12 +37,17 @@ pub enum DataKey {
     MerchantPayments(Address),
     PayerPayments(Address),
     Refund(String),
+    OrderRefunds(String),
     Dispute(String),
     Multisig(String),
     PaymentRequest(String),
     LargePaymentThreshold,
     AllowedToken(Address),
     MultisigExpiryDuration,
+    MinRefundAmount,
+    PlatformFeeBps,
+    FeeRecipient,
+    RefundWindow,
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -60,6 +83,46 @@ pub fn set_cleanup_period(env: &Env, period: u64) {
     env.storage()
         .instance()
         .set(&DataKey::CleanupPeriod, &period);
+}
+
+// ── Platform fee ──────────────────────────────────────────────────────────────
+
+pub fn get_platform_fee_bps(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::PlatformFeeBps)
+        .unwrap_or(0)
+}
+
+pub fn set_platform_fee_bps(env: &Env, fee_bps: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::PlatformFeeBps, &fee_bps);
+}
+
+pub fn get_fee_recipient(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::FeeRecipient)
+}
+
+pub fn set_fee_recipient(env: &Env, recipient: &Address) {
+    env.storage()
+        .instance()
+        .set(&DataKey::FeeRecipient, recipient);
+}
+
+// ── Refund window ─────────────────────────────────────────────────────────────
+
+pub fn get_refund_window(env: &Env) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::RefundWindow)
+        .unwrap_or(30 * 24 * 3600) // default 30 days
+}
+
+pub fn set_refund_window(env: &Env, window_secs: u64) {
+    env.storage()
+        .instance()
+        .set(&DataKey::RefundWindow, &window_secs);
 }
 
 // ── Suspicious Activity Thresholds ────────────────────────────────────────────
@@ -193,16 +256,15 @@ pub fn get_merchant_payment_ids(env: &Env, merchant: &Address) -> Vec<String> {
 
 pub fn add_merchant_payment_id(env: &Env, merchant: &Address, order_id: &String) -> Result<(), PaymentError> {
     let mut ids = get_merchant_payment_ids(env, merchant);
-    if ids.len() >= MAX_PAYMENT_IDS_PER_ACCOUNT as usize {
+    if ids.len() >= MAX_PAYMENT_IDS_PER_ACCOUNT {
         return Err(PaymentError::PaymentHistoryLimitExceeded);
     }
     ids.push_back(order_id.clone());
     let key = DataKey::MerchantPayments(merchant.clone());
     env.storage().persistent().set(&key, &ids);
-    // Index lists must outlive the records they reference; extend to 2 years.
     env.storage()
         .persistent()
-        .set(&DataKey::MerchantPayments(merchant.clone()), &ids);
+        .extend_ttl(&key, PAYMENT_TTL_LEDGERS, PAYMENT_TTL_LEDGERS);
     Ok(())
 }
 
@@ -215,16 +277,16 @@ pub fn get_payer_payment_ids(env: &Env, payer: &Address) -> Vec<String> {
 
 pub fn add_payer_payment_id(env: &Env, payer: &Address, order_id: &String) -> Result<(), PaymentError> {
     let mut ids = get_payer_payment_ids(env, payer);
-    if ids.len() >= MAX_PAYMENT_IDS_PER_ACCOUNT as usize {
+    if ids.len() >= MAX_PAYMENT_IDS_PER_ACCOUNT {
         return Err(PaymentError::PaymentHistoryLimitExceeded);
     }
     ids.push_back(order_id.clone());
     let key = DataKey::PayerPayments(payer.clone());
     env.storage().persistent().set(&key, &ids);
-    // Index lists must outlive the records they reference; extend to 2 years.
     env.storage()
         .persistent()
-        .set(&DataKey::PayerPayments(payer.clone()), &ids);
+        .extend_ttl(&key, PAYMENT_TTL_LEDGERS, PAYMENT_TTL_LEDGERS);
+    Ok(())
 }
 
 // ── Refund ────────────────────────────────────────────────────────────────────

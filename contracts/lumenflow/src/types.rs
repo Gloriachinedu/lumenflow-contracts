@@ -51,6 +51,7 @@ pub struct PaymentOrder {
     pub refunded_amount: i128,
     pub memo: String,
     pub tags: Option<Vec<String>>,
+    pub platform_fee: i128,
 }
 
 #[contracttype]
@@ -207,6 +208,18 @@ pub struct MerchantStats {
     /// Aggregate volume of executed refunds for this merchant. Uses saturating
     /// arithmetic to avoid runtime panics when approaching i128::MAX.
     pub total_refund_volume: i128,
+}
+
+// ── Dispute ───────────────────────────────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeRecord {
+    pub refund_id: String,
+    pub order_id: String,
+    pub initiator: Address,
+    pub reason: String,
+    pub created_at: u64,
 }
 
 // ── Suspicious Activity ───────────────────────────────────────────────────────

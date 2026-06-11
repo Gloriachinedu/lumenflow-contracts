@@ -14,13 +14,15 @@ use soroban_sdk::{contract, contractimpl, token, xdr::ToXdr, Address, Bytes, Env
 
 use error::PaymentError;
 use helper::{
-    require_admin, require_admin_or, require_non_empty_string, require_positive,
-    require_valid_limit, validate_tags, verify_signature, REFUND_WINDOW_SECS,
+    require_admin, require_admin_or, require_min_refund_amount, require_non_empty_string,
+    require_not_paused, require_positive, require_valid_id, require_valid_limit,
+    validate_merchant_category, validate_tags, verify_signature,
 };
 use types::{
-    BatchPaymentItem, GlobalStats, Merchant, MerchantCategory, MultisigPayment, PaymentFilter,
-    PaymentOrder, PaymentPage, PaymentRequest, PaymentStatus, PaymentSummary, RefundRecord,
-    RefundStatus, SortField, SortOrder, StatusFilter, SuspiciousActivityReason,
+    BatchPaymentItem, GlobalStats, Merchant, MerchantCategory, MerchantPage, MerchantStats,
+    MultisigPayment, PaymentFilter, PaymentOrder, PaymentPage, PaymentRequest, PaymentStatus,
+    PaymentSummary, RefundRecord, RefundStatus, SortField, SortOrder, StatusFilter,
+    SuspiciousActivityReason,
 };
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -73,11 +75,6 @@ impl PaymentProcessingContract {
         new_admin: Address,
     ) -> Result<(), PaymentError> {
         require_admin(&env, &current_admin)?;
-
-        if new_admin.contract_id().is_some() {
-            return Err(PaymentError::InvalidAdminAddress);
-        }
-
         storage::set_admin(&env, &new_admin);
         env.events()
             .publish(("lumenflow", "admin_transferred"), (current_admin, new_admin));
@@ -217,38 +214,6 @@ impl PaymentProcessingContract {
         require_admin(&env, &admin)?;
         require_positive(amount)?;
         storage::set_min_refund_amount(&env, amount);
-        Ok(())
-    }
-
-    /// Allow or disallow a token for payments. Admin only.
-    pub fn add_allowed_token(env: Env, admin: Address, token: Address) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
-        storage::set_token_allowed(&env, &token, true);
-        Ok(())
-    }
-
-    /// Remove a token from the allowed list. Admin only.
-    pub fn remove_allowed_token(
-        env: Env,
-        admin: Address,
-        token: Address,
-    ) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
-        storage::set_token_allowed(&env, &token, false);
-        Ok(())
-    }
-
-    /// Allow or disallow a token for payments. Admin only.
-    pub fn add_allowed_token(env: Env, admin: Address, token: Address) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
-        storage::set_token_allowed(&env, &token, true);
-        Ok(())
-    }
-
-    /// Remove a token from the allowed list. Admin only.
-    pub fn remove_allowed_token(env: Env, admin: Address, token: Address) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
-        storage::set_token_allowed(&env, &token, false);
         Ok(())
     }
 
@@ -537,7 +502,7 @@ impl PaymentProcessingContract {
         require_not_paused(&env)?;
         payer.require_auth();
         require_positive(amount)?;
-        require_non_empty_string(&order_id)?;
+        require_valid_id(&order_id)?;
         validate_tags(&tags)?;
 
         if !storage::is_token_allowed(&env, &token_address) {
@@ -591,6 +556,7 @@ impl PaymentProcessingContract {
             refunded_amount: 0,
             memo,
             tags,
+            platform_fee,
         };
 
         storage::set_payment(&env, &payment);
@@ -611,7 +577,7 @@ impl PaymentProcessingContract {
         // Update global stats
         let mut stats = storage::get_global_stats(&env);
         stats.total_payments += 1;
-        stats.total_volume += amount;
+        stats.total_volume = stats.total_volume.saturating_add(amount);
         storage::set_global_stats(&env, &stats);
 
         // Check for suspicious activity (Issue #96)
@@ -711,6 +677,7 @@ impl PaymentProcessingContract {
                 refunded_amount: 0,
                 memo: item.memo.clone(),
                 tags: None,
+                platform_fee: 0,
             };
 
             storage::set_payment(&env, &payment);
@@ -731,7 +698,7 @@ impl PaymentProcessingContract {
             // Update global stats
             let mut stats = storage::get_global_stats(&env);
             stats.total_payments += 1;
-            stats.total_volume += item.amount;
+            stats.total_volume = stats.total_volume.saturating_add(item.amount);
             storage::set_global_stats(&env, &stats);
 
             env.events().publish(
@@ -1085,7 +1052,7 @@ impl PaymentProcessingContract {
         caller.require_auth();
         require_positive(amount)?;
         require_min_refund_amount(&env, amount)?;
-        require_non_empty_string(&refund_id)?;
+        require_valid_id(&refund_id)?;
 
         if storage::get_refund(&env, &refund_id).is_some() {
             return Err(PaymentError::RefundAlreadyExists);
@@ -1112,7 +1079,7 @@ impl PaymentProcessingContract {
 
         let refund = RefundRecord {
             refund_id: refund_id.clone(),
-            order_id,
+            order_id: order_id.clone(),
             initiator: caller,
             amount,
             reason,
@@ -1120,6 +1087,7 @@ impl PaymentProcessingContract {
             created_at: now,
         };
         storage::set_refund(&env, &refund);
+        storage::add_order_refund_id(&env, &order_id, &refund_id);
 
         env.events()
             .publish(("lumenflow", "refund_initiated"), refund_id);
@@ -1376,6 +1344,8 @@ impl PaymentProcessingContract {
             signatures: Vec::new(&env),
             signed_by: Vec::new(&env),
             executed: false,
+            cancelled: false,
+            initiator,
             created_at: now,
             expires_at: resolved_expires_at,
         };
@@ -1435,6 +1405,50 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Cancel a multisig payment. Initiator or admin only.
+    pub fn cancel_multisig_payment(
+        env: Env,
+        caller: Address,
+        payment_id: String,
+    ) -> Result<(), PaymentError> {
+        caller.require_auth();
+        let mut ms =
+            storage::get_multisig(&env, &payment_id).ok_or(PaymentError::MultisigNotFound)?;
+
+        if ms.executed {
+            return Err(PaymentError::MultisigAlreadyExecuted);
+        }
+        if ms.cancelled {
+            return Err(PaymentError::MultisigAlreadyCancelled);
+        }
+
+        let is_admin = storage::get_admin(&env).map_or(false, |a| a == caller);
+        if !is_admin && caller != ms.initiator {
+            return Err(PaymentError::Unauthorized);
+        }
+
+        ms.cancelled = true;
+        storage::set_multisig(&env, &ms);
+        Ok(())
+    }
+
+    /// Get a multisig payment record. Initiator, any listed signer, or admin.
+    pub fn get_multisig_payment(
+        env: Env,
+        caller: Address,
+        payment_id: String,
+    ) -> Result<MultisigPayment, PaymentError> {
+        caller.require_auth();
+        let ms =
+            storage::get_multisig(&env, &payment_id).ok_or(PaymentError::MultisigNotFound)?;
+
+        let is_admin = storage::get_admin(&env).map_or(false, |a| a == caller);
+        if !is_admin && caller != ms.initiator && !ms.signers.contains(&caller) && caller != ms.merchant_address {
+            return Err(PaymentError::Unauthorized);
+        }
+        Ok(ms)
+    }
+
     /// Execute a multisig payment once enough signatures are collected.
     ///
     /// Transfers `amount` tokens from `payer` to the merchant, records the payment in
@@ -1465,6 +1479,10 @@ impl PaymentProcessingContract {
             return Err(PaymentError::MultisigAlreadyExecuted);
         }
 
+        if ms.cancelled {
+            return Err(PaymentError::MultisigAlreadyCancelled);
+        }
+
         if let Some(expires_at) = ms.expires_at {
             if env.ledger().timestamp() > expires_at {
                 return Err(PaymentError::PaymentExpired);
@@ -1481,9 +1499,28 @@ impl PaymentProcessingContract {
         ms.executed = true;
         storage::set_multisig(&env, &ms);
 
+        // Record in payment history
+        let now = env.ledger().timestamp();
+        let payment = PaymentOrder {
+            order_id: payment_id.clone(),
+            merchant_address: ms.merchant_address.clone(),
+            payer: payer.clone(),
+            token: ms.token.clone(),
+            amount: ms.amount,
+            status: PaymentStatus::Completed,
+            paid_at: now,
+            refunded_amount: 0,
+            memo: String::from_str(&env, ""),
+            tags: None,
+            platform_fee: 0,
+        };
+        storage::set_payment(&env, &payment);
+        let _ = storage::add_merchant_payment_id(&env, &ms.merchant_address, &payment_id);
+        let _ = storage::add_payer_payment_id(&env, &payer, &payment_id);
+
         let mut stats = storage::get_global_stats(&env);
         stats.total_payments += 1;
-        stats.total_volume += ms.amount;
+        stats.total_volume = stats.total_volume.saturating_add(ms.amount);
         storage::set_global_stats(&env, &stats);
 
         env.events()
@@ -1492,6 +1529,19 @@ impl PaymentProcessingContract {
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
+
+    /// List merchants with cursor-based pagination. Admin only.
+    pub fn get_merchants(
+        env: Env,
+        admin: Address,
+        cursor: Option<Address>,
+        limit: u32,
+    ) -> Result<MerchantPage, PaymentError> {
+        require_admin(&env, &admin)?;
+        require_valid_limit(limit)?;
+        let addresses = storage::get_merchant_list(&env);
+        Self::build_merchant_page(&env, addresses, cursor, limit)
+    }
 
     fn build_merchant_page(
         env: &Env,
@@ -1603,8 +1653,8 @@ impl PaymentProcessingContract {
                 next_cursor = last_included_id;
                 break;
             }
-            result.push_back(p);
             last_included_id = Some(p.order_id.clone());
+            result.push_back(p);
         }
 
         Ok(PaymentPage {
@@ -1784,6 +1834,7 @@ impl PaymentProcessingContract {
             refunded_amount: 0,
             memo: pr.memo,
             tags: None,
+            platform_fee: 0,
         };
 
         storage::set_payment(&env, &payment);
@@ -1793,7 +1844,7 @@ impl PaymentProcessingContract {
         // Update stats
         let mut stats = storage::get_global_stats(&env);
         stats.total_payments += 1;
-        stats.total_volume += pr.amount;
+        stats.total_volume = stats.total_volume.saturating_add(pr.amount);
         storage::set_global_stats(&env, &stats);
 
         // Remove the request as it's paid

@@ -61,6 +61,14 @@ pub enum PaymentError {
     MultisigAlreadyExecuted = 42,
     /// The multi-signature payment lacks the required number of signatures to execute. Remediation: Collect more signatures from authorized signers.
     InsufficientSignatures = 43,
+    /// The multi-signature payment has already been cancelled. Remediation: No action needed.
+    MultisigAlreadyCancelled = 44,
+
+    // Contract state
+    /// The contract is currently paused. Remediation: An admin must unpause the contract.
+    ContractPaused = 70,
+    /// The payment history limit for this account has been exceeded. Remediation: Archive old payments.
+    PaymentHistoryLimitExceeded = 71,
 
     // General
     /// The provided input parameters are invalid. Remediation: Check the input values and format.
