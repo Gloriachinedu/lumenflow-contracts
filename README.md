@@ -209,14 +209,16 @@ Works on Linux and macOS (requires Docker Desktop or Docker Engine with Compose 
 
 ## Smoke Test
 
-After deploying to testnet, run the smoke test to verify the contract is functional:
+The smoke test script validates that the deployed contract is functional by exercising the admin initialization, merchant registration, payment path, and merchant retrieval.
+
+### Run the smoke test
 
 ```bash
-CONTRACT_ID=<id> \
+CONTRACT_ID=<contract-id> \
 ADMIN_KEY=<admin-secret> \
 MERCHANT_KEY=<merchant-secret> \
 PAYER_KEY=<payer-secret> \
-TOKEN_ADDRESS=<sac-token-address> \
+TOKEN_ADDRESS=<token-address> \
 ADMIN_ADDRESS=<admin-address> \
 MERCHANT_ADDRESS=<merchant-address> \
 PAYER_ADDRESS=<payer-address> \
@@ -224,9 +226,49 @@ NETWORK=testnet \
 ./scripts/smoke_test.sh
 ```
 
-The script calls `set_admin`, `register_merchant`, `process_payment_with_signature`, and `get_merchant` in sequence. It exits non-zero on any failure.
+### Required environment variables
 
-You can also trigger it from GitHub Actions via **Actions → Smoke Test (Testnet) → Run workflow**, providing the deployed contract ID. Required secrets: `TESTNET_ADMIN_KEY`, `TESTNET_MERCHANT_KEY`, `TESTNET_PAYER_KEY`, `TESTNET_TOKEN_ADDRESS`, `TESTNET_ADMIN_ADDRESS`, `TESTNET_MERCHANT_ADDRESS`, `TESTNET_PAYER_ADDRESS`.
+- `CONTRACT_ID` — deployed contract ID
+- `ADMIN_KEY` — admin account secret key
+- `MERCHANT_KEY` — merchant account secret key
+- `PAYER_KEY` — payer account secret key
+- `TOKEN_ADDRESS` — testnet SAC token address used for payment
+- `ADMIN_ADDRESS` — admin public address
+- `MERCHANT_ADDRESS` — merchant public address
+- `PAYER_ADDRESS` — payer public address
+- `NETWORK` — target network (`testnet` by default)
+
+Optional values supported by the smoke script:
+
+- `SMOKE_SIG` — explicit signature bytes for `process_payment_with_signature`
+- `SMOKE_PUBKEY` — explicit merchant public key used inside the test
+
+### Expected success criteria
+
+The smoke test passes when each step succeeds without returning a non-zero exit code. It executes:
+
+1. `set_admin`
+2. `register_merchant`
+3. `process_payment_with_signature`
+4. `get_merchant`
+
+On success, the script prints:
+
+```text
+✅ Smoke test passed.
+```
+
+### GitHub Actions secrets
+
+To run the smoke test from GitHub Actions, set these repository secrets:
+
+- `TESTNET_ADMIN_KEY`
+- `TESTNET_MERCHANT_KEY`
+- `TESTNET_PAYER_KEY`
+- `TESTNET_TOKEN_ADDRESS`
+- `TESTNET_ADMIN_ADDRESS`
+- `TESTNET_MERCHANT_ADDRESS`
+- `TESTNET_PAYER_ADDRESS`
 
 ---
 
