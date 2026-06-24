@@ -90,6 +90,8 @@ lumenflow-contracts/
 ├── scripts/
 │   ├── deploy.sh             # Build + deploy helper
 │   └── test.sh               # Lint + test runner
+├── cli/
+│   └── lumenflow-cli/        # CLI tool and config loader
 ├── .github/
 │   ├── workflows/
 │   │   ├── ci.yml            # Lint, test, WASM build
@@ -102,6 +104,54 @@ lumenflow-contracts/
 ├── CONTRIBUTING.md
 ├── LICENSE
 └── SECURITY.md
+```
+
+## CLI Usage
+
+The `lumenflow` CLI provides quick access to common contract workflows such as payments, refunds, history queries, and admin statistics.
+
+### Configuration
+
+The CLI loads configuration from a `.lumenflow.toml` file by default, and environment variables override values from the file. The CLI also loads a `.env` file if present.
+
+Example `.lumenflow.toml`:
+
+```toml
+network = "testnet"
+contract_id = "GC..."
+source_account = "S..."
+```
+
+Supported environment variables:
+
+- `LUMENFLOW_NETWORK` — Stellar network (`local`, `testnet`, `mainnet`)
+- `LUMENFLOW_CONTRACT_ID` — deployed contract ID
+- `LUMENFLOW_SOURCE` — source account secret key used for CLI commands
+
+You can also pass a custom config file path with `--config`.
+
+### Pay
+
+```bash
+lumenflow pay --merchant G... --amount 1000 --order_id ORDER_001
+```
+
+### Refund
+
+```bash
+lumenflow refund init --order_id ORDER_001 --amount 500
+```
+
+### History
+
+```bash
+lumenflow history --merchant G...
+```
+
+### Stats
+
+```bash
+lumenflow stats
 ```
 
 ## Merchant Onboarding
