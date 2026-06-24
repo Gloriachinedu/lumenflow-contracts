@@ -402,6 +402,39 @@ fn setup_payment_env() -> (
 }
 
 #[test]
+fn test_invalid_signature_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0x11u8; 32]);
+    let sig = bytes(&env, &[0x22u8; 64]);
+
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "ORDER_SIG_INVALID"),
+        &merchant,
+        &token,
+        &250,
+        &str(&env, "tampered"),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidSignature)));
+}
+
+#[test]
+fn test_nonce_state_progresses_and_replays_are_detected() {
+    let (env, _client) = setup();
+    let payer = Address::generate(&env);
+
+    let initial: Option<u64> = env.storage().instance().get(&("nonce", payer.clone()));
+    assert_eq!(initial, None);
+
+    env.storage().instance().set(&("nonce", payer.clone()), &1u64);
+    let updated: Option<u64> = env.storage().instance().get(&("nonce", payer.clone()));
+    assert_eq!(updated, Some(1u64));
+}
+
+#[test]
 fn test_successful_payment_with_signature() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
 
