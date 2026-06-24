@@ -58,6 +58,42 @@ enum RefundCommands {
         order_id: String,
         #[arg(short, long)]
         amount: i128,
+        /// Reason for refund
+        #[arg(long, default_value = "Customer request")]
+        reason: String,
+        /// Caller address (payer or merchant)
+        #[arg(long)]
+        caller: String,
+    },
+    /// Approve a pending refund (merchant or admin)
+    Approve {
+        /// Refund ID to approve
+        #[arg(short, long)]
+        refund_id: String,
+        /// Caller address (merchant or admin)
+        #[arg(long)]
+        caller: String,
+    },
+    /// Reject a pending refund (merchant or admin)
+    Reject {
+        /// Refund ID to reject
+        #[arg(short, long)]
+        refund_id: String,
+        /// Caller address (merchant or admin)
+        #[arg(long)]
+        caller: String,
+    },
+    /// Execute an approved refund (merchant)
+    Execute {
+        /// Refund ID to execute
+        #[arg(short, long)]
+        refund_id: String,
+    },
+    /// Get the current status of a refund
+    Status {
+        /// Refund ID to look up
+        #[arg(short, long)]
+        refund_id: String,
     },
 }
 
