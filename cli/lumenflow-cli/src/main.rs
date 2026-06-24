@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::process::Command;
 
 #[derive(Parser)]
 #[command(name = "lumenflow")]
@@ -35,6 +36,18 @@ enum Commands {
         amount: i128,
         #[arg(short, long)]
         order_id: String,
+        /// Token address
+        #[arg(short, long)]
+        token: String,
+        /// Memo (optional)
+        #[arg(long)]
+        memo: Option<String>,
+        /// Ed25519 signature bytes (hex)
+        #[arg(long)]
+        signature: String,
+        /// Merchant public key (hex)
+        #[arg(long)]
+        merchant_public_key: String,
     },
     /// Refund operations
     Refund {
@@ -45,9 +58,19 @@ enum Commands {
     History {
         #[arg(short, long)]
         merchant: String,
+        /// Pagination cursor (order_id)
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Max results per page
+        #[arg(long, default_value = "10")]
+        limit: u32,
     },
     /// View global statistics (admin only)
-    Stats,
+    Stats {
+        /// Admin address
+        #[arg(long)]
+        admin: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -102,6 +125,8 @@ struct Config {
     network: Option<String>,
     contract_id: Option<String>,
     source_account: Option<String>,
+    rpc_url: Option<String>,
+    network_passphrase: Option<String>,
 }
 
 fn load_config(path: Option<PathBuf>) -> Result<Config> {
@@ -214,7 +239,16 @@ fn main() -> Result<()> {
         }
     }
 
-    Ok(())
+    #[test]
+    fn test_base_invoke_succeeds_with_full_config() {
+        let config = Config {
+            contract_id: Some("CXXX".into()),
+            source_account: Some("SKEY".into()),
+            network: Some("testnet".into()),
+            ..Default::default()
+        };
+        assert!(base_invoke(&config).is_ok());
+    }
 }
 
 #[cfg(test)]
