@@ -1,0 +1,38 @@
+name: Deploy to Testnet
+
+on:
+  push:
+    branches: [develop]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Deploy to testnet
+        id: deploy
+        env:
+          TESTNET_SOURCE_ACCOUNT: ${{ secrets.TESTNET_SOURCE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          # Run deploy script — it should print the deployed contract ID
+          CONTRACT_ID=$(bash scripts/deploy.sh)
+          echo "Deployed contract: $CONTRACT_ID" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run smoke tests
+        env:
+          CONTRACT_ID: ${{ steps.deploy.outputs.contract_id || '' }}
+        run: |
+          set -euo pipefail
+          bash scripts/test.sh
