@@ -8,8 +8,11 @@ Be respectful, inclusive, and constructive. We follow the [Contributor Covenant]
 
 ## Getting Started
 
+New to the project? Follow the step-by-step [Developer Onboarding Guide](docs/ONBOARDING.md) to go from zero to running tests locally.
+
 1. Fork the repository and clone your fork.
 2. Install prerequisites (see README).
+3. Run `scripts/install_hooks.sh` after cloning to install the local pre-commit hook.
 3. Create a feature branch: `git checkout -b feat/your-feature`.
 4. Make your changes, add tests, and ensure everything passes.
 5. Open a pull request against `main`.
@@ -61,6 +64,15 @@ cargo build --target wasm32-unknown-unknown --release
 
 ## Contribution Guidelines
 
+### Translations
+
+We aim to make LumenFlow accessible to a global audience, particularly the Latin American Stellar community. We welcome contributions that:
+- Add translations for `README.md` and other key documentation to new languages.
+- Update existing translations to keep them in sync with the English versions.
+- Fix errors or improve clarity in translated documents.
+
+When adding a new translation, please follow the naming convention `README.[lang].md` and add a link in the language selector at the top of the main `README.md`.
+
 ### Code Style
 
 - Follow standard Rust idioms (`rustfmt` enforced in CI).
@@ -108,6 +120,23 @@ To ensure high-quality reviews and maintainability, the project is organized int
 - **SDK Team** (`@Gloriachinedu/sdk-team`): Responsible for the SDK layer (once created).
 
 Pull requests are automatically assigned to the relevant CODEOWNERS. At least one approval from a CODEOWNER is required for all PRs merging into `main`.
+
+## Release Checklist
+
+Use `scripts/release.sh <version>` to automate steps 1–4. Complete the remaining steps manually.
+
+- [ ] All issues and PRs for the milestone are merged into `main`
+- [ ] `cargo test --all-features` passes locally
+- [ ] Run `./scripts/release.sh <new-version>` — this will:
+  - [ ] Bump `version` in `contracts/lumenflow/Cargo.toml`
+  - [ ] Update `Cargo.lock`
+  - [ ] Prepend a new section to `CHANGELOG.md`
+  - [ ] Commit the changes as `chore: release v<version>`
+  - [ ] Create an annotated (or signed) git tag `v<version>`
+- [ ] Fill in the release notes in `CHANGELOG.md` and amend the commit if needed
+- [ ] Push branch and tag: `git push origin main && git push origin v<version>`
+- [ ] Verify the `release.yml` CI workflow completes and the GitHub Release is created
+- [ ] Announce the release in Discord / GitHub Discussions
 
 ## Reporting Security Issues
 
