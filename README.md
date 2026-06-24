@@ -5,7 +5,10 @@
 [![CI](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml/badge.svg)](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Stellar](https://img.shields.io/badge/Stellar-Soroban-blueviolet)](https://soroban.stellar.org)
+[![Audited by](https://img.shields.io/badge/Audited%20By-TBD-lightgrey)](docs/audit/audit-report.md)
 [![Discord](https://img.shields.io/discord/123456789012345678?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/lumenflow)
+
+[English](README.md) | [Español](README.es.md) | [Português](README.pt.md)
 
 ---
 
@@ -19,6 +22,29 @@ LumenFlow is a production-grade payment processing smart contract for the [Stell
 - **Multi-signature payments** — configurable threshold approvals
 - **Payment history queries** — paginated, filtered, and sorted
 - **Admin controls** — global stats, archiving, automated cleanup
+
+## Security & Docs
+
+- Architecture overview available in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- Audit plan and scope published in `docs/audit/audit-report.md`
+- Refund lifecycle state diagram available in `docs/refund-lifecycle.md`
+- Testing guidance available in `docs/testing-guide.md`
+- Multisig payment flow guide available in `docs/multisig-guide.md`
+
+## Refund lifecycle overview
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending
+    Pending --> Approved : merchant approves
+    Pending --> Rejected : merchant rejects
+    Approved --> Completed : merchant executes refund
+    Rejected --> [*]
+```
+
+## Notes
+
+This contract uses saturating accumulation for global payment and refund volumes to prevent runtime panics in release mode.
 
 ---
 
@@ -104,6 +130,14 @@ The compiled WASM is at:
 target/wasm32-unknown-unknown/release/lumenflow.wasm
 ```
 
+**Current binary size:** ~55 KB (well within Soroban's 128 KB contract size limit).
+
+CI enforces a 100 KB threshold — the build fails if the WASM exceeds this size. To check locally:
+
+```bash
+wc -c target/wasm32-unknown-unknown/release/lumenflow.wasm
+```
+
 ---
 
 ## Testing
@@ -118,6 +152,25 @@ cargo test test_successful_refund_flow
 # Full lint + test pipeline
 ./scripts/test.sh
 ```
+
+## Code Coverage
+
+Install `cargo-llvm-cov` once:
+
+```bash
+cargo install cargo-llvm-cov
+rustup component add llvm-tools-preview
+```
+
+Generate a local HTML report:
+
+```bash
+COVERAGE=1 ./scripts/test.sh
+# Report: coverage/index.html
+# lcov data: lcov.info
+```
+
+CI enforces a minimum **80% line coverage** threshold and uploads both the HTML report and `lcov.info` as build artifacts.
 
 Test coverage includes:
 
@@ -135,25 +188,55 @@ Test coverage includes:
 
 ## Local Network Setup
 
+A `docker-compose.yml` is provided to spin up a local Stellar node with Soroban RPC enabled.
+
 ```bash
-# 1. Start Docker Desktop, then:
-stellar network container start local
+# 1. Start the local node and deploy the contract in one step
+SOURCE_ACCOUNT=<secret-key> ./scripts/local_up.sh
 
-# 2. Build and deploy
-NETWORK=local SOURCE_ACCOUNT=<secret-key> ./scripts/deploy.sh
-
-# 3. Initialise admin
+# 2. Initialise admin (use the CONTRACT_ID printed by the script)
 stellar contract invoke \
   --id <CONTRACT_ID> \
   --source-account <admin-secret-key> \
-  --network local \
+  --rpc-url http://localhost:8000/soroban/rpc \
+  --network-passphrase "Standalone Network ; February 2017" \
   -- set_admin \
   --admin <admin-address>
+
+# Stop the node when done
+docker compose down
 ```
+
+Works on Linux and macOS (requires Docker Desktop or Docker Engine with Compose v2).
+
+---
+
+## Smoke Test
+
+After deploying to testnet, run the smoke test to verify the contract is functional:
+
+```bash
+CONTRACT_ID=<id> \
+ADMIN_KEY=<admin-secret> \
+MERCHANT_KEY=<merchant-secret> \
+PAYER_KEY=<payer-secret> \
+TOKEN_ADDRESS=<sac-token-address> \
+ADMIN_ADDRESS=<admin-address> \
+MERCHANT_ADDRESS=<merchant-address> \
+PAYER_ADDRESS=<payer-address> \
+NETWORK=testnet \
+./scripts/smoke_test.sh
+```
+
+The script calls `set_admin`, `register_merchant`, `process_payment_with_signature`, and `get_merchant` in sequence. It exits non-zero on any failure.
+
+You can also trigger it from GitHub Actions via **Actions → Smoke Test (Testnet) → Run workflow**, providing the deployed contract ID. Required secrets: `TESTNET_ADMIN_KEY`, `TESTNET_MERCHANT_KEY`, `TESTNET_PAYER_KEY`, `TESTNET_TOKEN_ADDRESS`, `TESTNET_ADMIN_ADDRESS`, `TESTNET_MERCHANT_ADDRESS`, `TESTNET_PAYER_ADDRESS`.
 
 ---
 
 ## Contract API
+
+For a complete list of contract error codes, their descriptions, and remediation steps, see **[docs/errors.md](docs/errors.md)**.
 
 ### Admin
 
@@ -186,13 +269,19 @@ stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network 
 # Get merchant info
 stellar contract invoke --id $CONTRACT_ID --source-account $CALLER_KEY --network $NETWORK \
   -- get_merchant --merchant_address <address>
-```
 
+# List merchants (admin only, cursor-based pagination)
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- get_merchants --admin <admin-address> --cursor null --limit 10
+```
 ### Payment Processing
+
+For detailed information on the signature payload format and how to build it in various languages, see **[docs/signature-format.md](docs/signature-format.md)**.
 
 ```bash
 # Process payment with signature
 stellar contract invoke --id $CONTRACT_ID --source-account $PAYER_KEY --network $NETWORK \
+...
   -- process_payment_with_signature \
   --payer <payer-address> \
   --order_id "ORDER_001" \
@@ -253,10 +342,16 @@ stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network 
 **Sort orders:** `Ascending` | `Descending`  
 **Pagination:** cursor-based using `order_id`; max 100 results per page.
 
+`PaymentPage` response fields:
+- `payments`: records returned for the current page
+- `next_cursor`: cursor to request the next page (or `null` if none)
+- `total_matching`: total count of records that match the query before applying `limit`
+
 ### Refunds
 
 Refund rules:
 - Window: 30 days from `paid_at`
+- Minimum refund amount: 100 stroops by default (admin-configurable via `set_min_refund_amount`)
 - Partial refunds allowed; cumulative total cannot exceed original amount
 - Initiator: payer or merchant
 - Approver/Rejector: merchant or admin
@@ -287,6 +382,10 @@ stellar contract invoke --id $CONTRACT_ID --source-account $MERCHANT_KEY --netwo
 # Get refund status
 stellar contract invoke --id $CONTRACT_ID --source-account $CALLER_KEY --network $NETWORK \
   -- get_refund --refund_id "REFUND_001"
+
+# List all refunds for an order (payer, merchant, or admin only)
+stellar contract invoke --id $CONTRACT_ID --source-account $CALLER_KEY --network $NETWORK \
+  -- get_refunds_for_order --caller <caller-address> --order_id "ORDER_001"
 ```
 
 ### Multi-Signature Payments
@@ -321,10 +420,14 @@ stellar contract invoke --id $CONTRACT_ID --source-account $PAYER_KEY --network 
 
 Full event payload documentation and subscription guides can be found in [docs/events-reference.md](docs/events-reference.md).
 
+For production monitoring — Horizon SSE streaming, alert thresholds, and example code — see [docs/monitoring.md](docs/monitoring.md).
+
 | Event name | Trigger |
 |---|---|
 | `lumenflow/admin_set` | Admin initialised |
 | `lumenflow/merchant_registered` | New merchant registered |
+| `lumenflow/merchant_updated` | Merchant profile updated |
+| `lumenflow/merchant_deactivated` | Merchant deactivated |
 | `lumenflow/payment_processed` | Payment completed |
 | `lumenflow/payment_archived` | Payment record removed |
 | `lumenflow/refund_initiated` | Refund request opened |
@@ -376,9 +479,17 @@ Need help or want to discuss LumenFlow?
 
 ---
 
+## Webhook / Off-Chain Notifications
+
+Merchants can receive real-time payment event notifications in their backend systems via the Horizon event stream. See [docs/webhook-integration.md](docs/webhook-integration.md) for a full guide including a Node.js example server and idempotency best practices.
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). All contributions are welcome — bug fixes, features, documentation, and tests.
+
+New contributors should start with the [Developer Onboarding Guide](docs/ONBOARDING.md).
 
 ## Governance
 
