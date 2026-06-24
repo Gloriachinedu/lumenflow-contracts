@@ -31,6 +31,7 @@ Every contract function and its required authorisation.
 | `get_refund` | None | Public read |
 | `initiate_multisig_payment` | `initiator` | |
 | `sign_multisig_payment` | `signer` (must be in signers list) | |
+| `get_multisig_payment` | `caller` (admin, merchant, or signer) | |
 | `execute_multisig_payment` | `payer` | |
 | `create_payment_request` | `merchant` | |
 | `pay_payment_request` | `payer` | |
