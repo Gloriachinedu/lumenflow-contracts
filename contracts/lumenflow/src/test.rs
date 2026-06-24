@@ -485,6 +485,151 @@ fn test_pagination_limit() {
     assert!(page.next_cursor.is_some());
 }
 
+#[test]
+fn test_pagination_initial_page() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let ids = ["INIT_0", "INIT_1", "INIT_2"];
+    for id_str in ids {
+        make_payment(&env, &client, &merchant, &payer, &token, id_str, 100);
+    }
+
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page.total, 3);
+    assert_eq!(page.payments.len(), 3);
+    assert!(page.next_cursor.is_none());
+}
+
+#[test]
+fn test_pagination_intermediate_pages() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let ids = ["INT_0", "INT_1", "INT_2", "INT_3", "INT_4"];
+    for id_str in ids {
+        make_payment(&env, &client, &merchant, &payer, &token, id_str, 100);
+    }
+
+    // First page: limit 2
+    let page1 = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &2,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page1.payments.len(), 2);
+    assert!(page1.next_cursor.is_some());
+    let cursor1 = page1.next_cursor.unwrap();
+
+    // Second page using cursor
+    let page2 = client.get_merchant_payment_history(
+        &merchant,
+        &Some(cursor1.clone()),
+        &2,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page2.payments.len(), 2);
+    assert!(page2.next_cursor.is_some());
+    let cursor2 = page2.next_cursor.unwrap();
+
+    // Third page (final)
+    let page3 = client.get_merchant_payment_history(
+        &merchant,
+        &Some(cursor2),
+        &2,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page3.payments.len(), 1);
+    assert!(page3.next_cursor.is_none());
+}
+
+#[test]
+fn test_pagination_empty_results() {
+    let (env, client, _admin, merchant, _payer, _token) = setup_payment_env();
+    
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page.total, 0);
+    assert_eq!(page.payments.len(), 0);
+    assert!(page.next_cursor.is_none());
+}
+
+#[test]
+fn test_pagination_cursor_semantics() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let ids = ["CUR_0", "CUR_1", "CUR_2", "CUR_3"];
+    for id_str in ids {
+        make_payment(&env, &client, &merchant, &payer, &token, id_str, 100);
+    }
+
+    // Get first page
+    let page1 = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &2,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    let first_id = page1.payments.get(0).unwrap().order_id.clone();
+    let last_id = page1.payments.get(1).unwrap().order_id.clone();
+
+    // Use last ID as cursor; next page should start after it
+    let page2 = client.get_merchant_payment_history(
+        &merchant,
+        &Some(last_id.clone()),
+        &2,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+
+    // Verify first ID is not in second page
+    for p in page2.payments.iter() {
+        assert_ne!(p.order_id, first_id);
+        assert_ne!(p.order_id, last_id);
+    }
+}
+
+#[test]
+fn test_pagination_limit_boundaries() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    
+    // Create exactly 10 payments
+    for i in 0..10 {
+        let id = format!("LIM_{}", i);
+        make_payment(&env, &client, &merchant, &payer, &token, &id, 100);
+    }
+
+    // Requesting limit=10 should return all without cursor
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page.payments.len(), 10);
+    assert!(page.next_cursor.is_none());
+}
+
 // ── Multisig tests ────────────────────────────────────────────────────────────
 
 #[test]
