@@ -1,5 +1,5 @@
-export * from "./types";
 export * from "./client";
+export * from "./types";
 export * from "./errors";
-export { buildPaymentPayload, signPaymentPayload } from "./signPaymentPayload";
-export type { Keypair } from "./signPaymentPayload";
+export * from "./signPaymentPayload";
+export * from "./wallet";
