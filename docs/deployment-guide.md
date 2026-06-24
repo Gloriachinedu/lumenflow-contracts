@@ -23,7 +23,17 @@ Before deploying to any network, confirm the following:
 
 ## Testnet Walkthrough
 
-### 1. Fund your account
+### 1. Validate Docker Compose and fund your account
+
+Before starting a local network, validate the compose file and confirm there are no syntax issues:
+
+```bash
+docker compose -f docker-compose.yml config
+```
+
+This command ensures the manifest is complete and that Docker Compose can parse it successfully.
+
+Use a local `.env` file or runtime environment variables for secrets and credentials. Do not hardcode private keys, secret values, or network credentials in repository files.
 
 ```bash
 curl "https://friendbot.stellar.org?addr=<YOUR_PUBLIC_KEY>"
@@ -89,9 +99,28 @@ A zero exit code means the contract is functional.
 
 - **Never reuse testnet keys on mainnet.** Generate fresh keypairs.
 - Store the admin secret key in a hardware wallet or a secrets manager (e.g., AWS Secrets Manager, HashiCorp Vault). Do not commit it to source control.
+- Do not hardcode secrets in repository files or Docker Compose manifests.
+- Use `.env`-style files, OS environment variables, or platform secret stores for local development.
 - The deployer account only needs enough XLM to cover the deployment fee. Fund it minimally and rotate the key after deployment.
 - `set_admin` is irreversible — double-check the admin address before invoking it.
 - Enable Stellar account thresholds and multi-sig on the admin account for additional protection.
+
+### Local secret handling
+
+For local Docker Compose runs, store sensitive values in a local `.env` file that is excluded by `.gitignore`. Example:
+
+```bash
+cp .env.example .env.local
+```
+
+Then set secrets locally:
+
+```bash
+export SOURCE_ACCOUNT="S..."
+export ADMIN_KEY="S..."
+```
+
+Avoid committing `.env.local` or any files that contain real secret keys.
 
 ### 1. Generate and fund a mainnet deployer account
 
