@@ -1,177 +1,201 @@
 # Deployment Guide
 
-This guide documents how to build, deploy, and initialize the LumenFlow contract on local, testnet, and mainnet environments.
-
-## Prerequisites
-
-- Rust toolchain (`stable`)
-- `cargo` command
-- Stellar CLI (`stellar`)
-- `docker` and `docker compose` for local network testing
-
-Verify your environment:
-
-```bash
-rustc --version
-cargo --version
-stellar --version
-docker --version
-docker compose version
-```
-
-If deploying to a local Soroban node, install the WASM target:
-
-```bash
-rustup target add wasm32-unknown-unknown
-```
+This guide covers deploying LumenFlow to testnet and mainnet, including pre-deployment checks, security considerations, post-deployment verification, and rollback strategy.
 
 ---
 
-## Local Deployment
+## Pre-Deployment Checklist
 
-For local development, the project includes a helper script that starts a local Soroban environment and deploys the contract.
+Before deploying to any network, confirm the following:
 
-```bash
-SOURCE_ACCOUNT=<secret-key> ./scripts/local_up.sh
-```
-
-This script will:
-
-- start a local Stellar node via Docker Compose
-- compile the contract to WASM
-- deploy the contract locally
-- print the deployed `CONTRACT_ID`
-
-Once deployed, initialize the admin on the local network:
-
-```bash
-stellar contract invoke \
-  --id <CONTRACT_ID> \
-  --source-account <admin-secret-key> \
-  --network local \
-  -- set_admin --admin <ADMIN_ADDRESS>
-```
+- [ ] Rust stable toolchain installed (`rustc --version`)
+- [ ] `wasm32-unknown-unknown` target added (`rustup target add wasm32-unknown-unknown`)
+- [ ] Stellar CLI installed (`stellar --version`)
+- [ ] All tests pass: `cargo test --all-features`
+- [ ] WASM binary builds cleanly: `cargo build --target wasm32-unknown-unknown --release --package lumenflow`
+- [ ] Binary size is under 100 KB: `wc -c target/wasm32-unknown-unknown/release/lumenflow.wasm`
+- [ ] Deployer account is funded (XLM for fees)
+- [ ] Admin address is a dedicated key — not the same as the deployer
+- [ ] Admin secret key is stored securely (hardware wallet or secrets manager for mainnet)
+- [ ] You have noted the intended `CONTRACT_ID` storage location for your team
 
 ---
 
-## Testnet Deployment
+## Testnet Walkthrough
 
-Use the helper script `scripts/deploy.sh` to build and deploy the contract to testnet.
+### 1. Validate Docker Compose and fund your account
 
-```bash
-NETWORK=testnet SOURCE_ACCOUNT=<secret-key> ./scripts/deploy.sh
-```
-
-This script runs:
+Before starting a local network, validate the compose file and confirm there are no syntax issues:
 
 ```bash
-cargo build --target wasm32-unknown-unknown --release --package lumenflow
-stellar contract deploy --wasm target/wasm32-unknown-unknown/release/lumenflow.wasm --source-account "$SOURCE_ACCOUNT" --network "$NETWORK"
+docker compose -f docker-compose.yml config
 ```
 
-After deployment, initialize the admin:
+This command ensures the manifest is complete and that Docker Compose can parse it successfully.
+
+Use a local `.env` file or runtime environment variables for secrets and credentials. Do not hardcode private keys, secret values, or network credentials in repository files.
+
+```bash
+curl "https://friendbot.stellar.org?addr=<YOUR_PUBLIC_KEY>"
+```
+
+### 2. Build and deploy
+
+```bash
+NETWORK=testnet SOURCE_ACCOUNT=<testnet-secret-key> ./scripts/deploy.sh
+```
+
+The script prints the `CONTRACT_ID` on success. Save it.
+
+### 3. Initialise the admin
 
 ```bash
 stellar contract invoke \
   --id <CONTRACT_ID> \
   --source-account <admin-secret-key> \
   --network testnet \
-  -- set_admin --admin <ADMIN_ADDRESS>
+  -- set_admin --admin <admin-address>
 ```
 
-### Environment variables used by `scripts/deploy.sh`
+`set_admin` can only be called once. The address you provide becomes the permanent admin.
 
-- `NETWORK` — network name: `local`, `testnet`, or `mainnet`
-- `SOURCE_ACCOUNT` — deploying account secret key
+### 4. Register a test merchant
+
+```bash
+stellar contract invoke \
+  --id <CONTRACT_ID> \
+  --source-account <merchant-secret-key> \
+  --network testnet \
+  -- register_merchant \
+  --merchant_address <merchant-address> \
+  --name "Test Store" \
+  --description "Testnet merchant" \
+  --contact_info "test@example.com" \
+  --category Retail
+```
+
+### 5. Run the smoke test
+
+```bash
+CONTRACT_ID=<id> \
+ADMIN_KEY=<admin-secret> \
+MERCHANT_KEY=<merchant-secret> \
+PAYER_KEY=<payer-secret> \
+TOKEN_ADDRESS=<sac-token-address> \
+ADMIN_ADDRESS=<admin-address> \
+MERCHANT_ADDRESS=<merchant-address> \
+PAYER_ADDRESS=<payer-address> \
+NETWORK=testnet \
+./scripts/smoke_test.sh
+```
+
+A zero exit code means the contract is functional.
 
 ---
 
-## Mainnet Deployment
+## Mainnet Walkthrough
 
-Mainnet deployment uses the same build flow but targets the `mainnet` Stellar network.
+### Security notes
+
+- **Never reuse testnet keys on mainnet.** Generate fresh keypairs.
+- Store the admin secret key in a hardware wallet or a secrets manager (e.g., AWS Secrets Manager, HashiCorp Vault). Do not commit it to source control.
+- Do not hardcode secrets in repository files or Docker Compose manifests.
+- Use `.env`-style files, OS environment variables, or platform secret stores for local development.
+- The deployer account only needs enough XLM to cover the deployment fee. Fund it minimally and rotate the key after deployment.
+- `set_admin` is irreversible — double-check the admin address before invoking it.
+- Enable Stellar account thresholds and multi-sig on the admin account for additional protection.
+
+### Local secret handling
+
+For local Docker Compose runs, store sensitive values in a local `.env` file that is excluded by `.gitignore`. Example:
 
 ```bash
-NETWORK=mainnet SOURCE_ACCOUNT=<secret-key> ./scripts/deploy.sh
+cp .env.example .env.local
 ```
 
-Then initialize the admin:
+Then set secrets locally:
+
+```bash
+export SOURCE_ACCOUNT="S..."
+export ADMIN_KEY="S..."
+```
+
+Avoid committing `.env.local` or any files that contain real secret keys.
+
+### 1. Generate and fund a mainnet deployer account
+
+Acquire XLM from an exchange and send it to your deployer public key. Verify the balance:
+
+```bash
+stellar account show --account <deployer-public-key> --network mainnet
+```
+
+### 2. Build and deploy
+
+```bash
+NETWORK=mainnet SOURCE_ACCOUNT=<mainnet-deployer-secret> ./scripts/deploy.sh
+```
+
+Save the printed `CONTRACT_ID` immediately. Share it with your team through a secure channel.
+
+### 3. Initialise the admin
 
 ```bash
 stellar contract invoke \
   --id <CONTRACT_ID> \
   --source-account <admin-secret-key> \
   --network mainnet \
-  -- set_admin --admin <ADMIN_ADDRESS>
+  -- set_admin --admin <admin-address>
 ```
 
-> Note: Mainnet transactions incur real fees. Ensure the deploying account is funded and you have verified the correct network passphrase.
+### 4. Configure the payment cleanup period (optional)
 
----
-
-## Manual Build and Deploy Commands
-
-If you prefer manual commands rather than the helper scripts, use the following:
-
-```bash
-cargo build --target wasm32-unknown-unknown --release --package lumenflow
-```
-
-Then deploy:
-
-```bash
-stellar contract deploy \
-  --wasm target/wasm32-unknown-unknown/release/lumenflow.wasm \
-  --source-account <secret-key> \
-  --network <local|testnet|mainnet>
-```
-
-After deploy:
+Default is 90 days (7 776 000 seconds). Adjust if needed:
 
 ```bash
 stellar contract invoke \
   --id <CONTRACT_ID> \
   --source-account <admin-secret-key> \
-  --network <local|testnet|mainnet> \
-  -- set_admin --admin <ADMIN_ADDRESS>
+  --network mainnet \
+  -- set_payment_cleanup_period --admin <admin-address> --period 7776000
 ```
 
----
+### 5. Run the smoke test against mainnet
 
-## Stellar CLI Requirements
-
-The Stellar CLI must be installed and reachable on your path as `stellar`.
-
-- Use `stellar --version` to confirm installation.
-- The network option must match the target environment: `local`, `testnet`, or `mainnet`.
-- For local deployment, the CLI must support Soroban contract deploy and invoke subcommands.
+Use the same smoke test script with `NETWORK=mainnet` and real mainnet keys. Use a minimal token amount (e.g., 1 stroop) for the test payment.
 
 ---
 
-## Common Deployment Errors
+## Post-Deployment Verification
 
-- `SOURCE_ACCOUNT is required.`
-  - The deploy script requires `SOURCE_ACCOUNT` to be set.
+After deploying to either network, verify the contract is live and correctly initialised:
 
-- `stellar: command not found`
-  - The Stellar CLI is not installed or not in your `PATH`.
+```bash
+# Confirm admin is set (should return the admin address)
+stellar contract invoke \
+  --id <CONTRACT_ID> \
+  --source-account <any-key> \
+  --network <NETWORK> \
+  -- get_global_payment_stats \
+  --admin <admin-address> \
+  --date_start null \
+  --date_end null
+```
 
-- `contract deploy failed`
-  - Confirm the WASM file exists at `target/wasm32-unknown-unknown/release/lumenflow.wasm`.
-  - Ensure the deploying account has enough funding on the target network.
-
-- `Admin already set`
-  - `set_admin` is a one-time initialization call. Use the same admin address only once.
-
-- `InvalidAdminAddress`
-  - The admin address cannot be a contract address or invalid account.
-
-- Network mismatch errors
-  - Ensure `--network` matches the target network and the account is funded there.
+- Confirm the smoke test exits 0.
+- Check Stellar Explorer (testnet: https://testnet.steexp.com, mainnet: https://steexp.com) for the deployment transaction.
+- Set up event monitoring via Horizon SSE — see [docs/monitoring.md](monitoring.md).
 
 ---
 
-## Notes
+## Rollback Strategy
 
-- Local deployment is best for development and tests.
-- Testnet is appropriate for sandboxed integration checks.
-- Mainnet deployment should only occur after full test coverage and audit review.
+Soroban contracts are immutable once deployed. There is no in-place upgrade path. The rollback procedure is:
+
+1. **Deploy a new contract** with the corrected code using `./scripts/deploy.sh`.
+2. **Initialise the new contract** (`set_admin`, merchant re-registration, etc.).
+3. **Update all integrations** (SDK config, frontend, webhooks) to point to the new `CONTRACT_ID`.
+4. **Deactivate merchants** on the old contract via `deactivate_merchant` to prevent new payments.
+5. **Archive or document** the old `CONTRACT_ID` so historical payment records remain queryable during the transition window.
+
+To minimise downtime, prepare the new contract in parallel before switching traffic.
