@@ -153,6 +153,22 @@ cargo test test_successful_refund_flow
 ./scripts/test.sh
 ```
 
+## Benchmarking
+
+Performance benchmarks for contract hot paths are available in [`contracts/lumenflow/benches/benchmark.rs`](contracts/lumenflow/benches/benchmark.rs) and documented in [`docs/benchmarking.md`](docs/benchmarking.md).
+
+```bash
+cargo bench --manifest-path contracts/lumenflow/Cargo.toml
+```
+
+The benchmark harness reports relative runtime for:
+
+- `process_payment_with_signature`
+- merchant payment history queries
+- `cleanup_expired_payments`
+
+Benchmark results help identify optimization targets and compare the cost of hot-path operations.
+
 ## Code Coverage
 
 Install `cargo-llvm-cov` once:
