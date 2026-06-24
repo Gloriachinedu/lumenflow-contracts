@@ -728,6 +728,27 @@ New contributors should start with the [Developer Onboarding Guide](docs/ONBOARD
 
 See [GOVERNANCE.md](GOVERNANCE.md) for project decision-making, the RFC process, and maintainer responsibilities.
 
+## Localization and Translation
+
+We maintain localized versions of the README to support Spanish and Portuguese readers. The translated files are:
+
+- [README.es.md](README.es.md)
+- [README.pt.md](README.pt.md)
+
+### Translation workflow
+
+1. Update the canonical `README.md` with new content or structural changes.
+2. Notify translators and update the corresponding localized files.
+3. Verify that key docs and examples are preserved in translations.
+4. Keep translations synchronized by reviewing changes during each release or docs update.
+
+### Prioritized documents for translation
+
+1. `README.md` — primary project overview and getting started guide.
+2. `SECURITY.md` — responsible disclosure and incident reporting.
+3. `docs/events-reference.md` — event payload definitions and integrations.
+4. `sdk/README.md` — SDK usage and helper method guidance.
+
 ## Security
 
 See [SECURITY.md](SECURITY.md) for responsible disclosure instructions.
