@@ -238,42 +238,112 @@ You can also trigger it from GitHub Actions via **Actions → Smoke Test (Testne
 
 For a complete list of contract error codes, their descriptions, and remediation steps, see **[docs/errors.md](docs/errors.md)**.
 
-### Admin
+### Admin Configuration
 
 ```bash
 # Set admin (one-time)
 stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
-  -- set_admin --admin <admin-address>
+  -- set_admin --admin $ADMIN_ADDR
+
+# Transfer admin rights
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- transfer_admin --current_admin $ADMIN_ADDR --new_admin $NEW_ADMIN_ADDR
+
+# Add allowed token (admin only)
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- add_allowed_token --admin $ADMIN_ADDR --token $TOKEN_ADDR
+
+# Remove allowed token (admin only)
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- remove_allowed_token --admin $ADMIN_ADDR --token $TOKEN_ADDR
+
+# Set platform fee (admin only)
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- set_platform_fee --admin $ADMIN_ADDR --fee_bps 250 --fee_recipient $FEE_RECIPIENT_ADDR
+
+# Set large payment threshold (admin only)
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- set_large_payment_threshold --admin $ADMIN_ADDR --threshold 100000
 
 # Set payment cleanup period (seconds)
 stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
-  -- set_payment_cleanup_period --admin <admin-address> --period 7776000
+  -- set_payment_cleanup_period --admin $ADMIN_ADDR --period 7776000
+
+# Set multisig expiry duration (admin only)
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- set_multisig_expiry_duration --admin $ADMIN_ADDR --duration 2592000
+
+# Set refund window (admin only)
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- set_refund_window --admin $ADMIN_ADDR --window_secs 2592000
+
+# Set minimum refund amount (admin only)
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- set_min_refund_amount --admin $ADMIN_ADDR --amount 100
+
+# Pause the contract (admin only)
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- pause_contract --admin $ADMIN_ADDR
+
+# Unpause the contract (admin only)
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- unpause_contract --admin $ADMIN_ADDR
+
+# Get contract version
+stellar contract invoke --id $CONTRACT_ID --source-account $CALLER_KEY --network $NETWORK \
+  -- get_contract_version
 ```
 
 ### Merchant Management
 
 ```bash
+# Check registration
+stellar contract invoke --id $CONTRACT_ID --source-account $CALLER_KEY --network $NETWORK \
+  -- is_registered --merchant_address $MERCHANT_ADDR
+
 # Register
 stellar contract invoke --id $CONTRACT_ID --source-account $MERCHANT_KEY --network $NETWORK \
   -- register_merchant \
-  --merchant_address <address> \
+  --merchant_address $MERCHANT_ADDR \
   --name "My Store" \
   --description "Store description" \
   --contact_info "contact@store.com" \
   --category Retail
 
-# Deactivate (admin only)
+# Update merchant profile
+stellar contract invoke --id $CONTRACT_ID --source-account $MERCHANT_KEY --network $NETWORK \
+  -- update_merchant \
+  --merchant_address $MERCHANT_ADDR \
+  --name "My Store Updated" \
+  --description "Updated description" \
+  --contact_info "support@store.com" \
+  --category Retail
+
+# Verify merchant (admin only)
 stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
-  -- deactivate_merchant --admin <admin-address> --merchant_address <address>
+  -- verify_merchant --admin $ADMIN_ADDR --merchant_address $MERCHANT_ADDR
+
+# Unverify merchant (admin only)
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- unverify_merchant --admin $ADMIN_ADDR --merchant_address $MERCHANT_ADDR
+
+# Reactivate merchant (admin only)
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- reactivate_merchant --admin $ADMIN_ADDR --merchant_address $MERCHANT_ADDR
+
+# Deactivate merchant (admin only)
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- deactivate_merchant --admin $ADMIN_ADDR --merchant_address $MERCHANT_ADDR
 
 # Get merchant info
 stellar contract invoke --id $CONTRACT_ID --source-account $CALLER_KEY --network $NETWORK \
-  -- get_merchant --merchant_address <address>
+  -- get_merchant --merchant_address $MERCHANT_ADDR
 
 # List merchants (admin only, cursor-based pagination)
 stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
-  -- get_merchants --admin <admin-address> --cursor null --limit 10
+  -- get_merchants --admin $ADMIN_ADDR --cursor null --limit 10
 ```
+
 ### Payment Processing
 
 For detailed information on the signature payload format and how to build it in various languages, see **[docs/signature-format.md](docs/signature-format.md)**.
@@ -281,28 +351,62 @@ For detailed information on the signature payload format and how to build it in 
 ```bash
 # Process payment with signature
 stellar contract invoke --id $CONTRACT_ID --source-account $PAYER_KEY --network $NETWORK \
-...
   -- process_payment_with_signature \
-  --payer <payer-address> \
+  --payer $PAYER_ADDR \
   --order_id "ORDER_001" \
-  --merchant_address <merchant-address> \
-  --token_address <token-address> \
+  --merchant_address $MERCHANT_ADDR \
+  --token_address $TOKEN_ADDR \
   --amount 1000 \
   --memo "Invoice #001" \
-  --signature <ed25519-signature-bytes> \
-  --merchant_public_key <ed25519-public-key-bytes>
+  --tags null \
+  --signature "<64-byte-signature>" \
+  --merchant_public_key "<32-byte-public-key>"
+
+# Batch payment (atomic, up to 10 items)
+stellar contract invoke --id $CONTRACT_ID --source-account $PAYER_KEY --network $NETWORK \
+  -- batch_payment \
+  --payments '[{"order_id":"ORDER_002","merchant_address":"$MERCHANT_ADDR","token_address":"$TOKEN_ADDR","amount":500,"memo":"Batch item 1","tags":null,"signature":"<64-byte-signature>","merchant_public_key":"<32-byte-public-key>"}]'
 
 # Get payment by ID
 stellar contract invoke --id $CONTRACT_ID --source-account $CALLER_KEY --network $NETWORK \
-  -- get_payment_by_id --caller <caller-address> --order_id "ORDER_001"
+  -- get_payment_by_id --caller $CALLER_ADDR --order_id "ORDER_001"
+
+# Get payment summary (public)
+stellar contract invoke --id $CONTRACT_ID --source-account $CALLER_KEY --network $NETWORK \
+  -- get_payment_summary --order_id "ORDER_001"
+
+# Update payment status after a refund (merchant or admin)
+stellar contract invoke --id $CONTRACT_ID --source-account $MERCHANT_KEY --network $NETWORK \
+  -- update_payment_status \
+  --caller $MERCHANT_ADDR \
+  --order_id "ORDER_001" \
+  --refunded_amount 500
 
 # Archive payment (admin only)
 stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
-  -- archive_payment_record --admin <admin-address> --order_id "ORDER_001"
+  -- archive_payment_record --admin $ADMIN_ADDR --order_id "ORDER_001"
 
 # Cleanup expired payments (admin only)
 stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
-  -- cleanup_expired_payments --admin <admin-address>
+  -- cleanup_expired_payments --admin $ADMIN_ADDR
+```
+
+### Payment Requests
+
+```bash
+# Create a payment request
+stellar contract invoke --id $CONTRACT_ID --source-account $MERCHANT_KEY --network $NETWORK \
+  -- create_payment_request \
+  --merchant $MERCHANT_ADDR \
+  --request_id "REQ_001" \
+  --token_address $TOKEN_ADDR \
+  --amount 2500 \
+  --memo "Invoice request" \
+  --ttl 86400
+
+# Pay a payment request
+stellar contract invoke --id $CONTRACT_ID --source-account $PAYER_KEY --network $NETWORK \
+  -- pay_payment_request --payer $PAYER_ADDR --request_id "REQ_001"
 ```
 
 ### Payment History Queries
@@ -331,9 +435,13 @@ stellar contract invoke --id $CONTRACT_ID --source-account $PAYER_KEY --network 
 # Global stats (admin only)
 stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
   -- get_global_payment_stats \
-  --admin <admin-address> \
+  --admin $ADMIN_ADDR \
   --date_start null \
   --date_end null
+
+# Merchant stats (merchant only)
+stellar contract invoke --id $CONTRACT_ID --source-account $MERCHANT_KEY --network $NETWORK \
+  -- get_merchant_stats --merchant $MERCHANT_ADDR
 ```
 
 **Filter fields:** `date_start`, `date_end`, `amount_min`, `amount_max`, `token`, `status` (`Any` | `Completed` | `PartiallyRefunded` | `FullyRefunded`)
@@ -412,6 +520,18 @@ stellar contract invoke --id $CONTRACT_ID --source-account $SIGNER_KEY --network
 # Execute (once threshold met)
 stellar contract invoke --id $CONTRACT_ID --source-account $PAYER_KEY --network $NETWORK \
   -- execute_multisig_payment --payer <payer-address> --payment_id "MS_001"
+
+# Cancel multisig payment (initiator or admin only)
+stellar contract invoke --id $CONTRACT_ID --source-account $INITIATOR_KEY --network $NETWORK \
+  -- cancel_multisig_payment \
+  --caller $INITIATOR_ADDR \
+  --payment_id "MS_001"
+
+# Get multisig payment details
+stellar contract invoke --id $CONTRACT_ID --source-account $SIGNER_KEY --network $NETWORK \
+  -- get_multisig_payment \
+  --caller $SIGNER_ADDR \
+  --payment_id "MS_001"
 ```
 
 ---
