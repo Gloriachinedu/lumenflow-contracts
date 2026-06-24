@@ -105,6 +105,34 @@ fn test_set_admin_zero_address_fails() {
     assert_eq!(result, Err(Ok(PaymentError::InvalidAdminAddress)));
 }
 
+#[test]
+fn test_admin_transfer_state_retention_and_permission_separation() {
+    let (env, client, admin, merchant, _payer, _token) = setup_payment_env();
+
+    // Initial admin can mutate admin-only state.
+    client.set_max_refunds_per_order(&admin, &2);
+
+    // Merchant data should still exist before the transfer.
+    let merchant_before = client.get_merchant(&merchant);
+    assert!(merchant_before.active);
+
+    // Simulate an admin handover by updating the stored admin value directly.
+    let new_admin = Address::generate(&env);
+    storage::set_admin(&env, &new_admin);
+
+    // New admin should still be able to perform admin-only actions.
+    client.set_large_payment_threshold(&new_admin, &20_000);
+
+    // Old admin should no longer have admin privileges.
+    let result = client.try_set_large_payment_threshold(&admin, &30_000);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+
+    // Contract state should retain merchant records after admin rotation.
+    let merchant_after = client.get_merchant(&merchant);
+    assert_eq!(merchant_after.address, merchant);
+    assert!(merchant_after.active);
+}
+
 // ── Merchant tests ────────────────────────────────────────────────────────────
 
 #[test]
