@@ -639,6 +639,47 @@ fn test_batch_payment_atomic_failure() {
 }
 
 #[test]
+fn test_refund_totals_never_exceed_original_amount() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_R1", 1_000);
+
+    let refund_ids = ["REFUND_A", "REFUND_B"];
+    let amounts = [400, 300];
+
+    for (refund_id, amount) in refund_ids.iter().zip(amounts.iter()) {
+        client.initiate_refund(
+            &payer,
+            &str(&env, refund_id),
+            &str(&env, "ORDER_R1"),
+            amount,
+            &str(&env, "partial"),
+        );
+        client.approve_refund(&merchant, &str(&env, refund_id));
+        client.execute_refund(&str(&env, refund_id));
+    }
+
+    let payment = client.get_payment_by_id(&payer, &str(&env, "ORDER_R1"));
+    assert!(payment.refunded_amount <= payment.amount);
+    assert_eq!(payment.refunded_amount, 700);
+    assert!(matches!(payment.status, crate::types::PaymentStatus::PartiallyRefunded));
+}
+
+#[test]
+fn test_zero_amount_refund_is_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_R2", 200);
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "REFUND_ZERO"),
+        &str(&env, "ORDER_R2"),
+        &0,
+        &str(&env, "zero"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+}
+
+#[test]
 fn test_successful_refund_flow() {
     let (env, client, admin, merchant, payer, token) = setup_payment_env();
     make_payment(&env, &client, &merchant, &payer, &token, "ORDER_R1", 1_000);
