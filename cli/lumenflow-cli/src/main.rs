@@ -4,6 +4,8 @@ use serde::Deserialize;
 use std::path::PathBuf;
 use std::process::Command;
 
+// ── CLI definition ────────────────────────────────────────────────────────────
+
 #[derive(Parser)]
 #[command(name = "lumenflow")]
 #[command(about = "LumenFlow CLI tool for common operations", long_about = None)]
@@ -120,17 +122,30 @@ enum RefundCommands {
     },
 }
 
-#[derive(Debug, Deserialize, Default)]
-struct Config {
+// ── Config model ──────────────────────────────────────────────────────────────
+
+/// Raw config as stored in `.lumenflow.toml` or environment variables.
+#[derive(Debug, Deserialize, Default, Clone)]
+struct RawConfig {
     network: Option<String>,
+    rpc_url: Option<String>,
+    network_passphrase: Option<String>,
     contract_id: Option<String>,
     source_account: Option<String>,
     rpc_url: Option<String>,
     network_passphrase: Option<String>,
 }
 
-fn load_config(path: Option<PathBuf>) -> Result<Config> {
-    let mut config = Config::default();
+/// Fully-resolved config after merging all sources.
+/// Priority (highest → lowest): CLI flags > env vars > TOML file > defaults.
+#[derive(Debug, Clone)]
+pub struct ResolvedConfig {
+    pub network: String,
+    pub rpc_url: String,
+    pub network_passphrase: String,
+    pub contract_id: String,
+    pub source_account: Option<String>,
+}
 
     let config_path = path.unwrap_or_else(|| PathBuf::from(".lumenflow.toml"));
     if config_path.exists() {
@@ -138,6 +153,7 @@ fn load_config(path: Option<PathBuf>) -> Result<Config> {
             .with_context(|| format!("Failed to read config: {}", config_path.display()))?;
         config = toml::from_str(&content)?;
     }
+}
 
     if let Ok(v) = std::env::var("LUMENFLOW_NETWORK") {
         config.network = Some(v);
@@ -148,8 +164,23 @@ fn load_config(path: Option<PathBuf>) -> Result<Config> {
     if let Ok(v) = std::env::var("LUMENFLOW_SOURCE") {
         config.source_account = Some(v);
     }
+}
 
-    Ok(config)
+/// Layer environment variables over a base config.
+fn apply_env_overrides(base: RawConfig) -> RawConfig {
+    RawConfig {
+        network: std::env::var("LUMENFLOW_NETWORK").ok().or(base.network),
+        rpc_url: std::env::var("LUMENFLOW_RPC_URL").ok().or(base.rpc_url),
+        network_passphrase: std::env::var("LUMENFLOW_NETWORK_PASSPHRASE")
+            .ok()
+            .or(base.network_passphrase),
+        contract_id: std::env::var("LUMENFLOW_CONTRACT_ID")
+            .ok()
+            .or(base.contract_id),
+        source_account: std::env::var("LUMENFLOW_SOURCE")
+            .ok()
+            .or(base.source_account),
+    }
 }
 
 /// Load the source account secret key from a key file (single-line, trimmed).
@@ -191,8 +222,11 @@ fn resolve_source(
     Ok(())
 }
 
+// ── Entry point ───────────────────────────────────────────────────────────────
+
 fn main() -> Result<()> {
     dotenvy::dotenv().ok();
+
     let cli = Cli::parse();
 
     let mut config = load_config(cli.config)?;
@@ -224,7 +258,7 @@ fn main() -> Result<()> {
                     println!("  Contract: {}", contract_id);
                 }
             }
-        }
+        },
         Commands::History { merchant } => {
             println!("Fetching payment history for merchant {}...", merchant);
             println!("  (Mock data)");
@@ -236,6 +270,14 @@ fn main() -> Result<()> {
             println!("  Total Volume:   45,000.00");
             println!("  Total Payments: 128");
             println!("  Active Merch:   12");
+        }
+        Commands::PrintConfig => {
+            println!("Resolved configuration:");
+            println!("  network:            {}", config.network);
+            println!("  rpc_url:            {}", config.rpc_url);
+            println!("  network_passphrase: {}", config.network_passphrase);
+            println!("  contract_id:        {}", config.contract_id);
+            println!("  source_account:     {}", config.source_account.as_deref().unwrap_or("(not set)"));
         }
     }
 
@@ -326,5 +368,77 @@ mod tests {
         assert_eq!(config.source_account.as_deref(), Some("SFROMFILE"));
         fs::remove_file(&path)?;
         Ok(())
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn make_cli(network: Option<&str>, rpc_url: Option<&str>, passphrase: Option<&str>) -> Cli {
+        Cli {
+            config: None,
+            network: network.map(String::from),
+            rpc_url: rpc_url.map(String::from),
+            network_passphrase: passphrase.map(String::from),
+            contract_id: None,
+            source_account: None,
+            command: Commands::Stats,
+        }
+    }
+
+    #[test]
+    fn test_file_config_loaded() -> Result<()> {
+        let path = PathBuf::from(".test_278.toml");
+        fs::write(&path, "network = \"local\"\ncontract_id = \"C123\"")?;
+        let cfg = load_file_config(Some(&path))?;
+        assert_eq!(cfg.network.unwrap(), "local");
+        assert_eq!(cfg.contract_id.unwrap(), "C123");
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_env_overrides_file() -> Result<()> {
+        let base = RawConfig {
+            network: Some("local".to_string()),
+            ..Default::default()
+        };
+        std::env::set_var("LUMENFLOW_NETWORK", "testnet");
+        let merged = apply_env_overrides(base);
+        assert_eq!(merged.network.unwrap(), "testnet");
+        std::env::remove_var("LUMENFLOW_NETWORK");
+        Ok(())
+    }
+
+    #[test]
+    fn test_cli_flags_override_env() {
+        let base = RawConfig {
+            network: Some("testnet".to_string()),
+            ..Default::default()
+        };
+        let cli = make_cli(Some("mainnet"), None, None);
+        let resolved = resolve_config(base, &cli);
+        assert_eq!(resolved.network, "mainnet");
+        // Preset should kick in for rpc_url
+        assert!(resolved.rpc_url.contains("mainnet"));
+    }
+
+    #[test]
+    fn test_preset_applied_for_local() {
+        let cli = make_cli(Some("local"), None, None);
+        let resolved = resolve_config(RawConfig::default(), &cli);
+        assert_eq!(resolved.rpc_url, "http://localhost:8000/soroban/rpc");
+        assert_eq!(resolved.network_passphrase, "Standalone Network ; February 2017");
+    }
+
+    #[test]
+    fn test_explicit_rpc_url_overrides_preset() {
+        let cli = make_cli(Some("testnet"), Some("http://custom:8080/rpc"), None);
+        let resolved = resolve_config(RawConfig::default(), &cli);
+        assert_eq!(resolved.rpc_url, "http://custom:8080/rpc");
     }
 }
