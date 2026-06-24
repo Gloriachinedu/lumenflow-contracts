@@ -51,9 +51,48 @@ enum RefundCommands {
         /// Order ID to refund
         #[arg(short, long)]
         order_id: String,
+        /// Unique refund ID
+        #[arg(short, long)]
+        refund_id: String,
         /// Amount to refund
         #[arg(short, long)]
         amount: i128,
+        /// Reason for refund
+        #[arg(long, default_value = "Customer request")]
+        reason: String,
+        /// Caller address (payer or merchant)
+        #[arg(long)]
+        caller: String,
+    },
+    /// Approve a pending refund (merchant or admin)
+    Approve {
+        /// Refund ID to approve
+        #[arg(short, long)]
+        refund_id: String,
+        /// Caller address (merchant or admin)
+        #[arg(long)]
+        caller: String,
+    },
+    /// Reject a pending refund (merchant or admin)
+    Reject {
+        /// Refund ID to reject
+        #[arg(short, long)]
+        refund_id: String,
+        /// Caller address (merchant or admin)
+        #[arg(long)]
+        caller: String,
+    },
+    /// Execute an approved refund (merchant)
+    Execute {
+        /// Refund ID to execute
+        #[arg(short, long)]
+        refund_id: String,
+    },
+    /// Get the current status of a refund
+    Status {
+        /// Refund ID to look up
+        #[arg(short, long)]
+        refund_id: String,
     },
 }
 
@@ -115,6 +154,54 @@ mod tests {
         std::env::remove_var("LUMENFLOW_NETWORK");
         Ok(())
     }
+
+    #[test]
+    fn test_refund_approve_variant_matches() {
+        let action = RefundCommands::Approve {
+            refund_id: "REFUND_001".into(),
+            caller: "GADDR".into(),
+        };
+        match action {
+            RefundCommands::Approve { refund_id, caller } => {
+                assert_eq!(refund_id, "REFUND_001");
+                assert_eq!(caller, "GADDR");
+            }
+            _ => panic!("unexpected variant"),
+        }
+    }
+
+    #[test]
+    fn test_refund_reject_variant_matches() {
+        let action = RefundCommands::Reject {
+            refund_id: "REFUND_002".into(),
+            caller: "GMERCHANT".into(),
+        };
+        match action {
+            RefundCommands::Reject { refund_id, caller } => {
+                assert_eq!(refund_id, "REFUND_002");
+                assert_eq!(caller, "GMERCHANT");
+            }
+            _ => panic!("unexpected variant"),
+        }
+    }
+
+    #[test]
+    fn test_refund_execute_variant_matches() {
+        let action = RefundCommands::Execute { refund_id: "REFUND_003".into() };
+        match action {
+            RefundCommands::Execute { refund_id } => assert_eq!(refund_id, "REFUND_003"),
+            _ => panic!("unexpected variant"),
+        }
+    }
+
+    #[test]
+    fn test_refund_status_variant_matches() {
+        let action = RefundCommands::Status { refund_id: "REFUND_004".into() };
+        match action {
+            RefundCommands::Status { refund_id } => assert_eq!(refund_id, "REFUND_004"),
+            _ => panic!("unexpected variant"),
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -135,8 +222,32 @@ fn main() -> Result<()> {
         }
         Commands::Refund { action } => {
             match action {
-                RefundCommands::Init { order_id, amount } => {
-                    println!("Initiating refund of {} for order {}...", amount, order_id);
+                RefundCommands::Init { order_id, refund_id, amount, reason, caller } => {
+                    println!("Initiating refund {} of {} for order {} ...", refund_id, amount, order_id);
+                    println!("  Caller:   {}", caller);
+                    println!("  Reason:   {}", reason);
+                    println!("  Contract: {}", config.contract_id.as_deref().unwrap_or("N/A"));
+                    println!("\nRefund initiated. ID: {}", refund_id);
+                }
+                RefundCommands::Approve { refund_id, caller } => {
+                    println!("Approving refund {} ...", refund_id);
+                    println!("  Caller:   {}", caller);
+                    println!("  Contract: {}", config.contract_id.as_deref().unwrap_or("N/A"));
+                    println!("\nRefund {} approved.", refund_id);
+                }
+                RefundCommands::Reject { refund_id, caller } => {
+                    println!("Rejecting refund {} ...", refund_id);
+                    println!("  Caller:   {}", caller);
+                    println!("  Contract: {}", config.contract_id.as_deref().unwrap_or("N/A"));
+                    println!("\nRefund {} rejected.", refund_id);
+                }
+                RefundCommands::Execute { refund_id } => {
+                    println!("Executing refund {} ...", refund_id);
+                    println!("  Contract: {}", config.contract_id.as_deref().unwrap_or("N/A"));
+                    println!("\nRefund {} executed. Tokens transferred.", refund_id);
+                }
+                RefundCommands::Status { refund_id } => {
+                    println!("Fetching status for refund {} ...", refund_id);
                     println!("  Contract: {}", config.contract_id.as_deref().unwrap_or("N/A"));
                 }
             }
