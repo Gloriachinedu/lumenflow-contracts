@@ -1,72 +1,25 @@
-# Audit Report and Status
+# Audit Report
 
 ## Audit Scope
 
-### In Scope
+This document captures the Soroban/Stellar smart contract security audit plan for LumenFlow.
 
-- **Smart Contract Logic** (`contracts/lumenflow/src/`):
-  - Merchant registration and lifecycle management
-  - Payment processing with ed25519 signature verification
-  - Refund initiation, approval, rejection, and execution workflows
-  - Multi-signature payment orchestration
-  - Payment history queries with pagination, filtering, and sorting
-  - Global statistics and administrative controls
-  - Automated payment cleanup by age
-  - Duplicate order ID validation
-  - Token transfer and balance management
+Scope includes:
 
-- **SDK Type Safety** (`sdk/src/`):
-  - Error mapping and localization
-  - Helper method type definitions
-  - Contract client bindings
+- Authorization model and access control
+- Signature verification and payload validation
+- Refund lifecycle and refund state transitions
+- Multi-signature payment approval and execution
+- Persistent storage and data integrity
+- Arithmetic correctness and overflow protection
 
-- **Deployment and Configuration**:
-  - Build and deployment scripts
-  - Network configuration (local, testnet, mainnet)
-  - CI/CD pipeline security
+## Status
 
-### Out of Scope
+An auditor engagement is being prepared. The audit report and remediation details will be published in this directory once the review is complete.
 
-- Third-party dependencies (soroban-sdk, token contracts)
-- Stellar network protocol security
-- Wallet and key management client-side concerns
-- Frontend/UI security
+## Next steps
 
-## Audit Status
-
-### Current Status: Under Development
-
-| Component | Status | Date | Notes |
-|-----------|--------|------|-------|
-| Contract Core | ✅ Unit Tested | 2026-06-24 | Comprehensive test suite in `src/test.rs` |
-| SDK Helpers | ✅ Unit Tested | 2026-06-24 | Error mapping and type safety tests added |
-| Pagination | 🟡 Partial | 2026-06-24 | Boundary tests planned for issue #339 |
-| Multi-sig | ✅ Tested | 2026-06-24 | Threshold validation covered |
-| Refund Window | ✅ Tested | 2026-06-24 | 30-day window and expiration validated |
-
-## Recommended Audit Schedule
-
-1. **Phase 1: Self-Review** (Week 1)
-   - Internal code review of critical paths
-   - Threat model validation
-   - Dependency audit
-
-2. **Phase 2: Automated Analysis** (Week 2)
-   - Static analysis for common Soroban vulnerabilities
-   - Coverage reporting
-   - Performance testing
-
-3. **Phase 3: Third-Party Security Review** (Week 3-4)
-   - Formal security audit by external firm
-   - Penetration testing on testnet
-   - Report and remediation tracking
-
-## Contact
-
-For audit inquiries or security concerns, contact:
-- **Email:** security@lumenflow.dev
-- **GitHub Issues:** See [SECURITY.md](../SECURITY.md) for reporting guidelines
-
----
-
-Last Updated: 2026-06-24
+1. Engage a reputable Soroban/Stellar smart contract auditor.
+2. Provide the auditor with the full contract source, test suite, and threat model.
+3. Track all Critical and High findings and resolve them before mainnet deployment.
+4. Publish the final audit report in `docs/audit/audit-report.md`.
