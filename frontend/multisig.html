@@ -345,39 +345,79 @@
 
   // ── Form validation ────────────────────────────────────────────────────────
 
-  function showErr(id, show) {
+  // Stellar StrKey addresses are 56 chars: a type prefix plus 55 base32 chars.
+  // G = account / public key, C = contract. This is a format + length check.
+  const STELLAR_KEY_BODY = /^[A-Z2-7]{55}$/;
+
+  function isValidStellarKey(value, prefixes) {
+    if (typeof value !== 'string' || value.length !== 56) return false;
+    if (!prefixes.includes(value[0])) return false;
+    return STELLAR_KEY_BODY.test(value.slice(1));
+  }
+
+  function setErr(id, message) {
     const el = document.getElementById(id);
-    el.style.display = show ? 'block' : 'none';
-    el.classList.toggle('visible', show);
+    if (message) el.textContent = message;
+    el.style.display = message ? 'block' : 'none';
+    el.classList.toggle('visible', !!message);
+  }
+
+  function markInput(id, invalid) {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('error', invalid);
   }
 
   function validateForm() {
     let ok = true;
 
     const paymentId = document.getElementById('payment-id').value.trim();
-    showErr('err-payment-id', !paymentId);
+    setErr('err-payment-id', paymentId ? '' : 'Payment ID is required.');
+    markInput('payment-id', !paymentId);
     if (!paymentId) ok = false;
 
     const merchant = document.getElementById('merchant-address').value.trim();
-    showErr('err-merchant', !merchant);
-    if (!merchant) ok = false;
+    let merchantErr = '';
+    if (!merchant) merchantErr = 'Merchant address is required.';
+    else if (!isValidStellarKey(merchant, ['G'])) merchantErr = 'Enter a valid Stellar address (starts with G, 56 characters).';
+    setErr('err-merchant', merchantErr);
+    markInput('merchant-address', !!merchantErr);
+    if (merchantErr) ok = false;
 
     const token = document.getElementById('token-address').value.trim();
-    showErr('err-token', !token);
-    if (!token) ok = false;
+    let tokenErr = '';
+    if (!token) tokenErr = 'Token address is required.';
+    else if (!isValidStellarKey(token, ['C', 'G'])) tokenErr = 'Enter a valid token address (starts with C or G, 56 characters).';
+    setErr('err-token', tokenErr);
+    markInput('token-address', !!tokenErr);
+    if (tokenErr) ok = false;
 
-    const amount = parseInt(document.getElementById('amount').value, 10);
-    showErr('err-amount', !amount || amount < 1);
-    if (!amount || amount < 1) ok = false;
+    const amountRaw = document.getElementById('amount').value.trim();
+    const amount = Number(amountRaw);
+    let amountErr = '';
+    if (!amountRaw) amountErr = 'Amount is required.';
+    else if (!Number.isInteger(amount) || amount < 1) amountErr = 'Amount must be a positive whole number of stroops.';
+    setErr('err-amount', amountErr);
+    markInput('amount', !!amountErr);
+    if (amountErr) ok = false;
 
-    const signers = getSignerValues();
-    const sigErr = document.getElementById('err-signers');
+    const signerInputs = Array.from(document.querySelectorAll('.signer-input'));
+    const signers = signerInputs.map(i => i.value.trim()).filter(Boolean);
+    let signerErr = '';
     if (signers.length === 0) {
-      sigErr.style.display = 'block';
-      ok = false;
+      signerErr = 'At least one signer is required.';
     } else {
-      sigErr.style.display = 'none';
+      let anyInvalid = false;
+      signerInputs.forEach(input => {
+        const value = input.value.trim();
+        const bad = value.length > 0 && !isValidStellarKey(value, ['G']);
+        input.classList.toggle('error', bad);
+        if (bad) anyInvalid = true;
+      });
+      if (anyInvalid) signerErr = 'Each signer must be a valid Stellar address (starts with G, 56 characters).';
+      else if (new Set(signers).size !== signers.length) signerErr = 'Signer addresses must be unique.';
     }
+    setErr('err-signers', signerErr);
+    if (signerErr) ok = false;
 
     if (!validateThreshold()) ok = false;
 
