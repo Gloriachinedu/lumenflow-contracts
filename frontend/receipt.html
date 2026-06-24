@@ -27,8 +27,9 @@
       border-radius: 12px;
       box-shadow: 0 2px 16px rgba(0,0,0,0.08);
       max-width: 560px;
-      width: 100%;
+      width: min(100%, 560px);
       padding: 2rem;
+      overflow-wrap: anywhere;
     }
 
     .receipt-header {
@@ -127,8 +128,9 @@
     }
 
     .btn {
-      flex: 1;
-      padding: 0.6rem 1rem;
+      flex: 1 1 140px;
+      min-height: 44px;
+      padding: 0.7rem 1rem;
       border: none;
       border-radius: 8px;
       font-size: 0.875rem;
@@ -369,9 +371,13 @@
   }
 
   function copyLink() {
-    navigator.clipboard.writeText(window.location.href)
-      .then(() => alert('Link copied!'))
-      .catch(() => prompt('Copy this link:', window.location.href));
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(window.location.href)
+        .then(() => alert('Link copied!'))
+        .catch(() => prompt('Copy this link:', window.location.href));
+      return;
+    }
+    prompt('Copy this link:', window.location.href);
   }
 
   // ── Bootstrap ──────────────────────────────────────────────────────────────
