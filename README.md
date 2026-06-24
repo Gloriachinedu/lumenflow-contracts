@@ -191,6 +191,9 @@ Test coverage includes:
 A `docker-compose.yml` is provided to spin up a local Stellar node with Soroban RPC enabled.
 
 ```bash
+# Validate the compose file before starting the local node
+docker compose -f docker-compose.yml config
+
 # 1. Start the local node and deploy the contract in one step
 SOURCE_ACCOUNT=<secret-key> ./scripts/local_up.sh
 
@@ -206,6 +209,8 @@ stellar contract invoke \
 # Stop the node when done
 docker compose down
 ```
+
+Secrets and local credentials should never be committed to the repository. Use environment variables or local `.env` files, and keep `.env.example` as the only example configuration file in source control.
 
 Works on Linux and macOS (requires Docker Desktop or Docker Engine with Compose v2).
 
