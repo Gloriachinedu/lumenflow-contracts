@@ -465,11 +465,18 @@ fn test_pagination_limit() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
     let ids = ["PAG_0", "PAG_1", "PAG_2", "PAG_3", "PAG_4"];
     for id_str in ids {
-        let id = String::from_str(&env, id_str);
         let pub_key = bytes(&env, &[0u8; 32]);
         let sig = bytes(&env, &[0u8; 64]);
         client.process_payment_with_signature(
-            &payer, id, &merchant, &token, &100, &str(&env, ""), &sig, &pub_key,
+            &payer,
+            &str(&env, id_str),
+            &merchant,
+            &token,
+            &100,
+            &str(&env, ""),
+            &None,
+            &sig,
+            &pub_key,
         );
     }
 
@@ -483,6 +490,47 @@ fn test_pagination_limit() {
     );
     assert_eq!(page.payments.len(), 3);
     assert!(page.next_cursor.is_some());
+}
+
+#[test]
+fn test_pagination_cursor_returns_next_page() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    // Insert 5 payments with distinct amounts so sort order is deterministic
+    let items = [("CUR_0", 100i128), ("CUR_1", 200), ("CUR_2", 300), ("CUR_3", 400), ("CUR_4", 500)];
+    for (id_str, amt) in items {
+        let pub_key = bytes(&env, &[0u8; 32]);
+        let sig = bytes(&env, &[0u8; 64]);
+        client.process_payment_with_signature(
+            &payer, &str(&env, id_str), &merchant, &token, &amt,
+            &str(&env, ""), &None, &sig, &pub_key,
+        );
+    }
+
+    // Page 1: limit 2 sorted ascending by amount
+    let page1 = client.get_merchant_payment_history(
+        &merchant, &None, &2, &None, &SortField::Amount, &SortOrder::Ascending,
+    );
+    assert_eq!(page1.payments.len(), 2);
+    assert_eq!(page1.payments.get(0).unwrap().amount, 100);
+    assert_eq!(page1.payments.get(1).unwrap().amount, 200);
+    let cursor = page1.next_cursor.clone();
+    assert!(cursor.is_some());
+
+    // Page 2: continue from cursor
+    let page2 = client.get_merchant_payment_history(
+        &merchant, &cursor, &2, &None, &SortField::Amount, &SortOrder::Ascending,
+    );
+    assert_eq!(page2.payments.len(), 2);
+    assert_eq!(page2.payments.get(0).unwrap().amount, 300);
+    assert_eq!(page2.payments.get(1).unwrap().amount, 400);
+
+    // Page 3: last item, no next cursor
+    let page3 = client.get_merchant_payment_history(
+        &merchant, &page2.next_cursor, &2, &None, &SortField::Amount, &SortOrder::Ascending,
+    );
+    assert_eq!(page3.payments.len(), 1);
+    assert_eq!(page3.payments.get(0).unwrap().amount, 500);
+    assert!(page3.next_cursor.is_none());
 }
 
 // ── Multisig tests ────────────────────────────────────────────────────────────

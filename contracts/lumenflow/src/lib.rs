@@ -717,19 +717,10 @@ impl PaymentProcessingContract {
         sort_field: SortField,
         sort_order: SortOrder,
     ) -> Result<PaymentPage, PaymentError> {
-        // Collect matching payments
+        // Single pass: load and filter all candidate payments.
+        // Storage reads are the dominant gas cost; we avoid re-reading any record.
         let mut payments: Vec<PaymentOrder> = Vec::new(env);
-        let mut skip = cursor.is_some();
-
         for id in ids.iter() {
-            // Cursor: skip until we pass the cursor id
-            if skip {
-                if Some(id.clone()) == cursor {
-                    skip = false;
-                }
-                continue;
-            }
-
             if let Some(p) = storage::get_payment(env, &id) {
                 if Self::matches_filter(&p, &filter) {
                     payments.push_back(p);
@@ -737,35 +728,54 @@ impl PaymentProcessingContract {
             }
         }
 
-        // Sort
-        let mut sorted: Vec<PaymentOrder> = Vec::new(env);
-        // Simple insertion sort (WASM-friendly, no std)
-        for p in payments.iter() {
-            let mut inserted = false;
-            let mut new_vec: Vec<PaymentOrder> = Vec::new(env);
-            for s in sorted.iter() {
-                if !inserted && Self::should_insert_before(&p, &s, &sort_field, &sort_order) {
-                    new_vec.push_back(p.clone());
-                    inserted = true;
+        // In-place insertion sort (no alloc, WASM-friendly).
+        let n = payments.len() as usize;
+        for i in 1..n {
+            let mut j = i;
+            while j > 0 {
+                let a = payments.get(j as u32).unwrap();
+                let b = payments.get(j as u32 - 1).unwrap();
+                if Self::should_insert_before(&a, &b, &sort_field, &sort_order) {
+                    // swap a and b
+                    payments.set(j as u32, b);
+                    payments.set(j as u32 - 1, a);
+                    j -= 1;
+                } else {
+                    break;
                 }
-                new_vec.push_back(s);
             }
-            if !inserted {
-                new_vec.push_back(p);
-            }
-            sorted = new_vec;
         }
 
-        let total = sorted.len();
+        let total = payments.len();
+
+        // Apply cursor: skip everything up to and including the cursor record.
+        let start = match cursor {
+            None => 0,
+            Some(ref c) => {
+                let mut pos = total; // default: cursor not found → return empty
+                for i in 0..total {
+                    if payments.get(i).unwrap().order_id == *c {
+                        pos = i + 1;
+                        break;
+                    }
+                }
+                pos
+            }
+        };
+
+        // Collect up to `limit` items from `start`, noting if more exist.
         let mut result: Vec<PaymentOrder> = Vec::new(env);
         let mut next_cursor: Option<String> = None;
-
-        for (i, p) in sorted.iter().enumerate() {
-            if i as u32 >= limit {
-                next_cursor = Some(p.order_id.clone());
+        let mut count: u32 = 0;
+        let mut i = start;
+        while i < total as usize {
+            if count == limit {
+                next_cursor = Some(payments.get(i as u32).unwrap().order_id.clone());
                 break;
             }
-            result.push_back(p);
+            result.push_back(payments.get(i as u32).unwrap());
+            count += 1;
+            i += 1;
         }
 
         Ok(PaymentPage {
