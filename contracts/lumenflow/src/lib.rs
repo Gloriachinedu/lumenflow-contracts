@@ -241,9 +241,18 @@ impl PaymentProcessingContract {
             return Err(PaymentError::BatchSizeExceeded);
         }
 
+        // Check for intra-batch duplicate order IDs before doing any work
+        let mut seen: Vec<String> = Vec::new(&env);
+        for item in payments.iter() {
+            require_non_empty_string(&item.order_id)?;
+            if seen.contains(&item.order_id) {
+                return Err(PaymentError::PaymentAlreadyExists);
+            }
+            seen.push_back(item.order_id.clone());
+        }
+
         for item in payments.iter() {
             require_positive(item.amount)?;
-            require_non_empty_string(&item.order_id)?;
 
             if storage::get_payment(&env, &item.order_id).is_some() {
                 return Err(PaymentError::PaymentAlreadyExists);
@@ -901,6 +910,11 @@ impl PaymentProcessingContract {
         if env.ledger().timestamp() > pr.expires_at {
             storage::remove_payment_request(&env, &request_id);
             return Err(PaymentError::PaymentExpired);
+        }
+
+        // Prevent creating a duplicate payment record for this order ID
+        if storage::get_payment(&env, &request_id).is_some() {
+            return Err(PaymentError::PaymentAlreadyExists);
         }
 
         // Transfer tokens from payer to merchant
