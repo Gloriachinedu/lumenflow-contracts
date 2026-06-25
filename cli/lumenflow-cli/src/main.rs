@@ -6,6 +6,8 @@ use std::process::Command;
 
 // ── CLI definition ────────────────────────────────────────────────────────────
 
+// ── CLI definition ─────────────────────────────────────────────────────────────
+
 #[derive(Parser)]
 #[command(name = "lumenflow")]
 #[command(about = "LumenFlow CLI tool for common operations", long_about = None)]
@@ -440,5 +442,120 @@ mod tests {
         let cli = make_cli(Some("testnet"), Some("http://custom:8080/rpc"), None);
         let resolved = resolve_config(RawConfig::default(), &cli);
         assert_eq!(resolved.rpc_url, "http://custom:8080/rpc");
+    }
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn full_config() -> Config {
+        Config {
+            network: Some("testnet".into()),
+            contract_id: Some("C123456".into()),
+            source_account: Some("SABC...".into()),
+        }
+    }
+
+    #[test]
+    fn test_valid_config_passes() {
+        let result = validate_config(full_config());
+        assert!(result.is_ok());
+        let v = result.unwrap();
+        assert_eq!(v.network, "testnet");
+        assert_eq!(v.contract_id, "C123456");
+    }
+
+    #[test]
+    fn test_missing_network_reports_error() {
+        let cfg = Config { network: None, ..full_config() };
+        let errors = validate_config(cfg).unwrap_err();
+        assert!(errors.iter().any(|e| matches!(e, ConfigError::MissingField { field: "network", .. })));
+    }
+
+    #[test]
+    fn test_missing_contract_id_reports_error() {
+        let cfg = Config { contract_id: None, ..full_config() };
+        let errors = validate_config(cfg).unwrap_err();
+        assert!(errors.iter().any(|e| matches!(e, ConfigError::MissingField { field: "contract_id", .. })));
+    }
+
+    #[test]
+    fn test_missing_source_account_reports_error() {
+        let cfg = Config { source_account: None, ..full_config() };
+        let errors = validate_config(cfg).unwrap_err();
+        assert!(errors.iter().any(|e| matches!(e, ConfigError::MissingField { field: "source_account", .. })));
+    }
+
+    #[test]
+    fn test_all_missing_reports_three_errors() {
+        let cfg = Config::default();
+        let errors = validate_config(cfg).unwrap_err();
+        assert_eq!(errors.len(), 3);
+    }
+
+    #[test]
+    fn test_invalid_network_reports_error() {
+        let cfg = Config { network: Some("devnet".into()), ..full_config() };
+        let errors = validate_config(cfg).unwrap_err();
+        assert!(errors.iter().any(|e| matches!(e, ConfigError::InvalidNetwork { .. })));
+    }
+
+    #[test]
+    fn test_valid_networks_accepted() {
+        for net in ["local", "testnet", "mainnet"] {
+            let cfg = Config { network: Some(net.into()), ..full_config() };
+            assert!(validate_config(cfg).is_ok(), "Expected {net} to be valid");
+        }
+    }
+
+    #[test]
+    fn test_empty_string_treated_as_missing() {
+        let cfg = Config { network: Some("  ".into()), ..full_config() };
+        let errors = validate_config(cfg).unwrap_err();
+        assert!(errors.iter().any(|e| matches!(e, ConfigError::MissingField { field: "network", .. })));
+    }
+
+    #[test]
+    fn test_error_message_contains_guidance() {
+        let e = ConfigError::MissingField {
+            field: "network",
+            env_var: "LUMENFLOW_NETWORK",
+            toml_key: "network",
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("LUMENFLOW_NETWORK"));
+        assert!(msg.contains(".lumenflow.toml"));
+    }
+
+    #[test]
+    fn test_invalid_network_error_message_lists_valid_values() {
+        let e = ConfigError::InvalidNetwork { value: "wrongnet".into() };
+        let msg = e.to_string();
+        assert!(msg.contains("testnet"));
+        assert!(msg.contains("mainnet"));
+        assert!(msg.contains("local"));
+    }
+
+    #[test]
+    fn test_load_config_from_file() -> Result<()> {
+        let temp = ".test_lumenflow_269.toml";
+        fs::write(temp, "network = \"testnet\"\ncontract_id = \"C999\"\nsource_account = \"S999\"")?;
+        let config = load_config(Some(PathBuf::from(temp)))?;
+        assert_eq!(config.network.unwrap(), "testnet");
+        assert_eq!(config.contract_id.unwrap(), "C999");
+        fs::remove_file(temp)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_config_missing_file_gives_defaults() -> Result<()> {
+        let config = load_config(Some(PathBuf::from(".nonexistent_config_xyz.toml")))?;
+        assert!(config.network.is_none());
+        assert!(config.contract_id.is_none());
+        Ok(())
     }
 }
