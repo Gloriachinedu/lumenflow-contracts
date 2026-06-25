@@ -26,7 +26,4 @@ identity/
 
 # Logs
 *.log
-
-# Node.js
 node_modules/
-
