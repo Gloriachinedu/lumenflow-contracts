@@ -1,0 +1,16 @@
+{
+  "name": "lumenflow-contracts",
+  "private": true,
+  "scripts": {
+    "lint:js": "eslint --no-error-on-unmatched-pattern 'frontend/**/*.js' 'dashboard/**/*.js'",
+    "lint:html": "htmlhint 'frontend/**/*.html' 'dashboard/**/*.html'",
+    "lint": "npm run lint:html && npm run lint:js"
+  },
+  "devDependencies": {
+    "@html-eslint/eslint-plugin": "0.62.0",
+    "@html-eslint/parser": "0.62.0",
+    "eslint": "9.39.4",
+    "globals": "16.3.0",
+    "htmlhint": "1.9.2"
+  }
+}
