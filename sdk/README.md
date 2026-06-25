@@ -1,4 +1,4 @@
-# LumenFlow SDK
+# @lumenflow/sdk
 
 The LumenFlow TypeScript SDK provides a convenient wrapper around the LumenFlow smart contract on Soroban.
 
@@ -60,7 +60,32 @@ await client.processPaymentWithNonce(
 The SDK maps numeric contract error codes to human-readable messages and provides a typed `LumenFlowError` object.
 
 ```typescript
-import { LumenFlowError, PaymentErrorCode } from '@lumenflow/sdk';
+import { LumenFlowClient, NETWORKS } from "@lumenflow/sdk";
+import { Keypair } from "@stellar/stellar-sdk";
+
+const client = new LumenFlowClient({
+  contractId: process.env.CONTRACT_ID!,
+  ...NETWORKS.testnet,
+});
+
+const source = Keypair.fromSecret(process.env.SOURCE_SECRET!);
+
+await client.registerMerchant(
+  source,
+  source.publicKey(),
+  "My Store",
+  "A great store",
+  "contact@store.com",
+  "Retail"
+);
+```
+
+## Error Handling
+
+Contract errors are surfaced as `LumenFlowError` with a typed `code` property:
+
+```typescript
+import { LumenFlowError, PaymentErrorCode } from "@lumenflow/sdk";
 
 try {
   await client.registerMerchant(...);
@@ -91,3 +116,7 @@ npm run build
 ```bash
 npm test
 ```
+
+## Error Codes
+
+See [`src/errors.ts`](src/errors.ts) for the full list of `PaymentErrorCode` values and their human-readable messages.
