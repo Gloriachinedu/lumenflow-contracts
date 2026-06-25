@@ -1,0 +1,184 @@
+/* LumenFlow Design System — shared across all frontend pages */
+
+/* ── Reset ─────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── Base ───────────────────────────────────────────────────────────────────── */
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #f5f7fa;
+  color: #1a1a2e;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 2rem 1rem;
+}
+
+/* ── Card ───────────────────────────────────────────────────────────────────── */
+.card {
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 2px 16px rgba(0,0,0,0.08);
+  max-width: 600px;
+  width: 100%;
+  padding: 2rem;
+  margin-bottom: 1.5rem;
+}
+
+.card h2 {
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: 1.25rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #eee;
+}
+
+/* ── Typography ─────────────────────────────────────────────────────────────── */
+h1 { font-size: 1.4rem; font-weight: 700; color: #6c47ff; margin-bottom: 0.25rem; }
+.subtitle { color: #666; font-size: 0.875rem; margin-bottom: 1.5rem; }
+
+/* ── Form fields ────────────────────────────────────────────────────────────── */
+.field { margin-bottom: 1rem; }
+
+.field label {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #555;
+  margin-bottom: 0.3rem;
+}
+
+.field input, .field select {
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  border: 1.5px solid #dde1e7;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.field input:focus, .field select:focus { border-color: #6c47ff; }
+.field input.error { border-color: #e53e3e; }
+
+.field .hint { font-size: 0.75rem; color: #888; margin-top: 0.25rem; }
+.field .help-text { font-size: 0.78rem; color: #666; margin-top: 0.3rem; }
+
+.field .err-msg { font-size: 0.75rem; color: #e53e3e; margin-top: 0.25rem; display: none; }
+.field .err-msg.visible { display: block; }
+
+/* ── Buttons ────────────────────────────────────────────────────────────────── */
+.btn {
+  padding: 0.6rem 1rem;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.btn:hover { opacity: 0.85; }
+.btn:disabled { cursor: not-allowed; opacity: 0.5; }
+
+.btn-primary { background: #6c47ff; color: #fff; }
+.btn-primary:disabled { background: #b0a0e8; opacity: 1; }
+.btn-outline { background: #fff; color: #6c47ff; border: 1.5px solid #6c47ff; }
+.btn-full { width: 100%; padding: 0.7rem; font-size: 0.95rem; font-weight: 700; margin-top: 0.5rem; }
+
+.btn-icon {
+  background: none;
+  border: 1.5px solid #dde1e7;
+  border-radius: 8px;
+  width: 36px;
+  height: 36px;
+  cursor: pointer;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+.btn-icon:hover { background: #f0ecff; border-color: #6c47ff; }
+
+.btn-link {
+  font-size: 0.82rem;
+  color: #6c47ff;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0.25rem 0;
+}
+.btn-link:hover { text-decoration: underline; }
+
+/* ── Badges ─────────────────────────────────────────────────────────────────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+}
+.badge-completed { background: #e6f9f0; color: #1a9e5c; }
+.badge-refunded  { background: #fff3e0; color: #e07b00; }
+.badge-partial   { background: #fff8e1; color: #c68000; }
+
+/* ── Alerts ─────────────────────────────────────────────────────────────────── */
+.alert {
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
+}
+.alert-success { background: #e6f9f0; color: #1a9e5c; }
+.alert-error   { background: #fff0f0; color: #e53e3e; }
+.alert-info    { background: #eff4ff; color: #3b5bdb; }
+
+/* ── Validation message ─────────────────────────────────────────────────────── */
+.validation-msg {
+  font-size: 0.8rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  margin-top: 0.5rem;
+  display: none;
+}
+.validation-msg.ok  { background: #e6f9f0; color: #1a9e5c; display: block; }
+.validation-msg.bad { background: #fff0f0; color: #e53e3e; display: block; }
+
+/* ── Divider ────────────────────────────────────────────────────────────────── */
+.divider {
+  border: none;
+  border-top: 1px dashed #e0e0e0;
+  margin: 1.25rem 0;
+}
+
+/* ── State boxes (loading / empty / 404) ────────────────────────────────────── */
+.state-box {
+  text-align: center;
+  padding: 3rem 1rem;
+}
+.state-box .icon { font-size: 3rem; margin-bottom: 1rem; }
+.state-box h2 { font-size: 1.2rem; margin-bottom: 0.5rem; }
+.state-box p  { color: #666; font-size: 0.9rem; }
+.state-box .next-steps {
+  margin-top: 1rem;
+  font-size: 0.85rem;
+  color: #555;
+  background: #f5f7fa;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  text-align: left;
+}
+
+/* ── Print ──────────────────────────────────────────────────────────────────── */
+@media print {
+  body { background: #fff; padding: 0; }
+  .card { box-shadow: none; border-radius: 0; max-width: 100%; }
+  .actions { display: none; }
+}
