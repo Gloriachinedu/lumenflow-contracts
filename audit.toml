@@ -1,0 +1,12 @@
+# cargo-audit configuration
+# See: https://github.com/rustsec/rustsec/tree/main/cargo-audit#configuration
+
+[advisories]
+# Ignore specific advisories that are false positives or not applicable.
+# Example:
+#   ignore = ["RUSTSEC-2020-0001"]
+ignore = []
+
+[output]
+# Deny advisories with these severity levels (high and critical).
+deny = ["high", "critical"]

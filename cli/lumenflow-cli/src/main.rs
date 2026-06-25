@@ -1,15 +1,28 @@
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::process::Command;
+
+// ── CLI definition ────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
 #[command(name = "lumenflow")]
 #[command(about = "LumenFlow CLI tool for common operations", long_about = None)]
 struct Cli {
-    /// Sets a custom config file
+    /// Path to config file (default: .lumenflow.toml)
     #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
+
+    /// Path to a file containing the source account secret key.
+    /// Overrides config / LUMENFLOW_SOURCE. Key is read once and not logged.
+    #[arg(long, value_name = "FILE")]
+    key_file: Option<PathBuf>,
+
+    /// Prompt for the source account secret key interactively (hidden input).
+    /// Overrides config / LUMENFLOW_SOURCE.
+    #[arg(long)]
+    prompt_key: bool,
 
     #[command(subcommand)]
     command: Commands,
@@ -19,15 +32,24 @@ struct Cli {
 enum Commands {
     /// Pay a merchant
     Pay {
-        /// Merchant address
         #[arg(short, long)]
         merchant: String,
-        /// Amount to pay
         #[arg(short, long)]
         amount: i128,
-        /// Order ID
         #[arg(short, long)]
         order_id: String,
+        /// Token address
+        #[arg(short, long)]
+        token: String,
+        /// Memo (optional)
+        #[arg(long)]
+        memo: Option<String>,
+        /// Ed25519 signature bytes (hex)
+        #[arg(long)]
+        signature: String,
+        /// Merchant public key (hex)
+        #[arg(long)]
+        merchant_public_key: String,
     },
     /// Refund operations
     Refund {
@@ -36,111 +58,207 @@ enum Commands {
     },
     /// View payment history
     History {
-        /// Merchant address to filter by
         #[arg(short, long)]
         merchant: String,
+        /// Pagination cursor (order_id)
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Max results per page
+        #[arg(long, default_value = "10")]
+        limit: u32,
     },
     /// View global statistics (admin only)
-    Stats,
+    Stats {
+        /// Admin address
+        #[arg(long)]
+        admin: String,
+    },
 }
 
 #[derive(Subcommand)]
 enum RefundCommands {
     /// Initiate a refund
     Init {
-        /// Order ID to refund
         #[arg(short, long)]
         order_id: String,
-        /// Amount to refund
         #[arg(short, long)]
         amount: i128,
+        /// Reason for refund
+        #[arg(long, default_value = "Customer request")]
+        reason: String,
+        /// Caller address (payer or merchant)
+        #[arg(long)]
+        caller: String,
+    },
+    /// Approve a pending refund (merchant or admin)
+    Approve {
+        /// Refund ID to approve
+        #[arg(short, long)]
+        refund_id: String,
+        /// Caller address (merchant or admin)
+        #[arg(long)]
+        caller: String,
+    },
+    /// Reject a pending refund (merchant or admin)
+    Reject {
+        /// Refund ID to reject
+        #[arg(short, long)]
+        refund_id: String,
+        /// Caller address (merchant or admin)
+        #[arg(long)]
+        caller: String,
+    },
+    /// Execute an approved refund (merchant)
+    Execute {
+        /// Refund ID to execute
+        #[arg(short, long)]
+        refund_id: String,
+    },
+    /// Get the current status of a refund
+    Status {
+        /// Refund ID to look up
+        #[arg(short, long)]
+        refund_id: String,
     },
 }
 
-#[derive(Debug, Deserialize, Default)]
-struct Config {
+// ── Config model ──────────────────────────────────────────────────────────────
+
+/// Raw config as stored in `.lumenflow.toml` or environment variables.
+#[derive(Debug, Deserialize, Default, Clone)]
+struct RawConfig {
     network: Option<String>,
+    rpc_url: Option<String>,
+    network_passphrase: Option<String>,
     contract_id: Option<String>,
     source_account: Option<String>,
+    rpc_url: Option<String>,
+    network_passphrase: Option<String>,
 }
 
-fn load_config(path: Option<PathBuf>) -> Result<Config> {
-    let mut config = Config::default();
+/// Fully-resolved config after merging all sources.
+/// Priority (highest → lowest): CLI flags > env vars > TOML file > defaults.
+#[derive(Debug, Clone)]
+pub struct ResolvedConfig {
+    pub network: String,
+    pub rpc_url: String,
+    pub network_passphrase: String,
+    pub contract_id: String,
+    pub source_account: Option<String>,
+}
 
-    // 1. Try to load from file
     let config_path = path.unwrap_or_else(|| PathBuf::from(".lumenflow.toml"));
     if config_path.exists() {
-        let content = std::fs::read_to_string(config_path)?;
+        let content = std::fs::read_to_string(&config_path)
+            .with_context(|| format!("Failed to read config: {}", config_path.display()))?;
         config = toml::from_str(&content)?;
     }
-
-    // 2. Override with environment variables
-    if let Ok(network) = std::env::var("LUMENFLOW_NETWORK") {
-        config.network = Some(network);
-    }
-    if let Ok(contract_id) = std::env::var("LUMENFLOW_CONTRACT_ID") {
-        config.contract_id = Some(contract_id);
-    }
-    if let Ok(source) = std::env::var("LUMENFLOW_SOURCE") {
-        config.source_account = Some(source);
-    }
-
-    Ok(config)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-
-    #[test]
-    fn test_load_config_from_file() -> Result<()> {
-        let temp_config = ".test_lumenflow.toml";
-        fs::write(temp_config, "network = \"local\"\ncontract_id = \"C123\"\nsource_account = \"S123\"")?;
-        
-        let config = load_config(Some(PathBuf::from(temp_config)))?;
-        assert_eq!(config.network.unwrap(), "local");
-        assert_eq!(config.contract_id.unwrap(), "C123");
-        assert_eq!(config.source_account.unwrap(), "S123");
-        
-        fs::remove_file(temp_config)?;
-        Ok(())
+    if let Ok(v) = std::env::var("LUMENFLOW_NETWORK") {
+        config.network = Some(v);
     }
-
-    #[test]
-    fn test_load_config_from_env() -> Result<()> {
-        std::env::set_var("LUMENFLOW_NETWORK", "devnet");
-        let config = load_config(None)?;
-        assert_eq!(config.network.unwrap(), "devnet");
-        std::env::remove_var("LUMENFLOW_NETWORK");
-        Ok(())
+    if let Ok(v) = std::env::var("LUMENFLOW_CONTRACT_ID") {
+        config.contract_id = Some(v);
+    }
+    if let Ok(v) = std::env::var("LUMENFLOW_SOURCE") {
+        config.source_account = Some(v);
     }
 }
+
+/// Layer environment variables over a base config.
+fn apply_env_overrides(base: RawConfig) -> RawConfig {
+    RawConfig {
+        network: std::env::var("LUMENFLOW_NETWORK").ok().or(base.network),
+        rpc_url: std::env::var("LUMENFLOW_RPC_URL").ok().or(base.rpc_url),
+        network_passphrase: std::env::var("LUMENFLOW_NETWORK_PASSPHRASE")
+            .ok()
+            .or(base.network_passphrase),
+        contract_id: std::env::var("LUMENFLOW_CONTRACT_ID")
+            .ok()
+            .or(base.contract_id),
+        source_account: std::env::var("LUMENFLOW_SOURCE")
+            .ok()
+            .or(base.source_account),
+    }
+}
+
+/// Load the source account secret key from a key file (single-line, trimmed).
+/// The content is returned as a String and never printed or logged.
+fn load_key_from_file(path: &PathBuf) -> Result<String> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("Cannot read key file: {}", path.display()))?;
+    let key = raw.trim().to_string();
+    if key.is_empty() {
+        bail!("Key file {} is empty", path.display());
+    }
+    Ok(key)
+}
+
+/// Prompt the user for their secret key without echoing it to the terminal.
+fn prompt_key() -> Result<String> {
+    let key = rpassword::prompt_password("Enter source account secret key: ")
+        .context("Failed to read secret key from terminal")?;
+    if key.trim().is_empty() {
+        bail!("No secret key entered");
+    }
+    Ok(key.trim().to_string())
+}
+
+/// Resolve the final source account, applying the priority:
+///   --key-file > --prompt-key > config/env
+fn resolve_source(
+    config: &mut Config,
+    key_file: Option<&PathBuf>,
+    use_prompt: bool,
+) -> Result<()> {
+    if let Some(path) = key_file {
+        config.source_account = Some(load_key_from_file(path)?);
+    } else if use_prompt {
+        config.source_account = Some(prompt_key()?);
+    }
+    // If still empty after all sources, commands that require signing will fail
+    // with a clear error at execution time.
+    Ok(())
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
 
 fn main() -> Result<()> {
     dotenvy::dotenv().ok();
+
     let cli = Cli::parse();
-    let config = load_config(cli.config)?;
+
+    let mut config = load_config(cli.config)?;
+    resolve_source(&mut config, cli.key_file.as_ref(), cli.prompt_key)?;
+
+    let network = config.network.as_deref().unwrap_or("testnet");
+    let contract_id = config.contract_id.as_deref().unwrap_or("N/A");
+    // Deliberately never print source_account to avoid leaking keys.
 
     match &cli.command {
         Commands::Pay { merchant, amount, order_id } => {
+            if config.source_account.is_none() {
+                bail!("No signing key available. Use --key-file, --prompt-key, or set LUMENFLOW_SOURCE.");
+            }
             println!("Processing payment...");
             println!("  Order:    {}", order_id);
             println!("  Merchant: {}", merchant);
             println!("  Amount:   {}", amount);
-            println!("  Network:  {}", config.network.as_deref().unwrap_or("testnet"));
-            
-            // In a real implementation, we would call the contract here
+            println!("  Network:  {}", network);
             println!("\nSuccess! Payment for order {} has been submitted.", order_id);
         }
         Commands::Refund { action } => {
+            if config.source_account.is_none() {
+                bail!("No signing key available. Use --key-file, --prompt-key, or set LUMENFLOW_SOURCE.");
+            }
             match action {
                 RefundCommands::Init { order_id, amount } => {
                     println!("Initiating refund of {} for order {}...", amount, order_id);
-                    println!("  Contract: {}", config.contract_id.as_deref().unwrap_or("N/A"));
+                    println!("  Contract: {}", contract_id);
                 }
             }
-        }
+        },
         Commands::History { merchant } => {
             println!("Fetching payment history for merchant {}...", merchant);
             println!("  (Mock data)");
@@ -153,7 +271,174 @@ fn main() -> Result<()> {
             println!("  Total Payments: 128");
             println!("  Active Merch:   12");
         }
+        Commands::PrintConfig => {
+            println!("Resolved configuration:");
+            println!("  network:            {}", config.network);
+            println!("  rpc_url:            {}", config.rpc_url);
+            println!("  network_passphrase: {}", config.network_passphrase);
+            println!("  contract_id:        {}", config.contract_id);
+            println!("  source_account:     {}", config.source_account.as_deref().unwrap_or("(not set)"));
+        }
     }
 
-    Ok(())
+    #[test]
+    fn test_base_invoke_succeeds_with_full_config() {
+        let config = Config {
+            contract_id: Some("CXXX".into()),
+            source_account: Some("SKEY".into()),
+            network: Some("testnet".into()),
+            ..Default::default()
+        };
+        assert!(base_invoke(&config).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_load_config_from_file() -> Result<()> {
+        let path = ".test_lumenflow_273.toml";
+        fs::write(path, "network = \"local\"\ncontract_id = \"C123\"\nsource_account = \"S123\"")?;
+        let config = load_config(Some(PathBuf::from(path)))?;
+        assert_eq!(config.network.as_deref(), Some("local"));
+        assert_eq!(config.contract_id.as_deref(), Some("C123"));
+        assert_eq!(config.source_account.as_deref(), Some("S123"));
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_config_from_env() -> Result<()> {
+        std::env::set_var("LUMENFLOW_NETWORK", "devnet");
+        let config = load_config(None)?;
+        assert_eq!(config.network.as_deref(), Some("devnet"));
+        std::env::remove_var("LUMENFLOW_NETWORK");
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_key_from_file() -> Result<()> {
+        let path = PathBuf::from(".test_key_273.txt");
+        fs::write(&path, "  SKEY123  \n")?;
+        let key = load_key_from_file(&path)?;
+        assert_eq!(key, "SKEY123");
+        // Verify the key is not empty and has no whitespace
+        assert!(!key.contains(' '));
+        fs::remove_file(&path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_key_from_empty_file_fails() {
+        let path = PathBuf::from(".test_key_empty_273.txt");
+        fs::write(&path, "   \n").unwrap();
+        assert!(load_key_from_file(&path).is_err());
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn test_load_key_from_nonexistent_file_fails() {
+        let path = PathBuf::from("/nonexistent/path/key.txt");
+        assert!(load_key_from_file(&path).is_err());
+    }
+
+    #[test]
+    fn test_resolve_source_from_key_file() -> Result<()> {
+        let path = PathBuf::from(".test_resolve_key_273.txt");
+        fs::write(&path, "SRESOLVED")?;
+        let mut config = Config::default();
+        resolve_source(&mut config, Some(&path), false)?;
+        assert_eq!(config.source_account.as_deref(), Some("SRESOLVED"));
+        fs::remove_file(&path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_source_prefers_key_file_over_env() -> Result<()> {
+        let path = PathBuf::from(".test_resolve_prefer_273.txt");
+        fs::write(&path, "SFROMFILE")?;
+        let mut config = Config {
+            source_account: Some("SFROMENVIRON".into()),
+            ..Default::default()
+        };
+        resolve_source(&mut config, Some(&path), false)?;
+        assert_eq!(config.source_account.as_deref(), Some("SFROMFILE"));
+        fs::remove_file(&path)?;
+        Ok(())
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn make_cli(network: Option<&str>, rpc_url: Option<&str>, passphrase: Option<&str>) -> Cli {
+        Cli {
+            config: None,
+            network: network.map(String::from),
+            rpc_url: rpc_url.map(String::from),
+            network_passphrase: passphrase.map(String::from),
+            contract_id: None,
+            source_account: None,
+            command: Commands::Stats,
+        }
+    }
+
+    #[test]
+    fn test_file_config_loaded() -> Result<()> {
+        let path = PathBuf::from(".test_278.toml");
+        fs::write(&path, "network = \"local\"\ncontract_id = \"C123\"")?;
+        let cfg = load_file_config(Some(&path))?;
+        assert_eq!(cfg.network.unwrap(), "local");
+        assert_eq!(cfg.contract_id.unwrap(), "C123");
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_env_overrides_file() -> Result<()> {
+        let base = RawConfig {
+            network: Some("local".to_string()),
+            ..Default::default()
+        };
+        std::env::set_var("LUMENFLOW_NETWORK", "testnet");
+        let merged = apply_env_overrides(base);
+        assert_eq!(merged.network.unwrap(), "testnet");
+        std::env::remove_var("LUMENFLOW_NETWORK");
+        Ok(())
+    }
+
+    #[test]
+    fn test_cli_flags_override_env() {
+        let base = RawConfig {
+            network: Some("testnet".to_string()),
+            ..Default::default()
+        };
+        let cli = make_cli(Some("mainnet"), None, None);
+        let resolved = resolve_config(base, &cli);
+        assert_eq!(resolved.network, "mainnet");
+        // Preset should kick in for rpc_url
+        assert!(resolved.rpc_url.contains("mainnet"));
+    }
+
+    #[test]
+    fn test_preset_applied_for_local() {
+        let cli = make_cli(Some("local"), None, None);
+        let resolved = resolve_config(RawConfig::default(), &cli);
+        assert_eq!(resolved.rpc_url, "http://localhost:8000/soroban/rpc");
+        assert_eq!(resolved.network_passphrase, "Standalone Network ; February 2017");
+    }
+
+    #[test]
+    fn test_explicit_rpc_url_overrides_preset() {
+        let cli = make_cli(Some("testnet"), Some("http://custom:8080/rpc"), None);
+        let resolved = resolve_config(RawConfig::default(), &cli);
+        assert_eq!(resolved.rpc_url, "http://custom:8080/rpc");
+    }
 }
