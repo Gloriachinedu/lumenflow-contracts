@@ -675,6 +675,55 @@ For production monitoring — Horizon SSE streaming, alert thresholds, and examp
 
 ---
 
+## Frontend Quickstart
+
+The `frontend/` directory contains three standalone HTML pages that let you interact with LumenFlow without any build step.
+
+| Page | File | Purpose |
+|------|------|---------|
+| Payment History | `frontend/history.html` | Browse and filter your payment records |
+| Payment Receipt | `frontend/receipt.html` | View a receipt for a specific order |
+| Multisig Payment | `frontend/multisig.html` | Initiate and sign multi-signature payments |
+
+### Open locally
+
+Simply open any file directly in a browser:
+
+```bash
+# Linux / macOS
+xdg-open frontend/history.html   # Linux
+open frontend/history.html        # macOS
+
+# Or serve with any static server to avoid browser CORS restrictions
+npx serve frontend
+# then visit http://localhost:3000
+```
+
+### Demo mode vs live mode
+
+By default the pages run in **demo mode** — they render with hard-coded mock data so you can preview the UI without a deployed contract.
+
+To switch to **live mode**, set the following environment variables before serving the pages (or edit the `<script>` block at the top of each HTML file):
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `LUMENFLOW_CONTRACT_ID` | Deployed contract address | `CABC…XYZ` |
+| `LUMENFLOW_NETWORK` | Stellar network to connect to | `testnet` or `mainnet` |
+| `LUMENFLOW_RPC_URL` | Soroban RPC endpoint | `https://soroban-testnet.stellar.org` |
+
+Example using a simple HTTP server with injected config:
+
+```bash
+export LUMENFLOW_CONTRACT_ID="CABC...XYZ"
+export LUMENFLOW_NETWORK="testnet"
+export LUMENFLOW_RPC_URL="https://soroban-testnet.stellar.org"
+npx serve frontend
+```
+
+> **Note:** The pages connect to Stellar Freighter or a compatible browser wallet for transaction signing. Install the [Freighter extension](https://www.freighter.app/) before using live mode.
+
+---
+
 ## Testnet Deployment
 
 ```bash
