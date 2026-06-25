@@ -18,6 +18,7 @@ pub enum DataKey {
     Multisig(String),
     PaymentRequest(String),
     LargePaymentThreshold,
+    MinRefundAmount,
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -191,4 +192,17 @@ pub fn remove_payment_request(env: &Env, request_id: &String) {
     env.storage()
         .temporary()
         .remove(&DataKey::PaymentRequest(request_id.clone()));
+}
+
+// ── Min Refund Amount ─────────────────────────────────────────────────────────
+
+pub fn get_min_refund_amount(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MinRefundAmount)
+        .unwrap_or(0)
+}
+
+pub fn set_min_refund_amount(env: &Env, amount: i128) {
+    env.storage().instance().set(&DataKey::MinRefundAmount, &amount);
 }

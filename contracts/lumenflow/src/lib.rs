@@ -73,6 +73,18 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Set the minimum refund amount. Admin only.
+    pub fn set_min_refund_amount(
+        env: Env,
+        admin: Address,
+        min_amount: i128,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        require_positive(min_amount)?;
+        storage::set_min_refund_amount(&env, min_amount);
+        Ok(())
+    }
+
     // ── Merchant management ───────────────────────────────────────────────────
 
     /// Register a new merchant.
@@ -515,6 +527,12 @@ impl PaymentProcessingContract {
         // Amount check
         if payment.refunded_amount + amount > payment.amount {
             return Err(PaymentError::RefundExceedsOriginal);
+        }
+
+        // Minimum refund amount check
+        let min_refund = storage::get_min_refund_amount(&env);
+        if min_refund > 0 && amount < min_refund {
+            return Err(PaymentError::RefundBelowMinimum);
         }
 
         let refund = RefundRecord {
