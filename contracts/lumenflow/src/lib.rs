@@ -39,9 +39,19 @@ impl PaymentProcessingContract {
             return Err(PaymentError::AdminAlreadySet);
         }
 
-        // Prevent setting admin to a contract address or zero address (Issue #83)
+        // Reject contract addresses — admin must be an account (Issue #280)
         if admin.contract_id().is_some() {
             return Err(PaymentError::InvalidAdminAddress);
+        }
+
+        // Reject zero account address — XDR-encoded public key must not be all zeros
+        {
+            use soroban_sdk::xdr::ToXdr;
+            let raw = admin.clone().to_xdr(&env);
+            let all_zero = raw.iter().all(|b| b == 0);
+            if all_zero {
+                return Err(PaymentError::InvalidAdminAddress);
+            }
         }
 
         admin.require_auth();
