@@ -62,6 +62,16 @@ impl PaymentProcessingContract {
         //     return Err(PaymentError::InvalidAdminAddress);
         // }
 
+        // Reject zero account address — XDR-encoded public key must not be all zeros
+        {
+            use soroban_sdk::xdr::ToXdr;
+            let raw = admin.clone().to_xdr(&env);
+            let all_zero = raw.iter().all(|b| b == 0);
+            if all_zero {
+                return Err(PaymentError::InvalidAdminAddress);
+            }
+        }
+
         admin.require_auth();
         storage::set_admin(&env, &admin);
         env.events().publish(("lumenflow", "admin_set"), admin);

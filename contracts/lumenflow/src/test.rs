@@ -158,6 +158,15 @@ fn test_admin_transfer_state_retention_and_permission_separation() {
     assert!(merchant_after.active);
 }
 
+#[test]
+fn test_set_admin_valid_account_succeeds() {
+    let (env, client) = setup();
+    // A standard account address must be accepted
+    let admin = Address::generate(&env);
+    let result = client.try_set_admin(&admin);
+    assert!(result.is_ok());
+}
+
 // ── Merchant tests ────────────────────────────────────────────────────────────
 
 #[test]
