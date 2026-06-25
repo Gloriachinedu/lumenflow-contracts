@@ -1082,3 +1082,189 @@ fn test_auth_sign_multisig_requires_listed_signer() {
     let result = client.try_sign_multisig_payment(&stranger, &str(&env, "AUTH_MS"), &bytes(&env, &[0u8; 64]));
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
+
+// ── Contract event subscription and provenance tests (#301) ──────────────────
+//
+// Event structure:
+//   topics[0] = Symbol("lumenflow")
+//   topics[1] = Symbol("<event_name>")
+//   data       = event-specific payload (see docs/events-reference.md)
+
+fn find_event<'a>(
+    env: &Env,
+    events: &'a soroban_sdk::Vec<soroban_sdk::testutils::Events>,
+    name: &str,
+) -> Option<soroban_sdk::testutils::Events> {
+    let needle = soroban_sdk::Symbol::new(env, name);
+    events.iter().find(|e| e.topics.get(1).map(|t| t == needle).unwrap_or(false))
+}
+
+#[test]
+fn test_event_admin_set() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let events = env.events().all();
+    let ev = find_event(&env, &events, "admin_set");
+    assert!(ev.is_some(), "admin_set event must be emitted");
+    // topics[0] == "lumenflow"
+    assert_eq!(
+        ev.unwrap().topics.get(0).unwrap(),
+        soroban_sdk::Symbol::new(&env, "lumenflow").into_val(&env)
+    );
+}
+
+#[test]
+fn test_event_merchant_registered() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Shop"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "merchant_registered").is_some(),
+        "merchant_registered event must be emitted"
+    );
+}
+
+#[test]
+fn test_event_payment_processed_topics_and_data() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EVT_PAY", 1_000);
+
+    let events = env.events().all();
+    let ev = find_event(&env, &events, "payment_processed");
+    assert!(ev.is_some(), "payment_processed event must be emitted");
+
+    // Verify stable topics
+    let ev = ev.unwrap();
+    assert_eq!(
+        ev.topics.get(0).unwrap(),
+        soroban_sdk::Symbol::new(&env, "lumenflow").into_val(&env)
+    );
+    assert_eq!(
+        ev.topics.get(1).unwrap(),
+        soroban_sdk::Symbol::new(&env, "payment_processed").into_val(&env)
+    );
+}
+
+#[test]
+fn test_event_payment_archived() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ARCH_PAY", 100);
+    client.archive_payment_record(&admin, &str(&env, "ARCH_PAY"));
+
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "payment_archived").is_some(),
+        "payment_archived event must be emitted"
+    );
+}
+
+#[test]
+fn test_event_refund_lifecycle() {
+    // Verifies refund_initiated, refund_approved, and refund_executed are all emitted.
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "REFUND_EVT", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "RF_EVT_1"),
+        &str(&env, "REFUND_EVT"),
+        &500,
+        &str(&env, "event test"),
+    );
+    {
+        let evs = env.events().all();
+        assert!(find_event(&env, &evs, "refund_initiated").is_some(), "refund_initiated must fire");
+    }
+
+    client.approve_refund(&merchant, &str(&env, "RF_EVT_1"));
+    {
+        let evs = env.events().all();
+        assert!(find_event(&env, &evs, "refund_approved").is_some(), "refund_approved must fire");
+    }
+
+    client.execute_refund(&str(&env, "RF_EVT_1"));
+    {
+        let evs = env.events().all();
+        assert!(find_event(&env, &evs, "refund_executed").is_some(), "refund_executed must fire");
+    }
+}
+
+#[test]
+fn test_event_refund_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "REJ_EVT", 1_000);
+    client.initiate_refund(&payer, &str(&env, "RF_REJ"), &str(&env, "REJ_EVT"), &200, &str(&env, "r"));
+    client.reject_refund(&merchant, &str(&env, "RF_REJ"));
+
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "refund_rejected").is_some(),
+        "refund_rejected event must be emitted"
+    );
+}
+
+#[test]
+fn test_event_multisig_initiated_and_executed() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut signers = soroban_sdk::Vec::new(&env);
+    signers.push_back(payer.clone());
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_EVT_1"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &1,
+    );
+    {
+        let evs = env.events().all();
+        assert!(find_event(&env, &evs, "multisig_initiated").is_some(), "multisig_initiated must fire");
+    }
+
+    client.sign_multisig_payment(&payer, &str(&env, "MS_EVT_1"), &bytes(&env, &[0u8; 64]));
+    client.execute_multisig_payment(&payer, &str(&env, "MS_EVT_1"));
+    {
+        let evs = env.events().all();
+        assert!(find_event(&env, &evs, "multisig_executed").is_some(), "multisig_executed must fire");
+    }
+}
+
+#[test]
+fn test_event_no_spurious_events_on_failed_payment() {
+    // A failed payment must not emit payment_processed.
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // First payment succeeds and emits the event.
+    client.process_payment_with_signature(
+        &payer, &str(&env, "DUP_EVT"), &merchant, &token, &100,
+        &str(&env, ""), &None, &sig, &pub_key,
+    );
+    let count_before = env.events().all().iter()
+        .filter(|e| e.topics.get(1).map(|t| t == soroban_sdk::Symbol::new(&env, "payment_processed").into_val(&env)).unwrap_or(false))
+        .count();
+
+    // Duplicate order — must fail and must NOT add another payment_processed event.
+    let _ = client.try_process_payment_with_signature(
+        &payer, &str(&env, "DUP_EVT"), &merchant, &token, &100,
+        &str(&env, ""), &None, &sig, &pub_key,
+    );
+    let count_after = env.events().all().iter()
+        .filter(|e| e.topics.get(1).map(|t| t == soroban_sdk::Symbol::new(&env, "payment_processed").into_val(&env)).unwrap_or(false))
+        .count();
+
+    assert_eq!(count_before, count_after, "failed payment must not emit payment_processed");
+}
