@@ -1598,19 +1598,10 @@ impl PaymentProcessingContract {
         sort_field: SortField,
         sort_order: SortOrder,
     ) -> Result<PaymentPage, PaymentError> {
-        // Collect matching payments
+        // Single pass: load and filter all candidate payments.
+        // Storage reads are the dominant gas cost; we avoid re-reading any record.
         let mut payments: Vec<PaymentOrder> = Vec::new(env);
-        let mut skip = cursor.is_some();
-
         for id in ids.iter() {
-            // Cursor: skip until we pass the cursor id
-            if skip {
-                if Some(id.clone()) == cursor {
-                    skip = false;
-                }
-                continue;
-            }
-
             if let Some(p) = storage::get_payment(env, &id) {
                 if Self::matches_filter(&p, &filter) {
                     payments.push_back(p);

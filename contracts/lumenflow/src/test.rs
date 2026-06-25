@@ -1088,7 +1088,6 @@ fn test_pagination_limit() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
     let ids = ["PAG_0", "PAG_1", "PAG_2", "PAG_3", "PAG_4"];
     for id_str in ids {
-        let id = String::from_str(&env, id_str);
         let pub_key = bytes(&env, &[0u8; 32]);
         let sig = bytes(&env, &[0u8; 64]);
         client.process_payment_with_signature(
