@@ -1,34 +1,63 @@
 # @lumenflow/sdk
 
-LumenFlow TypeScript SDK — a lightweight Node.js / serverless wrapper for calling the LumenFlow Soroban smart contract.
+The LumenFlow TypeScript SDK provides a convenient wrapper around the LumenFlow smart contract on Soroban.
 
 ## Installation
 
 ```bash
 npm install @lumenflow/sdk
-# or
-yarn add @lumenflow/sdk
 ```
 
 ## Quick Start
 
 ```typescript
-import { LumenFlowClient, NETWORKS } from "@lumenflow/sdk";
+import { LumenFlowClient, MerchantCategory } from '@lumenflow/sdk';
+import { Keypair } from '@stellar/stellar-sdk';
 
 const client = new LumenFlowClient({
-  contractId: "C...", // deployed contract address
-  ...NETWORKS.testnet, // or NETWORKS.mainnet
+  contractId: 'CC...',
+  rpcUrl: 'https://soroban-testnet.stellar.org',
+  networkPassphrase: 'Test SDF Network ; September 2015',
 });
 
-// Read-only query — no keypair needed
-const registered = await client.isRegistered("G...");
-console.log("Is registered:", registered);
+// Setup a signer for state-changing operations
+const secretKey = 'S...';
+const keypair = Keypair.fromSecret(secretKey);
 
-const merchant = await client.getMerchant("G...");
-console.log("Merchant name:", merchant.name);
+client.setSigner(async (tx) => {
+  tx.sign(keypair);
+  return tx;
+});
+
+// Register a merchant
+await client.registerMerchant(
+  keypair.publicKey(),
+  'My Shop',
+  'The best shop',
+  'contact@example.com',
+  MerchantCategory.Retail
+);
+
+// Get merchant info
+const merchant = await client.getMerchant(keypair.publicKey());
+console.log(`Merchant ${merchant.name} registered at ${merchant.registeredAt}`);
+
+// Process a payment
+await client.processPaymentWithNonce(
+  payerAddress,
+  'ORDER-123',
+  merchantAddress,
+  tokenAddress,
+  10000000n, // 1.0 unit (assuming 7 decimals)
+  'Payment for coffee',
+  ['coffee', 'morning'],
+  0n // nonce
+);
 ```
 
-## Invoke (state-changing calls)
+## Error Handling
+
+The SDK maps numeric contract error codes to human-readable messages and provides a typed `LumenFlowError` object.
 
 ```typescript
 import { LumenFlowClient, NETWORKS } from "@lumenflow/sdk";
@@ -59,51 +88,32 @@ Contract errors are surfaced as `LumenFlowError` with a typed `code` property:
 import { LumenFlowError, PaymentErrorCode } from "@lumenflow/sdk";
 
 try {
-  await client.registerMerchant(source, address, ...);
-} catch (err) {
-  if (err instanceof LumenFlowError) {
-    console.error(`[${err.code}] ${err.message}`);
-    // err.messageKey → "error.merchantalreadyregistered" (for i18n)
+  await client.registerMerchant(...);
+} catch (error) {
+  if (error instanceof LumenFlowError) {
+    console.error(`Error ${error.code}: ${error.message}`);
+    // e.g., "Error 11: This address is already registered as a merchant."
   }
 }
 ```
 
-## API Reference
+## Features
 
-### `new LumenFlowClient(config)`
-
-| Option | Type | Description |
-|--------|------|-------------|
-| `contractId` | `string` | Deployed contract address |
-| `rpcUrl` | `string` | Soroban RPC endpoint URL |
-| `networkPassphrase` | `string` | Stellar network passphrase |
-
-Use `NETWORKS.testnet` or `NETWORKS.mainnet` as a spread to fill `rpcUrl` and `networkPassphrase`.
-
-### Read-only methods (no keypair)
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `isRegistered(address)` | `Promise<boolean>` | Check if a merchant is registered |
-| `getMerchant(address)` | `Promise<object>` | Get merchant details |
-| `getPaymentSummary(orderId)` | `Promise<object>` | Get public payment summary |
-| `query(method, ...args)` | `Promise<T>` | Call any read-only contract method |
-
-### Invoke methods (requires `Keypair`)
-
-| Method | Description |
-|--------|-------------|
-| `registerMerchant(source, address, name, desc, contact, category)` | Register a merchant |
-| `processPayment(source, params)` | Process a payment with ed25519 signature |
-| `invoke(source, method, ...args)` | Call any state-changing contract method |
+- **Full Coverage:** Supports all 39 contract functions including Admin, Merchant, Payment, Refunds, Multisig, and Subscriptions.
+- **Type Safety:** Fully typed interfaces for all contract data structures.
+- **Automatic XDR Handling:** Converts between JS types (bigint, number, string) and Soroban ScVal automatically.
+- **Error Mapping:** Direct mapping from Soroban contract errors to descriptive SDK errors.
+- **Utility Functions:** Includes helpers for signing payment payloads off-chain.
 
 ## Development
 
+### Build
 ```bash
-# Build
 npm run build
+```
 
-# Run tests (mocked RPC — no live node needed)
+### Test
+```bash
 npm test
 ```
 

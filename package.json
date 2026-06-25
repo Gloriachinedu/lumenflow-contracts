@@ -1,0 +1,10 @@
+{
+  "name": "lumenflow-contracts-ui-tests",
+  "private": true,
+  "scripts": {
+    "test:receipt": "playwright test tests/receipt.spec.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.2"
+  }
+}
