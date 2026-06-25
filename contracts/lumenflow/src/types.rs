@@ -10,6 +10,8 @@ pub enum MerchantCategory {
     Services,
     Digital,
     Other,
+    /// A custom category string (non-empty, max 32 chars).
+    Custom(String),
 }
 
 #[contracttype]

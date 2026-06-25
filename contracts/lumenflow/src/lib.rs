@@ -16,7 +16,7 @@ use soroban_sdk::{
 use error::PaymentError;
 use helper::{
     require_admin, require_admin_or, require_non_empty_string, require_positive,
-    require_valid_limit, validate_tags, verify_signature, REFUND_WINDOW_SECS,
+    require_valid_limit, validate_category, validate_tags, verify_signature, REFUND_WINDOW_SECS,
 };
 use types::{
     BatchPaymentItem, GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder,
@@ -86,6 +86,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         merchant_address.require_auth();
         require_non_empty_string(&name)?;
+        validate_category(&category)?;
 
         if storage::get_merchant(&env, &merchant_address).is_some() {
             return Err(PaymentError::MerchantAlreadyRegistered);
