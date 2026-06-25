@@ -2888,3 +2888,68 @@ fn test_multisig_payment_id_65_chars_rejected() {
     );
     assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
 }
+
+// ── Custom category tests ─────────────────────────────────────────────────────
+
+#[test]
+fn test_register_merchant_custom_category_success() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Artisan Goods"),
+        &str(&env, "Handcrafted items"),
+        &str(&env, "artisan@example.com"),
+        &MerchantCategory::Custom(str(&env, "Handcraft")),
+    );
+    let stored = client.get_merchant(&merchant);
+    assert_eq!(stored.category, MerchantCategory::Custom(str(&env, "Handcraft")));
+}
+
+#[test]
+fn test_register_merchant_custom_category_max_length_success() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    // Exactly 32 characters — should pass
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Custom(str(&env, "12345678901234567890123456789012")),
+    );
+    let stored = client.get_merchant(&merchant);
+    assert_eq!(
+        stored.category,
+        MerchantCategory::Custom(str(&env, "12345678901234567890123456789012"))
+    );
+}
+
+#[test]
+fn test_register_merchant_custom_category_empty_fails() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Custom(str(&env, "")),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidCategory)));
+}
+
+#[test]
+fn test_register_merchant_custom_category_too_long_fails() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    // 33 characters — should fail
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Custom(str(&env, "123456789012345678901234567890123")),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidCategory)));
+}
