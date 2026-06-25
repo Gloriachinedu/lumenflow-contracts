@@ -1077,6 +1077,12 @@ impl PaymentProcessingContract {
             return Err(PaymentError::RefundExceedsOriginal);
         }
 
+        // Minimum refund amount check
+        let min_refund = storage::get_min_refund_amount(&env);
+        if min_refund > 0 && amount < min_refund {
+            return Err(PaymentError::RefundBelowMinimum);
+        }
+
         let refund = RefundRecord {
             refund_id: refund_id.clone(),
             order_id: order_id.clone(),

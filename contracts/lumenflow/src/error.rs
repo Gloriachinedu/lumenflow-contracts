@@ -51,6 +51,7 @@ pub enum PaymentError {
     RefundNotApproved = 34,
     /// The refund has already been executed. Remediation: No action needed; the refund is complete.
     RefundAlreadyCompleted = 35,
+    RefundBelowMinimum = 36,
 
     // Multisig
     /// The multi-signature payment request was not found. Remediation: Verify the payment ID.

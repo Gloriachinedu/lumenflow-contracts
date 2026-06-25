@@ -3264,3 +3264,99 @@ fn test_cleanup_does_not_remove_payments_at_exact_cutoff_boundary() {
     let removed = client.cleanup_expired_payments(&admin);
     assert_eq!(removed, 0, "payment at exact cutoff boundary must not be removed");
 }
+
+// ── Min refund amount tests ───────────────────────────────────────────────────
+
+#[test]
+fn test_set_min_refund_amount_success() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    // Admin can set the minimum refund amount
+    client.set_min_refund_amount(&admin, &100);
+    // A refund at exactly the minimum should succeed
+    make_payment(&env, &client, &merchant, &payer, &token, "MRA_001", 1_000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REFUND_MRA1"),
+        &str(&env, "MRA_001"),
+        &100,
+        &str(&env, "At minimum"),
+    );
+    let refund = client.get_refund(&str(&env, "REFUND_MRA1"));
+    assert_eq!(refund.amount, 100);
+}
+
+#[test]
+fn test_refund_below_minimum_fails() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.set_min_refund_amount(&admin, &200);
+    make_payment(&env, &client, &merchant, &payer, &token, "MRA_002", 1_000);
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "REFUND_MRA2"),
+        &str(&env, "MRA_002"),
+        &199,
+        &str(&env, "Below minimum"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundBelowMinimum)));
+}
+
+#[test]
+fn test_refund_above_minimum_succeeds() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.set_min_refund_amount(&admin, &50);
+    make_payment(&env, &client, &merchant, &payer, &token, "MRA_003", 1_000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REFUND_MRA3"),
+        &str(&env, "MRA_003"),
+        &51,
+        &str(&env, "Above minimum"),
+    );
+    let refund = client.get_refund(&str(&env, "REFUND_MRA3"));
+    assert_eq!(refund.amount, 51);
+}
+
+#[test]
+fn test_set_min_refund_amount_non_admin_fails() {
+    let (env, client, _admin, _merchant, payer, _token) = setup_payment_env();
+    let result = client.try_set_min_refund_amount(&payer, &100);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_min_refund_not_set_allows_any_positive() {
+    // Without setting a minimum, any positive amount should be accepted
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "MRA_004", 1_000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REFUND_MRA4"),
+        &str(&env, "MRA_004"),
+        &1,
+        &str(&env, "Tiny refund"),
+    );
+    let refund = client.get_refund(&str(&env, "REFUND_MRA4"));
+    assert_eq!(refund.amount, 1);
+}
+
+#[test]
+fn test_set_min_refund_amount_zero_fails() {
+    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
+    let result = client.try_set_min_refund_amount(&admin, &0);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+}
+
+#[test]
+fn test_min_refund_boundary_one_below_fails() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.set_min_refund_amount(&admin, &500);
+    make_payment(&env, &client, &merchant, &payer, &token, "MRA_005", 1_000);
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "REFUND_MRA5"),
+        &str(&env, "MRA_005"),
+        &499,
+        &str(&env, "One below min"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundBelowMinimum)));
+}
