@@ -640,7 +640,58 @@ fn test_batch_payment_success() {
 }
 
 #[test]
-fn test_batch_payment_size_exceeded() {
+fn test_batch_payment_intra_batch_duplicate_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let mut payments = Vec::new(&env);
+    // Two items with the same order ID in one batch
+    for _ in 0..2 {
+        payments.push_back(BatchPaymentItem {
+            order_id: str(&env, "DUP_BATCH"),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 100,
+            memo: str(&env, ""),
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        });
+    }
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::PaymentAlreadyExists)));
+}
+
+#[test]
+fn test_batch_payment_cross_call_duplicate_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // First: pay via normal call
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "CROSS_001"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+
+    // Then: try the same order_id in a batch
+    let mut payments = Vec::new(&env);
+    payments.push_back(BatchPaymentItem {
+        order_id: str(&env, "CROSS_001"),
+        merchant_address: merchant.clone(),
+        token_address: token.clone(),
+        amount: 100,
+        memo: str(&env, ""),
+        signature: bytes(&env, &[0u8; 64]),
+        merchant_public_key: bytes(&env, &[0u8; 32]),
+    });
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::PaymentAlreadyExists)));
+}
     let (env, client, _admin, merchant, _payer, token) = setup_payment_env();
     let mut payments = Vec::new(&env);
     for _ in 0..11 {
