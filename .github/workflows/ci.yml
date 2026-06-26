@@ -145,10 +145,30 @@ jobs:
           WASM=target/wasm32-unknown-unknown/release/lumenflow.wasm
           SIZE=$(wc -c < "$WASM")
           LIMIT=$((100 * 1024))
-          echo "WASM size: ${SIZE} bytes (limit: ${LIMIT} bytes)"
+          SIZE_KB=$(echo "scale=2; $SIZE / 1024" | bc)
+          LIMIT_KB=100
+
+          echo "WASM size: ${SIZE} bytes (${SIZE_KB} KB) — limit: ${LIMIT} bytes (${LIMIT_KB} KB)"
+
+          # Write a step summary so the size is visible in the Actions UI
+          {
+            echo "### WASM Size Report"
+            echo "| | Value |"
+            echo "|---|---|"
+            echo "| Binary | \`lumenflow.wasm\` |"
+            echo "| Size | ${SIZE_KB} KB (${SIZE} bytes) |"
+            echo "| Limit | ${LIMIT_KB} KB (${LIMIT} bytes) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
           if [ "$SIZE" -gt "$LIMIT" ]; then
-            echo "ERROR: WASM binary exceeds 100 KB limit (${SIZE} > ${LIMIT})"
+            echo "| Status | ❌ EXCEEDS LIMIT |" >> "$GITHUB_STEP_SUMMARY"
+            echo ""
+            echo "ERROR: WASM binary is ${SIZE_KB} KB, which exceeds the 100 KB limit."
+            echo "To reduce size: run 'cargo build --release' with 'opt-level = \"z\"' in Cargo.toml,"
+            echo "or remove unused features. See README for details."
             exit 1
+          else
+            echo "| Status | ✅ Within limit |" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload WASM artifact
