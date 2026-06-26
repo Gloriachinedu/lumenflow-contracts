@@ -14,6 +14,84 @@ Be respectful, inclusive, and constructive. We follow the [Contributor Covenant]
 4. Make your changes, add tests, and ensure everything passes.
 5. Open a pull request against `main`.
 
+---
+
+## Repository Layout
+
+```
+lumenflow-contracts/
+├── contracts/lumenflow/src/   # Soroban smart contract (Rust)
+│   ├── lib.rs                 # All public contract entrypoints
+│   ├── types.rs               # Shared data structures (contracttype)
+│   ├── storage.rs             # Persistent/instance/temporary storage helpers
+│   ├── error.rs               # Typed error codes
+│   ├── helper.rs              # Auth guards and validation utilities
+│   └── test.rs                # Unit + integration tests
+├── sdk/src/                   # TypeScript SDK
+│   ├── signPaymentPayload.ts  # Ed25519 payload builder
+│   ├── wallet.ts              # Wallet connection helpers
+│   └── errors.ts              # SDK-side error types
+├── cli/lumenflow-cli/src/     # Rust CLI (wraps contract invocations)
+│   └── main.rs
+├── frontend/                  # HTML/JS payment UI pages
+├── dashboard/                 # Merchant dashboard UI
+├── scripts/                   # Shell helpers: deploy, test, local network
+└── .github/workflows/         # CI/CD: lint, test, WASM build, release
+```
+
+Where each concern lives:
+
+| What you want to change | Where to look |
+|---|---|
+| Contract logic / new entrypoint | `contracts/lumenflow/src/lib.rs` |
+| Data structures | `contracts/lumenflow/src/types.rs` |
+| Storage access patterns | `contracts/lumenflow/src/storage.rs` |
+| Error codes | `contracts/lumenflow/src/error.rs` |
+| SDK payload signing | `sdk/src/signPaymentPayload.ts` |
+| CLI commands | `cli/lumenflow-cli/src/main.rs` |
+| CI pipeline | `.github/workflows/ci.yml` |
+| Docs | `docs/` |
+
+---
+
+## Build and Test Commands
+
+```bash
+# Run all contract tests
+cargo test --all-features
+
+# Run a specific test
+cargo test test_successful_refund_flow
+
+# Lint
+cargo clippy --all-targets --all-features -- -D warnings
+
+# Format check
+cargo fmt --all -- --check
+
+# Build WASM binary
+cargo build --target wasm32-unknown-unknown --release --package lumenflow
+
+# Full lint + test + coverage pipeline
+./scripts/test.sh
+
+# Start a local Stellar node and deploy
+SOURCE_ACCOUNT=<secret-key> ./scripts/local_up.sh
+```
+
+---
+
+## Issue and PR Conventions
+
+- **Branch names**: `feat/<slug>`, `fix/<slug>`, `docs/<slug>`, `ci/<slug>`, `test/<slug>`
+- **Commit messages**: follow [Conventional Commits](https://www.conventionalcommits.org/) — e.g. `feat: add X`, `fix: prevent Y`, `docs: update Z`
+- **Linking issues**: add `Closes #N` in the PR description body to auto-close the issue on merge
+- **One concern per PR** — keep PRs focused; reviewers will ask you to split large ones
+- **Fill the PR template** — summary, what was tested, any blocked items
+- **CI must be green** before requesting review
+
+---
+
 ### Toolchain Version
 
 We pin the Rust toolchain to a specific stable version in `rust-toolchain.toml` and `.github/workflows/ci.yml`. To update the version:
