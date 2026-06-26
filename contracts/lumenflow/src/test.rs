@@ -519,6 +519,115 @@ fn test_multisig_insufficient_signatures_fails() {
     assert_eq!(result, Err(Ok(PaymentError::InsufficientSignatures)));
 }
 
+// ── Merchant deactivation consequence tests ───────────────────────────────────
+
+#[test]
+fn test_deactivated_merchant_cannot_receive_payment() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.deactivate_merchant(&admin, &merchant);
+
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "ORDER_DEACT"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MerchantInactive)));
+}
+
+#[test]
+fn test_deactivated_merchant_history_remains_accessible() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "PRE_DEACT_1", 500);
+    make_payment(&env, &client, &merchant, &payer, &token, "PRE_DEACT_2", 750);
+
+    client.deactivate_merchant(&admin, &merchant);
+
+    // Payment history still queryable after deactivation
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page.total, 2);
+
+    // Individual payments still retrievable
+    let p = client.get_payment_by_id(&payer, &str(&env, "PRE_DEACT_1"));
+    assert_eq!(p.amount, 500);
+}
+
+#[test]
+fn test_deactivated_merchant_cannot_re_register() {
+    let (env, client, admin, merchant) = {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let merchant = Address::generate(&env);
+        client.set_admin(&admin);
+        client.register_merchant(
+            &merchant,
+            &str(&env, "Store"),
+            &str(&env, ""),
+            &str(&env, ""),
+            &MerchantCategory::Retail,
+        );
+        client.deactivate_merchant(&admin, &merchant);
+        (env, client, admin, merchant)
+    };
+    let _ = admin; // suppress unused warning
+
+    // Re-registration attempt must fail — address already exists regardless of active state
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MerchantAlreadyRegistered)));
+}
+
+#[test]
+fn test_deactivated_merchant_active_stats_decremented() {
+    let (env, client, admin, merchant, _payer, _token) = setup_payment_env();
+    let stats_before = client.get_global_payment_stats(&admin, &None, &None);
+    assert_eq!(stats_before.active_merchants, 1);
+
+    client.deactivate_merchant(&admin, &merchant);
+
+    let stats_after = client.get_global_payment_stats(&admin, &None, &None);
+    assert_eq!(stats_after.active_merchants, 0);
+}
+
+#[test]
+fn test_deactivated_merchant_blocked_from_multisig() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.deactivate_merchant(&admin, &merchant);
+
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_DEACT"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MerchantInactive)));
+}
+
 // ── Global stats tests ────────────────────────────────────────────────────────
 
 #[test]
