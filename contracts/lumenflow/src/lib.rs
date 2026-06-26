@@ -20,7 +20,7 @@ use helper::{
 };
 use types::{
     BatchPaymentItem, GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder,
-    PaymentPage, PaymentStatus, RefundRecord, RefundStatus, SortField, SortOrder,
+    PaymentPage, PaymentStatus, RefundRecord, RefundStatus, SignatureEntry, SortField, SortOrder,
     StatusFilter, Merchant, SuspiciousActivityReason, SubscriptionPlan, Subscription, SubscriptionStatus,
 };
 
@@ -918,8 +918,7 @@ impl PaymentProcessingContract {
             amount,
             required_signatures,
             signers,
-            signatures: Vec::new(&env),
-            signed_by: Vec::new(&env),
+            collected: Vec::new(&env),
             executed: false,
             created_at: env.ledger().timestamp(),
         };
@@ -951,12 +950,11 @@ impl PaymentProcessingContract {
         }
 
         // Prevent double-signing: check if this signer has already signed
-        if ms.signed_by.contains(&signer) {
+        if ms.collected.iter().any(|e| e.signer == signer) {
             return Err(PaymentError::MultisigAlreadySigned);
         }
 
-        ms.signatures.push_back(signature);
-        ms.signed_by.push_back(signer);
+        ms.collected.push_back(SignatureEntry { signer, signature });
         storage::set_multisig(&env, &ms);
         Ok(())
     }
@@ -975,7 +973,7 @@ impl PaymentProcessingContract {
             return Err(PaymentError::MultisigAlreadyExecuted);
         }
 
-        if ms.signatures.len() < ms.required_signatures {
+        if ms.collected.len() < ms.required_signatures {
             return Err(PaymentError::InsufficientSignatures);
         }
 
