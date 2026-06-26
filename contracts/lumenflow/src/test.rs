@@ -3419,3 +3419,293 @@ fn test_min_refund_boundary_one_below_fails() {
     );
     assert_eq!(result, Err(Ok(PaymentError::RefundBelowMinimum)));
 }
+
+// ── Additional multisig coverage tests (#344) ─────────────────────────────────
+
+#[test]
+fn test_multisig_non_signer_cannot_sign() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_NONSIGNER"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+        &None,
+    );
+
+    // Stranger is not in the signer set
+    let result = client.try_sign_multisig_payment(
+        &stranger,
+        &str(&env, "MS_NONSIGNER"),
+        &bytes(&env, &[9u8; 64]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_multisig_threshold_one_of_three() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+    let signer3 = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer1.clone());
+    signers.push_back(signer2.clone());
+    signers.push_back(signer3.clone());
+
+    // 1-of-3: only one signature needed
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_1OF3"),
+        &merchant,
+        &token,
+        &300,
+        &signers,
+        &1,
+        &None,
+    );
+
+    client.sign_multisig_payment(&signer2, &str(&env, "MS_1OF3"), &bytes(&env, &[2u8; 64]));
+    // Should succeed with just 1 signature
+    client.execute_multisig_payment(&payer, &str(&env, "MS_1OF3"));
+}
+
+#[test]
+fn test_multisig_threshold_three_of_three() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+    let signer3 = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer1.clone());
+    signers.push_back(signer2.clone());
+    signers.push_back(signer3.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_3OF3"),
+        &merchant,
+        &token,
+        &900,
+        &signers,
+        &3,
+        &None,
+    );
+
+    // Two signatures not enough
+    client.sign_multisig_payment(&signer1, &str(&env, "MS_3OF3"), &bytes(&env, &[1u8; 64]));
+    client.sign_multisig_payment(&signer2, &str(&env, "MS_3OF3"), &bytes(&env, &[2u8; 64]));
+
+    let result = client.try_execute_multisig_payment(&payer, &str(&env, "MS_3OF3"));
+    assert_eq!(result, Err(Ok(PaymentError::InsufficientSignatures)));
+
+    // Third signature satisfies the 3-of-3 threshold
+    client.sign_multisig_payment(&signer3, &str(&env, "MS_3OF3"), &bytes(&env, &[3u8; 64]));
+    client.execute_multisig_payment(&payer, &str(&env, "MS_3OF3"));
+}
+
+#[test]
+fn test_multisig_execution_marks_as_executed() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_EXEC_CHK"),
+        &merchant,
+        &token,
+        &400,
+        &signers,
+        &1,
+        &None,
+    );
+
+    client.sign_multisig_payment(&signer, &str(&env, "MS_EXEC_CHK"), &bytes(&env, &[1u8; 64]));
+    client.execute_multisig_payment(&payer, &str(&env, "MS_EXEC_CHK"));
+
+    // Trying to execute again must fail
+    let result = client.try_execute_multisig_payment(&payer, &str(&env, "MS_EXEC_CHK"));
+    assert_eq!(result, Err(Ok(PaymentError::MultisigAlreadyExecuted)));
+
+    // Trying to sign after execution must also fail
+    let sign_result = client.try_sign_multisig_payment(
+        &signer,
+        &str(&env, "MS_EXEC_CHK"),
+        &bytes(&env, &[2u8; 64]),
+    );
+    assert_eq!(sign_result, Err(Ok(PaymentError::MultisigAlreadyExecuted)));
+}
+
+#[test]
+fn test_multisig_payment_not_found() {
+    let (env, client, _admin, _, payer, _) = setup_payment_env();
+
+    let result = client.try_execute_multisig_payment(&payer, &str(&env, "NONEXISTENT"));
+    assert_eq!(result, Err(Ok(PaymentError::MultisigNotFound)));
+}
+
+#[test]
+fn test_multisig_sign_unknown_payment_fails() {
+    let (env, client, _admin, _, _, _) = setup_payment_env();
+    let signer = Address::generate(&env);
+
+    let result = client.try_sign_multisig_payment(
+        &signer,
+        &str(&env, "GHOST"),
+        &bytes(&env, &[1u8; 64]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MultisigNotFound)));
+}
+
+#[test]
+fn test_multisig_inactive_merchant_rejected() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.deactivate_merchant(&admin, &merchant);
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_INACTIVE"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+        &None,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MerchantInactive)));
+}
+
+#[test]
+fn test_multisig_cancelled_payment_cannot_be_signed() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_CANCEL_SIGN"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+        &None,
+    );
+
+    client.cancel_multisig_payment(&payer, &str(&env, "MS_CANCEL_SIGN"));
+
+    let result = client.try_sign_multisig_payment(
+        &signer,
+        &str(&env, "MS_CANCEL_SIGN"),
+        &bytes(&env, &[1u8; 64]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MultisigAlreadyCancelled)));
+}
+
+#[test]
+fn test_multisig_cancelled_payment_cannot_be_executed() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_CANCEL_EXEC"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+        &None,
+    );
+
+    client.cancel_multisig_payment(&payer, &str(&env, "MS_CANCEL_EXEC"));
+
+    let result = client.try_execute_multisig_payment(&payer, &str(&env, "MS_CANCEL_EXEC"));
+    assert_eq!(result, Err(Ok(PaymentError::MultisigAlreadyCancelled)));
+}
+
+#[test]
+fn test_multisig_duplicate_payment_id_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_DUP_ID"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+        &None,
+    );
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_DUP_ID"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+        &None,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::PaymentAlreadyExists)));
+}
+
+#[test]
+fn test_multisig_full_lifecycle_two_of_three() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+    let signer3 = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer1.clone());
+    signers.push_back(signer2.clone());
+    signers.push_back(signer3.clone());
+
+    // Initiate 2-of-3
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_2OF3_FULL"),
+        &merchant,
+        &token,
+        &750,
+        &signers,
+        &2,
+        &None,
+    );
+
+    // One signature not enough
+    client.sign_multisig_payment(&signer1, &str(&env, "MS_2OF3_FULL"), &bytes(&env, &[1u8; 64]));
+    let not_yet = client.try_execute_multisig_payment(&payer, &str(&env, "MS_2OF3_FULL"));
+    assert_eq!(not_yet, Err(Ok(PaymentError::InsufficientSignatures)));
+
+    // Signer3 adds second — threshold met (doesn't have to be signer2)
+    client.sign_multisig_payment(&signer3, &str(&env, "MS_2OF3_FULL"), &bytes(&env, &[3u8; 64]));
+    client.execute_multisig_payment(&payer, &str(&env, "MS_2OF3_FULL"));
+
+    // Verify payment was created
+    let payment = client.get_payment_by_id(&payer, &str(&env, "MS_2OF3_FULL"));
+    assert_eq!(payment.amount, 750);
+    assert_eq!(payment.merchant_address, merchant);
+}
