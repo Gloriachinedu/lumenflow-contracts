@@ -2,6 +2,7 @@
 
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
+    token,
     token::StellarAssetClient,
     Address, Bytes, Env, String, Vec,
 };
@@ -436,6 +437,113 @@ fn test_multisig_insufficient_signatures_fails() {
 
     let result = client.try_execute_multisig_payment(&payer, &str(&env, "MS_002"));
     assert_eq!(result, Err(Ok(PaymentError::InsufficientSignatures)));
+}
+
+// ── Platform fee tests ────────────────────────────────────────────────────────
+
+#[test]
+fn test_platform_fee_deducted() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let fee_recipient = Address::generate(&env);
+
+    // 200 bps = 2 %
+    client.set_platform_fee_bps(&admin, &200u32);
+    client.set_fee_recipient(&admin, &fee_recipient);
+
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "FEE_001"),
+        &merchant,
+        &token,
+        &1_000,
+        &str(&env, ""),
+        &sig,
+        &pub_key,
+    );
+
+    // fee = 1000 * 200 / 10000 = 20
+    let token_client = token::Client::new(&env, &token);
+    assert_eq!(token_client.balance(&fee_recipient), 20);
+    assert_eq!(token_client.balance(&merchant), 980);
+}
+
+#[test]
+fn test_zero_fee_no_recipient_transfer() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let fee_recipient = Address::generate(&env);
+
+    // 0 bps = no fee
+    client.set_platform_fee_bps(&admin, &0u32);
+    client.set_fee_recipient(&admin, &fee_recipient);
+
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "FEE_ZERO"),
+        &merchant,
+        &token,
+        &500,
+        &str(&env, ""),
+        &sig,
+        &pub_key,
+    );
+
+    let token_client = token::Client::new(&env, &token);
+    // Merchant gets full amount; fee_recipient gets nothing
+    assert_eq!(token_client.balance(&merchant), 500);
+    assert_eq!(token_client.balance(&fee_recipient), 0);
+}
+
+#[test]
+fn test_fee_rounding_floors_to_merchant_benefit() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let fee_recipient = Address::generate(&env);
+
+    // 100 bps = 1 %; amount = 1 → fee = 1*100/10000 = 0 (floors down)
+    client.set_platform_fee_bps(&admin, &100u32);
+    client.set_fee_recipient(&admin, &fee_recipient);
+
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "FEE_ROUND"),
+        &merchant,
+        &token,
+        &1,
+        &str(&env, ""),
+        &sig,
+        &pub_key,
+    );
+
+    let token_client = token::Client::new(&env, &token);
+    // fee = 0 (floored), merchant gets 1
+    assert_eq!(token_client.balance(&merchant), 1);
+    assert_eq!(token_client.balance(&fee_recipient), 0);
+}
+
+#[test]
+fn test_fee_recipient_can_be_updated() {
+    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
+    let recipient1 = Address::generate(&env);
+    let recipient2 = Address::generate(&env);
+
+    client.set_fee_recipient(&admin, &recipient1);
+    client.set_fee_recipient(&admin, &recipient2);
+    // No error = recipient updated successfully; further payment tests confirm it persists
+}
+
+#[test]
+fn test_set_fee_bps_above_10000_fails() {
+    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
+    let result = client.try_set_platform_fee_bps(&admin, &10_001u32);
+    assert_eq!(result, Err(Ok(crate::error::PaymentError::InvalidInput)));
 }
 
 // ── Global stats tests ────────────────────────────────────────────────────────

@@ -54,6 +54,31 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Set platform fee in basis points (100 bps = 1 %). Admin only.
+    pub fn set_platform_fee_bps(
+        env: Env,
+        admin: Address,
+        bps: u32,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        if bps > 10_000 {
+            return Err(PaymentError::InvalidInput);
+        }
+        storage::set_platform_fee_bps(&env, bps);
+        Ok(())
+    }
+
+    /// Set the fee recipient address. Admin only.
+    pub fn set_fee_recipient(
+        env: Env,
+        admin: Address,
+        recipient: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_fee_recipient(&env, &recipient);
+        Ok(())
+    }
+
     // ── Merchant management ───────────────────────────────────────────────────
 
     /// Register a new merchant.
@@ -154,9 +179,21 @@ impl PaymentProcessingContract {
         payload.append(&Bytes::from_slice(&env, &amount.to_be_bytes()));
         verify_signature(&env, &merchant_public_key, &payload, &signature)?;
 
-        // Transfer tokens from payer to merchant
+        // Calculate platform fee (rounds down, so merchant gets ceiling)
+        let fee_bps = storage::get_platform_fee_bps(&env) as i128;
+        let fee_amount = if fee_bps > 0 { (amount * fee_bps) / 10_000 } else { 0 };
+        let merchant_amount = amount - fee_amount;
+
+        // Transfer net amount to merchant
         let token_client = token::Client::new(&env, &token_address);
-        token_client.transfer(&payer, &merchant_address, &amount);
+        token_client.transfer(&payer, &merchant_address, &merchant_amount);
+
+        // Transfer fee to fee recipient (if fee > 0 and recipient is set)
+        if fee_amount > 0 {
+            if let Some(recipient) = storage::get_fee_recipient(&env) {
+                token_client.transfer(&payer, &recipient, &fee_amount);
+            }
+        }
 
         let now = env.ledger().timestamp();
         let payment = PaymentOrder {
@@ -175,9 +212,9 @@ impl PaymentProcessingContract {
         storage::add_merchant_payment_id(&env, &merchant_address, &order_id);
         storage::add_payer_payment_id(&env, &payer, &order_id);
 
-        // Update merchant total
+        // Update merchant total (net of fee)
         let mut m = merchant;
-        m.total_received += amount;
+        m.total_received += merchant_amount;
         storage::set_merchant(&env, &m);
 
         // Update global stats
