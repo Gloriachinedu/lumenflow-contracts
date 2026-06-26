@@ -10,6 +10,8 @@ pub enum MerchantCategory {
     Services,
     Digital,
     Other,
+    /// A custom category string. Must be non-empty and at most 32 characters.
+    Custom(String),
 }
 
 #[contracttype]
@@ -49,7 +51,7 @@ pub struct PaymentOrder {
     pub refunded_amount: i128,
     pub memo: String,
     pub tags: Option<Vec<String>>,
-    pub note: Option<String>,
+    pub platform_fee: i128,
 }
 
 #[contracttype]
@@ -95,7 +97,6 @@ pub enum RefundStatus {
     Approved,
     Rejected,
     Completed,
-    Disputed,
 }
 
 #[contracttype]
@@ -110,26 +111,17 @@ pub struct RefundRecord {
     pub created_at: u64,
 }
 
-// ── Dispute ───────────────────────────────────────────────────────────────────
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DisputeOutcome {
-    FavorPayer,
-    FavorMerchant,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DisputeRecord {
-    pub refund_id: String,
-    pub payer: Address,
-    pub evidence: String,
-    pub outcome: Option<DisputeOutcome>,
-    pub created_at: u64,
-}
-
 // ── Multisig ──────────────────────────────────────────────────────────────────
+
+/// A single entry pairing a signer address with their signature bytes.
+/// Stored as one vector instead of two parallel vectors to reduce on-chain
+/// storage overhead and keep the signer↔signature relationship explicit.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SignatureEntry {
+    pub signer: Address,
+    pub signature: Bytes,
+}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -140,10 +132,14 @@ pub struct MultisigPayment {
     pub amount: i128,
     pub required_signatures: u32,
     pub signers: Vec<Address>,
-    pub signatures: Vec<Bytes>,
-    pub signed_by: Vec<Address>,
+    /// Collected signatures. Each entry bundles signer address + signature bytes
+    /// in a single `SignatureEntry`, replacing the previous two parallel vectors.
+    pub collected: Vec<SignatureEntry>,
     pub executed: bool,
+    pub cancelled: bool,
+    pub initiator: Address,
     pub created_at: u64,
+    pub expires_at: Option<u64>,
 }
 
 // ── Query helpers ─────────────────────────────────────────────────────────────
@@ -185,10 +181,19 @@ pub struct PaymentFilter {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantPage {
+    pub merchants: Vec<Merchant>,
+    pub next_cursor: Option<Address>,
+    pub total: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PaymentPage {
     pub payments: Vec<PaymentOrder>,
     pub next_cursor: Option<String>,
-    pub total: u32,
+    /// Total number of records matching the query before page limit is applied.
+    pub total_matching: u32,
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
@@ -197,14 +202,35 @@ pub struct PaymentPage {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GlobalStats {
     pub total_payments: u32,
-    /// Aggregate volume of completed payments. Uses saturating arithmetic to avoid
-    /// runtime panics when approaching i128::MAX.
     pub total_volume: i128,
     pub total_refunds: u32,
-    /// Aggregate volume of executed refunds. Uses saturating arithmetic to avoid
-    /// runtime panics when approaching i128::MAX.
     pub total_refund_volume: i128,
     pub active_merchants: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantStats {
+    pub total_payments: u32,
+    /// Aggregate volume of completed payments for this merchant. Uses saturating
+    /// arithmetic to avoid runtime panics when approaching i128::MAX.
+    pub total_volume: i128,
+    pub total_refunds: u32,
+    /// Aggregate volume of executed refunds for this merchant. Uses saturating
+    /// arithmetic to avoid runtime panics when approaching i128::MAX.
+    pub total_refund_volume: i128,
+}
+
+// ── Dispute ───────────────────────────────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeRecord {
+    pub refund_id: String,
+    pub order_id: String,
+    pub initiator: Address,
+    pub reason: String,
+    pub created_at: u64,
 }
 
 // ── Suspicious Activity ───────────────────────────────────────────────────────
@@ -215,37 +241,4 @@ pub enum SuspiciousActivityReason {
     LargePayment = 1,
     RapidRefunds = 2,
     ManyAuthFailures = 3,
-}
-
-// ── Subscription ──────────────────────────────────────────────────────────────
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SubscriptionPlan {
-    pub plan_id: String,
-    pub merchant: Address,
-    pub token: Address,
-    pub amount: i128,
-    pub interval_secs: u64,
-    pub max_cycles: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum SubscriptionStatus {
-    Active,
-    Cancelled,
-    Completed,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Subscription {
-    pub subscription_id: String,
-    pub plan_id: String,
-    pub subscriber: Address,
-    pub cycles_charged: u32,
-    pub last_charged_at: u64,
-    pub status: SubscriptionStatus,
-    pub created_at: u64,
 }
