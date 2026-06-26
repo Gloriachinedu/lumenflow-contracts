@@ -48,6 +48,7 @@ pub enum DataKey {
     PlatformFeeBps,
     FeeRecipient,
     RefundWindow,
+    Nonce(Address),
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -407,4 +408,22 @@ pub fn set_multisig_expiry_duration(env: &Env, duration: u64) {
     env.storage()
         .instance()
         .set(&DataKey::MultisigExpiryDuration, &duration);
+}
+
+// ── Nonce ─────────────────────────────────────────────────────────────────────
+
+/// Returns the next expected nonce for a payer (0 if never used).
+pub fn get_nonce(env: &Env, payer: &Address) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::Nonce(payer.clone()))
+        .unwrap_or(0u64)
+}
+
+/// Advance the nonce by 1 after a successful payment.
+pub fn increment_nonce(env: &Env, payer: &Address) {
+    let next = get_nonce(env, payer).saturating_add(1);
+    env.storage()
+        .instance()
+        .set(&DataKey::Nonce(payer.clone()), &next);
 }

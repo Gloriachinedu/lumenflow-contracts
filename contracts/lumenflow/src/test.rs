@@ -459,16 +459,103 @@ fn test_invalid_signature_rejected() {
 }
 
 #[test]
-fn test_nonce_state_progresses_and_replays_are_detected() {
-    let (env, _client) = setup();
-    let payer = Address::generate(&env);
+fn test_process_payment_with_nonce_valid() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
 
-    let initial: Option<u64> = env.storage().instance().get(&("nonce", payer.clone()));
-    assert_eq!(initial, None);
+    // First payment: nonce 0
+    client.process_payment_with_nonce(
+        &payer,
+        &str(&env, "NONCE_ORDER_1"),
+        &merchant,
+        &token,
+        &1_000,
+        &str(&env, "Payment 1"),
+        &None,
+        &0u64,
+    );
 
-    env.storage().instance().set(&("nonce", payer.clone()), &1u64);
-    let updated: Option<u64> = env.storage().instance().get(&("nonce", payer.clone()));
-    assert_eq!(updated, Some(1u64));
+    let payment = client.get_payment_by_id(&payer, &str(&env, "NONCE_ORDER_1"));
+    assert_eq!(payment.amount, 1_000);
+}
+
+#[test]
+fn test_process_payment_with_nonce_sequential() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    mint(&env, &token, &Address::generate(&env), &payer, 10_000);
+
+    // First payment nonce=0, second nonce=1
+    client.process_payment_with_nonce(
+        &payer,
+        &str(&env, "NONCE_SEQ_1"),
+        &merchant,
+        &token,
+        &500,
+        &str(&env, "first"),
+        &None,
+        &0u64,
+    );
+
+    client.process_payment_with_nonce(
+        &payer,
+        &str(&env, "NONCE_SEQ_2"),
+        &merchant,
+        &token,
+        &500,
+        &str(&env, "second"),
+        &None,
+        &1u64,
+    );
+
+    let p2 = client.get_payment_by_id(&payer, &str(&env, "NONCE_SEQ_2"));
+    assert_eq!(p2.amount, 500);
+}
+
+#[test]
+fn test_process_payment_with_nonce_replay_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // First payment succeeds with nonce=0
+    client.process_payment_with_nonce(
+        &payer,
+        &str(&env, "NONCE_REPLAY_1"),
+        &merchant,
+        &token,
+        &500,
+        &str(&env, "original"),
+        &None,
+        &0u64,
+    );
+
+    // Replay with same nonce=0 and different order_id must fail
+    let result = client.try_process_payment_with_nonce(
+        &payer,
+        &str(&env, "NONCE_REPLAY_2"),
+        &merchant,
+        &token,
+        &500,
+        &str(&env, "replay"),
+        &None,
+        &0u64,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidNonce)));
+}
+
+#[test]
+fn test_process_payment_with_nonce_skipped_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Skipping nonce 0 and using nonce 1 must fail
+    let result = client.try_process_payment_with_nonce(
+        &payer,
+        &str(&env, "NONCE_SKIP_1"),
+        &merchant,
+        &token,
+        &500,
+        &str(&env, "skipped"),
+        &None,
+        &5u64,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidNonce)));
 }
 
 #[test]
