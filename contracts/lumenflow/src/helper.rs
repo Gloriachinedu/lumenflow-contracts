@@ -5,6 +5,7 @@ use crate::storage;
 
 pub const MAX_PAGE_LIMIT: u32 = 100;
 pub const REFUND_WINDOW_SECS: u64 = 30 * 24 * 3600; // 30 days
+pub const MAX_REASON_LEN: u32 = 200;
 
 /// Require that `caller` is the stored admin.
 pub fn require_admin(env: &Env, caller: &Address) -> Result<(), PaymentError> {
@@ -75,4 +76,15 @@ pub fn require_non_empty_string(s: &String) -> Result<(), PaymentError> {
     } else {
         Ok(())
     }
+}
+
+/// Validate refund reason: must be non-empty and within MAX_REASON_LEN.
+pub fn validate_refund_reason(reason: &String) -> Result<(), PaymentError> {
+    if reason.len() == 0 {
+        return Err(PaymentError::RefundReasonEmpty);
+    }
+    if reason.len() > MAX_REASON_LEN {
+        return Err(PaymentError::RefundReasonTooLong);
+    }
+    Ok(())
 }

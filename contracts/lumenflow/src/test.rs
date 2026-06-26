@@ -519,6 +519,57 @@ fn test_multisig_insufficient_signatures_fails() {
     assert_eq!(result, Err(Ok(PaymentError::InsufficientSignatures)));
 }
 
+// ── Refund reason validation tests ───────────────────────────────────────────
+
+#[test]
+fn test_refund_empty_reason_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_RR1", 1_000);
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "REFUND_RR1"),
+        &str(&env, "ORDER_RR1"),
+        &100,
+        &str(&env, ""),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundReasonEmpty)));
+}
+
+#[test]
+fn test_refund_reason_too_long_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_RR2", 1_000);
+
+    // Build a 201-character string
+    let long_reason = "a".repeat(201);
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "REFUND_RR2"),
+        &str(&env, "ORDER_RR2"),
+        &100,
+        &String::from_str(&env, &long_reason),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundReasonTooLong)));
+}
+
+#[test]
+fn test_refund_reason_at_max_length_succeeds() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_RR3", 1_000);
+
+    let max_reason = "a".repeat(200);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REFUND_RR3"),
+        &str(&env, "ORDER_RR3"),
+        &100,
+        &String::from_str(&env, &max_reason),
+    );
+    let refund = client.get_refund(&str(&env, "REFUND_RR3"));
+    assert!(matches!(refund.status, crate::types::RefundStatus::Pending));
+}
+
 // ── Global stats tests ────────────────────────────────────────────────────────
 
 #[test]

@@ -28,6 +28,8 @@ pub enum PaymentError {
     RefundExceedsOriginal = 33,
     RefundNotApproved = 34,
     RefundAlreadyCompleted = 35,
+    RefundReasonEmpty = 36,
+    RefundReasonTooLong = 37,
 
     // Multisig
     MultisigNotFound = 40,
