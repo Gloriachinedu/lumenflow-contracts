@@ -452,6 +452,49 @@ fn test_global_stats_updated() {
     assert_eq!(stats.active_merchants, 1);
 }
 
+#[test]
+fn test_global_stats_unauthorized_fails() {
+    let (env, client, _admin, _merchant, _payer, _token) = setup_payment_env();
+    let non_admin = Address::generate(&env);
+    let result = client.try_get_global_payment_stats(&non_admin, &None, &None);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_global_stats_date_filter_empty_range() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "STAT_D1", 500);
+
+    // Filter window entirely in the future → nothing matches
+    let far_future: u64 = 9_999_999_999;
+    let stats = client.get_global_payment_stats(&admin, &Some(far_future), &None);
+    assert_eq!(stats.total_payments, 0);
+    assert_eq!(stats.total_volume, 0);
+    assert_eq!(stats.active_merchants, 0);
+}
+
+#[test]
+fn test_global_stats_date_filter_range() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    // t=0: payment 1
+    make_payment(&env, &client, &merchant, &payer, &token, "STAT_R1", 100);
+
+    // Advance time by 100s, then payment 2
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    make_payment(&env, &client, &merchant, &payer, &token, "STAT_R2", 200);
+
+    // Advance time by another 100s, then payment 3
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    make_payment(&env, &client, &merchant, &payer, &token, "STAT_R3", 400);
+
+    // Filter: only the middle payment (t=100)
+    let t1 = env.ledger().timestamp() - 100; // = initial + 100
+    let stats = client.get_global_payment_stats(&admin, &Some(t1), &Some(t1));
+    assert_eq!(stats.total_payments, 1);
+    assert_eq!(stats.total_volume, 200);
+}
+
 // ── Cleanup tests ─────────────────────────────────────────────────────────────
 
 #[test]

@@ -313,11 +313,56 @@ impl PaymentProcessingContract {
     pub fn get_global_payment_stats(
         env: Env,
         admin: Address,
-        _date_start: Option<u64>,
-        _date_end: Option<u64>,
+        date_start: Option<u64>,
+        date_end: Option<u64>,
     ) -> Result<GlobalStats, PaymentError> {
         require_admin(&env, &admin)?;
-        Ok(storage::get_global_stats(&env))
+
+        // No date filter — return the fast cached aggregate
+        if date_start.is_none() && date_end.is_none() {
+            return Ok(storage::get_global_stats(&env));
+        }
+
+        // Date filter — scan all payments and compute stats for the window
+        let merchant_list = storage::get_merchant_list(&env);
+        let mut stats = GlobalStats {
+            total_payments: 0,
+            total_volume: 0,
+            total_refunds: 0,
+            total_refund_volume: 0,
+            active_merchants: 0,
+        };
+        let mut counted_merchants: Vec<Address> = Vec::new(&env);
+
+        for merchant_addr in merchant_list.iter() {
+            let ids = storage::get_merchant_payment_ids(&env, &merchant_addr);
+            let mut merchant_has_payment = false;
+            for id in ids.iter() {
+                if let Some(p) = storage::get_payment(&env, &id) {
+                    if let Some(start) = date_start {
+                        if p.paid_at < start {
+                            continue;
+                        }
+                    }
+                    if let Some(end) = date_end {
+                        if p.paid_at > end {
+                            continue;
+                        }
+                    }
+                    stats.total_payments += 1;
+                    stats.total_volume += p.amount;
+                    stats.total_refunds += if p.refunded_amount > 0 { 1 } else { 0 };
+                    stats.total_refund_volume += p.refunded_amount;
+                    merchant_has_payment = true;
+                }
+            }
+            if merchant_has_payment && !counted_merchants.contains(&merchant_addr) {
+                counted_merchants.push_back(merchant_addr);
+                stats.active_merchants += 1;
+            }
+        }
+
+        Ok(stats)
     }
 
     // ── Refunds ───────────────────────────────────────────────────────────────
