@@ -372,6 +372,14 @@ Need help or want to discuss LumenFlow?
 
 ---
 
+## CI Artifacts
+
+The `build` job uploads `lumenflow.wasm` as a GitHub Actions artifact after every successful CI run. Artifacts are retained for **30 days** and then automatically deleted by GitHub.
+
+For local cleanup commands and full retention policy details, see [docs/artifact-retention.md](docs/artifact-retention.md).
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). All contributions are welcome — bug fixes, features, documentation, and tests.
