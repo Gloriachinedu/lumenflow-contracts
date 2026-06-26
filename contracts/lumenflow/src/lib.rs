@@ -587,9 +587,9 @@ impl PaymentProcessingContract {
         storage::add_merchant_payment_id(&env, &merchant_address, &order_id)?;
         storage::add_payer_payment_id(&env, &payer, &order_id)?;
 
-        // Update merchant total
+        // Update merchant total (net of fee)
         let mut m = merchant;
-        m.total_received += amount;
+        m.total_received += merchant_amount;
         storage::set_merchant(&env, &m);
 
         // Update merchant stats

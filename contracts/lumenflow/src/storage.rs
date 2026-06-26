@@ -408,3 +408,25 @@ pub fn set_multisig_expiry_duration(env: &Env, duration: u64) {
         .instance()
         .set(&DataKey::MultisigExpiryDuration, &duration);
 }
+
+// ── Platform fee ──────────────────────────────────────────────────────────────
+
+/// Fee in basis points (100 bps = 1 %). Returns 0 if not set.
+pub fn get_platform_fee_bps(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::PlatformFeeBps)
+        .unwrap_or(0u32)
+}
+
+pub fn set_platform_fee_bps(env: &Env, bps: u32) {
+    env.storage().instance().set(&DataKey::PlatformFeeBps, &bps);
+}
+
+pub fn get_fee_recipient(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::FeeRecipient)
+}
+
+pub fn set_fee_recipient(env: &Env, recipient: &Address) {
+    env.storage().instance().set(&DataKey::FeeRecipient, recipient);
+}
