@@ -350,6 +350,22 @@ stellar network container restart local
 
 ---
 
+## Frontend Validation
+
+The CI pipeline includes a `Frontend HTML/CSS Lint` job that runs on every push and pull request targeting `main` or `develop`. It performs:
+
+- **HTML linting** — `htmlhint` validates all `frontend/**/*.html` files against the rules in `.htmlhintrc` (doctype, tag pairing, attribute quoting, alt text, unique IDs, etc.).
+- **CSS linting** — `stylelint` validates all `frontend/**/*.css` files for invalid hex colors, empty blocks, and duplicate selectors.
+
+Lint failures are surfaced as CI errors on the pull request, blocking merge until resolved. To run the checks locally:
+
+```bash
+npx htmlhint "frontend/**/*.html" --config .htmlhintrc
+npx stylelint "frontend/**/*.css"
+```
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). All contributions are welcome — bug fixes, features, documentation, and tests.

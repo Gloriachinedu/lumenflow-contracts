@@ -63,6 +63,23 @@ jobs:
       - name: Run tests
         run: cargo test --all-features
 
+  frontend-lint:
+    name: Frontend HTML/CSS Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Lint HTML files
+        run: npx --yes htmlhint "frontend/**/*.html" --config .htmlhintrc
+
+      - name: Lint CSS files
+        run: npx --yes stylelint "frontend/**/*.css" --config '{"rules":{"block-no-empty":true,"color-no-invalid-hex":true,"no-duplicate-selectors":true}}'
+
   build:
     name: Build WASM
     runs-on: ubuntu-latest
