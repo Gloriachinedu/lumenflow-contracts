@@ -27,3 +27,6 @@ identity/
 
 # Logs
 *.log
+
+# Node
+node_modules/
