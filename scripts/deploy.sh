@@ -16,23 +16,23 @@ while [[ $# -gt 0 ]]; do
 done
 
 NETWORK="${NETWORK:-testnet}"
-ENV_FILE="$SCRIPT_DIR/env/${NETWORK}.env"
+WASM="target/wasm32-unknown-unknown/release/lumenflow.wasm"
 
-# Load environment-specific config if present
-if [[ -f "$ENV_FILE" ]]; then
-  # shellcheck source=/dev/null
-  source "$ENV_FILE"
-  echo "==> Loaded config: $ENV_FILE"
-else
-  echo "WARNING: No env file found at $ENV_FILE — using defaults."
-fi
+# Load environment-specific config file if present, then fall back to .env.local
+for env_file in ".env.${NETWORK}" ".env.local"; do
+  if [[ -f "$env_file" ]]; then
+    # shellcheck disable=SC1090
+    set -a; source "$env_file"; set +a
+    echo "==> Loaded config from $env_file"
+    break
+  fi
+done
 
 SOURCE_ACCOUNT="${SOURCE_ACCOUNT:-}"
-WASM="target/wasm32-unknown-unknown/release/lumenflow.wasm"
 
 usage() {
   echo "Usage: NETWORK=<local|testnet|mainnet> SOURCE_ACCOUNT=<secret-key> $0"
-  echo "   or: ./scripts/deploy.sh --network <local|testnet|mainnet>"
+  echo "       Or set SOURCE_ACCOUNT in .env.<NETWORK> or .env.local"
   exit 1
 }
 

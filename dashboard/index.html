@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LumenFlow Dashboard</title>
+  <script>
+    // Apply theme before paint to prevent flash of unstyled content
+    (function () {
+      const stored = localStorage.getItem('theme');
+      if (stored === 'dark' || (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+    })();
+  </script>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --surface: #f4f4f5;
+      --text: #18181b;
+      --text-muted: #52525b;
+      --border: #d4d4d8;
+      --accent: #6d28d9;
+      --accent-text: #ffffff;
+    }
+
+    [data-theme="dark"] {
+      --bg: #09090b;
+      --surface: #18181b;
+      --text: #fafafa;
+      --text-muted: #a1a1aa;
+      --border: #27272a;
+      --accent: #7c3aed;
+      --accent-text: #ffffff;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, sans-serif;
+      min-height: 100vh;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    header h1 { font-size: 1.25rem; }
+
+    button#theme-toggle {
+      background: var(--accent);
+      color: var(--accent-text);
+      border: none;
+      border-radius: 0.375rem;
+      padding: 0.4rem 0.9rem;
+      cursor: pointer;
+      font-size: 0.875rem;
+    }
+
+    main {
+      padding: 2rem 1.5rem;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      padding: 1.25rem;
+      margin-bottom: 1rem;
+    }
+
+    .card h2 { font-size: 1rem; margin-bottom: 0.25rem; }
+    .card p  { color: var(--text-muted); font-size: 0.875rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>LumenFlow</h1>
+    <button id="theme-toggle">Toggle Dark Mode</button>
+  </header>
+  <main>
+    <div class="card">
+      <h2>Payments</h2>
+      <p>View and manage your payment history.</p>
+    </div>
+    <div class="card">
+      <h2>Merchants</h2>
+      <p>Registered merchant profiles.</p>
+    </div>
+    <div class="card">
+      <h2>Refunds</h2>
+      <p>Track refund requests and approvals.</p>
+    </div>
+  </main>
+  <script>
+    const toggle = document.getElementById('theme-toggle');
+    toggle.addEventListener('click', function () {
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      const next = isDark ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+    });
+  </script>
+</body>
+</html>
