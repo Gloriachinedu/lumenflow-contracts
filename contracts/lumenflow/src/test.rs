@@ -1092,6 +1092,86 @@ fn test_reject_refund() {
     ));
 }
 
+// ── Merchant verification tests ───────────────────────────────────────────────
+
+#[test]
+fn test_verify_merchant() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+    // Newly registered merchant is unverified
+    assert!(!client.get_merchant(&merchant).verified);
+
+    client.verify_merchant(&admin, &merchant);
+    assert!(client.get_merchant(&merchant).verified);
+
+    client.unverify_merchant(&admin, &merchant);
+    assert!(!client.get_merchant(&merchant).verified);
+}
+
+#[test]
+fn test_verify_merchant_unauthorized_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+    let result = client.try_verify_merchant(&non_admin, &merchant);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_payment_verified_vs_unverified_merchant() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // Payment succeeds for unverified merchant (verified flag is informational)
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "VER_001"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &sig,
+        &pub_key,
+    );
+
+    // Verify the merchant and confirm flag is set
+    client.verify_merchant(&admin, &merchant);
+    assert!(client.get_merchant(&merchant).verified);
+
+    // Payment also succeeds for verified merchant
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "VER_002"),
+        &merchant,
+        &token,
+        &200,
+        &str(&env, ""),
+        &sig,
+        &pub_key,
+    );
+    let payment = client.get_payment_by_id(&payer, &str(&env, "VER_002"));
+    assert_eq!(payment.amount, 200);
+}
+
 // ── Payment history tests ─────────────────────────────────────────────────────
 
 #[test]
