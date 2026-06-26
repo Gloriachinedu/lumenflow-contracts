@@ -1082,3 +1082,216 @@ fn test_auth_sign_multisig_requires_listed_signer() {
     let result = client.try_sign_multisig_payment(&stranger, &str(&env, "AUTH_MS"), &bytes(&env, &[0u8; 64]));
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
+
+// ── Refund edge-case tests (#286) ─────────────────────────────────────────────
+
+/// Partial refund that leaves a non-zero remaining balance updates status to PartiallyRefunded.
+#[test]
+fn test_partial_refund_updates_status() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_PR1", 1_000);
+
+    client.initiate_refund(&payer, &str(&env, "RF_PR1"), &str(&env, "EDGE_PR1"), &300, &str(&env, "partial"));
+    client.approve_refund(&merchant, &str(&env, "RF_PR1"));
+    client.execute_refund(&str(&env, "RF_PR1"));
+
+    let p = client.get_payment_by_id(&payer, &str(&env, "EDGE_PR1"));
+    assert_eq!(p.refunded_amount, 300);
+    assert!(matches!(p.status, crate::types::PaymentStatus::PartiallyRefunded));
+}
+
+/// Cumulative refunds that exactly equal the original amount set status to FullyRefunded.
+#[test]
+fn test_cumulative_partial_refunds_reach_full() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_CUM", 1_000);
+
+    // First partial: 600
+    client.initiate_refund(&payer, &str(&env, "RF_CUM1"), &str(&env, "EDGE_CUM"), &600, &str(&env, "first"));
+    client.approve_refund(&merchant, &str(&env, "RF_CUM1"));
+    client.execute_refund(&str(&env, "RF_CUM1"));
+
+    // Second partial: remaining 400 — should become FullyRefunded
+    client.initiate_refund(&payer, &str(&env, "RF_CUM2"), &str(&env, "EDGE_CUM"), &400, &str(&env, "second"));
+    client.approve_refund(&merchant, &str(&env, "RF_CUM2"));
+    client.execute_refund(&str(&env, "RF_CUM2"));
+
+    let p = client.get_payment_by_id(&payer, &str(&env, "EDGE_CUM"));
+    assert_eq!(p.refunded_amount, 1_000);
+    assert!(matches!(p.status, crate::types::PaymentStatus::FullyRefunded));
+}
+
+/// Refund of exactly the original amount (single request) is allowed and sets FullyRefunded.
+#[test]
+fn test_full_single_refund_allowed() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_FULL", 500);
+
+    client.initiate_refund(&payer, &str(&env, "RF_FULL"), &str(&env, "EDGE_FULL"), &500, &str(&env, "full"));
+    client.approve_refund(&merchant, &str(&env, "RF_FULL"));
+    client.execute_refund(&str(&env, "RF_FULL"));
+
+    let p = client.get_payment_by_id(&payer, &str(&env, "EDGE_FULL"));
+    assert!(matches!(p.status, crate::types::PaymentStatus::FullyRefunded));
+}
+
+/// Initiating a refund for more than the original amount is rejected immediately.
+#[test]
+fn test_over_refund_single_request_fails() {
+    let (env, client, _admin, _merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &_merchant, &payer, &token, "EDGE_OVER", 200);
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "RF_OVER"),
+        &str(&env, "EDGE_OVER"),
+        &201,
+        &str(&env, "too much"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundExceedsOriginal)));
+}
+
+/// After partial refunds the cumulative total cannot exceed the original amount.
+#[test]
+fn test_over_refund_cumulative_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_OVCUM", 1_000);
+
+    // Refund 700 first
+    client.initiate_refund(&payer, &str(&env, "RF_OV1"), &str(&env, "EDGE_OVCUM"), &700, &str(&env, "first"));
+    client.approve_refund(&merchant, &str(&env, "RF_OV1"));
+    client.execute_refund(&str(&env, "RF_OV1"));
+
+    // Attempt to refund 400 more (700 + 400 = 1100 > 1000) — must fail
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "RF_OV2"),
+        &str(&env, "EDGE_OVCUM"),
+        &400,
+        &str(&env, "over"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundExceedsOriginal)));
+}
+
+/// Refund initiated exactly at the 30-day boundary is still within the window.
+#[test]
+fn test_refund_at_window_boundary_allowed() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_BOUND", 500);
+
+    // Advance to exactly 30 days (still within window — window is > 30 days exclusive)
+    env.ledger().with_mut(|l| l.timestamp += 30 * 24 * 3600);
+
+    // Should succeed (boundary is inclusive on the payment side)
+    client.initiate_refund(
+        &payer,
+        &str(&env, "RF_BOUND"),
+        &str(&env, "EDGE_BOUND"),
+        &100,
+        &str(&env, "boundary"),
+    );
+}
+
+/// Refund initiated one second past the 30-day window is rejected.
+#[test]
+fn test_refund_one_second_past_window_fails() {
+    let (env, client, _admin, _merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &_merchant, &payer, &token, "EDGE_LATE", 500);
+
+    env.ledger().with_mut(|l| l.timestamp += 30 * 24 * 3600 + 1);
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "RF_LATE"),
+        &str(&env, "EDGE_LATE"),
+        &100,
+        &str(&env, "too late"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundWindowExpired)));
+}
+
+/// Approving a refund that is already Approved returns RefundAlreadyCompleted.
+#[test]
+fn test_approve_already_approved_refund_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_AA", 500);
+
+    client.initiate_refund(&payer, &str(&env, "RF_AA"), &str(&env, "EDGE_AA"), &100, &str(&env, "r"));
+    client.approve_refund(&merchant, &str(&env, "RF_AA"));
+
+    let result = client.try_approve_refund(&merchant, &str(&env, "RF_AA"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundAlreadyCompleted)));
+}
+
+/// Rejecting a refund that is already Rejected returns RefundAlreadyCompleted.
+#[test]
+fn test_reject_already_rejected_refund_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_RR", 500);
+
+    client.initiate_refund(&payer, &str(&env, "RF_RR"), &str(&env, "EDGE_RR"), &100, &str(&env, "r"));
+    client.reject_refund(&merchant, &str(&env, "RF_RR"));
+
+    let result = client.try_reject_refund(&merchant, &str(&env, "RF_RR"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundAlreadyCompleted)));
+}
+
+/// Executing a pending (not-yet-approved) refund returns RefundNotApproved.
+#[test]
+fn test_execute_pending_refund_fails() {
+    let (env, client, _admin, _merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &_merchant, &payer, &token, "EDGE_EP", 500);
+
+    client.initiate_refund(&payer, &str(&env, "RF_EP"), &str(&env, "EDGE_EP"), &100, &str(&env, "r"));
+
+    let result = client.try_execute_refund(&str(&env, "RF_EP"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundNotApproved)));
+}
+
+/// Executing a rejected refund returns RefundNotApproved.
+#[test]
+fn test_execute_rejected_refund_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_ER", 500);
+
+    client.initiate_refund(&payer, &str(&env, "RF_ER"), &str(&env, "EDGE_ER"), &100, &str(&env, "r"));
+    client.reject_refund(&merchant, &str(&env, "RF_ER"));
+
+    let result = client.try_execute_refund(&str(&env, "RF_ER"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundNotApproved)));
+}
+
+/// Refunding a zero-amount order is rejected by require_positive.
+#[test]
+fn test_zero_amount_refund_fails() {
+    let (env, client, _admin, _merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &_merchant, &payer, &token, "EDGE_ZERO", 500);
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "RF_ZERO"),
+        &str(&env, "EDGE_ZERO"),
+        &0,
+        &str(&env, "zero"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+}
+
+/// Merchant can also initiate a refund on behalf of the payer.
+#[test]
+fn test_merchant_can_initiate_refund() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_MINIT", 500);
+
+    // Merchant initiates — should succeed
+    client.initiate_refund(
+        &merchant,
+        &str(&env, "RF_MINIT"),
+        &str(&env, "EDGE_MINIT"),
+        &200,
+        &str(&env, "merchant initiated"),
+    );
+
+    let refund = client.get_refund(&str(&env, "RF_MINIT"));
+    assert!(matches!(refund.status, crate::types::RefundStatus::Pending));
+}
