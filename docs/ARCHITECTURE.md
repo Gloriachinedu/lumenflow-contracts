@@ -1,190 +1,159 @@
 # LumenFlow Architecture
 
-This document describes the high-level architecture of LumenFlow and the data flows between its main components.
+This document describes the internal structure of the LumenFlow Soroban smart contract: module responsibilities, storage layout, auth model, and lifecycle diagrams.
 
 ---
 
-## Component Overview
+## Module Responsibilities
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Client Layer                             │
-│                                                                 │
-│   ┌──────────────────┐        ┌───────────────────────────┐    │
-│   │  Frontend (HTML) │        │  CLI (lumenflow-cli)       │    │
-│   │  frontend/       │        │  cli/lumenflow-cli/        │    │
-│   └────────┬─────────┘        └────────────┬──────────────┘    │
-│            │                               │                    │
-│            └──────────────┬────────────────┘                    │
-│                           │  TypeScript SDK                     │
-│                   ┌───────┴──────────┐                          │
-│                   │  sdk/src/        │                          │
-│                   │  signPayment,    │                          │
-│                   │  wallet, errors  │                          │
-│                   └───────┬──────────┘                          │
-└───────────────────────────┼─────────────────────────────────────┘
-                            │  Stellar RPC / Horizon
-                            ▼
-┌───────────────────────────────────────────────────────────────┐
-│                   Soroban Smart Contract                       │
-│                   contracts/lumenflow/src/                     │
-│                                                                │
-│  lib.rs ──► types.rs ──► storage.rs                           │
-│     │                       │                                  │
-│     └──► helper.rs          └──► Persistent / Instance /      │
-│     └──► error.rs                Temporary storage            │
-└───────────────────────────────────────────────────────────────┘
+contracts/lumenflow/src/
+├── lib.rs        — All contract entry points (public API)
+├── types.rs      — Shared data structures and enums
+├── storage.rs    — Typed wrappers around Soroban persistent/instance storage
+├── error.rs      — PaymentError enum (all typed error codes)
+└── helper.rs     — Auth checks and input validation utilities
 ```
 
-### Component Roles
+### `lib.rs`
+The single contract struct `PaymentProcessingContract`. Every `#[contractimpl]` function is defined here. Functions delegate to `storage.rs` for reads/writes and `helper.rs` for auth/validation. No business logic lives outside this file.
 
-| Component | Location | Role |
+### `types.rs`
+Defines all `#[contracttype]` structs and enums used in storage and function signatures:
+- `MerchantProfile`, `MerchantCategory`
+- `PaymentRecord`, `PaymentStatus`, `PaymentFilter`, `SortField`, `SortOrder`, `StatusFilter`
+- `RefundRecord`, `RefundStatus`
+- `MultisigPayment`, `MultisigStatus`
+- `GlobalStats`, `PaymentPage`, `BatchPaymentItem`
+
+### `storage.rs`
+Typed get/set helpers for every storage key. Centralises all `env.storage()` calls so `lib.rs` never touches raw storage keys directly. Key categories:
+
+| Helper prefix | Storage type | Purpose |
 |---|---|---|
-| Frontend | `frontend/` | HTML UI for payments, multisig, and history |
-| Dashboard | `dashboard/` | Merchant-facing portal and stats |
-| SDK | `sdk/src/` | TypeScript helpers — payload signing, wallet connection, error types |
-| CLI | `cli/lumenflow-cli/` | Command-line invoker for contract functions |
-| Contract | `contracts/lumenflow/src/` | Core on-chain logic (Soroban/Rust) |
-| CI/CD | `.github/workflows/` | Lint, test, WASM build, size checks, testnet deploy |
-| Scripts | `scripts/` | Local network setup, deploy, smoke tests |
+| `get/set_admin` | Instance | Admin address |
+| `get/set_merchant` | Persistent | Merchant profiles |
+| `get/set_payment` | Persistent | Payment records |
+| `get/set_refund` | Persistent | Refund records |
+| `get/set_multisig` | Persistent | Multisig payment state |
+| `get/set_global_stats` | Instance | Aggregate counters |
+| `get/set_merchant_index` | Persistent | Per-merchant order ID list |
+| `get/set_payer_index` | Persistent | Per-payer order ID list |
+| `get/set_payer_nonce` | Persistent | Replay-protection counter |
 
----
+### `error.rs`
+`PaymentError` — a `#[contracterror]` enum. Every function returns `Result<T, PaymentError>`. No panics in contract code.
 
-## Merchant Registration Flow
-
-```mermaid
-sequenceDiagram
-    participant F as Frontend / CLI
-    participant S as SDK
-    participant C as Contract (lib.rs)
-    participant St as Storage
-
-    F->>S: build register_merchant call
-    S->>C: invoke register_merchant(address, name, description, contact, category)
-    C->>St: get_merchant(address) — check not already registered
-    C->>St: set_merchant(Merchant { active: true, verified: false, ... })
-    C->>St: add_to_merchant_list(address)
-    C->>St: update GlobalStats.active_merchants += 1
-    C-->>F: Ok / emit lumenflow/merchant_registered
-```
-
----
-
-## Payment Processing Flow
-
-```mermaid
-sequenceDiagram
-    participant P as Payer (Frontend/SDK)
-    participant C as Contract
-    participant T as Token Contract (SEP-41)
-    participant St as Storage
-
-    P->>C: process_payment_with_signature(payer, order_id, merchant, token, amount, memo, sig, pubkey)
-    C->>St: get_payment(order_id) — reject if duplicate
-    C->>C: verify ed25519 signature over (order_id + merchant + token + amount + memo)
-    C->>St: get_merchant(merchant) — must be active
-    C->>T: transfer(payer → merchant, amount)
-    C->>St: set_payment(PaymentOrder { status: Completed, ... })
-    C->>St: add_merchant_payment_id / add_payer_payment_id
-    C->>St: update GlobalStats (total_payments, total_volume)
-    C-->>P: Ok / emit lumenflow/payment_processed
-```
-
----
-
-## Refund Lifecycle Flow
-
-```mermaid
-stateDiagram-v2
-    [*] --> Pending : initiate_refund (payer or merchant)
-    Pending --> Approved : approve_refund (merchant or admin)
-    Pending --> Rejected : reject_refund (merchant or admin)
-    Approved --> Completed : execute_refund (merchant signs token transfer)
-    Pending --> Disputed : raise_dispute
-    Disputed --> Approved : admin resolves FavorPayer
-    Disputed --> Rejected : admin resolves FavorMerchant
-    Rejected --> [*]
-    Completed --> [*]
-```
-
-```mermaid
-sequenceDiagram
-    participant I as Initiator (Payer/Merchant)
-    participant M as Merchant
-    participant C as Contract
-    participant T as Token Contract
-    participant St as Storage
-
-    I->>C: initiate_refund(caller, refund_id, order_id, amount, reason)
-    C->>St: get_payment(order_id) — validate window (≤30 days) & amount
-    C->>St: set_refund(RefundRecord { status: Pending })
-    M->>C: approve_refund(caller, refund_id)
-    C->>St: update RefundRecord { status: Approved }
-    M->>C: execute_refund(refund_id)
-    C->>T: transfer(merchant → payer, amount)
-    C->>St: update PaymentOrder.refunded_amount / status
-    C->>St: update GlobalStats (total_refunds, total_refund_volume)
-    C-->>M: Ok / emit lumenflow/refund_executed
-```
-
----
-
-## Multi-Signature Payment Flow
-
-```mermaid
-sequenceDiagram
-    participant I as Initiator
-    participant S1 as Signer 1
-    participant S2 as Signer N
-    participant C as Contract
-    participant T as Token Contract
-    participant St as Storage
-
-    I->>C: initiate_multisig_payment(initiator, payment_id, merchant, token, amount, signers[], required_signatures)
-    C->>St: set_multisig(MultisigPayment { executed: false, signatures: [], signed_by: [] })
-    C-->>I: emit lumenflow/multisig_initiated
-
-    S1->>C: sign_multisig_payment(signer, payment_id, signature)
-    C->>St: append signature + signer address; verify signer is in signers[]
-
-    S2->>C: sign_multisig_payment(signer, payment_id, signature)
-    C->>St: append signature + signer address
-
-    I->>C: execute_multisig_payment(payer, payment_id)
-    C->>St: get_multisig — verify signatures.len() >= required_signatures
-    C->>T: transfer(payer → merchant, amount)
-    C->>St: update MultisigPayment { executed: true }
-    C-->>I: emit lumenflow/multisig_executed
-```
-
----
-
-## Replay Protection and Nonce Model
-
-Each payer has an associated `PayerNonce` (u64) stored in contract persistent storage.
-
-- Payments submitted via `process_payment_with_nonce` must supply the expected current nonce value.
-- On successful processing the contract increments the payer's nonce by 1.
-- If the supplied nonce does not match the stored value, the contract rejects with `InvalidNonce`.
-
-This design is necessary because Soroban does not provide a universal per-account sequence number at the contract entrypoint level. An on-chain per-payer counter provides deterministic replay protection tied to the payer's address.
-
-Tests: see `contracts/lumenflow/src/test.rs` for integration tests that verify nonce increment and replay rejection.
+### `helper.rs`
+- `require_admin` — reads admin from storage, calls `env.require_auth`
+- `validate_string_len` — enforces max-length constraints on memo/reason fields
+- `validate_amount` — rejects zero or negative amounts
 
 ---
 
 ## Storage Layout
 
-| Key | Type | Tier | Description |
-|---|---|---|---|
-| `Admin` | `Address` | Instance | Contract administrator |
-| `GlobalStats` | `GlobalStats` | Instance | Aggregate counters |
-| `MerchantList` | `Vec<Address>` | Instance | All registered merchant addresses |
-| `CleanupPeriod` | `u64` | Instance | Payment expiry window (seconds) |
-| `Merchant(addr)` | `Merchant` | Persistent | Per-merchant profile |
-| `Payment(id)` | `PaymentOrder` | Persistent | Per-payment record |
-| `MerchantPayments(addr)` | `Vec<String>` | Persistent | Payment IDs for a merchant |
-| `PayerPayments(addr)` | `Vec<String>` | Persistent | Payment IDs for a payer |
-| `Refund(id)` | `RefundRecord` | Persistent | Per-refund record |
-| `Multisig(id)` | `MultisigPayment` | Persistent | Per-multisig payment |
-| `PaymentRequest(id)` | `PaymentRequest` | Temporary | Short-lived payment request |
+LumenFlow uses two Soroban storage tiers:
+
+**Instance storage** (shared contract lifetime, cheaper):
+- `Admin` → `Address`
+- `GlobalStats` → `GlobalStats`
+- `MaxRefundsPerOrder` → `u32`
+- `LargePaymentThreshold` → `i128`
+- `PaymentCleanupPeriod` → `u64`
+
+**Persistent storage** (per-key TTL, survives ledger archival):
+- `Merchant(Address)` → `MerchantProfile`
+- `Payment(String)` → `PaymentRecord`  *(keyed by order_id)*
+- `Refund(String)` → `RefundRecord`  *(keyed by refund_id)*
+- `Multisig(String)` → `MultisigPayment`  *(keyed by payment_id)*
+- `MerchantIndex(Address)` → `Vec<String>`  *(order IDs for history)*
+- `PayerIndex(Address)` → `Vec<String>`  *(order IDs for history)*
+- `PayerNonce(Address)` → `u64`
+- `AllowedToken(Address)` → `bool`
+
+---
+
+## Auth Model
+
+See also [`docs/auth-model.md`](auth-model.md) for full details.
+
+| Operation | Required auth |
+|---|---|
+| `set_admin` | None (one-time, first caller) |
+| `register_merchant` | `merchant_address` |
+| `deactivate_merchant` | admin |
+| `process_payment_with_signature` | `payer` |
+| `initiate_refund` | `payer` or `merchant` |
+| `approve_refund` / `reject_refund` | `merchant` or admin |
+| `execute_refund` | merchant of the original payment |
+| `initiate_multisig_payment` | `initiator` |
+| `sign_multisig_payment` | `signer` (must be in signers list) |
+| `execute_multisig_payment` | `payer` (initiator) |
+| `get_global_payment_stats` | admin |
+| `archive_payment_record` | admin |
+| `cleanup_expired_payments` | admin |
+
+Auth is enforced via `env.require_auth(&address)` inside `helper::require_admin` or inline in `lib.rs`. `mock_all_auths()` is used in tests to bypass Soroban's auth engine.
+
+---
+
+## Refund State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending : initiate_refund
+    Pending --> Approved : approve_refund (merchant/admin)
+    Pending --> Rejected : reject_refund (merchant/admin)
+    Approved --> Completed : execute_refund (merchant)
+    Rejected --> [*]
+    Completed --> [*]
+```
+
+Rules:
+- Window: 30 days from `paid_at` timestamp
+- Partial refunds allowed; cumulative total ≤ original amount
+- Max concurrent refunds per order enforced by `MaxRefundsPerOrder` (default 5)
+- Payment status transitions: `Completed` → `PartiallyRefunded` → `FullyRefunded`
+
+---
+
+## Multisig Payment Lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending : initiate_multisig_payment
+    Pending --> Pending : sign_multisig_payment (threshold not yet met)
+    Pending --> Executed : execute_multisig_payment (threshold met)
+    Executed --> [*]
+```
+
+Rules:
+- `signers` list and `required_signatures` threshold set at initiation
+- Each signer calls `sign_multisig_payment` once; duplicate signing is rejected
+- `execute_multisig_payment` fails with `InsufficientSignatures` if threshold not met
+- On execution, a `PaymentRecord` is written and indexed in merchant/payer history
+
+---
+
+## Payment History Indexing
+
+History queries are O(n) scans over in-contract index vectors:
+
+1. `MerchantIndex(merchant)` and `PayerIndex(payer)` store ordered lists of `order_id` strings.
+2. `get_merchant_payment_history` / `get_payer_payment_history` load the index, apply filters, sort, and paginate using cursor-based pagination (cursor = last seen `order_id`).
+3. Max page size: 100 results.
+
+---
+
+## Replay Protection
+
+`process_payment_with_nonce` uses a per-payer `PayerNonce` counter stored in persistent storage. The caller must supply the current nonce; the contract increments it on success. Mismatched nonces return `InvalidNonce`.
+
+`process_payment_with_signature` uses `order_id` uniqueness (duplicate order IDs return `PaymentAlreadyExists`) combined with ed25519 signature verification over the payment payload.
+
+---
+
+## Event Emission
+
+Every state-changing operation emits a Soroban event with topic `["lumenflow", "<event_name>"]`. See [`docs/events-reference.md`](events-reference.md) for full payload schemas.
