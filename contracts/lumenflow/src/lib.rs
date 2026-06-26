@@ -79,6 +79,7 @@ impl PaymentProcessingContract {
             contact_info,
             category,
             active: true,
+            verified: false,
             registered_at: env.ledger().timestamp(),
             total_received: 0,
         };
@@ -112,6 +113,34 @@ impl PaymentProcessingContract {
             stats.active_merchants -= 1;
         }
         storage::set_global_stats(&env, &stats);
+        Ok(())
+    }
+
+    /// Mark a merchant as verified (admin only).
+    pub fn verify_merchant(
+        env: Env,
+        admin: Address,
+        merchant_address: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        let mut merchant = storage::get_merchant(&env, &merchant_address)
+            .ok_or(PaymentError::MerchantNotFound)?;
+        merchant.verified = true;
+        storage::set_merchant(&env, &merchant);
+        Ok(())
+    }
+
+    /// Revoke merchant verification (admin only).
+    pub fn unverify_merchant(
+        env: Env,
+        admin: Address,
+        merchant_address: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        let mut merchant = storage::get_merchant(&env, &merchant_address)
+            .ok_or(PaymentError::MerchantNotFound)?;
+        merchant.verified = false;
+        storage::set_merchant(&env, &merchant);
         Ok(())
     }
 

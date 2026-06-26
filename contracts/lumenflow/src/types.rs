@@ -21,6 +21,7 @@ pub struct Merchant {
     pub contact_info: String,
     pub category: MerchantCategory,
     pub active: bool,
+    pub verified: bool,
     pub registered_at: u64,
     pub total_received: i128,
 }
