@@ -1,0 +1,10 @@
+# CODEOWNERS file for automated review assignment
+
+# Global owners
+* @Gloriachinedu
+
+# Path-specific owners
+/contracts/ @Gloriachinedu/smart-contract-team
+/scripts/ @Gloriachinedu/devops-team
+/docs/ @Gloriachinedu/documentation-team
+/sdk/ @Gloriachinedu/sdk-team
