@@ -189,8 +189,14 @@ jobs:
           LIMIT=$((100 * 1024))
           echo "WASM size: ${SIZE} bytes (limit: ${LIMIT})"
           if [ "$SIZE" -gt "$LIMIT" ]; then
-            echo "ERROR: WASM binary exceeds 100 KB limit (${SIZE} > ${LIMIT})"
+            echo "| Status | ❌ EXCEEDS LIMIT |" >> "$GITHUB_STEP_SUMMARY"
+            echo ""
+            echo "ERROR: WASM binary is ${SIZE_KB} KB, which exceeds the 100 KB limit."
+            echo "To reduce size: run 'cargo build --release' with 'opt-level = \"z\"' in Cargo.toml,"
+            echo "or remove unused features. See README for details."
             exit 1
+          else
+            echo "| Status | ✅ Within limit |" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload WASM artifact
