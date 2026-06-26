@@ -1082,3 +1082,157 @@ fn test_auth_sign_multisig_requires_listed_signer() {
     let result = client.try_sign_multisig_payment(&stranger, &str(&env, "AUTH_MS"), &bytes(&env, &[0u8; 64]));
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
+
+// ── Token whitelist tests (#284) ──────────────────────────────────────────────
+
+/// Admin can add and remove a token; is_token_allowed reflects the change.
+#[test]
+fn test_admin_add_remove_allowed_token() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+
+    client.set_admin(&admin);
+
+    // Token not allowed yet
+    assert!(!storage::is_token_allowed(&env, &token));
+
+    client.add_allowed_token(&admin, &token);
+    assert!(storage::is_token_allowed(&env, &token));
+
+    client.remove_allowed_token(&admin, &token);
+    assert!(!storage::is_token_allowed(&env, &token));
+}
+
+/// Only the admin may call add_allowed_token.
+#[test]
+fn test_add_allowed_token_requires_admin() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+    let stranger = Address::generate(&env);
+
+    client.set_admin(&admin);
+
+    let result = client.try_add_allowed_token(&stranger, &token);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+/// Only the admin may call remove_allowed_token.
+#[test]
+fn test_remove_allowed_token_requires_admin() {
+    let (env, client, admin, _, _, token) = setup_payment_env();
+    let stranger = Address::generate(&env);
+
+    let result = client.try_remove_allowed_token(&stranger, &token);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+/// process_payment_with_signature rejects a disallowed token.
+#[test]
+fn test_payment_with_disallowed_token_fails() {
+    let (env, client, admin, merchant, payer, _allowed_token) = setup_payment_env();
+    let token_admin = Address::generate(&env);
+    let bad_token = create_token(&env, &token_admin);
+    mint(&env, &bad_token, &token_admin, &payer, 10_000);
+
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "WL_ORDER_1"),
+        &merchant,
+        &bad_token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+
+    // After adding it, the payment succeeds
+    client.add_allowed_token(&admin, &bad_token);
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "WL_ORDER_1"),
+        &merchant,
+        &bad_token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+}
+
+/// batch_payment rejects any item with a disallowed token.
+#[test]
+fn test_batch_payment_disallowed_token_fails() {
+    let (env, client, _admin, merchant, payer, _allowed_token) = setup_payment_env();
+    let token_admin = Address::generate(&env);
+    let bad_token = create_token(&env, &token_admin);
+    mint(&env, &bad_token, &token_admin, &payer, 10_000);
+
+    let mut payments = Vec::new(&env);
+    payments.push_back(BatchPaymentItem {
+        order_id: str(&env, "WL_BATCH_1"),
+        merchant_address: merchant.clone(),
+        token_address: bad_token.clone(),
+        amount: 100,
+        memo: str(&env, ""),
+        signature: bytes(&env, &[0u8; 64]),
+        merchant_public_key: bytes(&env, &[0u8; 32]),
+    });
+
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+}
+
+/// initiate_multisig_payment rejects a disallowed token.
+#[test]
+fn test_multisig_payment_disallowed_token_fails() {
+    let (env, client, _admin, merchant, payer, _allowed_token) = setup_payment_env();
+    let token_admin = Address::generate(&env);
+    let bad_token = create_token(&env, &token_admin);
+
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "WL_MS_1"),
+        &merchant,
+        &bad_token,
+        &500,
+        &signers,
+        &1,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+}
+
+/// After a token is removed from the whitelist, existing payment paths reject it.
+#[test]
+fn test_removed_token_is_rejected() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // First payment works
+    client.process_payment_with_signature(
+        &payer, &str(&env, "WL_RM1"), &merchant, &token, &100, &str(&env, ""), &None, &sig, &pub_key,
+    );
+
+    // Admin removes the token
+    client.remove_allowed_token(&admin, &token);
+
+    // Subsequent payment with the same token must fail
+    let result = client.try_process_payment_with_signature(
+        &payer, &str(&env, "WL_RM2"), &merchant, &token, &100, &str(&env, ""), &None, &sig, &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+}

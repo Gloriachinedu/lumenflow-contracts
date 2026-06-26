@@ -20,6 +20,7 @@ pub enum DataKey {
     LargePaymentThreshold,
     MaxRefundsPerOrder,
     OrderRefundCount(String),
+    AllowedToken(Address),
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
