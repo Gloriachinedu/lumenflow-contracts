@@ -4076,3 +4076,266 @@ fn test_merchant_can_initiate_refund() {
     let refund = client.get_refund(&str(&env, "RF_MINIT"));
     assert!(matches!(refund.status, crate::types::RefundStatus::Pending));
 }
+
+// ── Versioning tests ──────────────────────────────────────────────────────────
+
+#[test]
+fn test_get_contract_version() {
+    let (env, client) = setup();
+    let version = client.get_contract_version();
+    assert_eq!(version, String::from_str(&env, "1.0.0"));
+}
+
+#[test]
+fn test_set_and_assert_version() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.set_contract_version(&admin);
+    client.assert_version_matches(&admin);
+}
+
+#[test]
+fn test_assert_version_no_stored_version_passes() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    // No set_contract_version called — no stored version means skip check
+    client.assert_version_matches(&admin);
+}
+
+#[test]
+fn test_set_contract_version_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let result = client.try_set_contract_version(&non_admin);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+// ── Multisig expiry and cancellation tests ────────────────────────────────────
+
+#[test]
+fn test_multisig_expired_cannot_sign() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_EXP_001"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+    );
+
+    // Advance past 7-day expiry
+    env.ledger().with_mut(|l| l.timestamp += 8 * 24 * 3600);
+
+    let result = client.try_sign_multisig_payment(
+        &signer,
+        &str(&env, "MS_EXP_001"),
+        &bytes(&env, &[1u8; 64]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MultisigExpired)));
+}
+
+#[test]
+fn test_multisig_expired_cannot_execute() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_EXP_002"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+    );
+
+    // Sign before expiry
+    client.sign_multisig_payment(&signer, &str(&env, "MS_EXP_002"), &bytes(&env, &[1u8; 64]));
+
+    // Advance past expiry
+    env.ledger().with_mut(|l| l.timestamp += 8 * 24 * 3600);
+
+    let result = client.try_execute_multisig_payment(&payer, &str(&env, "MS_EXP_002"));
+    assert_eq!(result, Err(Ok(PaymentError::MultisigExpired)));
+}
+
+#[test]
+fn test_multisig_cancellation_by_initiator() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_CANCEL_001"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+    );
+
+    // Initiator cancels
+    client.cancel_multisig_payment(&payer, &str(&env, "MS_CANCEL_001"));
+
+    // Cannot sign after cancellation
+    let result = client.try_sign_multisig_payment(
+        &signer,
+        &str(&env, "MS_CANCEL_001"),
+        &bytes(&env, &[1u8; 64]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MultisigCancelled)));
+}
+
+#[test]
+fn test_multisig_cancel_unauthorized() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_CANCEL_002"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+    );
+
+    let result = client.try_cancel_multisig_payment(&stranger, &str(&env, "MS_CANCEL_002"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_multisig_cancel_by_admin() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_CANCEL_003"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+    );
+
+    // Admin can also cancel
+    client.cancel_multisig_payment(&admin, &str(&env, "MS_CANCEL_003"));
+
+    let ms = client.get_multisig_payment(&str(&env, "MS_CANCEL_003"));
+    assert!(ms.cancelled);
+}
+
+// ── Admin permission tests ────────────────────────────────────────────────────
+
+#[test]
+fn test_set_payment_cleanup_period_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let result = client.try_set_payment_cleanup_period(&non_admin, &86400);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_set_payment_cleanup_period_admin_success() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.set_payment_cleanup_period(&admin, &86400);
+}
+
+#[test]
+fn test_set_large_payment_threshold_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let result = client.try_set_large_payment_threshold(&non_admin, &1000);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_set_large_payment_threshold_admin_success() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.set_large_payment_threshold(&admin, &1000);
+}
+
+#[test]
+fn test_deactivate_merchant_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+    let result = client.try_deactivate_merchant(&non_admin, &merchant);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_archive_payment_record_unauthorized() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let non_admin = Address::generate(&env);
+    make_payment(&env, &client, &merchant, &payer, &token, "ARCH_001", 100);
+    let result = client.try_archive_payment_record(&non_admin, &str(&env, "ARCH_001"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_archive_payment_record_admin_success() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ARCH_002", 100);
+    client.archive_payment_record(&admin, &str(&env, "ARCH_002"));
+    let result = client.try_get_payment_by_id(&payer, &str(&env, "ARCH_002"));
+    assert_eq!(result, Err(Ok(PaymentError::PaymentNotFound)));
+}
+
+#[test]
+fn test_cleanup_expired_payments_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let result = client.try_cleanup_expired_payments(&non_admin);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_get_global_payment_stats_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let result = client.try_get_global_payment_stats(&non_admin, &None, &None);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}

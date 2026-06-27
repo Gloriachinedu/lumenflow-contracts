@@ -275,6 +275,28 @@ fn main() -> Result<()> {
             println!("  contract_id:        {}", config.contract_id);
             println!("  source_account:     {}", config.source_account.as_deref().unwrap_or("(not set)"));
         }
+        Commands::BatchPay { items } => {
+            if items.is_empty() {
+                anyhow::bail!("At least one --item is required");
+            }
+            if items.len() > 10 {
+                anyhow::bail!("Too many items: {} (max 10)", items.len());
+            }
+            println!("Batch payment ({} items):", items.len());
+            let mut total: i128 = 0;
+            for item in items {
+                let parts: Vec<&str> = item.splitn(3, ':').collect();
+                if parts.len() != 3 {
+                    anyhow::bail!("Invalid item format '{}' - expected ORDER_ID:MERCHANT_ADDR:AMOUNT", item);
+                }
+                let amount: i128 = parts[2].parse()
+                    .map_err(|_| anyhow::anyhow!("Invalid amount '{}' in item '{}'", parts[2], item))?;
+                println!("  Order: {}  Merchant: {}  Amount: {}", parts[0], parts[1], amount);
+                total += amount;
+            }
+            println!("Total amount: {}", total);
+            println!("Network: {}", config.network.as_deref().unwrap_or("testnet"));
+        }
     }
 
     #[test]

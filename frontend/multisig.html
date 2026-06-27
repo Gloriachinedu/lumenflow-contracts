@@ -84,12 +84,45 @@
     .sign-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
     .execute-section { margin-top: 1.25rem; }
+
+    /* Wallet / mode styles */
+    #wallet-bar {
+      padding: 0.5rem 1rem;
+      font-size: 0.82rem;
+      font-weight: 600;
+      border-radius: 8px;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    #wallet-bar.demo  { background: #fff3cd; color: #856404; }
+    #wallet-bar.live  { background: #d1f3e0; color: #1a5e37; }
+    #wallet-bar.error { background: #fce8e8; color: #c0392b; }
+    #connect-wallet-btn {
+      margin-left: auto;
+      padding: 0.3rem 0.8rem;
+      border: 1.5px solid currentColor;
+      border-radius: 6px;
+      background: transparent;
+      color: inherit;
+      font-size: 0.78rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    #connect-wallet-btn:hover { opacity: 0.75; }
   </style>
 </head>
 <body>
 
 <h1>Multisig Payment</h1>
 <p class="subtitle">Initiate a payment that requires multiple signers to approve.</p>
+
+<!-- Wallet / mode status bar -->
+<div id="wallet-bar" class="demo" role="status" aria-live="polite">
+  <span id="wallet-bar-text">⚠ Demo mode – transactions are simulated. Connect a wallet to go live.</span>
+  <button id="connect-wallet-btn" type="button" onclick="connectWallet()">Connect Wallet</button>
+</div>
 
 <!-- Initiation form -->
 <div class="card" id="form-panel">
@@ -330,20 +363,139 @@
   // ── Contract interaction ───────────────────────────────────────────────────
   // CONTRACT_ID and RPC_URL are imported from lumenflow-shared.js
 
+  /**
+   * Wallet adapter hook.
+   *
+   * Replace the body of `walletAdapter` with your preferred wallet library:
+   *   - Freighter:  https://docs.freighter.app
+   *   - Albedo:     https://albedo.link/docs
+   *   - WalletConnect / Stellar WalletKit (community)
+   *
+   * The adapter must resolve to { publicKey: string } on success or throw on
+   * failure. Downstream call helpers (`callInitiateMultisig`, etc.) then pass
+   * the public key to the transaction builder and request signature approval.
+   *
+   * @returns {Promise<{publicKey: string}>}
+   */
+  const walletAdapter = {
+    /**
+     * Request wallet connection. Returns the connected public key.
+     * Throws a user-friendly message if the wallet is unavailable.
+     */
+    async connect() {
+      // ── Freighter integration point ─────────────────────────────────────
+      // import { isConnected, getPublicKey, requestAccess } from '@stellar/freighter-api';
+      // const connected = await isConnected();
+      // if (!connected.isConnected) await requestAccess();
+      // const result = await getPublicKey();
+      // if (result.error) throw new Error(result.error);
+      // return { publicKey: result.address };
+      // ────────────────────────────────────────────────────────────────────
+
+      throw new Error(
+        'No wallet detected. Install the Freighter browser extension (freighter.app) ' +
+        'and reload the page, or set window.LUMENFLOW_CONTRACT_ID in demo mode.'
+      );
+    },
+
+    /**
+     * Sign and submit a transaction XDR.
+     * @param {string} xdr - Base64-encoded transaction envelope XDR.
+     * @returns {Promise<{hash: string}>}
+     */
+    async signAndSubmit(xdr) {
+      // ── Freighter integration point ─────────────────────────────────────
+      // import { signTransaction } from '@stellar/freighter-api';
+      // const { signedTxXdr, error } = await signTransaction(xdr, { networkPassphrase: Networks.TESTNET });
+      // if (error) throw new Error(error);
+      // const server = new SorobanRpc.Server(RPC_URL);
+      // const tx = TransactionBuilder.fromXDR(signedTxXdr, Networks.TESTNET);
+      // const result = await server.sendTransaction(tx);
+      // if (result.status === 'ERROR') throw new Error(result.errorResult?.result().switch().name);
+      // return { hash: result.hash };
+      // ────────────────────────────────────────────────────────────────────
+
+      throw new Error('Wallet adapter not configured. See walletAdapter.signAndSubmit in multisig.html.');
+    },
+  };
+
+  // Connected wallet public key (null in demo mode or before wallet connect).
+  let connectedPublicKey = null;
+
+  async function connectWallet() {
+    const btn  = document.getElementById('connect-wallet-btn');
+    const bar  = document.getElementById('wallet-bar');
+    const text = document.getElementById('wallet-bar-text');
+    btn.disabled = true;
+    btn.textContent = 'Connecting…';
+
+    if (!CONTRACT_ID) {
+      bar.className = 'demo';
+      text.textContent = '⚠ Demo mode – set LUMENFLOW_CONTRACT_ID to connect to a live contract.';
+      btn.disabled = false;
+      btn.textContent = 'Connect Wallet';
+      return;
+    }
+
+    try {
+      const { publicKey } = await walletAdapter.connect();
+      connectedPublicKey = publicKey;
+      bar.className = 'live';
+      text.textContent = `✔ Wallet connected: ${publicKey.slice(0, 8)}…${publicKey.slice(-4)}`;
+      btn.textContent = 'Disconnect';
+      btn.onclick = disconnectWallet;
+    } catch (e) {
+      bar.className = 'error';
+      text.textContent = `✖ ${e.message}`;
+      btn.disabled = false;
+      btn.textContent = 'Retry';
+    }
+  }
+
+  function disconnectWallet() {
+    connectedPublicKey = null;
+    const bar  = document.getElementById('wallet-bar');
+    const text = document.getElementById('wallet-bar-text');
+    const btn  = document.getElementById('connect-wallet-btn');
+    bar.className = 'demo';
+    text.textContent = '⚠ Demo mode – transactions are simulated. Connect a wallet to go live.';
+    btn.textContent = 'Connect Wallet';
+    btn.onclick = connectWallet;
+  }
+
   async function callInitiateMultisig({ paymentId, merchantAddress, tokenAddress, amount, signers, required }) {
     if (!CONTRACT_ID) {
       // Demo mode: simulate success
       await new Promise(r => setTimeout(r, 600));
       return { success: true };
     }
-
+    if (!connectedPublicKey) {
+      return { success: false, error: 'Please connect a wallet before initiating a payment.' };
+    }
     try {
-      const { SorobanRpc, Contract, nativeToScVal, Networks, TransactionBuilder, BASE_FEE, Keypair } =
+      const { SorobanRpc, Contract, nativeToScVal, Networks, TransactionBuilder, BASE_FEE } =
         await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
-
-      const server = new SorobanRpc.Server(RPC_URL);
-      // Wallet integration point: replace with Freighter/Albedo call
-      throw new Error('Connect a wallet to sign transactions. Set window.LUMENFLOW_CONTRACT_ID and integrate Freighter.');
+      const server   = new SorobanRpc.Server(RPC_URL);
+      const contract = new Contract(CONTRACT_ID);
+      const account  = await server.getAccount(connectedPublicKey);
+      const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase: Networks.TESTNET })
+        .addOperation(contract.call(
+          'initiate_multisig_payment',
+          nativeToScVal(connectedPublicKey, { type: 'address' }),
+          nativeToScVal(paymentId,          { type: 'string'  }),
+          nativeToScVal(merchantAddress,    { type: 'address' }),
+          nativeToScVal(tokenAddress,       { type: 'address' }),
+          nativeToScVal(BigInt(amount),     { type: 'i128'    }),
+          nativeToScVal(signers.map(s => nativeToScVal(s, { type: 'address' }))),
+          nativeToScVal(required,           { type: 'u32'     }),
+        ))
+        .setTimeout(30)
+        .build();
+      const sim = await server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(sim)) throw new Error(sim.error);
+      const preparedXdr = SorobanRpc.assembleTransaction(tx, sim).build().toXDR();
+      await walletAdapter.signAndSubmit(preparedXdr);
+      return { success: true };
     } catch (e) {
       return { success: false, error: e.message };
     }
@@ -354,7 +506,32 @@
       await new Promise(r => setTimeout(r, 400));
       return { success: true };
     }
-    return { success: false, error: 'Wallet integration required.' };
+    if (!connectedPublicKey) {
+      return { success: false, error: 'Please connect a wallet to sign.' };
+    }
+    try {
+      const { SorobanRpc, Contract, nativeToScVal, Networks, TransactionBuilder, BASE_FEE } =
+        await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
+      const server   = new SorobanRpc.Server(RPC_URL);
+      const contract = new Contract(CONTRACT_ID);
+      const account  = await server.getAccount(connectedPublicKey);
+      const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase: Networks.TESTNET })
+        .addOperation(contract.call(
+          'sign_multisig_payment',
+          nativeToScVal(signerAddress, { type: 'address' }),
+          nativeToScVal(paymentId,     { type: 'string'  }),
+          nativeToScVal(new Uint8Array(64)), // placeholder: real signature from wallet
+        ))
+        .setTimeout(30)
+        .build();
+      const sim = await server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(sim)) throw new Error(sim.error);
+      const preparedXdr = SorobanRpc.assembleTransaction(tx, sim).build().toXDR();
+      await walletAdapter.signAndSubmit(preparedXdr);
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
   }
 
   async function callExecuteMultisig(paymentId) {
@@ -362,7 +539,31 @@
       await new Promise(r => setTimeout(r, 500));
       return { success: true };
     }
-    return { success: false, error: 'Wallet integration required.' };
+    if (!connectedPublicKey) {
+      return { success: false, error: 'Please connect a wallet to execute.' };
+    }
+    try {
+      const { SorobanRpc, Contract, nativeToScVal, Networks, TransactionBuilder, BASE_FEE } =
+        await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
+      const server   = new SorobanRpc.Server(RPC_URL);
+      const contract = new Contract(CONTRACT_ID);
+      const account  = await server.getAccount(connectedPublicKey);
+      const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase: Networks.TESTNET })
+        .addOperation(contract.call(
+          'execute_multisig_payment',
+          nativeToScVal(connectedPublicKey, { type: 'address' }),
+          nativeToScVal(paymentId,          { type: 'string'  }),
+        ))
+        .setTimeout(30)
+        .build();
+      const sim = await server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(sim)) throw new Error(sim.error);
+      const preparedXdr = SorobanRpc.assembleTransaction(tx, sim).build().toXDR();
+      await walletAdapter.signAndSubmit(preparedXdr);
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
   }
 
   // ── Submit ─────────────────────────────────────────────────────────────────
