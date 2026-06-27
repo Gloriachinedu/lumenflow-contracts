@@ -3,6 +3,7 @@
 **Scalable, secure, and decentralized smart contracts for Soroban on Stellar.**
 
 [![CI](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml/badge.svg)](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/Gloriachinedu/lumenflow-contracts/branch/main/graph/badge.svg)](https://codecov.io/gh/Gloriachinedu/lumenflow-contracts)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Stellar](https://img.shields.io/badge/Stellar-Soroban-blueviolet)](https://soroban.stellar.org)
 [![Audited by](https://img.shields.io/badge/Audited%20By-TBD-lightgrey)](docs/audit/audit-report.md)
@@ -202,6 +203,16 @@ cargo test test_successful_refund_flow
 
 # Full lint + test pipeline
 ./scripts/test.sh
+
+# Generate coverage report locally (requires cargo-llvm-cov)
+COVERAGE=1 ./scripts/test.sh
+# → writes lcov.info to the workspace root
+```
+
+Coverage threshold: **80% line coverage** is enforced in CI. Install `cargo-llvm-cov` once with:
+
+```bash
+cargo install cargo-llvm-cov --locked
 ```
 
 ## Benchmarking
@@ -749,6 +760,29 @@ stellar network container restart local
 **Insufficient XLM for fees:** Fund your account via Friendbot (testnet) or acquire XLM (mainnet).
 
 **Test failures:** Ensure `soroban-sdk` version in `Cargo.toml` matches `rust-toolchain.toml` channel.
+
+---
+
+## Frontend Dev Server
+
+A lightweight local preview server is included under `frontend/` for working on static UI pages without a production build step.
+
+**Requirements:** Node.js ≥ 18
+
+```bash
+# One-command start (installs deps on first run)
+./scripts/dev.sh
+```
+
+Or run directly:
+
+```bash
+cd frontend
+npm install   # first time only
+npm run dev   # starts http://localhost:3000 with live reload
+```
+
+The server watches `**/*.html`, `**/*.css`, and `**/*.js` inside `frontend/` and refreshes the browser automatically on changes.
 
 ---
 

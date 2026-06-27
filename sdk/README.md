@@ -255,9 +255,31 @@ await client.processPaymentWithNonce(
 );
 ```
 
-**Nonce semantics:** The contract stores the next expected nonce per payer. Passing the current expected value succeeds and increments it. Any other value (lower or skipped) returns `InvalidNonce (4)`.
+## Requirements
 
-#### `batchPayment(payer: string, payments: BatchPaymentItem[]): Promise<void>`
+| Tool | Version |
+|------|---------|
+| Node.js | ≥ 18 |
+| TypeScript | ≥ 5.0 |
+
+## Installation
+
+```bash
+# npm
+npm install @lumenflow/sdk
+
+# yarn
+yarn add @lumenflow/sdk
+
+# pnpm
+pnpm add @lumenflow/sdk
+```
+
+## Build
+
+```bash
+# Install dev dependencies first
+npm install
 
 Execute up to 10 signature-verified payments atomically. All succeed or all fail.
 

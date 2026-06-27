@@ -227,6 +227,20 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Add a token to the payment whitelist. Admin only.
+    pub fn add_allowed_token(env: Env, admin: Address, token: Address) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_token_allowed(&env, &token, true);
+        Ok(())
+    }
+
+    /// Remove a token from the payment whitelist. Admin only.
+    pub fn remove_allowed_token(env: Env, admin: Address, token: Address) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_token_allowed(&env, &token, false);
+        Ok(())
+    }
+
     // ── Merchant management ───────────────────────────────────────────────────
 
     /// Register a new merchant.
@@ -573,9 +587,9 @@ impl PaymentProcessingContract {
         storage::add_merchant_payment_id(&env, &merchant_address, &order_id)?;
         storage::add_payer_payment_id(&env, &payer, &order_id)?;
 
-        // Update merchant total
+        // Update merchant total (net of fee)
         let mut m = merchant;
-        m.total_received += amount;
+        m.total_received += merchant_amount;
         storage::set_merchant(&env, &m);
 
         // Update merchant stats
@@ -1354,13 +1368,13 @@ impl PaymentProcessingContract {
 
         let ms = MultisigPayment {
             payment_id: payment_id.clone(),
+            initiator: initiator.clone(),
             merchant_address,
             token: token_address,
             amount,
             required_signatures,
             signers,
-            signatures: Vec::new(&env),
-            signed_by: Vec::new(&env),
+            collected: Vec::new(&env),
             executed: false,
             cancelled: false,
             initiator,
@@ -1407,18 +1421,25 @@ impl PaymentProcessingContract {
             return Err(PaymentError::MultisigAlreadyExecuted);
         }
 
+        if ms.cancelled {
+            return Err(PaymentError::MultisigCancelled);
+        }
+
+        if env.ledger().timestamp() >= ms.expires_at {
+            return Err(PaymentError::MultisigExpired);
+        }
+
         // Verify signer is in the allowed list
         if !ms.signers.contains(&signer) {
             return Err(PaymentError::Unauthorized);
         }
 
         // Prevent double-signing: check if this signer has already signed
-        if ms.signed_by.contains(&signer) {
+        if ms.collected.iter().any(|e| e.signer == signer) {
             return Err(PaymentError::MultisigAlreadySigned);
         }
 
-        ms.signatures.push_back(signature);
-        ms.signed_by.push_back(signer);
+        ms.collected.push_back(SignatureEntry { signer, signature });
         storage::set_multisig(&env, &ms);
         Ok(())
     }
@@ -1543,6 +1564,33 @@ impl PaymentProcessingContract {
 
         env.events()
             .publish(("lumenflow", "multisig_executed"), payment_id);
+        Ok(())
+    }
+
+    // ── Versioning ────────────────────────────────────────────────────────────
+
+    /// Returns the contract version from the compiled package metadata.
+    pub fn get_contract_version(_env: Env) -> String {
+        String::from_str(&_env, env!("CARGO_PKG_VERSION"))
+    }
+
+    /// Admin: record the current binary version on-chain (call once after deploy/upgrade).
+    pub fn set_contract_version(env: Env, admin: Address) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        let version = String::from_str(&env, env!("CARGO_PKG_VERSION"));
+        storage::set_stored_version(&env, &version);
+        Ok(())
+    }
+
+    /// Admin guard: returns error if stored on-chain version does not match binary version.
+    pub fn assert_version_matches(env: Env, admin: Address) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        let current = String::from_str(&env, env!("CARGO_PKG_VERSION"));
+        if let Some(stored) = storage::get_stored_version(&env) {
+            if stored != current {
+                return Err(PaymentError::VersionMismatch);
+            }
+        }
         Ok(())
     }
 
