@@ -5,6 +5,7 @@ use crate::storage;
 
 pub const MAX_PAGE_LIMIT: u32 = 100;
 pub const REFUND_WINDOW_SECS: u64 = 30 * 24 * 3600; // 30 days
+pub const MULTISIG_EXPIRY_SECS: u64 = 7 * 24 * 3600; // 7 days
 
 /// Require that `caller` is the stored admin.
 pub fn require_admin(env: &Env, caller: &Address) -> Result<(), PaymentError> {

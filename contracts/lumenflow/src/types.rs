@@ -91,6 +91,7 @@ pub struct RefundRecord {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MultisigPayment {
     pub payment_id: String,
+    pub initiator: Address,
     pub merchant_address: Address,
     pub token: Address,
     pub amount: i128,
@@ -98,7 +99,9 @@ pub struct MultisigPayment {
     pub signers: Vec<Address>,
     pub signatures: Vec<Bytes>,
     pub executed: bool,
+    pub cancelled: bool,
     pub created_at: u64,
+    pub expires_at: u64,
 }
 
 // ── Query helpers ─────────────────────────────────────────────────────────────

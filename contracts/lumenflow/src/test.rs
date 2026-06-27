@@ -597,3 +597,135 @@ fn test_is_registered() {
     
     assert!(client.is_registered(&merchant));
 }
+
+// ── Multisig expiry and cancellation tests ────────────────────────────────────
+
+#[test]
+fn test_multisig_expired_cannot_sign() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_EXP_001"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+    );
+
+    // Advance past 7-day expiry
+    env.ledger().with_mut(|l| l.timestamp += 8 * 24 * 3600);
+
+    let result = client.try_sign_multisig_payment(
+        &signer,
+        &str(&env, "MS_EXP_001"),
+        &bytes(&env, &[1u8; 64]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MultisigExpired)));
+}
+
+#[test]
+fn test_multisig_expired_cannot_execute() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_EXP_002"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+    );
+
+    // Sign before expiry
+    client.sign_multisig_payment(&signer, &str(&env, "MS_EXP_002"), &bytes(&env, &[1u8; 64]));
+
+    // Advance past expiry
+    env.ledger().with_mut(|l| l.timestamp += 8 * 24 * 3600);
+
+    let result = client.try_execute_multisig_payment(&payer, &str(&env, "MS_EXP_002"));
+    assert_eq!(result, Err(Ok(PaymentError::MultisigExpired)));
+}
+
+#[test]
+fn test_multisig_cancellation_by_initiator() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_CANCEL_001"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+    );
+
+    // Initiator cancels
+    client.cancel_multisig_payment(&payer, &str(&env, "MS_CANCEL_001"));
+
+    // Cannot sign after cancellation
+    let result = client.try_sign_multisig_payment(
+        &signer,
+        &str(&env, "MS_CANCEL_001"),
+        &bytes(&env, &[1u8; 64]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MultisigCancelled)));
+}
+
+#[test]
+fn test_multisig_cancel_unauthorized() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_CANCEL_002"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+    );
+
+    let result = client.try_cancel_multisig_payment(&stranger, &str(&env, "MS_CANCEL_002"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_multisig_cancel_by_admin() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_CANCEL_003"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+    );
+
+    // Admin can also cancel
+    client.cancel_multisig_payment(&admin, &str(&env, "MS_CANCEL_003"));
+
+    let ms = client.get_multisig_payment(&str(&env, "MS_CANCEL_003"));
+    assert!(ms.cancelled);
+}

@@ -35,6 +35,8 @@ pub enum PaymentError {
     MultisigAlreadySigned = 41,
     MultisigAlreadyExecuted = 42,
     InsufficientSignatures = 43,
+    MultisigExpired = 44,
+    MultisigCancelled = 45,
 
     // General
     InvalidInput = 50,

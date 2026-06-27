@@ -16,7 +16,7 @@ use soroban_sdk::{
 use error::PaymentError;
 use helper::{
     require_admin, require_admin_or, require_non_empty_string, require_positive,
-    require_valid_limit, validate_tags, verify_signature, REFUND_WINDOW_SECS,
+    require_valid_limit, validate_tags, verify_signature, REFUND_WINDOW_SECS, MULTISIG_EXPIRY_SECS,
 };
 use types::{
     BatchPaymentItem, GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder,
@@ -624,8 +624,10 @@ impl PaymentProcessingContract {
             return Err(PaymentError::MerchantInactive);
         }
 
+        let now = env.ledger().timestamp();
         let ms = MultisigPayment {
             payment_id: payment_id.clone(),
+            initiator: initiator.clone(),
             merchant_address,
             token: token_address,
             amount,
@@ -633,7 +635,9 @@ impl PaymentProcessingContract {
             signers,
             signatures: Vec::new(&env),
             executed: false,
-            created_at: env.ledger().timestamp(),
+            cancelled: false,
+            created_at: now,
+            expires_at: now + MULTISIG_EXPIRY_SECS,
         };
         storage::set_multisig(&env, &ms);
 
@@ -655,6 +659,14 @@ impl PaymentProcessingContract {
 
         if ms.executed {
             return Err(PaymentError::MultisigAlreadyExecuted);
+        }
+
+        if ms.cancelled {
+            return Err(PaymentError::MultisigCancelled);
+        }
+
+        if env.ledger().timestamp() >= ms.expires_at {
+            return Err(PaymentError::MultisigExpired);
         }
 
         // Verify signer is in the allowed list
@@ -686,6 +698,14 @@ impl PaymentProcessingContract {
             return Err(PaymentError::MultisigAlreadyExecuted);
         }
 
+        if ms.cancelled {
+            return Err(PaymentError::MultisigCancelled);
+        }
+
+        if env.ledger().timestamp() >= ms.expires_at {
+            return Err(PaymentError::MultisigExpired);
+        }
+
         if ms.signatures.len() < ms.required_signatures {
             return Err(PaymentError::InsufficientSignatures);
         }
@@ -704,6 +724,38 @@ impl PaymentProcessingContract {
         env.events()
             .publish(("lumenflow", "multisig_executed"), payment_id);
         Ok(())
+    }
+
+    /// Cancel a multisig payment. Only the initiator or admin may cancel.
+    pub fn cancel_multisig_payment(
+        env: Env,
+        caller: Address,
+        payment_id: String,
+    ) -> Result<(), PaymentError> {
+        let mut ms = storage::get_multisig(&env, &payment_id)
+            .ok_or(PaymentError::MultisigNotFound)?;
+
+        if ms.executed {
+            return Err(PaymentError::MultisigAlreadyExecuted);
+        }
+
+        if ms.cancelled {
+            return Err(PaymentError::MultisigCancelled);
+        }
+
+        require_admin_or(&env, &caller, &ms.initiator.clone())?;
+
+        ms.cancelled = true;
+        storage::set_multisig(&env, &ms);
+
+        env.events()
+            .publish(("lumenflow", "multisig_cancelled"), payment_id);
+        Ok(())
+    }
+
+    /// Get a multisig payment record by ID.
+    pub fn get_multisig_payment(env: Env, payment_id: String) -> Result<MultisigPayment, PaymentError> {
+        storage::get_multisig(&env, &payment_id).ok_or(PaymentError::MultisigNotFound)
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
