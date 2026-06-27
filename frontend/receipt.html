@@ -4,6 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Payment Receipt – LumenFlow</title>
+  <meta name="description" content="Your LumenFlow payment receipt. View transaction details, amounts, and confirmation for completed payments." />
+  <meta property="og:title" content="Payment Receipt – LumenFlow" />
+  <meta property="og:description" content="Your LumenFlow payment receipt. View transaction details, amounts, and confirmation for completed payments." />
+  <meta name="twitter:card" content="summary" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -23,8 +27,9 @@
       border-radius: 12px;
       box-shadow: 0 2px 16px rgba(0,0,0,0.08);
       max-width: 560px;
-      width: 100%;
+      width: min(100%, 560px);
       padding: 2rem;
+      overflow-wrap: anywhere;
     }
 
     .receipt-header {
@@ -35,44 +40,13 @@
       border-bottom: 1px solid #e8ecf0;
       padding-bottom: 1rem;
     }
+    .receipt-header h1 { font-size: 1.25rem; margin-bottom: 0; }
 
-    .receipt-header h1 {
-      font-size: 1.25rem;
-      font-weight: 700;
-      color: #6c47ff;
-    }
-
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.3rem;
-      font-size: 0.75rem;
-      font-weight: 600;
-      padding: 0.25rem 0.6rem;
-      border-radius: 999px;
-    }
-
-    .badge-completed { background: #e6f9f0; color: #1a9e5c; }
-    .badge-refunded  { background: #fff3e0; color: #e07b00; }
-    .badge-partial   { background: #fff8e1; color: #c68000; }
-
-    .verified-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.25rem;
-      font-size: 0.7rem;
-      color: #6c47ff;
-      font-weight: 600;
-    }
-
-    .field { margin-bottom: 1rem; }
     .field label {
-      display: block;
       font-size: 0.72rem;
-      text-transform: uppercase;
       letter-spacing: 0.05em;
       color: #888;
-      margin-bottom: 0.2rem;
+      font-weight: 400;
     }
     .field .value {
       font-size: 0.95rem;
@@ -85,10 +59,13 @@
       color: #6c47ff;
     }
 
-    .divider {
-      border: none;
-      border-top: 1px dashed #e0e0e0;
-      margin: 1.25rem 0;
+    .verified-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      font-size: 0.7rem;
+      color: #6c47ff;
+      font-weight: 600;
     }
 
     .refunds-section h2 {
@@ -99,7 +76,6 @@
       color: #555;
       margin-bottom: 0.75rem;
     }
-
     .refund-item {
       background: #fafafa;
       border: 1px solid #eee;
@@ -113,7 +89,7 @@
       justify-content: space-between;
       margin-bottom: 0.2rem;
     }
-    .refund-item .refund-reason { color: #666; font-size: 0.8rem; }
+    .refund-item .refund-meta { color: #666; font-size: 0.8rem; margin-top: 0.3rem; }
 
     .actions {
       display: flex;
@@ -123,8 +99,9 @@
     }
 
     .btn {
-      flex: 1;
-      padding: 0.6rem 1rem;
+      flex: 1 1 140px;
+      min-height: 44px;
+      padding: 0.7rem 1rem;
       border: none;
       border-radius: 8px;
       font-size: 0.875rem;
@@ -146,30 +123,31 @@
     .state-box p  { color: #666; font-size: 0.9rem; }
 
     #loading, #not-found, #receipt-content { display: none; }
-
-    /* Print */
-    @media print {
-      body { background: #fff; padding: 0; }
-      .receipt { box-shadow: none; border-radius: 0; max-width: 100%; }
-      .actions { display: none; }
-      .receipt-header h1::after { content: " – LumenFlow"; }
-    }
   </style>
 </head>
 <body>
 
-<div class="receipt">
+<div class="card receipt">
   <!-- Loading -->
   <div id="loading" class="state-box">
     <div class="icon">⏳</div>
     <h2>Loading receipt…</h2>
+    <p>Fetching your payment details from the Stellar network.</p>
   </div>
 
-  <!-- 404 -->
+  <!-- 404 / Not found -->
   <div id="not-found" class="state-box">
     <div class="icon">🔍</div>
     <h2>Receipt not found</h2>
     <p>No payment record exists for order ID <strong id="missing-id"></strong>.</p>
+    <div class="next-steps">
+      <strong>What you can do:</strong>
+      <ul style="margin-top:0.4rem;padding-left:1.2rem;">
+        <li>Double-check the order ID in your payment confirmation email.</li>
+        <li>Ask your merchant to resend the receipt link.</li>
+        <li>Contact <a href="mailto:support@lumenflow.io">support@lumenflow.io</a> if the problem persists.</li>
+      </ul>
+    </div>
   </div>
 
   <!-- Receipt content -->
@@ -182,38 +160,43 @@
     <div class="field">
       <label>Order ID</label>
       <div class="value" id="field-order-id"></div>
+      <div class="help-text">Your unique reference for this transaction.</div>
     </div>
 
     <div class="field">
       <label>Merchant</label>
       <div class="value">
         <span id="field-merchant-name"></span>
-        <span id="verified-badge" class="verified-badge" style="display:none">
-          ✔ Verified
-        </span>
+        <span id="verified-badge" class="verified-badge" style="display:none">✔ Verified</span>
       </div>
+      <div class="help-text">The business that received this payment.</div>
     </div>
 
     <div class="field">
-      <label>Amount</label>
+      <label>Amount Paid</label>
       <div class="value amount" id="field-amount"></div>
+      <div class="help-text">Total amount transferred in this transaction.</div>
     </div>
 
     <div class="field">
-      <label>Token</label>
+      <label>Token / Asset</label>
       <div class="value" id="field-token"></div>
+      <div class="help-text">The Stellar asset used for this payment.</div>
     </div>
 
     <div class="field">
-      <label>Date</label>
+      <label>Payment Date</label>
       <div class="value" id="field-date"></div>
     </div>
 
     <hr class="divider" />
 
-    <!-- Refund history (hidden when empty) -->
+    <!-- Refund history -->
     <div id="refunds-section" class="refunds-section" style="display:none">
       <h2>Refund History</h2>
+      <p style="font-size:0.82rem;color:#666;margin-bottom:0.75rem;">
+        Each entry below shows a refund request associated with this payment.
+      </p>
       <div id="refunds-list"></div>
       <hr class="divider" />
     </div>
@@ -225,7 +208,9 @@
   </div>
 </div>
 
-<script>
+<script type="module">
+  import { CONTRACT_ID, RPC_URL, formatAmount, formatDate, renderModeBanner } from './lumenflow-shared.js';
+
   // ── Routing ────────────────────────────────────────────────────────────────
   // Supports both:
   //   /receipt/ORDER_001          (path-based, requires server routing)
@@ -238,34 +223,15 @@
     return new URLSearchParams(window.location.search).get('orderId');
   }
 
-  // ── Formatting helpers ─────────────────────────────────────────────────────
-
-  function formatAmount(amount, decimals = 7) {
-    return (Number(amount) / Math.pow(10, decimals)).toLocaleString(undefined, {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: decimals,
-    });
-  }
-
-  function formatDate(timestamp) {
-    return new Date(Number(timestamp) * 1000).toLocaleString();
-  }
-
+  // ── Status badge (local to receipt page) ──────────────────────────────────
   function statusBadge(status) {
     const map = {
       Completed:         { label: '✔ Completed',          cls: 'badge-completed' },
       PartiallyRefunded: { label: '↩ Partially Refunded', cls: 'badge-partial'   },
       FullyRefunded:     { label: '↩ Fully Refunded',     cls: 'badge-refunded'  },
     };
-    return map[status] || { label: status, cls: '' };
+    return map[status] || { label: status || 'Unknown', cls: 'badge-unknown' };
   }
-
-  // ── Stellar / Soroban data fetching ────────────────────────────────────────
-  // Replace CONTRACT_ID and NETWORK_RPC with your deployment values,
-  // or inject them via a build-time environment variable.
-
-  const CONTRACT_ID = window.LUMENFLOW_CONTRACT_ID || '';
-  const RPC_URL     = window.LUMENFLOW_RPC_URL     || 'https://soroban-testnet.stellar.org';
 
   async function fetchPayment(orderId) {
     // If no contract configured, fall back to demo data so the page is usable
@@ -365,14 +331,20 @@
   }
 
   function copyLink() {
-    navigator.clipboard.writeText(window.location.href)
-      .then(() => alert('Link copied!'))
-      .catch(() => prompt('Copy this link:', window.location.href));
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(window.location.href)
+        .then(() => alert('Link copied!'))
+        .catch(() => prompt('Copy this link:', window.location.href));
+      return;
+    }
+    prompt('Copy this link:', window.location.href);
   }
+  window.copyLink = copyLink;
 
   // ── Bootstrap ──────────────────────────────────────────────────────────────
 
   (async () => {
+    renderModeBanner();
     const orderId = getOrderId();
     if (!orderId) {
       document.getElementById('missing-id').textContent = '(none)';

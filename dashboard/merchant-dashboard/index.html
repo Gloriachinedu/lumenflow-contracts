@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Merchant Dashboard — Refunds</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <a href="#content" class="skip-link">Skip to content</a>
+  <header class="site-header">
+    <h1 id="pageTitle">Merchant Refunds</h1>
+    <div id="account" class="account">Not connected</div>
+  </header>
+
+  <main>
+    <section class="controls">
+      <button id="connectWallet">Connect Wallet</button>
+    </section>
+
+    <nav class="tabs" role="tablist" aria-label="Refund status tabs">
+      <button role="tab" aria-selected="true" data-status="pending" class="tab">Pending</button>
+      <button role="tab" aria-selected="false" data-status="approved" class="tab">Approved</button>
+      <button role="tab" aria-selected="false" data-status="rejected" class="tab">Rejected</button>
+      <button role="tab" aria-selected="false" data-status="completed" class="tab">Completed</button>
+    </nav>
+
+    <section id="content">
+      <div id="empty" class="empty">No refunds.</div>
+      <table id="refundsTable" role="table" aria-label="Refund requests table">
+        <thead>
+          <tr>
+            <th id="col-id" scope="col">ID</th>
+            <th id="col-customer" scope="col">Customer</th>
+            <th id="col-amount" scope="col">Amount</th>
+            <th id="col-status" scope="col">Status</th>
+            <th id="col-actions" scope="col">Actions</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+
+  <!-- Wallet + Confirm modals -->
+  <div id="walletModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="walletTitle">
+    <div class="modal-content">
+      <h2 id="walletTitle">Connect Wallet</h2>
+      <button id="freighter">Freighter</button>
+      <button id="albedo">Albedo</button>
+      <button id="walletClose">Close</button>
+    </div>
+  </div>
+
+  <div id="confirmModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="confirmTitle">
+    <div class="modal-content">
+      <h2 id="confirmTitle" class="visually-hidden">Confirmation</h2>
+      <p id="confirmText">Are you sure?</p>
+      <button id="confirmYes">Yes</button>
+      <button id="confirmNo">No</button>
+    </div>
+  </div>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>

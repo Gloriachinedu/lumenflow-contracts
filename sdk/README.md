@@ -1,6 +1,59 @@
 # @lumenflow/sdk
 
-TypeScript SDK for interacting with the LumenFlow Soroban smart contract on Stellar.
+The LumenFlow TypeScript SDK provides a convenient wrapper around the LumenFlow smart contract on Soroban.
+
+## Installation
+
+```bash
+npm install @lumenflow/sdk
+```
+
+## Quick Start
+
+```typescript
+import { LumenFlowClient, MerchantCategory } from '@lumenflow/sdk';
+import { Keypair } from '@stellar/stellar-sdk';
+
+const client = new LumenFlowClient({
+  contractId: 'CC...',
+  rpcUrl: 'https://soroban-testnet.stellar.org',
+  networkPassphrase: 'Test SDF Network ; September 2015',
+});
+
+// Setup a signer for state-changing operations
+const secretKey = 'S...';
+const keypair = Keypair.fromSecret(secretKey);
+
+client.setSigner(async (tx) => {
+  tx.sign(keypair);
+  return tx;
+});
+
+// Register a merchant
+await client.registerMerchant(
+  keypair.publicKey(),
+  'My Shop',
+  'The best shop',
+  'contact@example.com',
+  MerchantCategory.Retail
+);
+
+// Get merchant info
+const merchant = await client.getMerchant(keypair.publicKey());
+console.log(`Merchant ${merchant.name} registered at ${merchant.registeredAt}`);
+
+// Process a payment
+await client.processPaymentWithNonce(
+  payerAddress,
+  'ORDER-123',
+  merchantAddress,
+  tokenAddress,
+  10000000n, // 1.0 unit (assuming 7 decimals)
+  'Payment for coffee',
+  ['coffee', 'morning'],
+  0n // nonce
+);
+```
 
 ## Requirements
 
@@ -28,55 +81,66 @@ pnpm add @lumenflow/sdk
 # Install dev dependencies first
 npm install
 
-# Compile TypeScript → dist/
-npm run build
-```
-
-The compiled output lands in `dist/`.
-
-## Testing
-
-```bash
-npm test
-```
-
-## Usage
+The SDK maps numeric contract error codes to human-readable messages and provides a typed `LumenFlowError` object.
 
 ```typescript
-import { LumenFlowError, PaymentErrorCode } from '@lumenflow/sdk';
+import { LumenFlowClient, NETWORKS } from "@lumenflow/sdk";
+import { Keypair } from "@stellar/stellar-sdk";
 
-try {
-  // Call a contract method via your Soroban RPC client...
-} catch (error) {
-  if (error.code) {
-    const lfError = new LumenFlowError(error.code);
-    console.error(lfError.message);      // human-readable message
-    console.error(lfError.messageKey);   // i18n key, e.g. "error.paymentalreadyexists"
-  }
-}
-```
+const client = new LumenFlowClient({
+  contractId: process.env.CONTRACT_ID!,
+  ...NETWORKS.testnet,
+});
 
-### Error codes
+const source = Keypair.fromSecret(process.env.SOURCE_SECRET!);
 
-All contract error codes are exported as the `PaymentErrorCode` enum:
-
-```typescript
-import { PaymentErrorCode } from '@lumenflow/sdk';
-
-// e.g. PaymentErrorCode.Unauthorized === 1
+await client.registerMerchant(
+  source,
+  source.publicKey(),
+  "My Store",
+  "A great store",
+  "contact@store.com",
+  "Retail"
+);
 ```
 
 ## Error Handling
 
-`LumenFlowError` wraps a numeric contract error code and exposes:
+Contract errors are surfaced as `LumenFlowError` with a typed `code` property:
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `code` | `PaymentErrorCode` | Numeric error code |
-| `message` | `string` | Human-readable English message |
-| `messageKey` | `string` | i18n-ready key (e.g. `"error.unauthorized"`) |
-| `details` | `any` | Optional raw error payload |
+```typescript
+import { LumenFlowError, PaymentErrorCode } from "@lumenflow/sdk";
 
-## License
+try {
+  await client.registerMerchant(...);
+} catch (error) {
+  if (error instanceof LumenFlowError) {
+    console.error(`Error ${error.code}: ${error.message}`);
+    // e.g., "Error 11: This address is already registered as a merchant."
+  }
+}
+```
 
-MIT
+## Features
+
+- **Full Coverage:** Supports all 39 contract functions including Admin, Merchant, Payment, Refunds, Multisig, and Subscriptions.
+- **Type Safety:** Fully typed interfaces for all contract data structures.
+- **Automatic XDR Handling:** Converts between JS types (bigint, number, string) and Soroban ScVal automatically.
+- **Error Mapping:** Direct mapping from Soroban contract errors to descriptive SDK errors.
+- **Utility Functions:** Includes helpers for signing payment payloads off-chain.
+
+## Development
+
+### Build
+```bash
+npm run build
+```
+
+### Test
+```bash
+npm test
+```
+
+## Error Codes
+
+See [`src/errors.ts`](src/errors.ts) for the full list of `PaymentErrorCode` values and their human-readable messages.
