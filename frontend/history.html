@@ -157,6 +157,59 @@
 
     tr:last-child td { border-bottom: none; }
 
+    /* ── Mobile Responsive ───────────────────────────────────────────────────── */
+    @media (max-width: 767px) {
+      body { padding: 1rem 0.5rem; }
+
+      .filter-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .range-inputs {
+        flex-wrap: wrap;
+      }
+      .range-inputs input { width: calc(50% - 1rem); }
+
+      /* Hide table, show card layout instead */
+      .results-card { overflow-x: hidden; }
+
+      table thead { display: none; }
+
+      table, tbody, tr, td {
+        display: block;
+        width: 100%;
+      }
+
+      tr {
+        border: 1px solid #eee;
+        border-radius: 8px;
+        margin-bottom: 0.75rem;
+        padding: 0.75rem;
+        background: #fff;
+      }
+      tr:last-child { margin-bottom: 0; }
+
+      td {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.35rem 0;
+        border-bottom: none;
+        font-size: 0.85rem;
+      }
+
+      td::before {
+        content: attr(data-label);
+        font-size: 0.72rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #888;
+        flex-shrink: 0;
+        margin-right: 0.5rem;
+      }
+    }
+
     .amount-cell { font-weight: 600; color: #1a1a2e; }
     .status-badge {
       font-size: 0.75rem;
