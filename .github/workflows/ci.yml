@@ -110,3 +110,73 @@ jobs:
           name: lumenflow-wasm
           path: target/wasm32-unknown-unknown/release/lumenflow.wasm
           retention-days: 30
+
+  sdk-test:
+    name: SDK Unit Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: sdk/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts || npm install
+
+      - name: Run SDK tests
+        run: npm test
+
+  sdk-integration:
+    name: SDK Integration Tests (local Soroban)
+    runs-on: ubuntu-latest
+    if: ${{ vars.RUN_SDK_INTEGRATION == 'true' }}
+    defaults:
+      run:
+        working-directory: sdk
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Stellar CLI
+        run: |
+          curl -L https://github.com/stellar/stellar-cli/releases/latest/download/stellar-cli-x86_64-unknown-linux-gnu.tar.gz | tar -xz
+          sudo mv stellar /usr/local/bin/
+
+      - name: Start local Soroban network
+        run: stellar network container start local
+
+      - name: Wait for RPC
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8000/soroban/rpc && break || sleep 2
+          done
+
+      - name: Build and deploy contract
+        run: |
+          cd ..
+          cargo build --target wasm32-unknown-unknown --release --package lumenflow
+          CONTRACT_ID=$(stellar contract deploy \
+            --wasm target/wasm32-unknown-unknown/release/lumenflow.wasm \
+            --network local \
+            --source "${{ secrets.LOCAL_SOURCE_SECRET }}")
+          echo "CONTRACT_ID=$CONTRACT_ID" >> "$GITHUB_ENV"
+
+      - name: Install SDK dependencies
+        run: npm install
+
+      - name: Run integration tests
+        env:
+          SOROBAN_RPC_URL: http://localhost:8000/soroban/rpc
+          CONTRACT_ID: ${{ env.CONTRACT_ID }}
+        run: npm test -- tests/integration.test.ts
