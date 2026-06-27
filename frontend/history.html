@@ -164,8 +164,10 @@
       padding: 0.2rem 0.5rem;
       border-radius: 4px;
     }
-    .status-completed { background: #e6f9f0; color: #1a9e5c; }
-    .status-refunded  { background: #fff3e0; color: #e07b00; }
+    .status-completed          { background: #e6f9f0; color: #1a9e5c; }
+    .status-partiallyrefunded  { background: #fff3e0; color: #e07b00; }
+    .status-fullyrefunded      { background: #fce8e8; color: #c0392b; }
+    .status-unknown            { background: #f0f0f0; color: #666; }
 
     .empty-state {
       padding: 4rem 2rem;
@@ -356,12 +358,24 @@
     updateResults();
   }
 
-  // ── Mock Results ────────────────────────────────────────────────────────────
+  // ── Status helpers ──────────────────────────────────────────────────────────
+  // Maps contract PaymentStatus enum values to stable UI labels and CSS classes.
+  const STATUS_MAP = {
+    Completed:         { label: '✔ Completed',          cls: 'status-completed'         },
+    PartiallyRefunded: { label: '↩ Partially Refunded', cls: 'status-partiallyrefunded' },
+    FullyRefunded:     { label: '↩ Fully Refunded',     cls: 'status-fullyrefunded'     },
+  };
+
+  function statusBadgeHtml(status) {
+    const entry = STATUS_MAP[status] || { label: status || 'Unknown', cls: 'status-unknown' };
+    return `<span class="status-badge ${entry.cls}">${entry.label}</span>`;
+  }
   
   const mockData = [
-    { date: '2026-05-28 14:22', id: 'ORD-9921', recipient: 'Amazon', amount: '124.50 XLM', status: 'Completed' },
-    { date: '2026-05-27 09:15', id: 'ORD-8832', recipient: 'Starbucks', amount: '12.00 XLM', status: 'Completed' },
-    { date: '2026-05-25 18:40', id: 'ORD-7712', recipient: 'Netflix', amount: '15.99 XLM', status: 'PartiallyRefunded' },
+    { date: '2026-05-28 14:22', id: 'ORD-9921', recipient: 'Amazon',    amount: '124.50 XLM', status: 'Completed'         },
+    { date: '2026-05-27 09:15', id: 'ORD-8832', recipient: 'Starbucks', amount: '12.00 XLM',  status: 'Completed'         },
+    { date: '2026-05-25 18:40', id: 'ORD-7712', recipient: 'Netflix',   amount: '15.99 XLM',  status: 'PartiallyRefunded' },
+    { date: '2026-05-20 10:00', id: 'ORD-6601', recipient: 'Spotify',   amount: '9.99 XLM',   status: 'FullyRefunded'     },
   ];
 
   function updateResults() {
@@ -379,11 +393,11 @@
       mockData.forEach(item => {
         const tr = document.createElement('tr');
         tr.innerHTML = `
-          <td>${item.date}</td>
-          <td><code>${item.id}</code></td>
-          <td>${item.recipient}</td>
-          <td class="amount-cell">${item.amount}</td>
-          <td><span class="status-badge ${item.status === 'Completed' ? 'status-completed' : 'status-refunded'}">${item.status}</span></td>
+          <td data-label="Date">${item.date}</td>
+          <td data-label="Order ID"><code>${item.id}</code></td>
+          <td data-label="Recipient">${item.recipient}</td>
+          <td data-label="Amount" class="amount-cell">${item.amount}</td>
+          <td data-label="Status">${statusBadgeHtml(item.status)}</td>
         `;
         body.appendChild(tr);
       });
