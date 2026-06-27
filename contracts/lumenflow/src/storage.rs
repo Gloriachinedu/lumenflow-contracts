@@ -18,6 +18,7 @@ pub enum DataKey {
     Multisig(String),
     PaymentRequest(String),
     LargePaymentThreshold,
+    ContractVersion,
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -191,4 +192,14 @@ pub fn remove_payment_request(env: &Env, request_id: &String) {
     env.storage()
         .temporary()
         .remove(&DataKey::PaymentRequest(request_id.clone()));
+}
+
+// ── Contract version ──────────────────────────────────────────────────────────
+
+pub fn get_stored_version(env: &Env) -> Option<soroban_sdk::String> {
+    env.storage().instance().get(&DataKey::ContractVersion)
+}
+
+pub fn set_stored_version(env: &Env, version: &soroban_sdk::String) {
+    env.storage().instance().set(&DataKey::ContractVersion, version);
 }

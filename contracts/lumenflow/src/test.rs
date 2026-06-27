@@ -597,3 +597,40 @@ fn test_is_registered() {
     
     assert!(client.is_registered(&merchant));
 }
+
+// ── Versioning tests ──────────────────────────────────────────────────────────
+
+#[test]
+fn test_get_contract_version() {
+    let (env, client) = setup();
+    let version = client.get_contract_version();
+    assert_eq!(version, String::from_str(&env, "1.0.0"));
+}
+
+#[test]
+fn test_set_and_assert_version() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.set_contract_version(&admin);
+    client.assert_version_matches(&admin);
+}
+
+#[test]
+fn test_assert_version_no_stored_version_passes() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    // No set_contract_version called — no stored version means skip check
+    client.assert_version_matches(&admin);
+}
+
+#[test]
+fn test_set_contract_version_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let result = client.try_set_contract_version(&non_admin);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}

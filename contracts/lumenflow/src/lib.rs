@@ -706,6 +706,33 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    // ── Versioning ────────────────────────────────────────────────────────────
+
+    /// Returns the contract version from the compiled package metadata.
+    pub fn get_contract_version(_env: Env) -> String {
+        String::from_str(&_env, env!("CARGO_PKG_VERSION"))
+    }
+
+    /// Admin: record the current binary version on-chain (call once after deploy/upgrade).
+    pub fn set_contract_version(env: Env, admin: Address) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        let version = String::from_str(&env, env!("CARGO_PKG_VERSION"));
+        storage::set_stored_version(&env, &version);
+        Ok(())
+    }
+
+    /// Admin guard: returns error if stored on-chain version does not match binary version.
+    pub fn assert_version_matches(env: Env, admin: Address) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        let current = String::from_str(&env, env!("CARGO_PKG_VERSION"));
+        if let Some(stored) = storage::get_stored_version(&env) {
+            if stored != current {
+                return Err(PaymentError::VersionMismatch);
+            }
+        }
+        Ok(())
+    }
+
     // ── Internal helpers ──────────────────────────────────────────────────────
 
     fn build_page(
