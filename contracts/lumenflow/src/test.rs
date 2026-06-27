@@ -1223,8 +1223,218 @@ fn test_get_payer_payment_history_with_filter() {
     assert_eq!(page.payments.get(0).unwrap().amount, 500);
 }
 
+// ── PaymentFilter.tag tests (#296) ─────────────────────────────────────────
+
+/// Helper: process a payment with a given set of tags.
+fn make_payment_with_tags(
+    env: &Env,
+    client: &PaymentProcessingContractClient,
+    merchant: &Address,
+    payer: &Address,
+    token: &Address,
+    order_id: &str,
+    amount: i128,
+    tags: Option<Vec<String>>,
+) {
+    let pub_key = bytes(env, &[0u8; 32]);
+    let sig = bytes(env, &[0u8; 64]);
+    client.process_payment_with_signature(
+        payer,
+        &str(env, order_id),
+        merchant,
+        token,
+        &amount,
+        &str(env, ""),
+        &tags,
+        &sig,
+        &pub_key,
+    );
+}
+
 #[test]
-fn test_pagination_limit() {
+fn test_tag_filter_matches_payment_with_tag() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut tags = Vec::new(&env);
+    tags.push_back(str(&env, "invoice"));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_001", 100, Some(tags));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_002", 200, None);
+
+    let filter = PaymentFilter {
+        date_start: None,
+        date_end: None,
+        amount_min: None,
+        amount_max: None,
+        token: None,
+        status: StatusFilter::Any,
+        tag: Some(str(&env, "invoice")),
+    };
+
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &Some(filter),
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+
+    assert_eq!(page.total_matching, 1);
+    assert_eq!(page.payments.get(0).unwrap().order_id, str(&env, "T_001"));
+}
+
+#[test]
+fn test_tag_filter_excludes_payment_without_matching_tag() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut tags = Vec::new(&env);
+    tags.push_back(str(&env, "subscription"));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_003", 300, Some(tags));
+
+    let filter = PaymentFilter {
+        date_start: None,
+        date_end: None,
+        amount_min: None,
+        amount_max: None,
+        token: None,
+        status: StatusFilter::Any,
+        tag: Some(str(&env, "invoice")),
+    };
+
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &Some(filter),
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+
+    assert_eq!(page.total_matching, 0);
+}
+
+#[test]
+fn test_tag_filter_excludes_payment_with_no_tags() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_004", 100, None);
+
+    let filter = PaymentFilter {
+        date_start: None,
+        date_end: None,
+        amount_min: None,
+        amount_max: None,
+        token: None,
+        status: StatusFilter::Any,
+        tag: Some(str(&env, "invoice")),
+    };
+
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &Some(filter),
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+
+    assert_eq!(page.total_matching, 0);
+}
+
+#[test]
+fn test_no_tag_filter_returns_all_payments() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut tags = Vec::new(&env);
+    tags.push_back(str(&env, "invoice"));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_005", 100, Some(tags));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_006", 200, None);
+
+    let filter = PaymentFilter {
+        date_start: None,
+        date_end: None,
+        amount_min: None,
+        amount_max: None,
+        token: None,
+        status: StatusFilter::Any,
+        tag: None,
+    };
+
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &Some(filter),
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+
+    assert_eq!(page.total_matching, 2);
+}
+
+#[test]
+fn test_tag_filter_matches_one_of_multiple_tags() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut tags = Vec::new(&env);
+    tags.push_back(str(&env, "invoice"));
+    tags.push_back(str(&env, "q2"));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_007", 100, Some(tags));
+
+    let filter = PaymentFilter {
+        date_start: None,
+        date_end: None,
+        amount_min: None,
+        amount_max: None,
+        token: None,
+        status: StatusFilter::Any,
+        tag: Some(str(&env, "q2")),
+    };
+
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &Some(filter),
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+
+    assert_eq!(page.total_matching, 1);
+    assert_eq!(page.payments.get(0).unwrap().order_id, str(&env, "T_007"));
+}
+
+#[test]
+fn test_tag_filter_payer_history() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut tags = Vec::new(&env);
+    tags.push_back(str(&env, "retail"));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_008", 500, Some(tags));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_009", 600, None);
+
+    let filter = PaymentFilter {
+        date_start: None,
+        date_end: None,
+        amount_min: None,
+        amount_max: None,
+        token: None,
+        status: StatusFilter::Any,
+        tag: Some(str(&env, "retail")),
+    };
+
+    let page = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &Some(filter),
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+
+    assert_eq!(page.total_matching, 1);
+    assert_eq!(page.payments.get(0).unwrap().order_id, str(&env, "T_008"));
+}
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
     let ids = ["PAG_0", "PAG_1", "PAG_2", "PAG_3", "PAG_4"];
     for id_str in ids {
