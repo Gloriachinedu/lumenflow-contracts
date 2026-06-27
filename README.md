@@ -763,6 +763,29 @@ stellar network container restart local
 
 ---
 
+## Frontend Dev Server
+
+A lightweight local preview server is included under `frontend/` for working on static UI pages without a production build step.
+
+**Requirements:** Node.js ≥ 18
+
+```bash
+# One-command start (installs deps on first run)
+./scripts/dev.sh
+```
+
+Or run directly:
+
+```bash
+cd frontend
+npm install   # first time only
+npm run dev   # starts http://localhost:3000 with live reload
+```
+
+The server watches `**/*.html`, `**/*.css`, and `**/*.js` inside `frontend/` and refreshes the browser automatically on changes.
+
+---
+
 ## Community & Support
 
 Need help or want to discuss LumenFlow?
