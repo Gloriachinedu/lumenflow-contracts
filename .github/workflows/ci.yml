@@ -22,7 +22,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # master
+        uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537  # master
         with:
           toolchain: 1.87.0
           targets: wasm32-unknown-unknown
@@ -35,7 +35,7 @@ jobs:
         run: cargo update --locked
 
       - name: Cache cargo registry
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -66,7 +66,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # master
+        uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537  # master
         with:
           toolchain: 1.87.0
           targets: wasm32-unknown-unknown
@@ -75,7 +75,7 @@ jobs:
         run: rustc --version | grep "1.87.0"
 
       - name: Cache cargo registry
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -100,13 +100,13 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # master
+        uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537  # master
         with:
           toolchain: 1.87.0
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo registry
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -129,7 +129,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
           cache: 'npm'
@@ -143,6 +143,50 @@ jobs:
       - name: Lint JS
         run: npm run lint:js
 
+  frontend-lint:
+    name: Frontend HTML/CSS Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - name: Lint HTML files
+        run: npx --yes htmlhint "frontend/**/*.html" --config .htmlhintrc
+
+      - name: Lint CSS files
+        run: npx --yes stylelint "frontend/**/*.css" --config '{"rules":{"block-no-empty":true,"color-no-invalid-hex":true,"no-duplicate-selectors":true}}'
+
+  test-cli:
+    name: CLI Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.87.0
+
+      - name: Verify toolchain version
+        run: rustc --version | grep "1.87.0"
+
+      - name: Cache Cargo registry and git sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-cli-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-cli-
+
+      - name: Run CLI unit and integration tests
+        run: cargo test --package lumenflow-cli --all-features
+
   build:
     name: Build WASM
     runs-on: ubuntu-latest
@@ -155,7 +199,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # master
+        uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537  # master
         with:
           toolchain: 1.87.0
           targets: wasm32-unknown-unknown
@@ -164,7 +208,7 @@ jobs:
         run: rustc --version | grep "1.87.0"
 
       - name: Cache cargo registry
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -189,8 +233,14 @@ jobs:
           LIMIT=$((100 * 1024))
           echo "WASM size: ${SIZE} bytes (limit: ${LIMIT})"
           if [ "$SIZE" -gt "$LIMIT" ]; then
-            echo "ERROR: WASM binary exceeds 100 KB limit (${SIZE} > ${LIMIT})"
+            echo "| Status | ❌ EXCEEDS LIMIT |" >> "$GITHUB_STEP_SUMMARY"
+            echo ""
+            echo "ERROR: WASM binary is ${SIZE_KB} KB, which exceeds the 100 KB limit."
+            echo "To reduce size: run 'cargo build --release' with 'opt-level = \"z\"' in Cargo.toml,"
+            echo "or remove unused features. See README for details."
             exit 1
+          else
+            echo "| Status | ✅ Within limit |" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload WASM artifact
@@ -199,3 +249,24 @@ jobs:
           name: lumenflow-wasm
           path: target/cargo-wasm/wasm32-unknown-unknown/release/lumenflow.wasm
           retention-days: 30
+
+  sdk:
+    name: SDK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: sdk/package-lock.json
+
+      - name: Install SDK dependencies
+        working-directory: sdk
+        run: npm ci --ignore-scripts || npm install --ignore-scripts
+
+      - name: Build SDK
+        working-directory: sdk
+        run: npm run build --if-present

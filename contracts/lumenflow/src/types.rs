@@ -113,17 +113,29 @@ pub struct RefundRecord {
 
 // ── Multisig ──────────────────────────────────────────────────────────────────
 
+/// A single entry pairing a signer address with their signature bytes.
+/// Stored as one vector instead of two parallel vectors to reduce on-chain
+/// storage overhead and keep the signer↔signature relationship explicit.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SignatureEntry {
+    pub signer: Address,
+    pub signature: Bytes,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MultisigPayment {
     pub payment_id: String,
+    pub initiator: Address,
     pub merchant_address: Address,
     pub token: Address,
     pub amount: i128,
     pub required_signatures: u32,
     pub signers: Vec<Address>,
-    pub signatures: Vec<Bytes>,
-    pub signed_by: Vec<Address>,
+    /// Collected signatures. Each entry bundles signer address + signature bytes
+    /// in a single `SignatureEntry`, replacing the previous two parallel vectors.
+    pub collected: Vec<SignatureEntry>,
     pub executed: bool,
     pub cancelled: bool,
     pub initiator: Address,
