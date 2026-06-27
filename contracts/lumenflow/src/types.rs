@@ -127,6 +127,7 @@ pub struct SignatureEntry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MultisigPayment {
     pub payment_id: String,
+    pub initiator: Address,
     pub merchant_address: Address,
     pub token: Address,
     pub amount: i128,

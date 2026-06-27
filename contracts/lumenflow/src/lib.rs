@@ -1368,6 +1368,7 @@ impl PaymentProcessingContract {
 
         let ms = MultisigPayment {
             payment_id: payment_id.clone(),
+            initiator: initiator.clone(),
             merchant_address,
             token: token_address,
             amount,
@@ -1418,6 +1419,14 @@ impl PaymentProcessingContract {
 
         if ms.executed {
             return Err(PaymentError::MultisigAlreadyExecuted);
+        }
+
+        if ms.cancelled {
+            return Err(PaymentError::MultisigCancelled);
+        }
+
+        if env.ledger().timestamp() >= ms.expires_at {
+            return Err(PaymentError::MultisigExpired);
         }
 
         // Verify signer is in the allowed list
