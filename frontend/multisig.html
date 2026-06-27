@@ -125,11 +125,11 @@
     <label>Signer Addresses</label>
     <div id="signers-list">
       <div class="signer-row">
-        <input type="text" placeholder="G… signer address" class="signer-input" oninput="updateThresholdLabel()" />
-        <button class="btn-icon" onclick="removeSigner(this)" title="Remove">✕</button>
+        <input type="text" placeholder="G… signer address" class="signer-input" aria-label="Signer address 1" oninput="updateThresholdLabel()" />
+        <button type="button" class="btn-icon" onclick="removeSigner(this)" aria-label="Remove signer 1">✕</button>
       </div>
     </div>
-    <button class="btn-link" onclick="addSigner()">+ Add signer</button>
+    <button type="button" class="btn-link" id="add-signer-btn" onclick="addSigner()">+ Add signer</button>
     <div class="err-msg" id="err-signers">At least one signer is required.</div>
   </div>
 
@@ -178,20 +178,38 @@
   // ── Signer management ──────────────────────────────────────────────────────
 
   function addSigner() {
+    const list = document.getElementById('signers-list');
+    const index = list.querySelectorAll('.signer-row').length + 1;
     const row = document.createElement('div');
     row.className = 'signer-row';
     row.innerHTML = `
-      <input type="text" placeholder="G… signer address" class="signer-input" oninput="updateThresholdLabel()" />
-      <button class="btn-icon" onclick="removeSigner(this)" title="Remove">✕</button>`;
-    document.getElementById('signers-list').appendChild(row);
+      <input type="text" placeholder="G… signer address" class="signer-input" aria-label="Signer address ${index}" oninput="updateThresholdLabel()" />
+      <button type="button" class="btn-icon" onclick="removeSigner(this)" aria-label="Remove signer ${index}">✕</button>`;
+    list.appendChild(row);
     updateThresholdLabel();
+    // Move focus to the new input for keyboard users
+    row.querySelector('.signer-input').focus();
   }
 
   function removeSigner(btn) {
-    const rows = document.querySelectorAll('.signer-row');
+    const list = document.getElementById('signers-list');
+    const rows = list.querySelectorAll('.signer-row');
     if (rows.length <= 1) return; // keep at least one
-    btn.closest('.signer-row').remove();
+
+    const row = btn.closest('.signer-row');
+    const rowIndex = Array.from(rows).indexOf(row);
+
+    row.remove();
     updateThresholdLabel();
+
+    // Move focus: try previous row's input, otherwise the "Add signer" button
+    const remaining = list.querySelectorAll('.signer-row');
+    const focusTarget = remaining[rowIndex - 1]
+      ? remaining[rowIndex - 1].querySelector('.signer-input')
+      : remaining[0]
+        ? remaining[0].querySelector('.signer-input')
+        : document.getElementById('add-signer-btn');
+    if (focusTarget) focusTarget.focus();
   }
 
   function getSignerValues() {
