@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Payment Receipt — LumenFlow</title>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:system-ui,sans-serif;background:#f4f6f9;color:#1a1a2e;line-height:1.6}
+
+    /* Skip link — visible on focus only */
+    .skip-link{position:absolute;top:-100%;left:0;padding:.5rem 1rem;background:#0052cc;color:#fff;font-weight:600;z-index:100;border-radius:0 0 4px 4px}
+    .skip-link:focus{top:0}
+
+    /* Global focus style — never outline:none */
+    :focus-visible{outline:2px solid #0052cc;outline-offset:3px}
+
+    header{background:#0052cc;color:#fff;padding:1rem 2rem}
+    header h1{font-size:1.25rem;font-weight:700}
+
+    main{max-width:600px;margin:2rem auto;padding:0 1rem}
+
+    section{background:#fff;border-radius:8px;padding:1.5rem;box-shadow:0 1px 4px rgba(0,0,0,.12)}
+    section h2{font-size:1rem;font-weight:600;margin-bottom:1rem;color:#0052cc}
+
+    .receipt-grid{display:grid;grid-template-columns:1fr 1fr;gap:.5rem 1rem}
+    .receipt-grid dt{color:#555;font-size:.875rem}
+    .receipt-grid dd{font-weight:600;font-size:.875rem}
+
+    .status-badge{display:inline-block;padding:.15rem .6rem;border-radius:12px;background:#e3fcef;color:#006644;font-size:.8rem;font-weight:700}
+
+    .actions{display:flex;gap:.75rem;margin-top:1.5rem;flex-wrap:wrap}
+    button{padding:.6rem 1.25rem;border:none;border-radius:6px;font-size:.95rem;font-weight:600;cursor:pointer}
+    .btn-primary{background:#0052cc;color:#fff}
+    .btn-primary:hover{background:#0041a3}
+    .btn-secondary{background:#e8edf4;color:#1a1a2e}
+    .btn-secondary:hover{background:#d0d9ea}
+
+    /* aria-live announcement region */
+    #copy-announcement{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+    .copy-toast{position:fixed;bottom:1.5rem;right:1.5rem;background:#0052cc;color:#fff;padding:.6rem 1.2rem;border-radius:6px;font-size:.9rem;opacity:0;transition:opacity .3s;pointer-events:none}
+    .copy-toast.show{opacity:1}
+  </style>
+</head>
+<body>
+
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <header role="banner">
+    <h1>LumenFlow</h1>
+  </header>
+
+  <main id="main-content" tabindex="-1">
+    <section aria-labelledby="receipt-heading">
+      <h2 id="receipt-heading">Payment Receipt</h2>
+      <dl class="receipt-grid">
+        <dt>Order ID</dt>
+        <dd>ORDER_001</dd>
+        <dt>Merchant</dt>
+        <dd>Demo Store</dd>
+        <dt>Amount</dt>
+        <dd>1,000 USDC</dd>
+        <dt>Token</dt>
+        <dd>USDC</dd>
+        <dt>Status</dt>
+        <dd><span class="status-badge" role="status">Completed</span></dd>
+        <dt>Date</dt>
+        <dd><time datetime="2026-06-27">2026-06-27</time></dd>
+      </dl>
+
+      <div class="actions">
+        <button type="button" class="btn-primary" id="copy-btn"
+          aria-label="Copy link to this receipt">
+          Copy Link
+        </button>
+        <button type="button" class="btn-secondary"
+          aria-label="Print this receipt"
+          onclick="window.print()">
+          Print Receipt
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <!-- aria-live region for screen-reader announcements -->
+  <div id="copy-announcement" aria-live="polite" aria-atomic="true"></div>
+  <div class="copy-toast" id="copy-toast" aria-hidden="true">Link copied!</div>
+
+  <script>
+    (function () {
+      var btn = document.getElementById('copy-btn');
+      var announcement = document.getElementById('copy-announcement');
+      var toast = document.getElementById('copy-toast');
+      var toastTimer;
+
+      function showCopied() {
+        announcement.textContent = 'Link copied to clipboard.';
+        toast.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(function () {
+          toast.classList.remove('show');
+          announcement.textContent = '';
+        }, 2500);
+      }
+
+      function copyLink() {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(window.location.href).then(showCopied).catch(fallback);
+        } else {
+          fallback();
+        }
+      }
+
+      function fallback() {
+        var ta = document.createElement('textarea');
+        ta.value = window.location.href;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        try { document.execCommand('copy'); showCopied(); } catch (e) {}
+        document.body.removeChild(ta);
+        btn.focus();
+      }
+
+      btn.addEventListener('click', copyLink);
+      // Space/Enter are handled natively by <button>, but explicit keydown
+      // ensures it works even if the element is patched or replaced.
+      btn.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          copyLink();
+        }
+      });
+    }());
+  </script>
+</body>
+</html>
