@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Multisig Payment – LumenFlow</title>
+  <meta name="description" content="Initiate and manage multi-signature payments on LumenFlow. Requires threshold approvals before funds are released." />
+  <meta property="og:title" content="Multisig Payment – LumenFlow" />
+  <meta property="og:description" content="Initiate and manage multi-signature payments on LumenFlow. Requires threshold approvals before funds are released." />
+  <meta name="twitter:card" content="summary" />
+  <style>
+    /* Multisig-specific styles not in the shared design system */
+
+    .signer-row {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+      align-items: center;
+    }
+    .signer-row input { flex: 1; }
+
+    .threshold-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-top: 0.5rem;
+    }
+    .threshold-row input[type=number] { width: 80px; }
+    .threshold-row .of-label { font-size: 0.85rem; color: #555; }
+
+    /* Progress panel */
+    #progress-panel { display: none; }
+
+    .progress-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    .progress-header h2 { border: none; padding: 0; margin: 0; }
+
+    .progress-bar-wrap {
+      background: #eee;
+      border-radius: 999px;
+      height: 10px;
+      margin-bottom: 0.5rem;
+      overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%;
+      background: #6c47ff;
+      border-radius: 999px;
+      transition: width 0.4s;
+    }
+    .progress-label { font-size: 0.82rem; color: #555; margin-bottom: 1.25rem; }
+
+    .signer-status-list { list-style: none; }
+    .signer-status-list li {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid #f0f0f0;
+      font-size: 0.85rem;
+    }
+    .signer-status-list li:last-child { border-bottom: none; }
+    .sig-icon { font-size: 1rem; }
+    .sig-addr { flex: 1; word-break: break-all; color: #333; }
+    .sig-status { font-size: 0.75rem; font-weight: 600; }
+    .sig-status.signed  { color: #1a9e5c; }
+    .sig-status.pending { color: #888; }
+
+    .sign-btn {
+      padding: 0.3rem 0.7rem;
+      border: 1.5px solid #6c47ff;
+      border-radius: 6px;
+      background: #fff;
+      color: #6c47ff;
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .sign-btn:hover { background: #f0ecff; }
+    .sign-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .execute-section { margin-top: 1.25rem; }
+
+    /* Wallet / mode styles */
+    #wallet-bar {
+      padding: 0.5rem 1rem;
+      font-size: 0.82rem;
+      font-weight: 600;
+      border-radius: 8px;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    #wallet-bar.demo  { background: #fff3cd; color: #856404; }
+    #wallet-bar.live  { background: #d1f3e0; color: #1a5e37; }
+    #wallet-bar.error { background: #fce8e8; color: #c0392b; }
+    #connect-wallet-btn {
+      margin-left: auto;
+      padding: 0.3rem 0.8rem;
+      border: 1.5px solid currentColor;
+      border-radius: 6px;
+      background: transparent;
+      color: inherit;
+      font-size: 0.78rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    #connect-wallet-btn:hover { opacity: 0.75; }
+  </style>
+</head>
+<body>
+
+<h1>Multisig Payment</h1>
+<p class="subtitle">Initiate a payment that requires multiple signers to approve.</p>
+
+<!-- Wallet / mode status bar -->
+<div id="wallet-bar" class="demo" role="status" aria-live="polite">
+  <span id="wallet-bar-text">⚠ Demo mode – transactions are simulated. Connect a wallet to go live.</span>
+  <button id="connect-wallet-btn" type="button" onclick="connectWallet()">Connect Wallet</button>
+</div>
+
+<!-- Initiation form -->
+<div class="card" id="form-panel">
+  <h2>New Multisig Payment</h2>
+
+  <div class="field">
+    <label for="payment-id">Payment ID</label>
+    <input type="text" id="payment-id" placeholder="MS_001" aria-describedby="err-payment-id" aria-required="true" />
+    <div class="err-msg" id="err-payment-id" role="alert" aria-live="polite">Payment ID is required.</div>
+  </div>
+
+  <div class="field">
+    <label for="merchant-address">Merchant Address</label>
+    <input type="text" id="merchant-address" placeholder="G…" aria-describedby="err-merchant" aria-required="true" />
+    <div class="err-msg" id="err-merchant" role="alert" aria-live="polite">Merchant address is required.</div>
+  </div>
+
+  <div class="field">
+    <label for="token-address">Token Address</label>
+    <input type="text" id="token-address" placeholder="C… or G…" aria-describedby="err-token" aria-required="true" />
+    <div class="err-msg" id="err-token" role="alert" aria-live="polite">Token address is required.</div>
+  </div>
+
+  <div class="field">
+    <label for="amount">Amount (stroops)</label>
+    <input type="number" id="amount" placeholder="5000000" min="1" aria-describedby="amount-hint err-amount" aria-required="true" />
+    <div class="hint" id="amount-hint">1 XLM = 10,000,000 stroops</div>
+    <div class="err-msg" id="err-amount" role="alert" aria-live="polite">Amount must be a positive number.</div>
+  </div>
+
+  <!-- Signers -->
+  <div class="field">
+    <label>Signer Addresses</label>
+    <div id="signers-list">
+      <div class="signer-row">
+        <input type="text" placeholder="G… signer address" class="signer-input" aria-label="Signer address 1" aria-describedby="err-signers" oninput="updateThresholdLabel()" />
+        <button type="button" class="btn-icon" onclick="removeSigner(this)" aria-label="Remove signer 1">✕</button>
+      </div>
+    </div>
+    <button type="button" class="btn-link" id="add-signer-btn" onclick="addSigner()">+ Add signer</button>
+    <div class="err-msg" id="err-signers" role="alert" aria-live="polite">At least one signer is required.</div>
+  </div>
+
+  <!-- Required signatures threshold -->
+  <div class="field">
+    <label for="required-sigs">Required Signatures</label>
+    <div class="threshold-row">
+      <input type="number" id="required-sigs" min="1" value="1" aria-describedby="threshold-msg" oninput="validateThreshold()" />
+      <span class="of-label">of <strong id="signer-count">1</strong> signers</span>
+    </div>
+    <div class="validation-msg" id="threshold-msg" role="status" aria-live="polite"></div>
+  </div>
+
+  <div id="form-alert" class="alert" role="alert" aria-live="assertive" style="display:none"></div>
+
+  <button class="btn btn-primary btn-full" id="submit-btn" onclick="submitForm()">Initiate Payment</button>
+</div>
+
+<!-- Progress panel (shown after initiation) -->
+<div class="card" id="progress-panel">
+  <div class="progress-header">
+    <h2>Signature Progress</h2>
+    <span id="progress-fraction" style="font-size:0.85rem;color:#555;"></span>
+  </div>
+
+  <div class="progress-bar-wrap">
+    <div class="progress-bar" id="progress-bar" style="width:0%"></div>
+  </div>
+  <div class="progress-label" id="progress-label"></div>
+
+  <ul class="signer-status-list" id="signer-status-list"></ul>
+
+  <div class="execute-section">
+    <div id="execute-alert" class="alert" style="display:none"></div>
+    <button class="btn btn-primary btn-full" id="execute-btn" onclick="executePayment()" disabled>
+      Execute Payment
+    </button>
+  </div>
+</div>
+
+<script type="module">
+  import { CONTRACT_ID, RPC_URL, renderModeBanner } from './lumenflow-shared.js';
+
+  // ── State ──────────────────────────────────────────────────────────────────
+
+  let state = null; // { paymentId, merchantAddress, tokenAddress, amount, signers, required, signatures: Set }
+
+  // ── Signer management ──────────────────────────────────────────────────────
+
+  function addSigner() {
+    const list = document.getElementById('signers-list');
+    const index = list.querySelectorAll('.signer-row').length + 1;
+    const row = document.createElement('div');
+    row.className = 'signer-row';
+    row.innerHTML = `
+      <input type="text" placeholder="G… signer address" class="signer-input" aria-label="Signer address ${index}" oninput="updateThresholdLabel()" />
+      <button type="button" class="btn-icon" onclick="removeSigner(this)" aria-label="Remove signer ${index}">✕</button>`;
+    list.appendChild(row);
+    updateThresholdLabel();
+    // Move focus to the new input for keyboard users
+    row.querySelector('.signer-input').focus();
+  }
+
+  function removeSigner(btn) {
+    const list = document.getElementById('signers-list');
+    const rows = list.querySelectorAll('.signer-row');
+    if (rows.length <= 1) return; // keep at least one
+
+    const row = btn.closest('.signer-row');
+    const rowIndex = Array.from(rows).indexOf(row);
+
+    row.remove();
+    updateThresholdLabel();
+
+    // Move focus: try previous row's input, otherwise the "Add signer" button
+    const remaining = list.querySelectorAll('.signer-row');
+    const focusTarget = remaining[rowIndex - 1]
+      ? remaining[rowIndex - 1].querySelector('.signer-input')
+      : remaining[0]
+        ? remaining[0].querySelector('.signer-input')
+        : document.getElementById('add-signer-btn');
+    if (focusTarget) focusTarget.focus();
+  }
+
+  function getSignerValues() {
+    return Array.from(document.querySelectorAll('.signer-input'))
+      .map(i => i.value.trim())
+      .filter(Boolean);
+  }
+
+  function updateThresholdLabel() {
+    const count = document.querySelectorAll('.signer-input').length;
+    document.getElementById('signer-count').textContent = count;
+    validateThreshold();
+  }
+
+  function validateThreshold() {
+    const required = parseInt(document.getElementById('required-sigs').value, 10);
+    const count    = document.querySelectorAll('.signer-input').length;
+    const msg      = document.getElementById('threshold-msg');
+
+    if (!required || required < 1) {
+      msg.textContent = 'Required signatures must be at least 1.';
+      msg.className   = 'validation-msg bad';
+      return false;
+    }
+    if (required > count) {
+      msg.textContent = `Required (${required}) cannot exceed signer count (${count}).`;
+      msg.className   = 'validation-msg bad';
+      return false;
+    }
+    msg.textContent = `✔ Valid: ${required} of ${count} signatures required.`;
+    msg.className   = 'validation-msg ok';
+    return true;
+  }
+
+  // ── Form validation ────────────────────────────────────────────────────────
+
+  // Stellar StrKey addresses are 56 chars: a type prefix plus 55 base32 chars.
+  // G = account / public key, C = contract. This is a format + length check.
+  const STELLAR_KEY_BODY = /^[A-Z2-7]{55}$/;
+
+  function isValidStellarKey(value, prefixes) {
+    if (typeof value !== 'string' || value.length !== 56) return false;
+    if (!prefixes.includes(value[0])) return false;
+    return STELLAR_KEY_BODY.test(value.slice(1));
+  }
+
+  function setErr(id, message) {
+    const el = document.getElementById(id);
+    if (message) el.textContent = message;
+    el.style.display = message ? 'block' : 'none';
+    el.classList.toggle('visible', !!message);
+  }
+
+  function markInput(id, invalid) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.toggle('error', invalid);
+    if (invalid) {
+      el.setAttribute('aria-invalid', 'true');
+    } else {
+      el.removeAttribute('aria-invalid');
+    }
+  }
+
+  function validateForm() {
+    let ok = true;
+
+    const paymentId = document.getElementById('payment-id').value.trim();
+    setErr('err-payment-id', paymentId ? '' : 'Payment ID is required.');
+    markInput('payment-id', !paymentId);
+    if (!paymentId) ok = false;
+
+    const merchant = document.getElementById('merchant-address').value.trim();
+    let merchantErr = '';
+    if (!merchant) merchantErr = 'Merchant address is required.';
+    else if (!isValidStellarKey(merchant, ['G'])) merchantErr = 'Enter a valid Stellar address (starts with G, 56 characters).';
+    setErr('err-merchant', merchantErr);
+    markInput('merchant-address', !!merchantErr);
+    if (merchantErr) ok = false;
+
+    const token = document.getElementById('token-address').value.trim();
+    let tokenErr = '';
+    if (!token) tokenErr = 'Token address is required.';
+    else if (!isValidStellarKey(token, ['C', 'G'])) tokenErr = 'Enter a valid token address (starts with C or G, 56 characters).';
+    setErr('err-token', tokenErr);
+    markInput('token-address', !!tokenErr);
+    if (tokenErr) ok = false;
+
+    const amountRaw = document.getElementById('amount').value.trim();
+    const amount = Number(amountRaw);
+    let amountErr = '';
+    if (!amountRaw) amountErr = 'Amount is required.';
+    else if (!Number.isInteger(amount) || amount < 1) amountErr = 'Amount must be a positive whole number of stroops.';
+    setErr('err-amount', amountErr);
+    markInput('amount', !!amountErr);
+    if (amountErr) ok = false;
+
+    const signerInputs = Array.from(document.querySelectorAll('.signer-input'));
+    const signers = signerInputs.map(i => i.value.trim()).filter(Boolean);
+    let signerErr = '';
+    if (signers.length === 0) {
+      signerErr = 'At least one signer is required.';
+    } else {
+      let anyInvalid = false;
+      signerInputs.forEach(input => {
+        const value = input.value.trim();
+        const bad = value.length > 0 && !isValidStellarKey(value, ['G']);
+        input.classList.toggle('error', bad);
+        if (bad) {
+          input.setAttribute('aria-invalid', 'true');
+          anyInvalid = true;
+        } else {
+          input.removeAttribute('aria-invalid');
+        }
+      });
+      if (anyInvalid) signerErr = 'Each signer must be a valid Stellar address (starts with G, 56 characters).';
+      else if (new Set(signers).size !== signers.length) signerErr = 'Signer addresses must be unique.';
+    }
+    setErr('err-signers', signerErr);
+    if (signerErr) ok = false;
+
+    if (!validateThreshold()) ok = false;
+
+    return ok;
+  }
+
+  // ── Contract interaction ───────────────────────────────────────────────────
+  // CONTRACT_ID and RPC_URL are imported from lumenflow-shared.js
+
+  /**
+   * Wallet adapter hook.
+   *
+   * Replace the body of `walletAdapter` with your preferred wallet library:
+   *   - Freighter:  https://docs.freighter.app
+   *   - Albedo:     https://albedo.link/docs
+   *   - WalletConnect / Stellar WalletKit (community)
+   *
+   * The adapter must resolve to { publicKey: string } on success or throw on
+   * failure. Downstream call helpers (`callInitiateMultisig`, etc.) then pass
+   * the public key to the transaction builder and request signature approval.
+   *
+   * @returns {Promise<{publicKey: string}>}
+   */
+  const walletAdapter = {
+    /**
+     * Request wallet connection. Returns the connected public key.
+     * Throws a user-friendly message if the wallet is unavailable.
+     */
+    async connect() {
+      // ── Freighter integration point ─────────────────────────────────────
+      // import { isConnected, getPublicKey, requestAccess } from '@stellar/freighter-api';
+      // const connected = await isConnected();
+      // if (!connected.isConnected) await requestAccess();
+      // const result = await getPublicKey();
+      // if (result.error) throw new Error(result.error);
+      // return { publicKey: result.address };
+      // ────────────────────────────────────────────────────────────────────
+
+      throw new Error(
+        'No wallet detected. Install the Freighter browser extension (freighter.app) ' +
+        'and reload the page, or set window.LUMENFLOW_CONTRACT_ID in demo mode.'
+      );
+    },
+
+    /**
+     * Sign and submit a transaction XDR.
+     * @param {string} xdr - Base64-encoded transaction envelope XDR.
+     * @returns {Promise<{hash: string}>}
+     */
+    async signAndSubmit(xdr) {
+      // ── Freighter integration point ─────────────────────────────────────
+      // import { signTransaction } from '@stellar/freighter-api';
+      // const { signedTxXdr, error } = await signTransaction(xdr, { networkPassphrase: Networks.TESTNET });
+      // if (error) throw new Error(error);
+      // const server = new SorobanRpc.Server(RPC_URL);
+      // const tx = TransactionBuilder.fromXDR(signedTxXdr, Networks.TESTNET);
+      // const result = await server.sendTransaction(tx);
+      // if (result.status === 'ERROR') throw new Error(result.errorResult?.result().switch().name);
+      // return { hash: result.hash };
+      // ────────────────────────────────────────────────────────────────────
+
+      throw new Error('Wallet adapter not configured. See walletAdapter.signAndSubmit in multisig.html.');
+    },
+  };
+
+  // Connected wallet public key (null in demo mode or before wallet connect).
+  let connectedPublicKey = null;
+
+  async function connectWallet() {
+    const btn  = document.getElementById('connect-wallet-btn');
+    const bar  = document.getElementById('wallet-bar');
+    const text = document.getElementById('wallet-bar-text');
+    btn.disabled = true;
+    btn.textContent = 'Connecting…';
+
+    if (!CONTRACT_ID) {
+      bar.className = 'demo';
+      text.textContent = '⚠ Demo mode – set LUMENFLOW_CONTRACT_ID to connect to a live contract.';
+      btn.disabled = false;
+      btn.textContent = 'Connect Wallet';
+      return;
+    }
+
+    try {
+      const { publicKey } = await walletAdapter.connect();
+      connectedPublicKey = publicKey;
+      bar.className = 'live';
+      text.textContent = `✔ Wallet connected: ${publicKey.slice(0, 8)}…${publicKey.slice(-4)}`;
+      btn.textContent = 'Disconnect';
+      btn.onclick = disconnectWallet;
+    } catch (e) {
+      bar.className = 'error';
+      text.textContent = `✖ ${e.message}`;
+      btn.disabled = false;
+      btn.textContent = 'Retry';
+    }
+  }
+
+  function disconnectWallet() {
+    connectedPublicKey = null;
+    const bar  = document.getElementById('wallet-bar');
+    const text = document.getElementById('wallet-bar-text');
+    const btn  = document.getElementById('connect-wallet-btn');
+    bar.className = 'demo';
+    text.textContent = '⚠ Demo mode – transactions are simulated. Connect a wallet to go live.';
+    btn.textContent = 'Connect Wallet';
+    btn.onclick = connectWallet;
+  }
+
+  async function callInitiateMultisig({ paymentId, merchantAddress, tokenAddress, amount, signers, required }) {
+    if (!CONTRACT_ID) {
+      // Demo mode: simulate success
+      await new Promise(r => setTimeout(r, 600));
+      return { success: true };
+    }
+    if (!connectedPublicKey) {
+      return { success: false, error: 'Please connect a wallet before initiating a payment.' };
+    }
+    try {
+      const { SorobanRpc, Contract, nativeToScVal, Networks, TransactionBuilder, BASE_FEE } =
+        await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
+      const server   = new SorobanRpc.Server(RPC_URL);
+      const contract = new Contract(CONTRACT_ID);
+      const account  = await server.getAccount(connectedPublicKey);
+      const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase: Networks.TESTNET })
+        .addOperation(contract.call(
+          'initiate_multisig_payment',
+          nativeToScVal(connectedPublicKey, { type: 'address' }),
+          nativeToScVal(paymentId,          { type: 'string'  }),
+          nativeToScVal(merchantAddress,    { type: 'address' }),
+          nativeToScVal(tokenAddress,       { type: 'address' }),
+          nativeToScVal(BigInt(amount),     { type: 'i128'    }),
+          nativeToScVal(signers.map(s => nativeToScVal(s, { type: 'address' }))),
+          nativeToScVal(required,           { type: 'u32'     }),
+        ))
+        .setTimeout(30)
+        .build();
+      const sim = await server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(sim)) throw new Error(sim.error);
+      const preparedXdr = SorobanRpc.assembleTransaction(tx, sim).build().toXDR();
+      await walletAdapter.signAndSubmit(preparedXdr);
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  }
+
+  async function callSignMultisig(paymentId, signerAddress) {
+    if (!CONTRACT_ID) {
+      await new Promise(r => setTimeout(r, 400));
+      return { success: true };
+    }
+    if (!connectedPublicKey) {
+      return { success: false, error: 'Please connect a wallet to sign.' };
+    }
+    try {
+      const { SorobanRpc, Contract, nativeToScVal, Networks, TransactionBuilder, BASE_FEE } =
+        await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
+      const server   = new SorobanRpc.Server(RPC_URL);
+      const contract = new Contract(CONTRACT_ID);
+      const account  = await server.getAccount(connectedPublicKey);
+      const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase: Networks.TESTNET })
+        .addOperation(contract.call(
+          'sign_multisig_payment',
+          nativeToScVal(signerAddress, { type: 'address' }),
+          nativeToScVal(paymentId,     { type: 'string'  }),
+          nativeToScVal(new Uint8Array(64)), // placeholder: real signature from wallet
+        ))
+        .setTimeout(30)
+        .build();
+      const sim = await server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(sim)) throw new Error(sim.error);
+      const preparedXdr = SorobanRpc.assembleTransaction(tx, sim).build().toXDR();
+      await walletAdapter.signAndSubmit(preparedXdr);
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  }
+
+  async function callExecuteMultisig(paymentId) {
+    if (!CONTRACT_ID) {
+      await new Promise(r => setTimeout(r, 500));
+      return { success: true };
+    }
+    if (!connectedPublicKey) {
+      return { success: false, error: 'Please connect a wallet to execute.' };
+    }
+    try {
+      const { SorobanRpc, Contract, nativeToScVal, Networks, TransactionBuilder, BASE_FEE } =
+        await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
+      const server   = new SorobanRpc.Server(RPC_URL);
+      const contract = new Contract(CONTRACT_ID);
+      const account  = await server.getAccount(connectedPublicKey);
+      const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase: Networks.TESTNET })
+        .addOperation(contract.call(
+          'execute_multisig_payment',
+          nativeToScVal(connectedPublicKey, { type: 'address' }),
+          nativeToScVal(paymentId,          { type: 'string'  }),
+        ))
+        .setTimeout(30)
+        .build();
+      const sim = await server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(sim)) throw new Error(sim.error);
+      const preparedXdr = SorobanRpc.assembleTransaction(tx, sim).build().toXDR();
+      await walletAdapter.signAndSubmit(preparedXdr);
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  }
+
+  // ── Submit ─────────────────────────────────────────────────────────────────
+
+  async function submitForm() {
+    if (!validateForm()) return;
+
+    const btn = document.getElementById('submit-btn');
+    btn.disabled = true;
+    btn.textContent = 'Initiating…';
+
+    const paymentId      = document.getElementById('payment-id').value.trim();
+    const merchantAddress = document.getElementById('merchant-address').value.trim();
+    const tokenAddress   = document.getElementById('token-address').value.trim();
+    const amount         = parseInt(document.getElementById('amount').value, 10);
+    const signers        = getSignerValues();
+    const required       = parseInt(document.getElementById('required-sigs').value, 10);
+
+    const result = await callInitiateMultisig({ paymentId, merchantAddress, tokenAddress, amount, signers, required });
+
+    if (!result.success) {
+      const alert = document.getElementById('form-alert');
+      alert.textContent = result.error || 'Failed to initiate payment.';
+      alert.className   = 'alert alert-error';
+      alert.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'Initiate Payment';
+      return;
+    }
+
+    // Store state and show progress panel
+    state = { paymentId, merchantAddress, tokenAddress, amount, signers, required, signatures: new Set() };
+    document.getElementById('form-panel').style.display = 'none';
+    renderProgress();
+    document.getElementById('progress-panel').style.display = 'block';
+  }
+
+  // ── Progress ───────────────────────────────────────────────────────────────
+
+  function renderProgress() {
+    const { signers, required, signatures } = state;
+    const signed = signatures.size;
+    const pct    = Math.round((signed / signers.length) * 100);
+
+    document.getElementById('progress-bar').style.width = pct + '%';
+    document.getElementById('progress-fraction').textContent = `${signed} / ${signers.length} signed`;
+    document.getElementById('progress-label').textContent =
+      signed >= required
+        ? `✔ Threshold met (${required} required). Ready to execute.`
+        : `${required - signed} more signature(s) needed to reach threshold.`;
+
+    const list = document.getElementById('signer-status-list');
+    list.innerHTML = '';
+    signers.forEach(addr => {
+      const isSigned = signatures.has(addr);
+      const li = document.createElement('li');
+      li.innerHTML = `
+        <span class="sig-icon">${isSigned ? '✅' : '⬜'}</span>
+        <span class="sig-addr">${addr}</span>
+        <span class="sig-status ${isSigned ? 'signed' : 'pending'}">${isSigned ? 'Signed' : 'Pending'}</span>
+        <button class="sign-btn" onclick="signPayment('${addr}')" ${isSigned ? 'disabled' : ''}>
+          ${isSigned ? 'Signed' : 'Sign'}
+        </button>`;
+      list.appendChild(li);
+    });
+
+    const execBtn = document.getElementById('execute-btn');
+    execBtn.disabled = signed < required;
+  }
+
+  async function signPayment(signerAddress) {
+    const btn = [...document.querySelectorAll('.sign-btn')]
+      .find(b => b.closest('li').querySelector('.sig-addr').textContent === signerAddress);
+    if (btn) { btn.disabled = true; btn.textContent = 'Signing…'; }
+
+    const result = await callSignMultisig(state.paymentId, signerAddress);
+
+    if (result.success) {
+      state.signatures.add(signerAddress);
+      renderProgress();
+    } else {
+      if (btn) { btn.disabled = false; btn.textContent = 'Sign'; }
+      showExecuteAlert(result.error || 'Signing failed.', false);
+    }
+  }
+
+  async function executePayment() {
+    const btn = document.getElementById('execute-btn');
+    btn.disabled = true;
+    btn.textContent = 'Executing…';
+
+    const result = await callExecuteMultisig(state.paymentId);
+
+    if (result.success) {
+      showExecuteAlert('✔ Payment executed successfully!', true);
+      btn.textContent = 'Executed';
+    } else {
+      btn.disabled = false;
+      btn.textContent = 'Execute Payment';
+      showExecuteAlert(result.error || 'Execution failed.', false);
+    }
+  }
+
+  function showExecuteAlert(msg, success) {
+    const el = document.getElementById('execute-alert');
+    el.textContent   = msg;
+    el.className     = 'alert ' + (success ? 'alert-success' : 'alert-error');
+    el.style.display = 'block';
+  }
+
+  // ── Init ───────────────────────────────────────────────────────────────────
+
+  // Expose handlers used by inline onclick attributes (required for ES modules)
+  window.addSigner       = addSigner;
+  window.removeSigner    = removeSigner;
+  window.updateThresholdLabel = updateThresholdLabel;
+  window.validateThreshold    = validateThreshold;
+  window.submitForm      = submitForm;
+  window.signPayment     = signPayment;
+  window.executePayment  = executePayment;
+
+  document.getElementById('required-sigs').addEventListener('input', validateThreshold);
+  renderModeBanner();
+  updateThresholdLabel();
+</script>
+</body>
+</html>
