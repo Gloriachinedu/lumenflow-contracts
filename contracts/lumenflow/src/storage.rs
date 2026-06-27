@@ -410,20 +410,24 @@ pub fn set_multisig_expiry_duration(env: &Env, duration: u64) {
         .set(&DataKey::MultisigExpiryDuration, &duration);
 }
 
-// ── Nonce ─────────────────────────────────────────────────────────────────────
+// ── Platform fee ──────────────────────────────────────────────────────────────
 
-/// Returns the next expected nonce for a payer (0 if never used).
-pub fn get_nonce(env: &Env, payer: &Address) -> u64 {
+/// Fee in basis points (100 bps = 1 %). Returns 0 if not set.
+pub fn get_platform_fee_bps(env: &Env) -> u32 {
     env.storage()
         .instance()
-        .get(&DataKey::Nonce(payer.clone()))
-        .unwrap_or(0u64)
+        .get(&DataKey::PlatformFeeBps)
+        .unwrap_or(0u32)
 }
 
-/// Advance the nonce by 1 after a successful payment.
-pub fn increment_nonce(env: &Env, payer: &Address) {
-    let next = get_nonce(env, payer).saturating_add(1);
-    env.storage()
-        .instance()
-        .set(&DataKey::Nonce(payer.clone()), &next);
+pub fn set_platform_fee_bps(env: &Env, bps: u32) {
+    env.storage().instance().set(&DataKey::PlatformFeeBps, &bps);
+}
+
+pub fn get_fee_recipient(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::FeeRecipient)
+}
+
+pub fn set_fee_recipient(env: &Env, recipient: &Address) {
+    env.storage().instance().set(&DataKey::FeeRecipient, recipient);
 }

@@ -55,7 +55,31 @@ await client.processPaymentWithNonce(
 );
 ```
 
-## Error Handling
+## Requirements
+
+| Tool | Version |
+|------|---------|
+| Node.js | ≥ 18 |
+| TypeScript | ≥ 5.0 |
+
+## Installation
+
+```bash
+# npm
+npm install @lumenflow/sdk
+
+# yarn
+yarn add @lumenflow/sdk
+
+# pnpm
+pnpm add @lumenflow/sdk
+```
+
+## Build
+
+```bash
+# Install dev dependencies first
+npm install
 
 The SDK maps numeric contract error codes to human-readable messages and provides a typed `LumenFlowError` object.
 

@@ -1179,6 +1179,86 @@ fn test_reject_refund() {
     ));
 }
 
+// ── Merchant verification tests ───────────────────────────────────────────────
+
+#[test]
+fn test_verify_merchant() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+    // Newly registered merchant is unverified
+    assert!(!client.get_merchant(&merchant).verified);
+
+    client.verify_merchant(&admin, &merchant);
+    assert!(client.get_merchant(&merchant).verified);
+
+    client.unverify_merchant(&admin, &merchant);
+    assert!(!client.get_merchant(&merchant).verified);
+}
+
+#[test]
+fn test_verify_merchant_unauthorized_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+    let result = client.try_verify_merchant(&non_admin, &merchant);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_payment_verified_vs_unverified_merchant() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // Payment succeeds for unverified merchant (verified flag is informational)
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "VER_001"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &sig,
+        &pub_key,
+    );
+
+    // Verify the merchant and confirm flag is set
+    client.verify_merchant(&admin, &merchant);
+    assert!(client.get_merchant(&merchant).verified);
+
+    // Payment also succeeds for verified merchant
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "VER_002"),
+        &merchant,
+        &token,
+        &200,
+        &str(&env, ""),
+        &sig,
+        &pub_key,
+    );
+    let payment = client.get_payment_by_id(&payer, &str(&env, "VER_002"));
+    assert_eq!(payment.amount, 200);
+}
+
 // ── Payment history tests ─────────────────────────────────────────────────────
 
 #[test]
@@ -1230,8 +1310,218 @@ fn test_get_payer_payment_history_with_filter() {
     assert_eq!(page.payments.get(0).unwrap().amount, 500);
 }
 
+// ── PaymentFilter.tag tests (#296) ─────────────────────────────────────────
+
+/// Helper: process a payment with a given set of tags.
+fn make_payment_with_tags(
+    env: &Env,
+    client: &PaymentProcessingContractClient,
+    merchant: &Address,
+    payer: &Address,
+    token: &Address,
+    order_id: &str,
+    amount: i128,
+    tags: Option<Vec<String>>,
+) {
+    let pub_key = bytes(env, &[0u8; 32]);
+    let sig = bytes(env, &[0u8; 64]);
+    client.process_payment_with_signature(
+        payer,
+        &str(env, order_id),
+        merchant,
+        token,
+        &amount,
+        &str(env, ""),
+        &tags,
+        &sig,
+        &pub_key,
+    );
+}
+
 #[test]
-fn test_pagination_limit() {
+fn test_tag_filter_matches_payment_with_tag() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut tags = Vec::new(&env);
+    tags.push_back(str(&env, "invoice"));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_001", 100, Some(tags));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_002", 200, None);
+
+    let filter = PaymentFilter {
+        date_start: None,
+        date_end: None,
+        amount_min: None,
+        amount_max: None,
+        token: None,
+        status: StatusFilter::Any,
+        tag: Some(str(&env, "invoice")),
+    };
+
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &Some(filter),
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+
+    assert_eq!(page.total_matching, 1);
+    assert_eq!(page.payments.get(0).unwrap().order_id, str(&env, "T_001"));
+}
+
+#[test]
+fn test_tag_filter_excludes_payment_without_matching_tag() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut tags = Vec::new(&env);
+    tags.push_back(str(&env, "subscription"));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_003", 300, Some(tags));
+
+    let filter = PaymentFilter {
+        date_start: None,
+        date_end: None,
+        amount_min: None,
+        amount_max: None,
+        token: None,
+        status: StatusFilter::Any,
+        tag: Some(str(&env, "invoice")),
+    };
+
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &Some(filter),
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+
+    assert_eq!(page.total_matching, 0);
+}
+
+#[test]
+fn test_tag_filter_excludes_payment_with_no_tags() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_004", 100, None);
+
+    let filter = PaymentFilter {
+        date_start: None,
+        date_end: None,
+        amount_min: None,
+        amount_max: None,
+        token: None,
+        status: StatusFilter::Any,
+        tag: Some(str(&env, "invoice")),
+    };
+
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &Some(filter),
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+
+    assert_eq!(page.total_matching, 0);
+}
+
+#[test]
+fn test_no_tag_filter_returns_all_payments() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut tags = Vec::new(&env);
+    tags.push_back(str(&env, "invoice"));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_005", 100, Some(tags));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_006", 200, None);
+
+    let filter = PaymentFilter {
+        date_start: None,
+        date_end: None,
+        amount_min: None,
+        amount_max: None,
+        token: None,
+        status: StatusFilter::Any,
+        tag: None,
+    };
+
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &Some(filter),
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+
+    assert_eq!(page.total_matching, 2);
+}
+
+#[test]
+fn test_tag_filter_matches_one_of_multiple_tags() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut tags = Vec::new(&env);
+    tags.push_back(str(&env, "invoice"));
+    tags.push_back(str(&env, "q2"));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_007", 100, Some(tags));
+
+    let filter = PaymentFilter {
+        date_start: None,
+        date_end: None,
+        amount_min: None,
+        amount_max: None,
+        token: None,
+        status: StatusFilter::Any,
+        tag: Some(str(&env, "q2")),
+    };
+
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &Some(filter),
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+
+    assert_eq!(page.total_matching, 1);
+    assert_eq!(page.payments.get(0).unwrap().order_id, str(&env, "T_007"));
+}
+
+#[test]
+fn test_tag_filter_payer_history() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut tags = Vec::new(&env);
+    tags.push_back(str(&env, "retail"));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_008", 500, Some(tags));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_009", 600, None);
+
+    let filter = PaymentFilter {
+        date_start: None,
+        date_end: None,
+        amount_min: None,
+        amount_max: None,
+        token: None,
+        status: StatusFilter::Any,
+        tag: Some(str(&env, "retail")),
+    };
+
+    let page = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &Some(filter),
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+
+    assert_eq!(page.total_matching, 1);
+    assert_eq!(page.payments.get(0).unwrap().order_id, str(&env, "T_008"));
+}
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
     let ids = ["PAG_0", "PAG_1", "PAG_2", "PAG_3", "PAG_4"];
     for id_str in ids {
@@ -3505,4 +3795,634 @@ fn test_min_refund_boundary_one_below_fails() {
         &str(&env, "One below min"),
     );
     assert_eq!(result, Err(Ok(PaymentError::RefundBelowMinimum)));
+}
+
+// ── Token whitelist tests (#284) ──────────────────────────────────────────────
+
+/// Admin can add and remove a token; is_token_allowed reflects the change.
+#[test]
+fn test_admin_add_remove_allowed_token() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+
+    client.set_admin(&admin);
+
+    // Token not allowed yet
+    assert!(!storage::is_token_allowed(&env, &token));
+
+    client.add_allowed_token(&admin, &token);
+    assert!(storage::is_token_allowed(&env, &token));
+
+    client.remove_allowed_token(&admin, &token);
+    assert!(!storage::is_token_allowed(&env, &token));
+}
+
+/// Only the admin may call add_allowed_token.
+#[test]
+fn test_add_allowed_token_requires_admin() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+    let stranger = Address::generate(&env);
+
+    client.set_admin(&admin);
+
+    let result = client.try_add_allowed_token(&stranger, &token);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+/// Only the admin may call remove_allowed_token.
+#[test]
+fn test_remove_allowed_token_requires_admin() {
+    let (env, client, admin, _, _, token) = setup_payment_env();
+    let stranger = Address::generate(&env);
+
+    let result = client.try_remove_allowed_token(&stranger, &token);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+/// process_payment_with_signature rejects a disallowed token.
+#[test]
+fn test_payment_with_disallowed_token_fails() {
+    let (env, client, admin, merchant, payer, _allowed_token) = setup_payment_env();
+    let token_admin = Address::generate(&env);
+    let bad_token = create_token(&env, &token_admin);
+    mint(&env, &bad_token, &token_admin, &payer, 10_000);
+
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "WL_ORDER_1"),
+        &merchant,
+        &bad_token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+
+    // After adding it, the payment succeeds
+    client.add_allowed_token(&admin, &bad_token);
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "WL_ORDER_1"),
+        &merchant,
+        &bad_token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+}
+
+/// batch_payment rejects any item with a disallowed token.
+#[test]
+fn test_batch_payment_disallowed_token_fails() {
+    let (env, client, _admin, merchant, payer, _allowed_token) = setup_payment_env();
+    let token_admin = Address::generate(&env);
+    let bad_token = create_token(&env, &token_admin);
+    mint(&env, &bad_token, &token_admin, &payer, 10_000);
+
+    let mut payments = Vec::new(&env);
+    payments.push_back(BatchPaymentItem {
+        order_id: str(&env, "WL_BATCH_1"),
+        merchant_address: merchant.clone(),
+        token_address: bad_token.clone(),
+        amount: 100,
+        memo: str(&env, ""),
+        signature: bytes(&env, &[0u8; 64]),
+        merchant_public_key: bytes(&env, &[0u8; 32]),
+    });
+
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+}
+
+/// initiate_multisig_payment rejects a disallowed token.
+#[test]
+fn test_multisig_payment_disallowed_token_fails() {
+    let (env, client, _admin, merchant, payer, _allowed_token) = setup_payment_env();
+    let token_admin = Address::generate(&env);
+    let bad_token = create_token(&env, &token_admin);
+
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "WL_MS_1"),
+        &merchant,
+        &bad_token,
+        &500,
+        &signers,
+        &1,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+}
+
+/// After a token is removed from the whitelist, existing payment paths reject it.
+#[test]
+fn test_removed_token_is_rejected() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // First payment works
+    client.process_payment_with_signature(
+        &payer, &str(&env, "WL_RM1"), &merchant, &token, &100, &str(&env, ""), &None, &sig, &pub_key,
+    );
+
+    // Admin removes the token
+    client.remove_allowed_token(&admin, &token);
+
+    // Subsequent payment with the same token must fail
+    let result = client.try_process_payment_with_signature(
+        &payer, &str(&env, "WL_RM2"), &merchant, &token, &100, &str(&env, ""), &None, &sig, &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+}
+
+// ── Refund edge-case tests (#286) ─────────────────────────────────────────────
+
+/// Partial refund that leaves a non-zero remaining balance updates status to PartiallyRefunded.
+#[test]
+fn test_partial_refund_updates_status() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_PR1", 1_000);
+
+    client.initiate_refund(&payer, &str(&env, "RF_PR1"), &str(&env, "EDGE_PR1"), &300, &str(&env, "partial"));
+    client.approve_refund(&merchant, &str(&env, "RF_PR1"));
+    client.execute_refund(&str(&env, "RF_PR1"));
+
+    let p = client.get_payment_by_id(&payer, &str(&env, "EDGE_PR1"));
+    assert_eq!(p.refunded_amount, 300);
+    assert!(matches!(p.status, crate::types::PaymentStatus::PartiallyRefunded));
+}
+
+/// Cumulative refunds that exactly equal the original amount set status to FullyRefunded.
+#[test]
+fn test_cumulative_partial_refunds_reach_full() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_CUM", 1_000);
+
+    // First partial: 600
+    client.initiate_refund(&payer, &str(&env, "RF_CUM1"), &str(&env, "EDGE_CUM"), &600, &str(&env, "first"));
+    client.approve_refund(&merchant, &str(&env, "RF_CUM1"));
+    client.execute_refund(&str(&env, "RF_CUM1"));
+
+    // Second partial: remaining 400 — should become FullyRefunded
+    client.initiate_refund(&payer, &str(&env, "RF_CUM2"), &str(&env, "EDGE_CUM"), &400, &str(&env, "second"));
+    client.approve_refund(&merchant, &str(&env, "RF_CUM2"));
+    client.execute_refund(&str(&env, "RF_CUM2"));
+
+    let p = client.get_payment_by_id(&payer, &str(&env, "EDGE_CUM"));
+    assert_eq!(p.refunded_amount, 1_000);
+    assert!(matches!(p.status, crate::types::PaymentStatus::FullyRefunded));
+}
+
+/// Refund of exactly the original amount (single request) is allowed and sets FullyRefunded.
+#[test]
+fn test_full_single_refund_allowed() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_FULL", 500);
+
+    client.initiate_refund(&payer, &str(&env, "RF_FULL"), &str(&env, "EDGE_FULL"), &500, &str(&env, "full"));
+    client.approve_refund(&merchant, &str(&env, "RF_FULL"));
+    client.execute_refund(&str(&env, "RF_FULL"));
+
+    let p = client.get_payment_by_id(&payer, &str(&env, "EDGE_FULL"));
+    assert!(matches!(p.status, crate::types::PaymentStatus::FullyRefunded));
+}
+
+/// Initiating a refund for more than the original amount is rejected immediately.
+#[test]
+fn test_over_refund_single_request_fails() {
+    let (env, client, _admin, _merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &_merchant, &payer, &token, "EDGE_OVER", 200);
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "RF_OVER"),
+        &str(&env, "EDGE_OVER"),
+        &201,
+        &str(&env, "too much"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundExceedsOriginal)));
+}
+
+/// After partial refunds the cumulative total cannot exceed the original amount.
+#[test]
+fn test_over_refund_cumulative_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_OVCUM", 1_000);
+
+    // Refund 700 first
+    client.initiate_refund(&payer, &str(&env, "RF_OV1"), &str(&env, "EDGE_OVCUM"), &700, &str(&env, "first"));
+    client.approve_refund(&merchant, &str(&env, "RF_OV1"));
+    client.execute_refund(&str(&env, "RF_OV1"));
+
+    // Attempt to refund 400 more (700 + 400 = 1100 > 1000) — must fail
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "RF_OV2"),
+        &str(&env, "EDGE_OVCUM"),
+        &400,
+        &str(&env, "over"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundExceedsOriginal)));
+}
+
+/// Refund initiated exactly at the 30-day boundary is still within the window.
+#[test]
+fn test_refund_at_window_boundary_allowed() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_BOUND", 500);
+
+    // Advance to exactly 30 days (still within window — window is > 30 days exclusive)
+    env.ledger().with_mut(|l| l.timestamp += 30 * 24 * 3600);
+
+    // Should succeed (boundary is inclusive on the payment side)
+    client.initiate_refund(
+        &payer,
+        &str(&env, "RF_BOUND"),
+        &str(&env, "EDGE_BOUND"),
+        &100,
+        &str(&env, "boundary"),
+    );
+}
+
+/// Refund initiated one second past the 30-day window is rejected.
+#[test]
+fn test_refund_one_second_past_window_fails() {
+    let (env, client, _admin, _merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &_merchant, &payer, &token, "EDGE_LATE", 500);
+
+    env.ledger().with_mut(|l| l.timestamp += 30 * 24 * 3600 + 1);
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "RF_LATE"),
+        &str(&env, "EDGE_LATE"),
+        &100,
+        &str(&env, "too late"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundWindowExpired)));
+}
+
+/// Approving a refund that is already Approved returns RefundAlreadyCompleted.
+#[test]
+fn test_approve_already_approved_refund_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_AA", 500);
+
+    client.initiate_refund(&payer, &str(&env, "RF_AA"), &str(&env, "EDGE_AA"), &100, &str(&env, "r"));
+    client.approve_refund(&merchant, &str(&env, "RF_AA"));
+
+    let result = client.try_approve_refund(&merchant, &str(&env, "RF_AA"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundAlreadyCompleted)));
+}
+
+/// Rejecting a refund that is already Rejected returns RefundAlreadyCompleted.
+#[test]
+fn test_reject_already_rejected_refund_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_RR", 500);
+
+    client.initiate_refund(&payer, &str(&env, "RF_RR"), &str(&env, "EDGE_RR"), &100, &str(&env, "r"));
+    client.reject_refund(&merchant, &str(&env, "RF_RR"));
+
+    let result = client.try_reject_refund(&merchant, &str(&env, "RF_RR"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundAlreadyCompleted)));
+}
+
+/// Executing a pending (not-yet-approved) refund returns RefundNotApproved.
+#[test]
+fn test_execute_pending_refund_fails() {
+    let (env, client, _admin, _merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &_merchant, &payer, &token, "EDGE_EP", 500);
+
+    client.initiate_refund(&payer, &str(&env, "RF_EP"), &str(&env, "EDGE_EP"), &100, &str(&env, "r"));
+
+    let result = client.try_execute_refund(&str(&env, "RF_EP"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundNotApproved)));
+}
+
+/// Executing a rejected refund returns RefundNotApproved.
+#[test]
+fn test_execute_rejected_refund_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_ER", 500);
+
+    client.initiate_refund(&payer, &str(&env, "RF_ER"), &str(&env, "EDGE_ER"), &100, &str(&env, "r"));
+    client.reject_refund(&merchant, &str(&env, "RF_ER"));
+
+    let result = client.try_execute_refund(&str(&env, "RF_ER"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundNotApproved)));
+}
+
+/// Refunding a zero-amount order is rejected by require_positive.
+#[test]
+fn test_zero_amount_refund_fails() {
+    let (env, client, _admin, _merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &_merchant, &payer, &token, "EDGE_ZERO", 500);
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "RF_ZERO"),
+        &str(&env, "EDGE_ZERO"),
+        &0,
+        &str(&env, "zero"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+}
+
+/// Merchant can also initiate a refund on behalf of the payer.
+#[test]
+fn test_merchant_can_initiate_refund() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_MINIT", 500);
+
+    // Merchant initiates — should succeed
+    client.initiate_refund(
+        &merchant,
+        &str(&env, "RF_MINIT"),
+        &str(&env, "EDGE_MINIT"),
+        &200,
+        &str(&env, "merchant initiated"),
+    );
+
+    let refund = client.get_refund(&str(&env, "RF_MINIT"));
+    assert!(matches!(refund.status, crate::types::RefundStatus::Pending));
+}
+
+// ── Versioning tests ──────────────────────────────────────────────────────────
+
+#[test]
+fn test_get_contract_version() {
+    let (env, client) = setup();
+    let version = client.get_contract_version();
+    assert_eq!(version, String::from_str(&env, "1.0.0"));
+}
+
+#[test]
+fn test_set_and_assert_version() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.set_contract_version(&admin);
+    client.assert_version_matches(&admin);
+}
+
+#[test]
+fn test_assert_version_no_stored_version_passes() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    // No set_contract_version called — no stored version means skip check
+    client.assert_version_matches(&admin);
+}
+
+#[test]
+fn test_set_contract_version_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let result = client.try_set_contract_version(&non_admin);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+// ── Multisig expiry and cancellation tests ────────────────────────────────────
+
+#[test]
+fn test_multisig_expired_cannot_sign() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_EXP_001"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+    );
+
+    // Advance past 7-day expiry
+    env.ledger().with_mut(|l| l.timestamp += 8 * 24 * 3600);
+
+    let result = client.try_sign_multisig_payment(
+        &signer,
+        &str(&env, "MS_EXP_001"),
+        &bytes(&env, &[1u8; 64]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MultisigExpired)));
+}
+
+#[test]
+fn test_multisig_expired_cannot_execute() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_EXP_002"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+    );
+
+    // Sign before expiry
+    client.sign_multisig_payment(&signer, &str(&env, "MS_EXP_002"), &bytes(&env, &[1u8; 64]));
+
+    // Advance past expiry
+    env.ledger().with_mut(|l| l.timestamp += 8 * 24 * 3600);
+
+    let result = client.try_execute_multisig_payment(&payer, &str(&env, "MS_EXP_002"));
+    assert_eq!(result, Err(Ok(PaymentError::MultisigExpired)));
+}
+
+#[test]
+fn test_multisig_cancellation_by_initiator() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_CANCEL_001"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+    );
+
+    // Initiator cancels
+    client.cancel_multisig_payment(&payer, &str(&env, "MS_CANCEL_001"));
+
+    // Cannot sign after cancellation
+    let result = client.try_sign_multisig_payment(
+        &signer,
+        &str(&env, "MS_CANCEL_001"),
+        &bytes(&env, &[1u8; 64]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MultisigCancelled)));
+}
+
+#[test]
+fn test_multisig_cancel_unauthorized() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_CANCEL_002"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+    );
+
+    let result = client.try_cancel_multisig_payment(&stranger, &str(&env, "MS_CANCEL_002"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_multisig_cancel_by_admin() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_CANCEL_003"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+    );
+
+    // Admin can also cancel
+    client.cancel_multisig_payment(&admin, &str(&env, "MS_CANCEL_003"));
+
+    let ms = client.get_multisig_payment(&str(&env, "MS_CANCEL_003"));
+    assert!(ms.cancelled);
+}
+
+// ── Admin permission tests ────────────────────────────────────────────────────
+
+#[test]
+fn test_set_payment_cleanup_period_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let result = client.try_set_payment_cleanup_period(&non_admin, &86400);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_set_payment_cleanup_period_admin_success() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.set_payment_cleanup_period(&admin, &86400);
+}
+
+#[test]
+fn test_set_large_payment_threshold_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let result = client.try_set_large_payment_threshold(&non_admin, &1000);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_set_large_payment_threshold_admin_success() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.set_large_payment_threshold(&admin, &1000);
+}
+
+#[test]
+fn test_deactivate_merchant_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+    let result = client.try_deactivate_merchant(&non_admin, &merchant);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_archive_payment_record_unauthorized() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let non_admin = Address::generate(&env);
+    make_payment(&env, &client, &merchant, &payer, &token, "ARCH_001", 100);
+    let result = client.try_archive_payment_record(&non_admin, &str(&env, "ARCH_001"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_archive_payment_record_admin_success() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ARCH_002", 100);
+    client.archive_payment_record(&admin, &str(&env, "ARCH_002"));
+    let result = client.try_get_payment_by_id(&payer, &str(&env, "ARCH_002"));
+    assert_eq!(result, Err(Ok(PaymentError::PaymentNotFound)));
+}
+
+#[test]
+fn test_cleanup_expired_payments_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let result = client.try_cleanup_expired_payments(&non_admin);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_get_global_payment_stats_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let result = client.try_get_global_payment_stats(&non_admin, &None, &None);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
