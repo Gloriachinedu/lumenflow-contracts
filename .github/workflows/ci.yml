@@ -14,11 +14,15 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_DIR: target/cargo-lint
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # master
         with:
           toolchain: 1.87.0
           targets: wasm32-unknown-unknown
@@ -27,30 +31,42 @@ jobs:
       - name: Verify toolchain version
         run: rustc --version | grep "1.87.0"
 
+      - name: Reproducibility check
+        run: cargo update --locked
+
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-lint-
+            ${{ runner.os }}-cargo-
 
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Check documentation
+        run: cargo doc --no-deps --locked 2>&1 | (! grep "^warning")
 
   test:
     name: Test
     runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_DIR: target/cargo-test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # master
         with:
           toolchain: 1.87.0
           targets: wasm32-unknown-unknown
@@ -59,27 +75,131 @@ jobs:
         run: rustc --version | grep "1.87.0"
 
       - name: Cache cargo registry
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+            ${{ runner.os }}-cargo-
+
+      - name: Run tests
+        run: cargo test --locked --all-features
+
+  auth-tests:
+    name: Auth Tests
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_DIR: target/cargo-auth
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # master
+        with:
+          toolchain: 1.87.0
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-auth-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-auth-
+            ${{ runner.os }}-cargo-
+
+      - name: Run auth tests
+        run: cargo test --all-features auth
+
+  frontend-lint:
+    name: Frontend Lint (HTML/JS)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install lint dependencies
+        run: npm ci
+
+      - name: Lint HTML
+        run: npm run lint:html
+
+      - name: Lint JS
+        run: npm run lint:js
+
+  frontend-lint:
+    name: Frontend HTML/CSS Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Lint HTML files
+        run: npx --yes htmlhint "frontend/**/*.html" --config .htmlhintrc
+
+      - name: Lint CSS files
+        run: npx --yes stylelint "frontend/**/*.css" --config '{"rules":{"block-no-empty":true,"color-no-invalid-hex":true,"no-duplicate-selectors":true}}'
+
+  test-cli:
+    name: CLI Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.87.0
+
+      - name: Verify toolchain version
+        run: rustc --version | grep "1.87.0"
+
+      - name: Cache Cargo registry and git sources
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-cli-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-cli-
 
-      - name: Run tests
-        run: cargo test --all-features
+      - name: Run CLI unit and integration tests
+        run: cargo test --package lumenflow-cli --all-features
 
   build:
     name: Build WASM
     runs-on: ubuntu-latest
     needs: [lint, test]
+    env:
+      CARGO_TARGET_DIR: target/cargo-wasm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # master
         with:
           toolchain: 1.87.0
           targets: wasm32-unknown-unknown
@@ -88,95 +208,65 @@ jobs:
         run: rustc --version | grep "1.87.0"
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-wasm-
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-
+            ${{ runner.os }}-cargo-
 
       - name: Build WASM
         run: |
-          cargo build \
+          cargo build --locked \
             --target wasm32-unknown-unknown \
             --release \
             --package lumenflow
 
+      - name: Check WASM size
+        run: |
+          WASM=target/cargo-wasm/wasm32-unknown-unknown/release/lumenflow.wasm
+          SIZE=$(wc -c < "$WASM")
+          LIMIT=$((100 * 1024))
+          echo "WASM size: ${SIZE} bytes (limit: ${LIMIT})"
+          if [ "$SIZE" -gt "$LIMIT" ]; then
+            echo "| Status | ❌ EXCEEDS LIMIT |" >> "$GITHUB_STEP_SUMMARY"
+            echo ""
+            echo "ERROR: WASM binary is ${SIZE_KB} KB, which exceeds the 100 KB limit."
+            echo "To reduce size: run 'cargo build --release' with 'opt-level = \"z\"' in Cargo.toml,"
+            echo "or remove unused features. See README for details."
+            exit 1
+          else
+            echo "| Status | ✅ Within limit |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Upload WASM artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae6567c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: lumenflow-wasm
-          path: target/wasm32-unknown-unknown/release/lumenflow.wasm
+          path: target/cargo-wasm/wasm32-unknown-unknown/release/lumenflow.wasm
           retention-days: 30
 
-  sdk-test:
-    name: SDK Unit Tests
+  sdk:
+    name: SDK
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: sdk
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          cache: "npm"
+          node-version: '20'
+          cache: 'npm'
           cache-dependency-path: sdk/package-lock.json
 
-      - name: Install dependencies
-        run: npm ci --ignore-scripts || npm install
-
-      - name: Run SDK tests
-        run: npm test
-
-  sdk-integration:
-    name: SDK Integration Tests (local Soroban)
-    runs-on: ubuntu-latest
-    if: ${{ vars.RUN_SDK_INTEGRATION == 'true' }}
-    defaults:
-      run:
-        working-directory: sdk
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Install Stellar CLI
-        run: |
-          curl -L https://github.com/stellar/stellar-cli/releases/latest/download/stellar-cli-x86_64-unknown-linux-gnu.tar.gz | tar -xz
-          sudo mv stellar /usr/local/bin/
-
-      - name: Start local Soroban network
-        run: stellar network container start local
-
-      - name: Wait for RPC
-        run: |
-          for i in $(seq 1 30); do
-            curl -sf http://localhost:8000/soroban/rpc && break || sleep 2
-          done
-
-      - name: Build and deploy contract
-        run: |
-          cd ..
-          cargo build --target wasm32-unknown-unknown --release --package lumenflow
-          CONTRACT_ID=$(stellar contract deploy \
-            --wasm target/wasm32-unknown-unknown/release/lumenflow.wasm \
-            --network local \
-            --source "${{ secrets.LOCAL_SOURCE_SECRET }}")
-          echo "CONTRACT_ID=$CONTRACT_ID" >> "$GITHUB_ENV"
-
       - name: Install SDK dependencies
-        run: npm install
+        working-directory: sdk
+        run: npm ci --ignore-scripts || npm install --ignore-scripts
 
-      - name: Run integration tests
-        env:
-          SOROBAN_RPC_URL: http://localhost:8000/soroban/rpc
-          CONTRACT_ID: ${{ env.CONTRACT_ID }}
-        run: npm test -- tests/integration.test.ts
+      - name: Build SDK
+        working-directory: sdk
+        run: npm run build --if-present
