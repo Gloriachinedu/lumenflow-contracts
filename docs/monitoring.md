@@ -1,134 +1,129 @@
-# Monitoring Plan
+# LumenFlow Monitoring Guide
 
-This document describes how to monitor LumenFlow contract activity and service health. The approach is manual-first; automated alerting can be layered on top as the deployment matures.
+How to subscribe to LumenFlow contract events, stream them in production, and set up alerting.
 
 ---
 
-## Components to Monitor
+## Event Reference
 
-| Component | What to Watch |
+All events are emitted under the `lumenflow` topic prefix. See [events-reference.md](events-reference.md) for full payload schemas.
+
+| Event | Trigger |
 |---|---|
-| **Soroban RPC node** | Availability, latency, block lag |
-| **Contract** | Event emission, error codes, payment volume |
-| **Wallet / payer integration** | Failed transaction submissions, fee spikes |
-| **Horizon API** | Request rate, response time, `result_codes` |
+| `lumenflow/payment_processed` | Payment completed |
+| `lumenflow/refund_initiated` | Refund request opened |
+| `lumenflow/refund_executed` | Refund transfer completed |
+| `lumenflow/multisig_executed` | Multisig payment executed |
+| `lumenflow/suspicious_activity` | Large-payment threshold exceeded |
+| `lumenflow/merchant_registered` | New merchant registered |
+| `lumenflow/admin_set` | Admin initialised |
 
 ---
 
-## Key Metrics
+## Subscribing via Stellar Horizon
 
-### Contract Health
+Horizon exposes a Server-Sent Events (SSE) endpoint for contract events.
 
-| Metric | Description | Warning Signal |
-|---|---|---|
-| `payment_processed` event rate | Payments per minute / hour | Sudden drop to 0 |
-| `suspicious_activity` event count | Large payments or auth failures | Any occurrence |
-| `InvalidSignature` (code 23) error rate | Signature verification failures | > 1% of payment attempts |
-| `refund_initiated` / `refund_executed` ratio | Unresolved refund backlog | Ratio > 0.2 over 24 h |
-| Total payment volume (i128) | Running sum from `payment_processed` events | Unexpected plateau |
-
-### Infrastructure
-
-| Metric | Description | Warning Signal |
-|---|---|---|
-| RPC node uptime | HTTP health endpoint | < 99.5% over 1 h |
-| RPC response time (p95) | Soroban RPC `getTransaction` latency | > 2 s |
-| Ledger close lag | Latest ledger vs. expected cadence (~5 s) | > 30 s behind |
-| Horizon `latest_ledger` staleness | Difference between Horizon and network | > 10 ledgers |
-
----
-
-## Contract Events to Track
-
-All events use topic prefix `("lumenflow", <event_name>)`. See [events-reference.md](events-reference.md) for full payload schemas.
-
-| Event | Severity | Action |
-|---|---|---|
-| `payment_processed` | Info | Record for volume metrics |
-| `suspicious_activity` | **Warning** | Page on-call; review actor and value fields |
-| `refund_executed` | Info | Reconcile against `refund_initiated` |
-| `merchant_deactivated` | Warning | Verify intent; check for unauthorized admin action |
-| `admin_set` | **Critical** | Alert immediately if unexpected |
-
----
-
-## Manual Monitoring Procedure
-
-Use these commands periodically until automated alerting is in place.
-
-### 1. Check RPC node availability
+### Stream all LumenFlow events (curl)
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}" \
-  https://soroban-testnet.stellar.org/
-# Expected: 200
+CONTRACT_ID="<your-contract-id>"
+HORIZON="https://horizon-testnet.stellar.org"   # or https://horizon.stellar.org for mainnet
+
+curl -N "$HORIZON/contracts/$CONTRACT_ID/events?cursor=now"
 ```
 
-### 2. Fetch recent contract events via Horizon
+Each SSE message is a JSON object:
+
+```json
+{
+  "id": "...",
+  "paging_token": "...",
+  "type": "contract",
+  "ledger": 12345,
+  "ledger_closed_at": "2026-05-30T04:00:00Z",
+  "contract_id": "<contract-id>",
+  "topic": ["lumenflow", "payment_processed"],
+  "value": { ... }
+}
+```
+
+### Poll for recent events (curl)
 
 ```bash
-curl -s "https://horizon-testnet.stellar.org/accounts/$CONTRACT_ID/transactions?limit=10&order=desc" \
-  | jq '.._embedded.records[].operation_count'
+# Fetch the last 200 events, newest first
+curl "$HORIZON/contracts/$CONTRACT_ID/events?order=desc&limit=200"
 ```
 
-### 3. Poll for `suspicious_activity` events
-
-```bash
-stellar contract events \
-  --id "$CONTRACT_ID" \
-  --network testnet \
-  --start-ledger "$LAST_CHECKED_LEDGER" \
-  --filter '["lumenflow","suspicious_activity"]'
-```
-
-### 4. Verify latest ledger is advancing
-
-```bash
-curl -s https://horizon-testnet.stellar.org/ | jq '.horizon_latest_ingested_ledger'
-# Compare with previous value — should increase every ~5 seconds
-```
-
----
-
-## Recommended Alerting Setup (Future)
-
-When you're ready to automate:
-
-1. **Datadog / Grafana** — ship Horizon and RPC metrics via a custom collector that polls `/metrics` endpoints.
-2. **PagerDuty / OpsGenie** — route `suspicious_activity` and `admin_set` events to on-call rotation.
-3. **Stellar Turret / Horizon SSE** — subscribe to the event stream and push to a webhook for real-time processing.
-
-Example SSE subscription (Node.js):
+### JavaScript SDK snippet
 
 ```js
 import { Horizon } from "@stellar/stellar-sdk";
 
 const server = new Horizon.Server("https://horizon-testnet.stellar.org");
+
 server
-  .transactions()
-  .forAccount(CONTRACT_ID)
+  .contracts()
+  .contractId(CONTRACT_ID)
+  .events()
   .cursor("now")
-  .stream({ onmessage: (tx) => console.log("new tx:", tx.id) });
+  .stream({
+    onmessage: (event) => {
+      const [ns, name] = event.topic;
+      console.log(`[${name}]`, event.value);
+
+      if (name === "suspicious_activity") {
+        triggerAlert(event);
+      }
+    },
+    onerror: (err) => console.error("Stream error", err),
+  });
+```
+
+### Python snippet
+
+```python
+import requests, json, sseclient
+
+CONTRACT_ID = "<your-contract-id>"
+url = f"https://horizon-testnet.stellar.org/contracts/{CONTRACT_ID}/events?cursor=now"
+
+with requests.get(url, stream=True) as r:
+    client = sseclient.SSEClient(r)
+    for msg in client.events():
+        event = json.loads(msg.data)
+        topic = event.get("topic", [])
+        print(topic, event.get("value"))
 ```
 
 ---
 
-## Runbooks
+## Recommended Alert Thresholds
 
-### High `InvalidSignature` rate
+| Condition | Suggested threshold | Severity |
+|---|---|---|
+| `suspicious_activity` events | Any occurrence | Critical |
+| `refund_executed` volume in 1 h | > 10 × average hourly refund volume | High |
+| `refund_initiated` per order | ≥ configured `max_refunds_per_order` | Medium |
+| `payment_processed` gap | No events for > 30 min during business hours | Medium |
+| Failed `execute_multisig_payment` rate | > 5 failures / 10 min | Medium |
 
-1. Check recent SDK version in use — a payload format change can break existing integrations.
-2. Verify merchant public key registration matches the signing key.
-3. Review `docs/signature-format.md` for the canonical payload spec.
+Configure these thresholds in your alerting tool (PagerDuty, Grafana, etc.) by filtering the event stream on the `topic[1]` field.
 
-### `suspicious_activity` alert
+---
 
-1. Identify the `actor` address in the event data.
-2. Check payment volume for that actor in the last 1 h via `get_payer_payment_history`.
-3. If fraudulent, call `deactivate_merchant` or coordinate with the admin to freeze activity.
+## Production Setup Checklist
 
-### RPC node unreachable
+1. **Use mainnet Horizon** (`https://horizon.stellar.org`) and set `cursor=now` so you only process new events.
+2. **Persist the `paging_token`** of the last processed event to a durable store. On restart, resume from that token instead of `now` to avoid gaps.
+3. **Deduplicate** on `id` — Horizon may re-deliver events after a reconnect.
+4. **Alert on stream errors** — a broken SSE connection means missed events.
+5. **Rotate monitoring keys** — use a read-only Stellar account for the Horizon API; never use a signing key.
 
-1. Switch the SDK / CLI `--network` to a backup RPC endpoint.
-2. Check [Stellar Status](https://status.stellar.org) for network-wide incidents.
-3. Monitor `horizon_latest_ingested_ledger` until it catches up before resuming operations.
+---
+
+## Further Reading
+
+- [Stellar Horizon Events API](https://developers.stellar.org/docs/data/horizon/api-reference/resources/events)
+- [Soroban Events](https://developers.stellar.org/docs/learn/encyclopedia/contract-development/events)
+- [LumenFlow Events Reference](events-reference.md)
