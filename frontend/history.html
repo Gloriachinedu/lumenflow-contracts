@@ -325,7 +325,9 @@
   </div>
 </div>
 
-<script>
+<script type="module">
+  import { statusBadgeHtml, renderModeBanner } from './lumenflow-shared.js';
+
   // ── State Management ────────────────────────────────────────────────────────
   
   const filters = {
@@ -411,19 +413,9 @@
     updateResults();
   }
 
-  // ── Status helpers ──────────────────────────────────────────────────────────
-  // Maps contract PaymentStatus enum values to stable UI labels and CSS classes.
-  const STATUS_MAP = {
-    Completed:         { label: '✔ Completed',          cls: 'status-completed'         },
-    PartiallyRefunded: { label: '↩ Partially Refunded', cls: 'status-partiallyrefunded' },
-    FullyRefunded:     { label: '↩ Fully Refunded',     cls: 'status-fullyrefunded'     },
-  };
+  // ── Status helpers (imported from lumenflow-shared.js) ─────────────────────
+  // statusBadgeHtml and STATUS_MAP are available via the module import below.
 
-  function statusBadgeHtml(status) {
-    const entry = STATUS_MAP[status] || { label: status || 'Unknown', cls: 'status-unknown' };
-    return `<span class="status-badge ${entry.cls}">${entry.label}</span>`;
-  }
-  
   const mockData = [
     { date: '2026-05-28 14:22', id: 'ORD-9921', recipient: 'Amazon',    amount: '124.50 XLM', status: 'Completed'         },
     { date: '2026-05-27 09:15', id: 'ORD-8832', recipient: 'Starbucks', amount: '12.00 XLM',  status: 'Completed'         },
@@ -478,7 +470,9 @@
   });
 
   // Init
+  window.removeFilter = removeFilter;
   window.addEventListener('popstate', initFromUrl);
+  renderModeBanner();
   initFromUrl();
 
 </script>

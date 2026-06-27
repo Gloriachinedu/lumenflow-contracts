@@ -170,7 +170,9 @@
   </div>
 </div>
 
-<script>
+<script type="module">
+  import { CONTRACT_ID, RPC_URL, renderModeBanner } from './lumenflow-shared.js';
+
   // ── State ──────────────────────────────────────────────────────────────────
 
   let state = null; // { paymentId, merchantAddress, tokenAddress, amount, signers, required, signatures: Set }
@@ -326,9 +328,7 @@
   }
 
   // ── Contract interaction ───────────────────────────────────────────────────
-
-  const CONTRACT_ID = window.LUMENFLOW_CONTRACT_ID || '';
-  const RPC_URL     = window.LUMENFLOW_RPC_URL     || 'https://soroban-testnet.stellar.org';
+  // CONTRACT_ID and RPC_URL are imported from lumenflow-shared.js
 
   async function callInitiateMultisig({ paymentId, merchantAddress, tokenAddress, amount, signers, required }) {
     if (!CONTRACT_ID) {
@@ -475,7 +475,17 @@
 
   // ── Init ───────────────────────────────────────────────────────────────────
 
+  // Expose handlers used by inline onclick attributes (required for ES modules)
+  window.addSigner       = addSigner;
+  window.removeSigner    = removeSigner;
+  window.updateThresholdLabel = updateThresholdLabel;
+  window.validateThreshold    = validateThreshold;
+  window.submitForm      = submitForm;
+  window.signPayment     = signPayment;
+  window.executePayment  = executePayment;
+
   document.getElementById('required-sigs').addEventListener('input', validateThreshold);
+  renderModeBanner();
   updateThresholdLabel();
 </script>
 </body>
