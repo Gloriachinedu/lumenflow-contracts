@@ -257,6 +257,12 @@
     <h2 id="filter-heading" class="sr-only">Filters</h2>
     
     <div class="filter-grid">
+      <!-- Merchant Address -->
+      <div class="filter-group" style="grid-column: 1 / -1;">
+        <label for="merchant-address">Merchant Address</label>
+        <input type="text" id="merchant-address" placeholder="G… your Stellar address" autocomplete="off">
+      </div>
+
       <!-- Date Range -->
       <div class="filter-group">
         <label for="date-start">Date Range</label>
@@ -305,6 +311,20 @@
   </section>
 
   <div class="results-card">
+    <!-- Loading state -->
+    <div id="loading-state" style="display:none;padding:3rem;text-align:center;color:#888;" role="status" aria-live="polite">
+      ⏳ Loading payments…
+    </div>
+
+    <!-- Error state -->
+    <div id="error-state" style="display:none;padding:3rem;text-align:center;color:#c0392b;" role="alert" aria-live="assertive">
+      <div style="font-size:1.5rem;margin-bottom:0.5rem">⚠</div>
+      <strong id="error-msg">Failed to load payments.</strong>
+      <div style="margin-top:0.75rem">
+        <button onclick="retryFetch()" style="padding:0.4rem 1rem;border:1.5px solid #c0392b;border-radius:6px;background:#fff;color:#c0392b;font-weight:600;cursor:pointer">Retry</button>
+      </div>
+    </div>
+
     <table id="history-table">
       <thead>
         <tr>
@@ -326,9 +346,15 @@
 </div>
 
 <script>
+  // ── Config ──────────────────────────────────────────────────────────────────
+  const CONTRACT_ID = window.LUMENFLOW_CONTRACT_ID || '';
+  const RPC_URL     = window.LUMENFLOW_RPC_URL     || 'https://soroban-testnet.stellar.org';
+  const DEMO_MODE   = !CONTRACT_ID;
+
   // ── State Management ────────────────────────────────────────────────────────
-  
+
   const filters = {
+    merchant_address: '',
     date_start: '',
     date_end: '',
     amount_min: '',
@@ -338,24 +364,19 @@
   };
 
   // ── Initialize from URL ─────────────────────────────────────────────────────
-  
+
   function initFromUrl() {
     const params = new URLSearchParams(window.location.search);
-    for (const key in filters) {
-      if (params.has(key)) {
-        filters[key] = params.get(key);
-        const el = document.getElementById(key.replace('_', '-').replace('selector', 'selector'));
-        if (el) el.value = filters[key];
-      }
+    if (params.has('merchant_address')) {
+      filters.merchant_address = params.get('merchant_address');
+      document.getElementById('merchant-address').value = filters.merchant_address;
     }
-    // Specific ID fixes for range inputs
-    if (params.has('date_start')) document.getElementById('date-start').value = params.get('date_start');
-    if (params.has('date_end'))   document.getElementById('date-end').value   = params.get('date_end');
-    if (params.has('amount_min')) document.getElementById('amount-min').value = params.get('amount_min');
-    if (params.has('amount_max')) document.getElementById('amount-max').value = params.get('amount_max');
-    if (params.has('token'))      document.getElementById('token-selector').value = params.get('token');
-    if (params.has('status'))     document.getElementById('status-selector').value = params.get('status');
-
+    if (params.has('date_start')) { filters.date_start = params.get('date_start'); document.getElementById('date-start').value = filters.date_start; }
+    if (params.has('date_end'))   { filters.date_end   = params.get('date_end');   document.getElementById('date-end').value   = filters.date_end; }
+    if (params.has('amount_min')) { filters.amount_min = params.get('amount_min'); document.getElementById('amount-min').value = filters.amount_min; }
+    if (params.has('amount_max')) { filters.amount_max = params.get('amount_max'); document.getElementById('amount-max').value = filters.amount_max; }
+    if (params.has('token'))      { filters.token  = params.get('token');  document.getElementById('token-selector').value  = filters.token; }
+    if (params.has('status'))     { filters.status = params.get('status'); document.getElementById('status-selector').value = filters.status; }
     renderActiveFilters();
     updateResults();
   }
@@ -363,9 +384,7 @@
   function updateUrl() {
     const params = new URLSearchParams();
     for (const key in filters) {
-      if (filters[key] && filters[key] !== 'Any') {
-        params.set(key, filters[key]);
-      }
+      if (filters[key] && filters[key] !== 'Any') params.set(key, filters[key]);
     }
     const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
     window.history.pushState({}, '', newUrl);
@@ -376,25 +395,13 @@
   function renderActiveFilters() {
     const container = document.getElementById('active-filters');
     container.innerHTML = '';
-
-    const labels = {
-      date_start: 'From ',
-      date_end: 'To ',
-      amount_min: 'Min ',
-      amount_max: 'Max ',
-      token: 'Token: ',
-      status: 'Status: '
-    };
-
+    const labels = { merchant_address: 'Merchant: ', date_start: 'From ', date_end: 'To ', amount_min: 'Min ', amount_max: 'Max ', token: 'Token: ', status: 'Status: ' };
     for (const key in filters) {
       const val = filters[key];
       if (val && val !== 'Any') {
         const chip = document.createElement('div');
         chip.className = 'chip';
-        chip.innerHTML = `
-          <span>${labels[key]}${val}</span>
-          <button onclick="removeFilter('${key}')" aria-label="Remove filter ${labels[key]}${val}">&times;</button>
-        `;
+        chip.innerHTML = `<span>${labels[key]}${val}</span><button onclick="removeFilter('${key}')" aria-label="Remove filter ${labels[key]}${val}">&times;</button>`;
         container.appendChild(chip);
       }
     }
@@ -402,74 +409,162 @@
 
   function removeFilter(key) {
     filters[key] = key === 'status' ? 'Any' : '';
-    const id = key.replace('_', '-');
-    const el = document.getElementById(id) || document.getElementById(id + '-selector');
+    const idMap = { merchant_address: 'merchant-address', date_start: 'date-start', date_end: 'date-end', amount_min: 'amount-min', amount_max: 'amount-max', token: 'token-selector', status: 'status-selector' };
+    const el = document.getElementById(idMap[key]);
     if (el) el.value = filters[key];
-    
     updateUrl();
     renderActiveFilters();
     updateResults();
   }
 
-  // ── Status helpers ──────────────────────────────────────────────────────────
-  // Maps contract PaymentStatus enum values to stable UI labels and CSS classes.
+  // ── Status badge ────────────────────────────────────────────────────────────
   const STATUS_MAP = {
     Completed:         { label: '✔ Completed',          cls: 'status-completed'         },
     PartiallyRefunded: { label: '↩ Partially Refunded', cls: 'status-partiallyrefunded' },
     FullyRefunded:     { label: '↩ Fully Refunded',     cls: 'status-fullyrefunded'     },
   };
-
   function statusBadgeHtml(status) {
     const entry = STATUS_MAP[status] || { label: status || 'Unknown', cls: 'status-unknown' };
     return `<span class="status-badge ${entry.cls}">${entry.label}</span>`;
   }
-  
-  const mockData = [
-    { date: '2026-05-28 14:22', id: 'ORD-9921', recipient: 'Amazon',    amount: '124.50 XLM', status: 'Completed'         },
-    { date: '2026-05-27 09:15', id: 'ORD-8832', recipient: 'Starbucks', amount: '12.00 XLM',  status: 'Completed'         },
-    { date: '2026-05-25 18:40', id: 'ORD-7712', recipient: 'Netflix',   amount: '15.99 XLM',  status: 'PartiallyRefunded' },
-    { date: '2026-05-20 10:00', id: 'ORD-6601', recipient: 'Spotify',   amount: '9.99 XLM',   status: 'FullyRefunded'     },
+
+  // ── Formatting ──────────────────────────────────────────────────────────────
+  function formatAmount(amount) {
+    return (Number(amount) / 1e7).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 7 }) + ' XLM';
+  }
+  function formatDate(ts) { return new Date(Number(ts) * 1000).toLocaleString(); }
+
+  // ── Mock data (demo mode) ───────────────────────────────────────────────────
+  const MOCK_DATA = [
+    { paid_at: BigInt(Math.floor(Date.now()/1000) - 86400), order_id: 'ORD-9921', merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON', amount: BigInt(1245000000), status: 'Completed'         },
+    { paid_at: BigInt(Math.floor(Date.now()/1000) - 172800), order_id: 'ORD-8832', merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON', amount: BigInt(120000000),  status: 'Completed'         },
+    { paid_at: BigInt(Math.floor(Date.now()/1000) - 259200), order_id: 'ORD-7712', merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON', amount: BigInt(159900000),  status: 'PartiallyRefunded' },
+    { paid_at: BigInt(Math.floor(Date.now()/1000) - 604800), order_id: 'ORD-6601', merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON', amount: BigInt(99900000),   status: 'FullyRefunded'     },
   ];
 
-  function updateResults() {
-    const body = document.getElementById('history-body');
+  // ── Soroban fetch ───────────────────────────────────────────────────────────
+  async function fetchFromContract(merchantAddress) {
+    const { SorobanRpc, Contract, nativeToScVal, scValToNative } =
+      await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
+    const server   = new SorobanRpc.Server(RPC_URL);
+    const contract = new Contract(CONTRACT_ID);
+
+    const filterArg = buildFilterArg(nativeToScVal);
+
+    const result = await server.simulateTransaction(
+      contract.call(
+        'get_merchant_payment_history',
+        nativeToScVal(merchantAddress, { type: 'address' }),
+        nativeToScVal(null),           // cursor
+        nativeToScVal(50, { type: 'u32' }), // limit
+        filterArg,
+        nativeToScVal('Date',       { type: 'symbol' }),
+        nativeToScVal('Descending', { type: 'symbol' }),
+      )
+    );
+    if (SorobanRpc.Api.isSimulationError(result)) {
+      throw new Error(result.error || 'Contract call failed');
+    }
+    const page = scValToNative(result.result.retval);
+    return page.payments || [];
+  }
+
+  function buildFilterArg(nativeToScVal) {
+    const hasFilter = filters.date_start || filters.date_end || filters.amount_min || filters.amount_max || filters.token || filters.status !== 'Any';
+    if (!hasFilter) return nativeToScVal(null);
+    return nativeToScVal({
+      date_start:  filters.date_start  ? BigInt(new Date(filters.date_start).getTime() / 1000)  : null,
+      date_end:    filters.date_end    ? BigInt(new Date(filters.date_end).getTime()   / 1000)  : null,
+      amount_min:  filters.amount_min  ? BigInt(Math.round(Number(filters.amount_min) * 1e7))  : null,
+      amount_max:  filters.amount_max  ? BigInt(Math.round(Number(filters.amount_max) * 1e7))  : null,
+      token:       filters.token       || null,
+      status:      filters.status !== 'Any' ? filters.status : null,
+    });
+  }
+
+  // ── UI state helpers ────────────────────────────────────────────────────────
+  function showLoading() {
+    document.getElementById('loading-state').style.display = 'block';
+    document.getElementById('error-state').style.display   = 'none';
+    document.getElementById('history-table').style.display = 'none';
+    document.getElementById('empty-state').style.display   = 'none';
+  }
+  function showError(msg) {
+    document.getElementById('loading-state').style.display = 'none';
+    document.getElementById('error-state').style.display   = 'block';
+    document.getElementById('error-msg').textContent       = msg;
+    document.getElementById('history-table').style.display = 'none';
+    document.getElementById('empty-state').style.display   = 'none';
+  }
+  function showTable() {
+    document.getElementById('loading-state').style.display = 'none';
+    document.getElementById('error-state').style.display   = 'none';
+    document.getElementById('history-table').style.display = '';
+  }
+
+  // ── Render rows ─────────────────────────────────────────────────────────────
+  function renderRows(payments) {
+    const body  = document.getElementById('history-body');
     const empty = document.getElementById('empty-state');
-    
-    // In a real app, we would fetch from Soroban here using the filters.
-    // For this UI component, we'll just show the mock data.
-    
     body.innerHTML = '';
-    if (mockData.length === 0) {
+    if (!payments.length) {
       empty.style.display = 'block';
-    } else {
-      empty.style.display = 'none';
-      mockData.forEach(item => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td data-label="Date">${item.date}</td>
-          <td data-label="Order ID"><code>${item.id}</code></td>
-          <td data-label="Recipient">${item.recipient}</td>
-          <td data-label="Amount" class="amount-cell">${item.amount}</td>
-          <td data-label="Status">${statusBadgeHtml(item.status)}</td>
-        `;
-        body.appendChild(tr);
-      });
+      return;
+    }
+    empty.style.display = 'none';
+    payments.forEach(p => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td data-label="Date">${formatDate(p.paid_at)}</td>
+        <td data-label="Order ID"><code>${p.order_id}</code></td>
+        <td data-label="Merchant"><code title="${p.merchant_address}">${p.merchant_address.slice(0,8)}…</code></td>
+        <td data-label="Amount" class="amount-cell">${formatAmount(p.amount)}</td>
+        <td data-label="Status">${statusBadgeHtml(p.status)}</td>`;
+      body.appendChild(tr);
+    });
+  }
+
+  // ── Main update ─────────────────────────────────────────────────────────────
+  async function updateResults() {
+    if (DEMO_MODE) {
+      showTable();
+      renderRows(MOCK_DATA);
+      return;
+    }
+
+    const merchant = filters.merchant_address.trim();
+    if (!merchant) {
+      showTable();
+      renderRows([]);
+      document.getElementById('empty-state').style.display = 'block';
+      document.getElementById('empty-state').textContent   = 'Enter a merchant address to load payment history.';
+      return;
+    }
+
+    showLoading();
+    try {
+      const payments = await fetchFromContract(merchant);
+      showTable();
+      renderRows(payments);
+    } catch (e) {
+      showError(e.message || 'Failed to fetch payment history from contract.');
     }
   }
 
+  function retryFetch() { updateResults(); }
+
   // ── Event Listeners ─────────────────────────────────────────────────────────
-
-  const inputs = [
-    { id: 'date-start', key: 'date_start' },
-    { id: 'date-end', key: 'date_end' },
-    { id: 'amount-min', key: 'amount_min' },
-    { id: 'amount-max', key: 'amount_max' },
-    { id: 'token-selector', key: 'token' },
-    { id: 'status-selector', key: 'status' }
+  const inputBindings = [
+    { id: 'merchant-address', key: 'merchant_address' },
+    { id: 'date-start',       key: 'date_start'       },
+    { id: 'date-end',         key: 'date_end'         },
+    { id: 'amount-min',       key: 'amount_min'       },
+    { id: 'amount-max',       key: 'amount_max'       },
+    { id: 'token-selector',   key: 'token'            },
+    { id: 'status-selector',  key: 'status'           },
   ];
-
-  inputs.forEach(({ id, key }) => {
-    document.getElementById(id).addEventListener('change', (e) => {
+  inputBindings.forEach(({ id, key }) => {
+    document.getElementById(id).addEventListener('change', e => {
       filters[key] = e.target.value;
       updateUrl();
       renderActiveFilters();
@@ -477,10 +572,10 @@
     });
   });
 
-  // Init
+  window.removeFilter = removeFilter;
+  window.retryFetch   = retryFetch;
   window.addEventListener('popstate', initFromUrl);
   initFromUrl();
-
 </script>
 
 </body>
