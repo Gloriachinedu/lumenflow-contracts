@@ -240,7 +240,7 @@
       PartiallyRefunded: { label: '↩ Partially Refunded', cls: 'badge-partial'   },
       FullyRefunded:     { label: '↩ Fully Refunded',     cls: 'badge-refunded'  },
     };
-    return map[status] || { label: status, cls: '' };
+    return map[status] || { label: status || 'Unknown', cls: 'badge-unknown' };
   }
 
   // ── Stellar / Soroban data fetching ────────────────────────────────────────
