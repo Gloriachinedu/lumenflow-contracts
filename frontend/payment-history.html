@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Payment History – LumenFlow</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f5f7fa;
+      color: #1a1a2e;
+      min-height: 100vh;
+      padding: 2rem 1rem;
+    }
+
+    h1 { font-size: 1.4rem; font-weight: 700; color: #6c47ff; margin-bottom: 0.25rem; }
+    .subtitle { color: #666; font-size: 0.875rem; margin-bottom: 1.5rem; }
+
+    .toolbar {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      margin-bottom: 1.25rem;
+      align-items: center;
+    }
+
+    .toolbar input, .toolbar select {
+      padding: 0.5rem 0.75rem;
+      border: 1.5px solid #dde1e7;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      outline: none;
+      background: #fff;
+    }
+    .toolbar input:focus, .toolbar select:focus { border-color: #6c47ff; }
+
+    .btn {
+      padding: 0.5rem 1.1rem;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .btn:hover { opacity: 0.85; }
+    .btn-primary { background: #6c47ff; color: #fff; }
+    .btn-outline {
+      background: #fff;
+      color: #6c47ff;
+      border: 1.5px solid #6c47ff;
+    }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* ── Desktop table ─────────────────────────────────────────────────── */
+    .table-wrap {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 2px 16px rgba(0,0,0,0.07);
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }
+
+    thead th {
+      padding: 0.9rem 1rem;
+      text-align: left;
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #555;
+      border-bottom: 1px solid #eee;
+      white-space: nowrap;
+      cursor: pointer;
+      user-select: none;
+    }
+    thead th:hover { color: #6c47ff; }
+    thead th .sort-icon { margin-left: 0.3rem; opacity: 0.5; }
+    thead th.active .sort-icon { opacity: 1; color: #6c47ff; }
+
+    tbody tr { border-bottom: 1px solid #f4f4f4; transition: background 0.1s; }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: #faf8ff; }
+
+    td { padding: 0.85rem 1rem; vertical-align: middle; }
+
+    .badge {
+      display: inline-block;
+      padding: 0.2rem 0.55rem;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 700;
+    }
+    .badge-completed        { background: #e6f9f0; color: #1a9e5c; }
+    .badge-partial          { background: #fff7e6; color: #b86a00; }
+    .badge-fully-refunded   { background: #f0ecff; color: #6c47ff; }
+
+    .order-id { font-family: monospace; font-size: 0.82rem; color: #444; }
+    .amount   { font-weight: 700; }
+
+    /* ── Mobile cards ──────────────────────────────────────────────────── */
+    .cards-list { display: none; }
+
+    .payment-card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.07);
+      padding: 1rem 1.1rem;
+      margin-bottom: 0.85rem;
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 0.6rem;
+    }
+
+    .card-order-id {
+      font-family: monospace;
+      font-size: 0.82rem;
+      color: #444;
+      word-break: break-all;
+    }
+
+    .card-amount {
+      font-size: 1rem;
+      font-weight: 700;
+      color: #1a1a2e;
+      white-space: nowrap;
+      margin-left: 0.5rem;
+    }
+
+    .card-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.8rem;
+      color: #666;
+      padding: 0.2rem 0;
+    }
+
+    .card-label { font-weight: 600; color: #888; }
+
+    /* ── Pagination ────────────────────────────────────────────────────── */
+    .pagination {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 0.6rem;
+      margin-top: 1.25rem;
+      flex-wrap: wrap;
+    }
+    .page-info { font-size: 0.85rem; color: #555; }
+
+    /* ── Empty state ───────────────────────────────────────────────────── */
+    .empty {
+      text-align: center;
+      padding: 3rem 1rem;
+      color: #999;
+      font-size: 0.9rem;
+    }
+
+    /* ── Responsive breakpoint ─────────────────────────────────────────── */
+    @media (max-width: 640px) {
+      .table-wrap { display: none; }
+      .cards-list { display: block; }
+    }
+  </style>
+</head>
+<body>
+
+<h1>Payment History</h1>
+<p class="subtitle">View and filter your past transactions.</p>
+
+<div class="toolbar">
+  <input type="text" id="search" placeholder="Search order ID…" oninput="applyFilters()" />
+  <select id="status-filter" onchange="applyFilters()">
+    <option value="">All statuses</option>
+    <option value="Completed">Completed</option>
+    <option value="PartiallyRefunded">Partially Refunded</option>
+    <option value="FullyRefunded">Fully Refunded</option>
+  </select>
+  <button class="btn btn-outline" onclick="resetFilters()">Reset</button>
+</div>
+
+<!-- Desktop table -->
+<div class="table-wrap">
+  <table id="history-table">
+    <thead>
+      <tr>
+        <th onclick="sortBy('order_id')">Order ID <span class="sort-icon">↕</span></th>
+        <th onclick="sortBy('merchant_address')">Merchant <span class="sort-icon">↕</span></th>
+        <th onclick="sortBy('amount')">Amount <span class="sort-icon">↕</span></th>
+        <th onclick="sortBy('status')">Status <span class="sort-icon">↕</span></th>
+        <th onclick="sortBy('paid_at')">Date <span class="sort-icon">↕</span></th>
+      </tr>
+    </thead>
+    <tbody id="table-body">
+      <tr><td colspan="5" class="empty">Loading…</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Mobile cards -->
+<div class="cards-list" id="cards-list"></div>
+
+<!-- Pagination -->
+<div class="pagination">
+  <button class="btn btn-outline" id="prev-btn" onclick="prevPage()" disabled>← Prev</button>
+  <span class="page-info" id="page-info"></span>
+  <button class="btn btn-outline" id="next-btn" onclick="nextPage()" disabled>Next →</button>
+</div>
+
+<script>
+  // ── Mock data (replace with contract call) ─────────────────────────────────
+  const MOCK_PAYMENTS = [
+    { order_id: 'ORDER_001', merchant_address: 'GDUT...XZ1A', amount: 1000, status: 'Completed',          paid_at: '2026-06-01' },
+    { order_id: 'ORDER_002', merchant_address: 'GCMR...Y9KP', amount: 4500, status: 'PartiallyRefunded',  paid_at: '2026-06-05' },
+    { order_id: 'ORDER_003', merchant_address: 'GDUT...XZ1A', amount: 750,  status: 'Completed',          paid_at: '2026-06-08' },
+    { order_id: 'ORDER_004', merchant_address: 'GCMR...Y9KP', amount: 200,  status: 'FullyRefunded',      paid_at: '2026-06-10' },
+    { order_id: 'ORDER_005', merchant_address: 'GDUT...XZ1A', amount: 3200, status: 'Completed',          paid_at: '2026-06-12' },
+    { order_id: 'ORDER_006', merchant_address: 'GCMR...Y9KP', amount: 600,  status: 'Completed',          paid_at: '2026-06-14' },
+    { order_id: 'ORDER_007', merchant_address: 'GDUT...XZ1A', amount: 980,  status: 'PartiallyRefunded',  paid_at: '2026-06-15' },
+    { order_id: 'ORDER_008', merchant_address: 'GCMR...Y9KP', amount: 120,  status: 'Completed',          paid_at: '2026-06-17' },
+    { order_id: 'ORDER_009', merchant_address: 'GDUT...XZ1A', amount: 8750, status: 'Completed',          paid_at: '2026-06-18' },
+    { order_id: 'ORDER_010', merchant_address: 'GCMR...Y9KP', amount: 310,  status: 'FullyRefunded',      paid_at: '2026-06-20' },
+    { order_id: 'ORDER_011', merchant_address: 'GDUT...XZ1A', amount: 2200, status: 'Completed',          paid_at: '2026-06-21' },
+    { order_id: 'ORDER_012', merchant_address: 'GCMR...Y9KP', amount: 540,  status: 'Completed',          paid_at: '2026-06-23' },
+  ];
+
+  const PAGE_SIZE = 5;
+  let currentPage = 1;
+  let sortField = 'paid_at';
+  let sortAsc = false;
+  let filtered = [...MOCK_PAYMENTS];
+
+  // ── Filtering ──────────────────────────────────────────────────────────────
+  function applyFilters() {
+    const search = document.getElementById('search').value.trim().toLowerCase();
+    const status = document.getElementById('status-filter').value;
+
+    filtered = MOCK_PAYMENTS.filter(p => {
+      const matchSearch = !search || p.order_id.toLowerCase().includes(search) ||
+                          p.merchant_address.toLowerCase().includes(search);
+      const matchStatus = !status || p.status === status;
+      return matchSearch && matchStatus;
+    });
+
+    currentPage = 1;
+    sortAndRender();
+  }
+
+  function resetFilters() {
+    document.getElementById('search').value = '';
+    document.getElementById('status-filter').value = '';
+    filtered = [...MOCK_PAYMENTS];
+    currentPage = 1;
+    sortAndRender();
+  }
+
+  // ── Sorting ────────────────────────────────────────────────────────────────
+  function sortBy(field) {
+    if (sortField === field) {
+      sortAsc = !sortAsc;
+    } else {
+      sortField = field;
+      sortAsc = true;
+    }
+    // Update header icons
+    document.querySelectorAll('thead th').forEach(th => th.classList.remove('active'));
+    const headers = ['order_id', 'merchant_address', 'amount', 'status', 'paid_at'];
+    const idx = headers.indexOf(field);
+    if (idx !== -1) {
+      const ths = document.querySelectorAll('thead th');
+      ths[idx].classList.add('active');
+      ths[idx].querySelector('.sort-icon').textContent = sortAsc ? '↑' : '↓';
+    }
+    sortAndRender();
+  }
+
+  function sortAndRender() {
+    const sorted = [...filtered].sort((a, b) => {
+      const av = a[sortField], bv = b[sortField];
+      if (av < bv) return sortAsc ? -1 : 1;
+      if (av > bv) return sortAsc ? 1 : -1;
+      return 0;
+    });
+    renderPage(sorted);
+  }
+
+  // ── Rendering ──────────────────────────────────────────────────────────────
+  function statusBadge(status) {
+    const map = {
+      Completed:          ['badge-completed',      'Completed'],
+      PartiallyRefunded:  ['badge-partial',         'Partial Refund'],
+      FullyRefunded:      ['badge-fully-refunded',  'Fully Refunded'],
+    };
+    const [cls, label] = map[status] || ['', status];
+    return `<span class="badge ${cls}">${label}</span>`;
+  }
+
+  function renderPage(sorted) {
+    const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
+    if (currentPage > totalPages) currentPage = totalPages;
+
+    const start = (currentPage - 1) * PAGE_SIZE;
+    const page  = sorted.slice(start, start + PAGE_SIZE);
+
+    // Table rows
+    const tbody = document.getElementById('table-body');
+    if (page.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty">No payments found.</td></tr>';
+    } else {
+      tbody.innerHTML = page.map(p => `
+        <tr>
+          <td><span class="order-id">${p.order_id}</span></td>
+          <td>${p.merchant_address}</td>
+          <td class="amount">${p.amount.toLocaleString()} XLM</td>
+          <td>${statusBadge(p.status)}</td>
+          <td>${p.paid_at}</td>
+        </tr>`).join('');
+    }
+
+    // Cards
+    const cardsList = document.getElementById('cards-list');
+    if (page.length === 0) {
+      cardsList.innerHTML = '<div class="empty">No payments found.</div>';
+    } else {
+      cardsList.innerHTML = page.map(p => `
+        <div class="payment-card">
+          <div class="card-header">
+            <span class="card-order-id">${p.order_id}</span>
+            <span class="card-amount">${p.amount.toLocaleString()} XLM</span>
+          </div>
+          <div class="card-row">
+            <span class="card-label">Merchant</span>
+            <span>${p.merchant_address}</span>
+          </div>
+          <div class="card-row">
+            <span class="card-label">Status</span>
+            <span>${statusBadge(p.status)}</span>
+          </div>
+          <div class="card-row">
+            <span class="card-label">Date</span>
+            <span>${p.paid_at}</span>
+          </div>
+        </div>`).join('');
+    }
+
+    // Pagination controls
+    document.getElementById('page-info').textContent =
+      sorted.length === 0 ? 'No results' : `Page ${currentPage} of ${totalPages} (${sorted.length} records)`;
+    document.getElementById('prev-btn').disabled = currentPage <= 1;
+    document.getElementById('next-btn').disabled = currentPage >= totalPages;
+  }
+
+  // ── Pagination ─────────────────────────────────────────────────────────────
+  function prevPage() { if (currentPage > 1) { currentPage--; sortAndRender(); } }
+  function nextPage() { currentPage++; sortAndRender(); }
+
+  // ── Init ───────────────────────────────────────────────────────────────────
+  sortAndRender();
+</script>
+</body>
+</html>

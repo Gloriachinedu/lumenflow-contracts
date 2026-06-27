@@ -1,0 +1,69 @@
+name: SDK Release (npm)
+
+on:
+  push:
+    tags:
+      - "sdk-v*.*.*"
+
+permissions:
+  contents: write
+  id-token: write   # required for npm provenance
+
+jobs:
+  release:
+    name: Build & Publish SDK
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+          cache: "npm"
+          cache-dependency-path: sdk/package-lock.json
+
+      # ── Version validation ─────────────────────────────────────────────────
+      - name: Validate tag matches package.json version
+        working-directory: sdk
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#sdk-v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "ERROR: Tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
+            exit 1
+          fi
+          echo "Version validated: $PKG_VERSION"
+
+      # ── Build ──────────────────────────────────────────────────────────────
+      - name: Install dependencies
+        working-directory: sdk
+        run: npm ci
+
+      - name: Build SDK
+        working-directory: sdk
+        run: npm run build
+
+      - name: Verify dist artifacts exist
+        working-directory: sdk
+        run: |
+          test -f dist/index.js   || { echo "ERROR: dist/index.js missing"; exit 1; }
+          test -f dist/index.d.ts || { echo "ERROR: dist/index.d.ts missing"; exit 1; }
+
+      # ── Publish ────────────────────────────────────────────────────────────
+      - name: Publish to npm
+        working-directory: sdk
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # ── GitHub Release ─────────────────────────────────────────────────────
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
