@@ -1,37 +1,82 @@
-# LumenFlow SDK
+# @lumenflow/sdk
 
-The LumenFlow TypeScript SDK provides a convenient wrapper around the LumenFlow smart contract.
+TypeScript SDK for interacting with the LumenFlow Soroban smart contract on Stellar.
 
-## Error Handling
+## Requirements
 
-The SDK maps numeric contract error codes to human-readable English messages and provides a typed `LumenFlowError` object.
+| Tool | Version |
+|------|---------|
+| Node.js | ≥ 18 |
+| TypeScript | ≥ 5.0 |
 
-### Usage
+## Installation
+
+```bash
+# npm
+npm install @lumenflow/sdk
+
+# yarn
+yarn add @lumenflow/sdk
+
+# pnpm
+pnpm add @lumenflow/sdk
+```
+
+## Build
+
+```bash
+# Install dev dependencies first
+npm install
+
+# Compile TypeScript → dist/
+npm run build
+```
+
+The compiled output lands in `dist/`.
+
+## Testing
+
+```bash
+npm test
+```
+
+## Usage
 
 ```typescript
 import { LumenFlowError, PaymentErrorCode } from '@lumenflow/sdk';
 
 try {
-  // Call contract...
+  // Call a contract method via your Soroban RPC client...
 } catch (error) {
   if (error.code) {
     const lfError = new LumenFlowError(error.code);
-    console.error(lfError.message); // "A payment with this order ID already exists."
-    
-    // For localization (e.g. in a dashboard):
-    const translationKey = lfError.messageKey; // "error.paymentalreadyexists"
-    // useTranslation(translationKey);
+    console.error(lfError.message);      // human-readable message
+    console.error(lfError.messageKey);   // i18n key, e.g. "error.paymentalreadyexists"
   }
 }
 ```
 
-### Toast Notification Example
+### Error codes
+
+All contract error codes are exported as the `PaymentErrorCode` enum:
 
 ```typescript
-function handleContractError(error: any) {
-  const lfError = new LumenFlowError(error.code || 50);
-  toast.error(lfError.message, {
-    description: `Error Code: ${lfError.code}`,
-  });
-}
+import { PaymentErrorCode } from '@lumenflow/sdk';
+
+// e.g. PaymentErrorCode.Unauthorized === 1
 ```
+
+## Error Handling
+
+`LumenFlowError` wraps a numeric contract error code and exposes:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `code` | `PaymentErrorCode` | Numeric error code |
+| `message` | `string` | Human-readable English message |
+| `messageKey` | `string` | i18n-ready key (e.g. `"error.unauthorized"`) |
+| `details` | `any` | Optional raw error payload |
+
+## License
+
+MIT
