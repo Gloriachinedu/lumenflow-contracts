@@ -597,3 +597,97 @@ fn test_is_registered() {
     
     assert!(client.is_registered(&merchant));
 }
+
+// ── Admin permission tests ────────────────────────────────────────────────────
+
+#[test]
+fn test_set_payment_cleanup_period_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let result = client.try_set_payment_cleanup_period(&non_admin, &86400);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_set_payment_cleanup_period_admin_success() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.set_payment_cleanup_period(&admin, &86400);
+}
+
+#[test]
+fn test_set_large_payment_threshold_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let result = client.try_set_large_payment_threshold(&non_admin, &1000);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_set_large_payment_threshold_admin_success() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.set_large_payment_threshold(&admin, &1000);
+}
+
+#[test]
+fn test_deactivate_merchant_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+    let result = client.try_deactivate_merchant(&non_admin, &merchant);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_archive_payment_record_unauthorized() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let non_admin = Address::generate(&env);
+    make_payment(&env, &client, &merchant, &payer, &token, "ARCH_001", 100);
+    let result = client.try_archive_payment_record(&non_admin, &str(&env, "ARCH_001"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_archive_payment_record_admin_success() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ARCH_002", 100);
+    client.archive_payment_record(&admin, &str(&env, "ARCH_002"));
+    let result = client.try_get_payment_by_id(&payer, &str(&env, "ARCH_002"));
+    assert_eq!(result, Err(Ok(PaymentError::PaymentNotFound)));
+}
+
+#[test]
+fn test_cleanup_expired_payments_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let result = client.try_cleanup_expired_payments(&non_admin);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_get_global_payment_stats_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let result = client.try_get_global_payment_stats(&non_admin, &None, &None);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
