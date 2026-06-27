@@ -1,139 +1,371 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Payment Receipt — LumenFlow</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Payment Receipt – LumenFlow</title>
+  <meta name="description" content="Your LumenFlow payment receipt. View transaction details, amounts, and confirmation for completed payments." />
+  <meta property="og:title" content="Payment Receipt – LumenFlow" />
+  <meta property="og:description" content="Your LumenFlow payment receipt. View transaction details, amounts, and confirmation for completed payments." />
+  <meta name="twitter:card" content="summary" />
   <style>
-    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-    body{font-family:system-ui,sans-serif;background:#f4f6f9;color:#1a1a2e;line-height:1.6}
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-    /* Skip link — visible on focus only */
-    .skip-link{position:absolute;top:-100%;left:0;padding:.5rem 1rem;background:#0052cc;color:#fff;font-weight:600;z-index:100;border-radius:0 0 4px 4px}
-    .skip-link:focus{top:0}
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f5f7fa;
+      color: #1a1a2e;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1rem;
+    }
 
-    /* Global focus style — never outline:none */
-    :focus-visible{outline:2px solid #0052cc;outline-offset:3px}
+    .receipt {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 2px 16px rgba(0,0,0,0.08);
+      max-width: 560px;
+      width: min(100%, 560px);
+      padding: 2rem;
+      overflow-wrap: anywhere;
+    }
 
-    header{background:#0052cc;color:#fff;padding:1rem 2rem}
-    header h1{font-size:1.25rem;font-weight:700}
+    .receipt-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1.5rem;
+      border-bottom: 1px solid #e8ecf0;
+      padding-bottom: 1rem;
+    }
+    .receipt-header h1 { font-size: 1.25rem; margin-bottom: 0; }
 
-    main{max-width:600px;margin:2rem auto;padding:0 1rem}
+    .field label {
+      font-size: 0.72rem;
+      letter-spacing: 0.05em;
+      color: #888;
+      font-weight: 400;
+    }
+    .field .value {
+      font-size: 0.95rem;
+      font-weight: 500;
+      word-break: break-all;
+    }
+    .field .value.amount {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: #6c47ff;
+    }
 
-    section{background:#fff;border-radius:8px;padding:1.5rem;box-shadow:0 1px 4px rgba(0,0,0,.12)}
-    section h2{font-size:1rem;font-weight:600;margin-bottom:1rem;color:#0052cc}
+    .verified-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      font-size: 0.7rem;
+      color: #6c47ff;
+      font-weight: 600;
+    }
 
-    .receipt-grid{display:grid;grid-template-columns:1fr 1fr;gap:.5rem 1rem}
-    .receipt-grid dt{color:#555;font-size:.875rem}
-    .receipt-grid dd{font-weight:600;font-size:.875rem}
+    .refunds-section h2 {
+      font-size: 0.85rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #555;
+      margin-bottom: 0.75rem;
+    }
+    .refund-item {
+      background: #fafafa;
+      border: 1px solid #eee;
+      border-radius: 8px;
+      padding: 0.75rem;
+      margin-bottom: 0.5rem;
+      font-size: 0.85rem;
+    }
+    .refund-item .refund-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 0.2rem;
+    }
+    .refund-item .refund-meta { color: #666; font-size: 0.8rem; margin-top: 0.3rem; }
 
-    .status-badge{display:inline-block;padding:.15rem .6rem;border-radius:12px;background:#e3fcef;color:#006644;font-size:.8rem;font-weight:700}
+    .actions {
+      display: flex;
+      gap: 0.75rem;
+      margin-top: 1.5rem;
+      flex-wrap: wrap;
+    }
 
-    .actions{display:flex;gap:.75rem;margin-top:1.5rem;flex-wrap:wrap}
-    button{padding:.6rem 1.25rem;border:none;border-radius:6px;font-size:.95rem;font-weight:600;cursor:pointer}
-    .btn-primary{background:#0052cc;color:#fff}
-    .btn-primary:hover{background:#0041a3}
-    .btn-secondary{background:#e8edf4;color:#1a1a2e}
-    .btn-secondary:hover{background:#d0d9ea}
+    .btn {
+      flex: 1 1 140px;
+      min-height: 44px;
+      padding: 0.7rem 1rem;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .btn:hover { opacity: 0.85; }
+    .btn-primary { background: #6c47ff; color: #fff; }
+    .btn-outline { background: #fff; color: #6c47ff; border: 1.5px solid #6c47ff; }
 
-    /* aria-live announcement region */
-    #copy-announcement{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
-    .copy-toast{position:fixed;bottom:1.5rem;right:1.5rem;background:#0052cc;color:#fff;padding:.6rem 1.2rem;border-radius:6px;font-size:.9rem;opacity:0;transition:opacity .3s;pointer-events:none}
-    .copy-toast.show{opacity:1}
+    /* 404 / loading states */
+    .state-box {
+      text-align: center;
+      padding: 3rem 1rem;
+    }
+    .state-box .icon { font-size: 3rem; margin-bottom: 1rem; }
+    .state-box h2 { font-size: 1.2rem; margin-bottom: 0.5rem; }
+    .state-box p  { color: #666; font-size: 0.9rem; }
+
+    #loading, #not-found, #receipt-content { display: none; }
   </style>
 </head>
 <body>
 
-  <a href="#main-content" class="skip-link">Skip to main content</a>
+<div class="card receipt">
+  <!-- Loading -->
+  <div id="loading" class="state-box">
+    <div class="icon">⏳</div>
+    <h2>Loading receipt…</h2>
+    <p>Fetching your payment details from the Stellar network.</p>
+  </div>
 
-  <header role="banner">
-    <h1>LumenFlow</h1>
-  </header>
+  <!-- 404 / Not found -->
+  <div id="not-found" class="state-box">
+    <div class="icon">🔍</div>
+    <h2>Receipt not found</h2>
+    <p>No payment record exists for order ID <strong id="missing-id"></strong>.</p>
+    <div class="next-steps">
+      <strong>What you can do:</strong>
+      <ul style="margin-top:0.4rem;padding-left:1.2rem;">
+        <li>Double-check the order ID in your payment confirmation email.</li>
+        <li>Ask your merchant to resend the receipt link.</li>
+        <li>Contact <a href="mailto:support@lumenflow.io">support@lumenflow.io</a> if the problem persists.</li>
+      </ul>
+    </div>
+  </div>
 
-  <main id="main-content" tabindex="-1">
-    <section aria-labelledby="receipt-heading">
-      <h2 id="receipt-heading">Payment Receipt</h2>
-      <dl class="receipt-grid">
-        <dt>Order ID</dt>
-        <dd>ORDER_001</dd>
-        <dt>Merchant</dt>
-        <dd>Demo Store</dd>
-        <dt>Amount</dt>
-        <dd>1,000 USDC</dd>
-        <dt>Token</dt>
-        <dd>USDC</dd>
-        <dt>Status</dt>
-        <dd><span class="status-badge" role="status">Completed</span></dd>
-        <dt>Date</dt>
-        <dd><time datetime="2026-06-27">2026-06-27</time></dd>
-      </dl>
+  <!-- Receipt content -->
+  <div id="receipt-content">
+    <div class="receipt-header">
+      <h1>Payment Receipt</h1>
+      <span id="status-badge" class="badge"></span>
+    </div>
 
-      <div class="actions">
-        <button type="button" class="btn-primary" id="copy-btn"
-          aria-label="Copy link to this receipt">
-          Copy Link
-        </button>
-        <button type="button" class="btn-secondary"
-          aria-label="Print this receipt"
-          onclick="window.print()">
-          Print Receipt
-        </button>
+    <div class="field">
+      <label>Order ID</label>
+      <div class="value" id="field-order-id"></div>
+      <div class="help-text">Your unique reference for this transaction.</div>
+    </div>
+
+    <div class="field">
+      <label>Merchant</label>
+      <div class="value">
+        <span id="field-merchant-name"></span>
+        <span id="verified-badge" class="verified-badge" style="display:none">✔ Verified</span>
       </div>
-    </section>
-  </main>
+      <div class="help-text">The business that received this payment.</div>
+    </div>
 
-  <!-- aria-live region for screen-reader announcements -->
-  <div id="copy-announcement" aria-live="polite" aria-atomic="true"></div>
-  <div class="copy-toast" id="copy-toast" aria-hidden="true">Link copied!</div>
+    <div class="field">
+      <label>Amount Paid</label>
+      <div class="value amount" id="field-amount"></div>
+      <div class="help-text">Total amount transferred in this transaction.</div>
+    </div>
 
-  <script>
-    (function () {
-      var btn = document.getElementById('copy-btn');
-      var announcement = document.getElementById('copy-announcement');
-      var toast = document.getElementById('copy-toast');
-      var toastTimer;
+    <div class="field">
+      <label>Token / Asset</label>
+      <div class="value" id="field-token"></div>
+      <div class="help-text">The Stellar asset used for this payment.</div>
+    </div>
 
-      function showCopied() {
-        announcement.textContent = 'Link copied to clipboard.';
-        toast.classList.add('show');
-        clearTimeout(toastTimer);
-        toastTimer = setTimeout(function () {
-          toast.classList.remove('show');
-          announcement.textContent = '';
-        }, 2500);
-      }
+    <div class="field">
+      <label>Payment Date</label>
+      <div class="value" id="field-date"></div>
+    </div>
 
-      function copyLink() {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(window.location.href).then(showCopied).catch(fallback);
-        } else {
-          fallback();
-        }
-      }
+    <hr class="divider" />
 
-      function fallback() {
-        var ta = document.createElement('textarea');
-        ta.value = window.location.href;
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.focus();
-        ta.select();
-        try { document.execCommand('copy'); showCopied(); } catch (e) {}
-        document.body.removeChild(ta);
-        btn.focus();
-      }
+    <!-- Refund history -->
+    <div id="refunds-section" class="refunds-section" style="display:none">
+      <h2>Refund History</h2>
+      <p style="font-size:0.82rem;color:#666;margin-bottom:0.75rem;">
+        Each entry below shows a refund request associated with this payment.
+      </p>
+      <div id="refunds-list"></div>
+      <hr class="divider" />
+    </div>
 
-      btn.addEventListener('click', copyLink);
-      // Space/Enter are handled natively by <button>, but explicit keydown
-      // ensures it works even if the element is patched or replaced.
-      btn.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          copyLink();
-        }
+    <div class="actions">
+      <button class="btn btn-outline" onclick="window.print()">🖨 Print</button>
+      <button class="btn btn-primary" onclick="copyLink()">🔗 Copy Link</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { CONTRACT_ID, RPC_URL, formatAmount, formatDate, renderModeBanner } from './lumenflow-shared.js';
+
+  // ── Routing ────────────────────────────────────────────────────────────────
+  // Supports both:
+  //   /receipt/ORDER_001          (path-based, requires server routing)
+  //   /receipt.html?orderId=ORDER_001  (query-param fallback)
+
+  function getOrderId() {
+    const path = window.location.pathname;
+    const match = path.match(/\/receipt\/([^/?#]+)/);
+    if (match) return decodeURIComponent(match[1]);
+    return new URLSearchParams(window.location.search).get('orderId');
+  }
+
+  // ── Status badge (local to receipt page) ──────────────────────────────────
+  function statusBadge(status) {
+    const map = {
+      Completed:         { label: '✔ Completed',          cls: 'badge-completed' },
+      PartiallyRefunded: { label: '↩ Partially Refunded', cls: 'badge-partial'   },
+      FullyRefunded:     { label: '↩ Fully Refunded',     cls: 'badge-refunded'  },
+    };
+    return map[status] || { label: status || 'Unknown', cls: 'badge-unknown' };
+  }
+
+  async function fetchPayment(orderId) {
+    // If no contract configured, fall back to demo data so the page is usable
+    // in a static preview without a live contract.
+    if (!CONTRACT_ID) return getDemoData(orderId);
+
+    const { SorobanRpc, Contract, nativeToScVal, scValToNative, Networks } =
+      await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
+
+    const server   = new SorobanRpc.Server(RPC_URL);
+    const contract = new Contract(CONTRACT_ID);
+
+    // get_payment_by_id requires a caller address; use a well-known testnet address
+    // for read-only calls (no auth needed for view functions in practice).
+    const callerArg = nativeToScVal('GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN', { type: 'address' });
+    const idArg     = nativeToScVal(orderId, { type: 'string' });
+
+    try {
+      const result = await server.simulateTransaction(
+        contract.call('get_payment_by_id', callerArg, idArg)
+      );
+      if (SorobanRpc.Api.isSimulationError(result)) return null;
+      const payment = scValToNative(result.result.retval);
+
+      // Fetch merchant name
+      const merchantArg = nativeToScVal(payment.merchant_address, { type: 'address' });
+      const mResult = await server.simulateTransaction(
+        contract.call('get_merchant', merchantArg)
+      );
+      const merchant = SorobanRpc.Api.isSimulationError(mResult)
+        ? { name: payment.merchant_address, verified: false }
+        : scValToNative(mResult.result.retval);
+
+      return { payment, merchant, refunds: [] };
+    } catch {
+      return null;
+    }
+  }
+
+  function getDemoData(orderId) {
+    if (orderId === 'NOT_FOUND') return null;
+    return {
+      payment: {
+        order_id:         orderId,
+        merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON',
+        payer:            'GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN',
+        token:            'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
+        amount:           50000000n,
+        status:           'Completed',
+        paid_at:          BigInt(Math.floor(Date.now() / 1000) - 3600),
+        refunded_amount:  0n,
+        memo:             'Invoice #001',
+      },
+      merchant: { name: 'Demo Store', verified: true },
+      refunds:  [],
+    };
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+
+  function renderReceipt({ payment, merchant, refunds }) {
+    document.getElementById('field-order-id').textContent    = payment.order_id;
+    document.getElementById('field-merchant-name').textContent = merchant.name || payment.merchant_address;
+    document.getElementById('field-amount').textContent      = formatAmount(payment.amount) + ' XLM';
+    document.getElementById('field-token').textContent       = payment.token;
+    document.getElementById('field-date').textContent        = formatDate(payment.paid_at);
+
+    if (merchant.verified) {
+      document.getElementById('verified-badge').style.display = 'inline-flex';
+    }
+
+    const { label, cls } = statusBadge(payment.status);
+    const badge = document.getElementById('status-badge');
+    badge.textContent = label;
+    badge.className   = 'badge ' + cls;
+
+    if (refunds && refunds.length > 0) {
+      const list = document.getElementById('refunds-list');
+      refunds.forEach(r => {
+        const item = document.createElement('div');
+        item.className = 'refund-item';
+        item.innerHTML = `
+          <div class="refund-row">
+            <span><strong>${r.refund_id}</strong></span>
+            <span>${formatAmount(r.amount)} XLM</span>
+          </div>
+          <div class="refund-row">
+            <span class="refund-reason">${r.reason}</span>
+            <span>${r.status}</span>
+          </div>`;
+        list.appendChild(item);
       });
-    }());
-  </script>
+      document.getElementById('refunds-section').style.display = 'block';
+    }
+
+    document.getElementById('receipt-content').style.display = 'block';
+  }
+
+  function copyLink() {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(window.location.href)
+        .then(() => alert('Link copied!'))
+        .catch(() => prompt('Copy this link:', window.location.href));
+      return;
+    }
+    prompt('Copy this link:', window.location.href);
+  }
+  window.copyLink = copyLink;
+
+  // ── Bootstrap ──────────────────────────────────────────────────────────────
+
+  (async () => {
+    renderModeBanner();
+    const orderId = getOrderId();
+    if (!orderId) {
+      document.getElementById('missing-id').textContent = '(none)';
+      document.getElementById('not-found').style.display = 'block';
+      return;
+    }
+
+    document.title = `Receipt ${orderId} – LumenFlow`;
+    document.getElementById('loading').style.display = 'block';
+
+    const data = await fetchPayment(orderId);
+
+    document.getElementById('loading').style.display = 'none';
+
+    if (!data) {
+      document.getElementById('missing-id').textContent = orderId;
+      document.getElementById('not-found').style.display = 'block';
+    } else {
+      renderReceipt(data);
+    }
+  })();
+</script>
 </body>
 </html>
