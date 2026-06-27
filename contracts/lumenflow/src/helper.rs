@@ -6,6 +6,7 @@ use crate::types::MerchantCategory;
 
 pub const MAX_PAGE_LIMIT: u32 = 100;
 pub const REFUND_WINDOW_SECS: u64 = 30 * 24 * 3600; // 30 days
+pub const MULTISIG_EXPIRY_SECS: u64 = 7 * 24 * 3600; // 7 days
 
 /// Return ContractPaused if the contract is currently paused.
 pub fn require_not_paused(env: &Env) -> Result<(), PaymentError> {

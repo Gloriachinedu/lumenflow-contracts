@@ -1,0 +1,13 @@
+{
+  "name": "lumenflow-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "LumenFlow static frontend preview",
+  "scripts": {
+    "dev": "browser-sync start --server . --files '**/*.html,**/*.css,**/*.js' --no-notify --port 3000",
+    "serve": "npx serve . --listen 3000"
+  },
+  "devDependencies": {
+    "browser-sync": "^2.29.3"
+  }
+}

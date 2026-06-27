@@ -128,6 +128,7 @@ h1 { font-size: 1.4rem; font-weight: 700; color: #6c47ff; margin-bottom: 0.25rem
 .badge-completed { background: #e6f9f0; color: #1a9e5c; }
 .badge-refunded  { background: #fff3e0; color: #e07b00; }
 .badge-partial   { background: #fff8e1; color: #c68000; }
+.badge-unknown   { background: #f0f0f0; color: #666; }
 
 /* ── Alerts ─────────────────────────────────────────────────────────────────── */
 .alert {
