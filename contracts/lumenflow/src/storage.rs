@@ -48,6 +48,7 @@ pub enum DataKey {
     PlatformFeeBps,
     FeeRecipient,
     RefundWindow,
+    Nonce(Address),
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────

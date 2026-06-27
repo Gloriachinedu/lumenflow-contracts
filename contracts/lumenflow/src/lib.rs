@@ -624,6 +624,146 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Process a payment using a per-payer sequential nonce for replay protection.
+    ///
+    /// The contract stores the next expected nonce for each payer. A payment is
+    /// accepted only when the supplied `nonce` equals the stored value, after which
+    /// the stored nonce is incremented. Any other value (replayed or skipped) is
+    /// rejected with [`PaymentError::InvalidNonce`].
+    ///
+    /// # Arguments
+    /// * `payer` - Address funding the payment. Must sign the call.
+    /// * `order_id` - Unique order identifier.
+    /// * `merchant_address` - Registered, active merchant to receive funds.
+    /// * `token_address` - Allowed token contract address.
+    /// * `amount` - Positive token amount in stroops.
+    /// * `memo` - Payment description (max 256 chars).
+    /// * `tags` - Optional payment tags.
+    /// * `nonce` - Must equal the payer's current stored nonce (starts at 0).
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::InvalidAmount`] — `amount` is not positive.
+    /// * [`PaymentError::InvalidInput`] — `order_id` is empty or tags are invalid.
+    /// * [`PaymentError::TokenNotAllowed`] — `token_address` is not on the allow-list.
+    /// * [`PaymentError::PaymentAlreadyExists`] — a payment with `order_id` already exists.
+    /// * [`PaymentError::MerchantNotFound`] — no merchant registered at `merchant_address`.
+    /// * [`PaymentError::MerchantInactive`] — the merchant has been deactivated.
+    /// * [`PaymentError::InvalidNonce`] — `nonce` does not match the expected value.
+    pub fn process_payment_with_nonce(
+        env: Env,
+        payer: Address,
+        order_id: String,
+        merchant_address: Address,
+        token_address: Address,
+        amount: i128,
+        memo: String,
+        tags: Option<Vec<String>>,
+        nonce: u64,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        payer.require_auth();
+        require_positive(amount)?;
+        require_valid_id(&order_id)?;
+        validate_tags(&tags)?;
+
+        // Replay-protection: nonce must equal the stored value
+        let expected = storage::get_nonce(&env, &payer);
+        if nonce != expected {
+            return Err(PaymentError::InvalidNonce);
+        }
+
+        if !storage::is_token_allowed(&env, &token_address) {
+            return Err(PaymentError::TokenNotAllowed);
+        }
+
+        if storage::get_payment(&env, &order_id).is_some() {
+            return Err(PaymentError::PaymentAlreadyExists);
+        }
+
+        let merchant =
+            storage::get_merchant(&env, &merchant_address).ok_or(PaymentError::MerchantNotFound)?;
+        if !merchant.active {
+            return Err(PaymentError::MerchantInactive);
+        }
+
+        // Advance nonce before any external calls
+        storage::increment_nonce(&env, &payer);
+
+        // Transfer tokens from payer to merchant (minus platform fee)
+        let token_client = token::Client::new(&env, &token_address);
+        let fee_bps = storage::get_platform_fee_bps(&env);
+        let platform_fee: i128 = if fee_bps > 0 {
+            amount * (fee_bps as i128) / 10_000
+        } else {
+            0
+        };
+        let merchant_amount = amount - platform_fee;
+        token_client.transfer(&payer, &merchant_address, &merchant_amount);
+        if platform_fee > 0 {
+            if let Some(recipient) = storage::get_fee_recipient(&env) {
+                token_client.transfer(&payer, &recipient, &platform_fee);
+            }
+        }
+
+        let now = env.ledger().timestamp();
+        let payment = PaymentOrder {
+            order_id: order_id.clone(),
+            merchant_address: merchant_address.clone(),
+            payer: payer.clone(),
+            token: token_address,
+            amount,
+            status: PaymentStatus::Completed,
+            paid_at: now,
+            refunded_amount: 0,
+            memo,
+            tags,
+            platform_fee,
+        };
+
+        storage::set_payment(&env, &payment);
+        storage::add_merchant_payment_id(&env, &merchant_address, &order_id)?;
+        storage::add_payer_payment_id(&env, &payer, &order_id)?;
+
+        // Update merchant total
+        let mut m = merchant;
+        m.total_received += amount;
+        storage::set_merchant(&env, &m);
+
+        // Update merchant stats
+        let mut merchant_stats = storage::get_merchant_stats(&env, &merchant_address);
+        merchant_stats.total_payments += 1;
+        merchant_stats.total_volume = merchant_stats.total_volume.saturating_add(amount);
+        storage::set_merchant_stats(&env, &merchant_address, &merchant_stats);
+
+        // Update global stats
+        let mut stats = storage::get_global_stats(&env);
+        stats.total_payments += 1;
+        stats.total_volume = stats.total_volume.saturating_add(amount);
+        storage::set_global_stats(&env, &stats);
+
+        // Check for suspicious activity
+        let threshold = storage::get_large_payment_threshold(&env);
+        if amount >= threshold {
+            env.events().publish(
+                ("lumenflow", "suspicious_activity"),
+                (
+                    SuspiciousActivityReason::LargePayment,
+                    payer.clone(),
+                    amount,
+                ),
+            );
+        }
+
+        env.events().publish(
+            ("lumenflow", "payment_processed"),
+            (order_id, payer, merchant_address, amount),
+        );
+        Ok(())
+    }
+
     /// Pay multiple merchants in one transaction. Maximum 10 items. Atomic.
     ///
     /// All items are validated and transferred atomically — if any item fails the
