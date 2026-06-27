@@ -543,6 +543,11 @@ impl PaymentProcessingContract {
             return Err(PaymentError::MerchantInactive);
         }
 
+        // Reject disallowed tokens
+        if !storage::is_token_allowed(&env, &token_address) {
+            return Err(PaymentError::TokenNotAllowed);
+        }
+
         // Build payload: order_id bytes + amount bytes
         let mut payload = Bytes::new(&env);
         let network_id_bytes: Bytes = env.ledger().network_id().into();
@@ -816,6 +821,11 @@ impl PaymentProcessingContract {
                 .ok_or(PaymentError::MerchantNotFound)?;
             if !merchant.active {
                 return Err(PaymentError::MerchantInactive);
+            }
+
+            // Reject disallowed tokens
+            if !storage::is_token_allowed(&env, &item.token_address) {
+                return Err(PaymentError::TokenNotAllowed);
             }
 
             // Build payload: order_id bytes + amount bytes

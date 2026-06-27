@@ -4426,3 +4426,112 @@ fn test_get_global_payment_stats_unauthorized() {
     let result = client.try_get_global_payment_stats(&non_admin, &None, &None);
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
+
+// ── Token whitelist tests (Issue #348) ────────────────────────────────────────
+
+#[test]
+fn test_payment_with_no_whitelist_succeeds() {
+    // When no whitelist is set every token is allowed
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "WL_001", 100);
+    let p = client.get_payment_by_id(&payer, &str(&env, "WL_001"));
+    assert_eq!(p.amount, 100);
+}
+
+#[test]
+fn test_payment_with_allowed_token_succeeds() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.add_allowed_token(&admin, &token);
+    make_payment(&env, &client, &merchant, &payer, &token, "WL_002", 200);
+    let p = client.get_payment_by_id(&payer, &str(&env, "WL_002"));
+    assert_eq!(p.amount, 200);
+}
+
+#[test]
+fn test_payment_with_disallowed_token_fails() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    // Whitelist a *different* token so `token` is blocked
+    let other_token_admin = Address::generate(&env);
+    let other_token = create_token(&env, &other_token_admin);
+    client.add_allowed_token(&admin, &other_token);
+
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "WL_BAD"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, "blocked"),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+}
+
+#[test]
+fn test_remove_token_from_whitelist() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.add_allowed_token(&admin, &token);
+
+    // Remove it — now the list is non-empty but doesn't contain `token`
+    let other_token_admin = Address::generate(&env);
+    let other_token = create_token(&env, &other_token_admin);
+    client.add_allowed_token(&admin, &other_token);
+    client.remove_allowed_token(&admin, &token);
+
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "WL_REM"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, "after remove"),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+}
+
+#[test]
+fn test_batch_payment_disallowed_token_fails() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let other_token_admin = Address::generate(&env);
+    let other_token = create_token(&env, &other_token_admin);
+    client.add_allowed_token(&admin, &other_token); // only other_token is allowed
+
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+    let items = soroban_sdk::vec![
+        &env,
+        BatchPaymentItem {
+            order_id: str(&env, "BATCH_WL_001"),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 100,
+            memo: str(&env, "blocked batch"),
+            signature: sig,
+            merchant_public_key: pub_key,
+        }
+    ];
+    let result = client.try_batch_payment(&payer, &items);
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+}
+
+#[test]
+fn test_get_token_whitelist() {
+    let (env, client, admin, _merchant, _payer, token) = setup_payment_env();
+    let list_before = client.get_token_whitelist();
+    assert_eq!(list_before.len(), 0);
+
+    client.add_allowed_token(&admin, &token);
+    let list_after = client.get_token_whitelist();
+    assert_eq!(list_after.len(), 1);
+    assert!(list_after.contains(&token));
+}
