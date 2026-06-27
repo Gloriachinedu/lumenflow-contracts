@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Multisig Payment – LumenFlow</title>
+  <meta name="description" content="Initiate and manage multi-signature payments on LumenFlow. Requires threshold approvals before funds are released." />
+  <meta property="og:title" content="Multisig Payment – LumenFlow" />
+  <meta property="og:description" content="Initiate and manage multi-signature payments on LumenFlow. Requires threshold approvals before funds are released." />
+  <meta name="twitter:card" content="summary" />
+  <style>
+    /* Multisig-specific styles not in the shared design system */
+
+    .signer-row {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+      align-items: center;
+    }
+    .signer-row input { flex: 1; }
+
+    .threshold-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-top: 0.5rem;
+    }
+    .threshold-row input[type=number] { width: 80px; }
+    .threshold-row .of-label { font-size: 0.85rem; color: #555; }
+
+    /* Progress panel */
+    #progress-panel { display: none; }
+
+    .progress-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    .progress-header h2 { border: none; padding: 0; margin: 0; }
+
+    .progress-bar-wrap {
+      background: #eee;
+      border-radius: 999px;
+      height: 10px;
+      margin-bottom: 0.5rem;
+      overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%;
+      background: #6c47ff;
+      border-radius: 999px;
+      transition: width 0.4s;
+    }
+    .progress-label { font-size: 0.82rem; color: #555; margin-bottom: 1.25rem; }
+
+    .signer-status-list { list-style: none; }
+    .signer-status-list li {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid #f0f0f0;
+      font-size: 0.85rem;
+    }
+    .signer-status-list li:last-child { border-bottom: none; }
+    .sig-icon { font-size: 1rem; }
+    .sig-addr { flex: 1; word-break: break-all; color: #333; }
+    .sig-status { font-size: 0.75rem; font-weight: 600; }
+    .sig-status.signed  { color: #1a9e5c; }
+    .sig-status.pending { color: #888; }
+
+    .sign-btn {
+      padding: 0.3rem 0.7rem;
+      border: 1.5px solid #6c47ff;
+      border-radius: 6px;
+      background: #fff;
+      color: #6c47ff;
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .sign-btn:hover { background: #f0ecff; }
+    .sign-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .execute-section { margin-top: 1.25rem; }
+  </style>
+</head>
+<body>
+
+<h1>Multisig Payment</h1>
+<p class="subtitle">Initiate a payment that requires multiple signers to approve.</p>
+
+<!-- Initiation form -->
+<div class="card" id="form-panel">
+  <h2>New Multisig Payment</h2>
+
+  <div class="field">
+    <label>Payment ID</label>
+    <input type="text" id="payment-id" placeholder="MS_001" />
+    <div class="err-msg" id="err-payment-id">Payment ID is required.</div>
+  </div>
+
+  <div class="field">
+    <label>Merchant Address</label>
+    <input type="text" id="merchant-address" placeholder="G…" />
+    <div class="err-msg" id="err-merchant">Merchant address is required.</div>
+  </div>
+
+  <div class="field">
+    <label>Token Address</label>
+    <input type="text" id="token-address" placeholder="C… or G…" />
+    <div class="err-msg" id="err-token">Token address is required.</div>
+  </div>
+
+  <div class="field">
+    <label>Amount (stroops)</label>
+    <input type="number" id="amount" placeholder="5000000" min="1" />
+    <div class="hint">1 XLM = 10,000,000 stroops</div>
+    <div class="err-msg" id="err-amount">Amount must be a positive number.</div>
+  </div>
+
+  <!-- Signers -->
+  <div class="field">
+    <label>Signer Addresses</label>
+    <div id="signers-list">
+      <div class="signer-row">
+        <input type="text" placeholder="G… signer address" class="signer-input" aria-label="Signer address 1" oninput="updateThresholdLabel()" />
+        <button type="button" class="btn-icon" onclick="removeSigner(this)" aria-label="Remove signer 1">✕</button>
+      </div>
+    </div>
+    <button type="button" class="btn-link" id="add-signer-btn" onclick="addSigner()">+ Add signer</button>
+    <div class="err-msg" id="err-signers">At least one signer is required.</div>
+  </div>
+
+  <!-- Required signatures threshold -->
+  <div class="field">
+    <label>Required Signatures</label>
+    <div class="threshold-row">
+      <input type="number" id="required-sigs" min="1" value="1" oninput="validateThreshold()" />
+      <span class="of-label">of <strong id="signer-count">1</strong> signers</span>
+    </div>
+    <div class="validation-msg" id="threshold-msg"></div>
+  </div>
+
+  <div id="form-alert" class="alert" style="display:none"></div>
+
+  <button class="btn btn-primary btn-full" id="submit-btn" onclick="submitForm()">Initiate Payment</button>
+</div>
+
+<!-- Progress panel (shown after initiation) -->
+<div class="card" id="progress-panel">
+  <div class="progress-header">
+    <h2>Signature Progress</h2>
+    <span id="progress-fraction" style="font-size:0.85rem;color:#555;"></span>
+  </div>
+
+  <div class="progress-bar-wrap">
+    <div class="progress-bar" id="progress-bar" style="width:0%"></div>
+  </div>
+  <div class="progress-label" id="progress-label"></div>
+
+  <ul class="signer-status-list" id="signer-status-list"></ul>
+
+  <div class="execute-section">
+    <div id="execute-alert" class="alert" style="display:none"></div>
+    <button class="btn btn-primary btn-full" id="execute-btn" onclick="executePayment()" disabled>
+      Execute Payment
+    </button>
+  </div>
+</div>
+
+<script>
+  // ── State ──────────────────────────────────────────────────────────────────
+
+  let state = null; // { paymentId, merchantAddress, tokenAddress, amount, signers, required, signatures: Set }
+
+  // ── Signer management ──────────────────────────────────────────────────────
+
+  function addSigner() {
+    const list = document.getElementById('signers-list');
+    const index = list.querySelectorAll('.signer-row').length + 1;
+    const row = document.createElement('div');
+    row.className = 'signer-row';
+    row.innerHTML = `
+      <input type="text" placeholder="G… signer address" class="signer-input" aria-label="Signer address ${index}" oninput="updateThresholdLabel()" />
+      <button type="button" class="btn-icon" onclick="removeSigner(this)" aria-label="Remove signer ${index}">✕</button>`;
+    list.appendChild(row);
+    updateThresholdLabel();
+    // Move focus to the new input for keyboard users
+    row.querySelector('.signer-input').focus();
+  }
+
+  function removeSigner(btn) {
+    const list = document.getElementById('signers-list');
+    const rows = list.querySelectorAll('.signer-row');
+    if (rows.length <= 1) return; // keep at least one
+
+    const row = btn.closest('.signer-row');
+    const rowIndex = Array.from(rows).indexOf(row);
+
+    row.remove();
+    updateThresholdLabel();
+
+    // Move focus: try previous row's input, otherwise the "Add signer" button
+    const remaining = list.querySelectorAll('.signer-row');
+    const focusTarget = remaining[rowIndex - 1]
+      ? remaining[rowIndex - 1].querySelector('.signer-input')
+      : remaining[0]
+        ? remaining[0].querySelector('.signer-input')
+        : document.getElementById('add-signer-btn');
+    if (focusTarget) focusTarget.focus();
+  }
+
+  function getSignerValues() {
+    return Array.from(document.querySelectorAll('.signer-input'))
+      .map(i => i.value.trim())
+      .filter(Boolean);
+  }
+
+  function updateThresholdLabel() {
+    const count = document.querySelectorAll('.signer-input').length;
+    document.getElementById('signer-count').textContent = count;
+    validateThreshold();
+  }
+
+  function validateThreshold() {
+    const required = parseInt(document.getElementById('required-sigs').value, 10);
+    const count    = document.querySelectorAll('.signer-input').length;
+    const msg      = document.getElementById('threshold-msg');
+
+    if (!required || required < 1) {
+      msg.textContent = 'Required signatures must be at least 1.';
+      msg.className   = 'validation-msg bad';
+      return false;
+    }
+    if (required > count) {
+      msg.textContent = `Required (${required}) cannot exceed signer count (${count}).`;
+      msg.className   = 'validation-msg bad';
+      return false;
+    }
+    msg.textContent = `✔ Valid: ${required} of ${count} signatures required.`;
+    msg.className   = 'validation-msg ok';
+    return true;
+  }
+
+  // ── Form validation ────────────────────────────────────────────────────────
+
+  // Stellar StrKey addresses are 56 chars: a type prefix plus 55 base32 chars.
+  // G = account / public key, C = contract. This is a format + length check.
+  const STELLAR_KEY_BODY = /^[A-Z2-7]{55}$/;
+
+  function isValidStellarKey(value, prefixes) {
+    if (typeof value !== 'string' || value.length !== 56) return false;
+    if (!prefixes.includes(value[0])) return false;
+    return STELLAR_KEY_BODY.test(value.slice(1));
+  }
+
+  function setErr(id, message) {
+    const el = document.getElementById(id);
+    if (message) el.textContent = message;
+    el.style.display = message ? 'block' : 'none';
+    el.classList.toggle('visible', !!message);
+  }
+
+  function markInput(id, invalid) {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('error', invalid);
+  }
+
+  function validateForm() {
+    let ok = true;
+
+    const paymentId = document.getElementById('payment-id').value.trim();
+    setErr('err-payment-id', paymentId ? '' : 'Payment ID is required.');
+    markInput('payment-id', !paymentId);
+    if (!paymentId) ok = false;
+
+    const merchant = document.getElementById('merchant-address').value.trim();
+    let merchantErr = '';
+    if (!merchant) merchantErr = 'Merchant address is required.';
+    else if (!isValidStellarKey(merchant, ['G'])) merchantErr = 'Enter a valid Stellar address (starts with G, 56 characters).';
+    setErr('err-merchant', merchantErr);
+    markInput('merchant-address', !!merchantErr);
+    if (merchantErr) ok = false;
+
+    const token = document.getElementById('token-address').value.trim();
+    let tokenErr = '';
+    if (!token) tokenErr = 'Token address is required.';
+    else if (!isValidStellarKey(token, ['C', 'G'])) tokenErr = 'Enter a valid token address (starts with C or G, 56 characters).';
+    setErr('err-token', tokenErr);
+    markInput('token-address', !!tokenErr);
+    if (tokenErr) ok = false;
+
+    const amountRaw = document.getElementById('amount').value.trim();
+    const amount = Number(amountRaw);
+    let amountErr = '';
+    if (!amountRaw) amountErr = 'Amount is required.';
+    else if (!Number.isInteger(amount) || amount < 1) amountErr = 'Amount must be a positive whole number of stroops.';
+    setErr('err-amount', amountErr);
+    markInput('amount', !!amountErr);
+    if (amountErr) ok = false;
+
+    const signerInputs = Array.from(document.querySelectorAll('.signer-input'));
+    const signers = signerInputs.map(i => i.value.trim()).filter(Boolean);
+    let signerErr = '';
+    if (signers.length === 0) {
+      signerErr = 'At least one signer is required.';
+    } else {
+      let anyInvalid = false;
+      signerInputs.forEach(input => {
+        const value = input.value.trim();
+        const bad = value.length > 0 && !isValidStellarKey(value, ['G']);
+        input.classList.toggle('error', bad);
+        if (bad) anyInvalid = true;
+      });
+      if (anyInvalid) signerErr = 'Each signer must be a valid Stellar address (starts with G, 56 characters).';
+      else if (new Set(signers).size !== signers.length) signerErr = 'Signer addresses must be unique.';
+    }
+    setErr('err-signers', signerErr);
+    if (signerErr) ok = false;
+
+    if (!validateThreshold()) ok = false;
+
+    return ok;
+  }
+
+  // ── Contract interaction ───────────────────────────────────────────────────
+
+  const CONTRACT_ID = window.LUMENFLOW_CONTRACT_ID || '';
+  const RPC_URL     = window.LUMENFLOW_RPC_URL     || 'https://soroban-testnet.stellar.org';
+
+  async function callInitiateMultisig({ paymentId, merchantAddress, tokenAddress, amount, signers, required }) {
+    if (!CONTRACT_ID) {
+      // Demo mode: simulate success
+      await new Promise(r => setTimeout(r, 600));
+      return { success: true };
+    }
+
+    try {
+      const { SorobanRpc, Contract, nativeToScVal, Networks, TransactionBuilder, BASE_FEE, Keypair } =
+        await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
+
+      const server = new SorobanRpc.Server(RPC_URL);
+      // Wallet integration point: replace with Freighter/Albedo call
+      throw new Error('Connect a wallet to sign transactions. Set window.LUMENFLOW_CONTRACT_ID and integrate Freighter.');
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  }
+
+  async function callSignMultisig(paymentId, signerAddress) {
+    if (!CONTRACT_ID) {
+      await new Promise(r => setTimeout(r, 400));
+      return { success: true };
+    }
+    return { success: false, error: 'Wallet integration required.' };
+  }
+
+  async function callExecuteMultisig(paymentId) {
+    if (!CONTRACT_ID) {
+      await new Promise(r => setTimeout(r, 500));
+      return { success: true };
+    }
+    return { success: false, error: 'Wallet integration required.' };
+  }
+
+  // ── Submit ─────────────────────────────────────────────────────────────────
+
+  async function submitForm() {
+    if (!validateForm()) return;
+
+    const btn = document.getElementById('submit-btn');
+    btn.disabled = true;
+    btn.textContent = 'Initiating…';
+
+    const paymentId      = document.getElementById('payment-id').value.trim();
+    const merchantAddress = document.getElementById('merchant-address').value.trim();
+    const tokenAddress   = document.getElementById('token-address').value.trim();
+    const amount         = parseInt(document.getElementById('amount').value, 10);
+    const signers        = getSignerValues();
+    const required       = parseInt(document.getElementById('required-sigs').value, 10);
+
+    const result = await callInitiateMultisig({ paymentId, merchantAddress, tokenAddress, amount, signers, required });
+
+    if (!result.success) {
+      const alert = document.getElementById('form-alert');
+      alert.textContent = result.error || 'Failed to initiate payment.';
+      alert.className   = 'alert alert-error';
+      alert.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'Initiate Payment';
+      return;
+    }
+
+    // Store state and show progress panel
+    state = { paymentId, merchantAddress, tokenAddress, amount, signers, required, signatures: new Set() };
+    document.getElementById('form-panel').style.display = 'none';
+    renderProgress();
+    document.getElementById('progress-panel').style.display = 'block';
+  }
+
+  // ── Progress ───────────────────────────────────────────────────────────────
+
+  function renderProgress() {
+    const { signers, required, signatures } = state;
+    const signed = signatures.size;
+    const pct    = Math.round((signed / signers.length) * 100);
+
+    document.getElementById('progress-bar').style.width = pct + '%';
+    document.getElementById('progress-fraction').textContent = `${signed} / ${signers.length} signed`;
+    document.getElementById('progress-label').textContent =
+      signed >= required
+        ? `✔ Threshold met (${required} required). Ready to execute.`
+        : `${required - signed} more signature(s) needed to reach threshold.`;
+
+    const list = document.getElementById('signer-status-list');
+    list.innerHTML = '';
+    signers.forEach(addr => {
+      const isSigned = signatures.has(addr);
+      const li = document.createElement('li');
+      li.innerHTML = `
+        <span class="sig-icon">${isSigned ? '✅' : '⬜'}</span>
+        <span class="sig-addr">${addr}</span>
+        <span class="sig-status ${isSigned ? 'signed' : 'pending'}">${isSigned ? 'Signed' : 'Pending'}</span>
+        <button class="sign-btn" onclick="signPayment('${addr}')" ${isSigned ? 'disabled' : ''}>
+          ${isSigned ? 'Signed' : 'Sign'}
+        </button>`;
+      list.appendChild(li);
+    });
+
+    const execBtn = document.getElementById('execute-btn');
+    execBtn.disabled = signed < required;
+  }
+
+  async function signPayment(signerAddress) {
+    const btn = [...document.querySelectorAll('.sign-btn')]
+      .find(b => b.closest('li').querySelector('.sig-addr').textContent === signerAddress);
+    if (btn) { btn.disabled = true; btn.textContent = 'Signing…'; }
+
+    const result = await callSignMultisig(state.paymentId, signerAddress);
+
+    if (result.success) {
+      state.signatures.add(signerAddress);
+      renderProgress();
+    } else {
+      if (btn) { btn.disabled = false; btn.textContent = 'Sign'; }
+      showExecuteAlert(result.error || 'Signing failed.', false);
+    }
+  }
+
+  async function executePayment() {
+    const btn = document.getElementById('execute-btn');
+    btn.disabled = true;
+    btn.textContent = 'Executing…';
+
+    const result = await callExecuteMultisig(state.paymentId);
+
+    if (result.success) {
+      showExecuteAlert('✔ Payment executed successfully!', true);
+      btn.textContent = 'Executed';
+    } else {
+      btn.disabled = false;
+      btn.textContent = 'Execute Payment';
+      showExecuteAlert(result.error || 'Execution failed.', false);
+    }
+  }
+
+  function showExecuteAlert(msg, success) {
+    const el = document.getElementById('execute-alert');
+    el.textContent   = msg;
+    el.className     = 'alert ' + (success ? 'alert-success' : 'alert-error');
+    el.style.display = 'block';
+  }
+
+  // ── Init ───────────────────────────────────────────────────────────────────
+
+  document.getElementById('required-sigs').addEventListener('input', validateThreshold);
+  updateThresholdLabel();
+</script>
+</body>
+</html>
