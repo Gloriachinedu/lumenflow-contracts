@@ -208,7 +208,9 @@
   </div>
 </div>
 
-<script>
+<script type="module">
+  import { CONTRACT_ID, RPC_URL, formatAmount, formatDate, renderModeBanner } from './lumenflow-shared.js';
+
   // ── Routing ────────────────────────────────────────────────────────────────
   // Supports both:
   //   /receipt/ORDER_001          (path-based, requires server routing)
@@ -221,19 +223,7 @@
     return new URLSearchParams(window.location.search).get('orderId');
   }
 
-  // ── Formatting helpers ─────────────────────────────────────────────────────
-
-  function formatAmount(amount, decimals = 7) {
-    return (Number(amount) / Math.pow(10, decimals)).toLocaleString(undefined, {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: decimals,
-    });
-  }
-
-  function formatDate(timestamp) {
-    return new Date(Number(timestamp) * 1000).toLocaleString();
-  }
-
+  // ── Status badge (local to receipt page) ──────────────────────────────────
   function statusBadge(status) {
     const map = {
       Completed:         { label: '✔ Completed',          cls: 'badge-completed' },
@@ -242,13 +232,6 @@
     };
     return map[status] || { label: status || 'Unknown', cls: 'badge-unknown' };
   }
-
-  // ── Stellar / Soroban data fetching ────────────────────────────────────────
-  // Replace CONTRACT_ID and NETWORK_RPC with your deployment values,
-  // or inject them via a build-time environment variable.
-
-  const CONTRACT_ID = window.LUMENFLOW_CONTRACT_ID || '';
-  const RPC_URL     = window.LUMENFLOW_RPC_URL     || 'https://soroban-testnet.stellar.org';
 
   async function fetchPayment(orderId) {
     // If no contract configured, fall back to demo data so the page is usable
@@ -356,10 +339,12 @@
     }
     prompt('Copy this link:', window.location.href);
   }
+  window.copyLink = copyLink;
 
   // ── Bootstrap ──────────────────────────────────────────────────────────────
 
   (async () => {
+    renderModeBanner();
     const orderId = getOrderId();
     if (!orderId) {
       document.getElementById('missing-id').textContent = '(none)';
