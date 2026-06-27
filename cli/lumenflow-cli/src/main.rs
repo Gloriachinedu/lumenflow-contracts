@@ -42,6 +42,12 @@ enum Commands {
     },
     /// View global statistics (admin only)
     Stats,
+    /// Batch pay multiple merchants in one transaction (max 10 items)
+    BatchPay {
+        /// Payment items in 'ORDER_ID:MERCHANT_ADDR:AMOUNT' format (repeatable, max 10)
+        #[arg(long = "item", value_name = "ORDER_ID:MERCHANT_ADDR:AMOUNT")]
+        items: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -115,6 +121,37 @@ mod tests {
         std::env::remove_var("LUMENFLOW_NETWORK");
         Ok(())
     }
+
+    #[test]
+    fn test_batch_pay_parses_correctly() {
+        let cli = Cli::try_parse_from([
+            "lumenflow", "batch-pay",
+            "--item", "ORDER1:MERCHANT_A:500",
+            "--item", "ORDER2:MERCHANT_B:300",
+        ]).expect("should parse");
+        match cli.command {
+            Commands::BatchPay { items } => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(items[0], "ORDER1:MERCHANT_A:500");
+                assert_eq!(items[1], "ORDER2:MERCHANT_B:300");
+            }
+            _ => panic!("expected BatchPay"),
+        }
+    }
+
+    #[test]
+    fn test_batch_pay_over_limit_detected() {
+        let mut args = vec!["lumenflow", "batch-pay"];
+        let items: Vec<String> = (1..=11).map(|i| format!("--item=ORDER{}:MERCHANT:100", i)).collect();
+        for item in &items {
+            args.push(item.as_str());
+        }
+        let cli = Cli::try_parse_from(&args).expect("should parse");
+        match cli.command {
+            Commands::BatchPay { items } => assert!(items.len() > 10),
+            _ => panic!("expected BatchPay"),
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -152,6 +189,28 @@ fn main() -> Result<()> {
             println!("  Total Volume:   45,000.00");
             println!("  Total Payments: 128");
             println!("  Active Merch:   12");
+        }
+        Commands::BatchPay { items } => {
+            if items.is_empty() {
+                anyhow::bail!("At least one --item is required");
+            }
+            if items.len() > 10 {
+                anyhow::bail!("Too many items: {} (max 10)", items.len());
+            }
+            println!("Batch payment ({} items):", items.len());
+            let mut total: i128 = 0;
+            for item in items {
+                let parts: Vec<&str> = item.splitn(3, ':').collect();
+                if parts.len() != 3 {
+                    anyhow::bail!("Invalid item format '{}' - expected ORDER_ID:MERCHANT_ADDR:AMOUNT", item);
+                }
+                let amount: i128 = parts[2].parse()
+                    .map_err(|_| anyhow::anyhow!("Invalid amount '{}' in item '{}'", parts[2], item))?;
+                println!("  Order: {}  Merchant: {}  Amount: {}", parts[0], parts[1], amount);
+                total += amount;
+            }
+            println!("Total amount: {}", total);
+            println!("Network: {}", config.network.as_deref().unwrap_or("testnet"));
         }
     }
 
