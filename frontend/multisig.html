@@ -129,28 +129,28 @@
   <h2>New Multisig Payment</h2>
 
   <div class="field">
-    <label>Payment ID</label>
-    <input type="text" id="payment-id" placeholder="MS_001" />
-    <div class="err-msg" id="err-payment-id">Payment ID is required.</div>
+    <label for="payment-id">Payment ID</label>
+    <input type="text" id="payment-id" placeholder="MS_001" aria-describedby="err-payment-id" aria-required="true" />
+    <div class="err-msg" id="err-payment-id" role="alert" aria-live="polite">Payment ID is required.</div>
   </div>
 
   <div class="field">
-    <label>Merchant Address</label>
-    <input type="text" id="merchant-address" placeholder="G…" />
-    <div class="err-msg" id="err-merchant">Merchant address is required.</div>
+    <label for="merchant-address">Merchant Address</label>
+    <input type="text" id="merchant-address" placeholder="G…" aria-describedby="err-merchant" aria-required="true" />
+    <div class="err-msg" id="err-merchant" role="alert" aria-live="polite">Merchant address is required.</div>
   </div>
 
   <div class="field">
-    <label>Token Address</label>
-    <input type="text" id="token-address" placeholder="C… or G…" />
-    <div class="err-msg" id="err-token">Token address is required.</div>
+    <label for="token-address">Token Address</label>
+    <input type="text" id="token-address" placeholder="C… or G…" aria-describedby="err-token" aria-required="true" />
+    <div class="err-msg" id="err-token" role="alert" aria-live="polite">Token address is required.</div>
   </div>
 
   <div class="field">
-    <label>Amount (stroops)</label>
-    <input type="number" id="amount" placeholder="5000000" min="1" />
-    <div class="hint">1 XLM = 10,000,000 stroops</div>
-    <div class="err-msg" id="err-amount">Amount must be a positive number.</div>
+    <label for="amount">Amount (stroops)</label>
+    <input type="number" id="amount" placeholder="5000000" min="1" aria-describedby="amount-hint err-amount" aria-required="true" />
+    <div class="hint" id="amount-hint">1 XLM = 10,000,000 stroops</div>
+    <div class="err-msg" id="err-amount" role="alert" aria-live="polite">Amount must be a positive number.</div>
   </div>
 
   <!-- Signers -->
@@ -158,25 +158,25 @@
     <label>Signer Addresses</label>
     <div id="signers-list">
       <div class="signer-row">
-        <input type="text" placeholder="G… signer address" class="signer-input" aria-label="Signer address 1" oninput="updateThresholdLabel()" />
+        <input type="text" placeholder="G… signer address" class="signer-input" aria-label="Signer address 1" aria-describedby="err-signers" oninput="updateThresholdLabel()" />
         <button type="button" class="btn-icon" onclick="removeSigner(this)" aria-label="Remove signer 1">✕</button>
       </div>
     </div>
     <button type="button" class="btn-link" id="add-signer-btn" onclick="addSigner()">+ Add signer</button>
-    <div class="err-msg" id="err-signers">At least one signer is required.</div>
+    <div class="err-msg" id="err-signers" role="alert" aria-live="polite">At least one signer is required.</div>
   </div>
 
   <!-- Required signatures threshold -->
   <div class="field">
-    <label>Required Signatures</label>
+    <label for="required-sigs">Required Signatures</label>
     <div class="threshold-row">
-      <input type="number" id="required-sigs" min="1" value="1" oninput="validateThreshold()" />
+      <input type="number" id="required-sigs" min="1" value="1" aria-describedby="threshold-msg" oninput="validateThreshold()" />
       <span class="of-label">of <strong id="signer-count">1</strong> signers</span>
     </div>
-    <div class="validation-msg" id="threshold-msg"></div>
+    <div class="validation-msg" id="threshold-msg" role="status" aria-live="polite"></div>
   </div>
 
-  <div id="form-alert" class="alert" style="display:none"></div>
+  <div id="form-alert" class="alert" role="alert" aria-live="assertive" style="display:none"></div>
 
   <button class="btn btn-primary btn-full" id="submit-btn" onclick="submitForm()">Initiate Payment</button>
 </div>
@@ -300,7 +300,13 @@
 
   function markInput(id, invalid) {
     const el = document.getElementById(id);
-    if (el) el.classList.toggle('error', invalid);
+    if (!el) return;
+    el.classList.toggle('error', invalid);
+    if (invalid) {
+      el.setAttribute('aria-invalid', 'true');
+    } else {
+      el.removeAttribute('aria-invalid');
+    }
   }
 
   function validateForm() {
@@ -347,7 +353,12 @@
         const value = input.value.trim();
         const bad = value.length > 0 && !isValidStellarKey(value, ['G']);
         input.classList.toggle('error', bad);
-        if (bad) anyInvalid = true;
+        if (bad) {
+          input.setAttribute('aria-invalid', 'true');
+          anyInvalid = true;
+        } else {
+          input.removeAttribute('aria-invalid');
+        }
       });
       if (anyInvalid) signerErr = 'Each signer must be a valid Stellar address (starts with G, 56 characters).';
       else if (new Set(signers).size !== signers.length) signerErr = 'Signer addresses must be unique.';
