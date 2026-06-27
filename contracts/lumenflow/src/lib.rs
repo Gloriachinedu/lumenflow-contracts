@@ -73,6 +73,46 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Add a token address to the payment whitelist (admin only).
+    /// Once any token is added the whitelist is enforced; payments using
+    /// unlisted tokens are rejected.
+    pub fn add_allowed_token(
+        env: Env,
+        admin: Address,
+        token: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        let mut list = storage::get_token_whitelist(&env);
+        if !list.contains(&token) {
+            list.push_back(token);
+            storage::set_token_whitelist(&env, &list);
+        }
+        Ok(())
+    }
+
+    /// Remove a token from the whitelist (admin only).
+    pub fn remove_allowed_token(
+        env: Env,
+        admin: Address,
+        token: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        let list = storage::get_token_whitelist(&env);
+        let mut new_list = Vec::new(&env);
+        for t in list.iter() {
+            if t != token {
+                new_list.push_back(t);
+            }
+        }
+        storage::set_token_whitelist(&env, &new_list);
+        Ok(())
+    }
+
+    /// Get the current token whitelist. Empty means no restriction.
+    pub fn get_token_whitelist(env: Env) -> Vec<Address> {
+        storage::get_token_whitelist(&env)
+    }
+
     // ── Merchant management ───────────────────────────────────────────────────
 
     /// Register a new merchant.
@@ -175,6 +215,11 @@ impl PaymentProcessingContract {
             return Err(PaymentError::MerchantInactive);
         }
 
+        // Reject disallowed tokens
+        if !storage::is_token_allowed(&env, &token_address) {
+            return Err(PaymentError::TokenNotAllowed);
+        }
+
         // Build payload: order_id bytes + amount bytes
         let mut payload = Bytes::new(&env);
         payload.append(&order_id.clone().to_xdr(&env));
@@ -253,6 +298,11 @@ impl PaymentProcessingContract {
                 .ok_or(PaymentError::MerchantNotFound)?;
             if !merchant.active {
                 return Err(PaymentError::MerchantInactive);
+            }
+
+            // Reject disallowed tokens
+            if !storage::is_token_allowed(&env, &item.token_address) {
+                return Err(PaymentError::TokenNotAllowed);
             }
 
             // Build payload: order_id bytes + amount bytes
@@ -624,6 +674,11 @@ impl PaymentProcessingContract {
             return Err(PaymentError::MerchantInactive);
         }
 
+        // Reject disallowed tokens
+        if !storage::is_token_allowed(&env, &token_address) {
+            return Err(PaymentError::TokenNotAllowed);
+        }
+
         let ms = MultisigPayment {
             payment_id: payment_id.clone(),
             merchant_address,
@@ -901,6 +956,11 @@ impl PaymentProcessingContract {
         if env.ledger().timestamp() > pr.expires_at {
             storage::remove_payment_request(&env, &request_id);
             return Err(PaymentError::PaymentExpired);
+        }
+
+        // Reject disallowed tokens
+        if !storage::is_token_allowed(&env, &pr.token) {
+            return Err(PaymentError::TokenNotAllowed);
         }
 
         // Transfer tokens from payer to merchant

@@ -18,6 +18,7 @@ pub enum DataKey {
     Multisig(String),
     PaymentRequest(String),
     LargePaymentThreshold,
+    TokenWhitelist,
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -191,4 +192,25 @@ pub fn remove_payment_request(env: &Env, request_id: &String) {
     env.storage()
         .temporary()
         .remove(&DataKey::PaymentRequest(request_id.clone()));
+}
+
+// ── Token Whitelist ───────────────────────────────────────────────────────────
+
+/// Returns the token whitelist. An empty list means all tokens are allowed.
+pub fn get_token_whitelist(env: &Env) -> Vec<Address> {
+    env.storage()
+        .instance()
+        .get(&DataKey::TokenWhitelist)
+        .unwrap_or(Vec::new(env))
+}
+
+pub fn set_token_whitelist(env: &Env, list: &Vec<Address>) {
+    env.storage().instance().set(&DataKey::TokenWhitelist, list);
+}
+
+/// Returns true when the token is permitted.
+/// If no whitelist has been set (empty list) every token is permitted.
+pub fn is_token_allowed(env: &Env, token: &Address) -> bool {
+    let list = get_token_whitelist(env);
+    list.is_empty() || list.contains(token)
 }
