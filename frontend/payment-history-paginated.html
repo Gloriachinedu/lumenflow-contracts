@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Payment History (Paginated) – LumenFlow</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f5f7fa;
+      color: #1a1a2e;
+      min-height: 100vh;
+      padding: 2rem 1rem;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    h1 { font-size: 1.4rem; font-weight: 700; color: #6c47ff; margin-bottom: 0.25rem; }
+    .subtitle { color: #666; font-size: 0.875rem; margin-bottom: 1.5rem; }
+
+    /* ── Table ─────────────────────────────────────────────────────────── */
+    .table-wrap {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 2px 16px rgba(0,0,0,0.07);
+      overflow-x: auto;
+      margin-bottom: 1rem;
+    }
+
+    table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+
+    thead th {
+      padding: 0.85rem 1rem;
+      text-align: left;
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #555;
+      border-bottom: 1px solid #eee;
+      white-space: nowrap;
+    }
+
+    tbody tr { border-bottom: 1px solid #f4f4f4; transition: background 0.1s; }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: #faf8ff; }
+    td { padding: 0.8rem 1rem; vertical-align: middle; }
+
+    .badge {
+      display: inline-block;
+      padding: 0.2rem 0.55rem;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 700;
+    }
+    .badge-completed       { background: #e6f9f0; color: #1a9e5c; }
+    .badge-partial         { background: #fff7e6; color: #b86a00; }
+    .badge-fully-refunded  { background: #f0ecff; color: #6c47ff; }
+
+    .order-id { font-family: monospace; font-size: 0.82rem; color: #444; }
+    .amount   { font-weight: 700; }
+
+    .empty-row td {
+      text-align: center;
+      padding: 3rem;
+      color: #aaa;
+      font-size: 0.9rem;
+    }
+
+    /* ── Pagination bar ────────────────────────────────────────────────── */
+    .pagination-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      padding: 0.75rem 0;
+    }
+
+    .page-meta { font-size: 0.85rem; color: #555; }
+
+    .page-controls { display: flex; gap: 0.5rem; align-items: center; }
+
+    .btn {
+      padding: 0.45rem 1rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1.5px solid #6c47ff;
+      background: #fff;
+      color: #6c47ff;
+      transition: background 0.15s, opacity 0.15s;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+    .btn:hover:not(:disabled) { background: #f0ecff; }
+    .btn:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+      border-color: #ccc;
+      color: #999;
+    }
+
+    .page-size-wrap { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #555; }
+    .page-size-wrap select {
+      padding: 0.35rem 0.6rem;
+      border: 1.5px solid #dde1e7;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      outline: none;
+    }
+    .page-size-wrap select:focus { border-color: #6c47ff; }
+
+    /* Loading overlay */
+    .loading-msg {
+      text-align: center;
+      padding: 2rem;
+      color: #888;
+      font-size: 0.875rem;
+    }
+  </style>
+</head>
+<body>
+
+<h1>Payment History</h1>
+<p class="subtitle">Browse paginated payment records.</p>
+
+<div class="table-wrap">
+  <table id="history-table">
+    <thead>
+      <tr>
+        <th>Order ID</th>
+        <th>Merchant</th>
+        <th>Amount</th>
+        <th>Status</th>
+        <th>Date</th>
+      </tr>
+    </thead>
+    <tbody id="table-body">
+      <tr class="empty-row"><td colspan="5">Loading…</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Pagination controls -->
+<div class="pagination-bar" id="pagination-bar">
+  <div class="page-meta" id="page-meta"></div>
+
+  <div class="page-controls">
+    <button class="btn" id="prev-btn" onclick="prevPage()" disabled aria-label="Previous page">
+      ← Prev
+    </button>
+    <button class="btn" id="next-btn" onclick="nextPage()" disabled aria-label="Next page">
+      Next →
+    </button>
+  </div>
+
+  <div class="page-size-wrap">
+    <label for="page-size">Per page:</label>
+    <select id="page-size" onchange="changePageSize()">
+      <option value="5" selected>5</option>
+      <option value="10">10</option>
+      <option value="25">25</option>
+    </select>
+  </div>
+</div>
+
+<script>
+  // ── Pagination state ───────────────────────────────────────────────────────
+  // cursor stack: index 0 = first page (null cursor), each push = next-page cursor
+  let cursorStack = [null];  // cursorStack[currentIdx] is cursor for that page
+  let currentIdx  = 0;
+  let pageSize    = 5;
+  let totalOnPage = 0;
+
+  // ── Mock data simulating contract paginated API ────────────────────────────
+  const ALL_PAYMENTS = [
+    { order_id: 'ORDER_001', merchant_address: 'GDUT...XZ1A', amount: 1000, status: 'Completed',         paid_at: '2026-06-01' },
+    { order_id: 'ORDER_002', merchant_address: 'GCMR...Y9KP', amount: 4500, status: 'PartiallyRefunded', paid_at: '2026-06-03' },
+    { order_id: 'ORDER_003', merchant_address: 'GDUT...XZ1A', amount: 750,  status: 'Completed',         paid_at: '2026-06-05' },
+    { order_id: 'ORDER_004', merchant_address: 'GCMR...Y9KP', amount: 200,  status: 'FullyRefunded',     paid_at: '2026-06-07' },
+    { order_id: 'ORDER_005', merchant_address: 'GDUT...XZ1A', amount: 3200, status: 'Completed',         paid_at: '2026-06-09' },
+    { order_id: 'ORDER_006', merchant_address: 'GCMR...Y9KP', amount: 600,  status: 'Completed',         paid_at: '2026-06-11' },
+    { order_id: 'ORDER_007', merchant_address: 'GDUT...XZ1A', amount: 980,  status: 'PartiallyRefunded', paid_at: '2026-06-13' },
+    { order_id: 'ORDER_008', merchant_address: 'GCMR...Y9KP', amount: 120,  status: 'Completed',         paid_at: '2026-06-15' },
+    { order_id: 'ORDER_009', merchant_address: 'GDUT...XZ1A', amount: 8750, status: 'Completed',         paid_at: '2026-06-17' },
+    { order_id: 'ORDER_010', merchant_address: 'GCMR...Y9KP', amount: 310,  status: 'FullyRefunded',     paid_at: '2026-06-19' },
+    { order_id: 'ORDER_011', merchant_address: 'GDUT...XZ1A', amount: 2200, status: 'Completed',         paid_at: '2026-06-21' },
+    { order_id: 'ORDER_012', merchant_address: 'GCMR...Y9KP', amount: 540,  status: 'Completed',         paid_at: '2026-06-23' },
+  ];
+
+  /**
+   * Simulates the contract's paginated query.
+   * Replace with a real Soroban RPC call when CONTRACT_ID is available.
+   *
+   * Returns: { payments: [...], next_cursor: string|null }
+   */
+  async function fetchPage(cursor, limit) {
+    await new Promise(r => setTimeout(r, 120)); // simulate latency
+
+    const startIdx = cursor ? ALL_PAYMENTS.findIndex(p => p.order_id === cursor) : 0;
+    const slice = ALL_PAYMENTS.slice(startIdx, startIdx + limit);
+    const remaining = ALL_PAYMENTS.slice(startIdx + limit);
+    const next_cursor = remaining.length > 0 ? remaining[0].order_id : null;
+
+    return { payments: slice, next_cursor };
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+  function statusBadge(status) {
+    const map = {
+      Completed:         ['badge-completed',      'Completed'],
+      PartiallyRefunded: ['badge-partial',         'Partial Refund'],
+      FullyRefunded:     ['badge-fully-refunded',  'Fully Refunded'],
+    };
+    const [cls, label] = map[status] || ['', status];
+    return `<span class="badge ${cls}">${label}</span>`;
+  }
+
+  function setLoading(on) {
+    document.getElementById('table-body').innerHTML = on
+      ? '<tr class="empty-row"><td colspan="5">Loading…</td></tr>'
+      : '';
+    document.getElementById('prev-btn').disabled = on || true;
+    document.getElementById('next-btn').disabled = on || true;
+  }
+
+  async function loadPage() {
+    setLoading(true);
+
+    const cursor = cursorStack[currentIdx];
+    const { payments, next_cursor } = await fetchPage(cursor, pageSize);
+
+    totalOnPage = payments.length;
+
+    // Render table rows
+    const tbody = document.getElementById('table-body');
+    if (payments.length === 0) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No payments found.</td></tr>';
+    } else {
+      tbody.innerHTML = payments.map(p => `
+        <tr>
+          <td><span class="order-id">${p.order_id}</span></td>
+          <td>${p.merchant_address}</td>
+          <td class="amount">${p.amount.toLocaleString()} XLM</td>
+          <td>${statusBadge(p.status)}</td>
+          <td>${p.paid_at}</td>
+        </tr>`).join('');
+    }
+
+    // Store next cursor if we don't have it yet (first visit to this position)
+    if (next_cursor && cursorStack.length === currentIdx + 1) {
+      cursorStack.push(next_cursor);
+    }
+
+    // Update meta text
+    const pageNum = currentIdx + 1;
+    document.getElementById('page-meta').textContent =
+      payments.length === 0
+        ? 'No records'
+        : `Page ${pageNum} · showing ${payments.length} record${payments.length !== 1 ? 's' : ''}`;
+
+    // Update button states
+    document.getElementById('prev-btn').disabled = currentIdx === 0;
+    document.getElementById('next-btn').disabled = !next_cursor;
+  }
+
+  // ── Navigation ─────────────────────────────────────────────────────────────
+  function prevPage() {
+    if (currentIdx > 0) {
+      currentIdx--;
+      loadPage();
+    }
+  }
+
+  function nextPage() {
+    if (currentIdx + 1 < cursorStack.length) {
+      currentIdx++;
+      loadPage();
+    }
+  }
+
+  function changePageSize() {
+    pageSize = parseInt(document.getElementById('page-size').value, 10);
+    // Reset to first page when page size changes
+    cursorStack = [null];
+    currentIdx  = 0;
+    loadPage();
+  }
+
+  // ── Init ───────────────────────────────────────────────────────────────────
+  loadPage();
+</script>
+</body>
+</html>
