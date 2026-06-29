@@ -93,6 +93,16 @@ fn test_set_admin_zero_address_fails() {
 }
 
 #[test]
+fn test_set_admin_contract_address_rejected() {
+    // Resolves issue #476: a contract address must be rejected by set_admin.
+    // env.register() returns a contract address (ScAddress::Contract discriminant).
+    let (env, client) = setup();
+    let contract_addr = env.register(crate::PaymentProcessingContract, ());
+    let result = client.try_set_admin(&contract_addr);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAdminAddress)));
+}
+
+#[test]
 fn test_transfer_admin_success() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
