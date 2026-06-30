@@ -34,12 +34,58 @@ function statusBadge(status) {
 
 function refundStatusLabel(status) {
   const map = {
-    Pending:   '⏳ Pending review',
-    Approved:  '✔ Approved',
-    Rejected:  '✗ Rejected',
-    Completed: '✔ Refunded',
+    Pending:   'Pending Review',
+    Approved:  'Approved',
+    Rejected:  'Rejected',
+    Completed: 'Refunded',
   };
   return map[status] || status;
+}
+
+function refundStatusIcon(status) {
+  return { Pending: '⏳', Approved: '✔', Rejected: '✗', Completed: '✅' }[status] || '•';
+}
+
+function escapeHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function buildRefundTimeline(r) {
+  const steps = [];
+
+  // Step 1 — always present: submitted
+  steps.push(`<div class="timeline-step step-status-approved">
+    <em class="refund-status-icon">📩</em> Submitted — ${formatDate(r.created_at)}
+  </div>`);
+
+  // Step 2 — middle state
+  if (r.status === 'Completed' || r.status === 'Approved') {
+    steps.push(`<div class="timeline-step step-status-approved">
+      <em class="refund-status-icon">✔</em> Approved
+    </div>`);
+  } else if (r.status === 'Rejected') {
+    steps.push(`<div class="timeline-step step-status-rejected">
+      <em class="refund-status-icon">✗</em> Rejected
+    </div>`);
+  } else {
+    steps.push(`<div class="timeline-step step-status-pending">
+      <em class="refund-status-icon">⏳</em> Awaiting merchant review
+    </div>`);
+  }
+
+  // Step 3 — completed transfer
+  if (r.status === 'Completed' && r.executed_at) {
+    steps.push(`<div class="timeline-step step-status-completed">
+      <em class="refund-status-icon">✅</em> Refund transferred — ${formatDate(r.executed_at)}
+    </div>`);
+  }
+
+  return `<div class="refund-timeline">${steps.join('')}</div>`;
 }
 
 // ── Data fetching ─────────────────────────────────────────────────────────────
@@ -82,6 +128,7 @@ async function fetchPayment(orderId) {
 
 function getDemoData(orderId) {
   if (orderId === 'NOT_FOUND') return null;
+  const now = Math.floor(Date.now() / 1000);
   return {
     payment: {
       order_id:         orderId,
@@ -89,20 +136,35 @@ function getDemoData(orderId) {
       payer:            'GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN',
       token:            'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
       amount:           50000000n,
-      status:           'Completed',
-      paid_at:          BigInt(Math.floor(Date.now() / 1000) - 3600),
-      refunded_amount:  0n,
+      status:           'PartiallyRefunded',
+      paid_at:          BigInt(now - 7200),
+      refunded_amount:  15000000n,
       memo:             'Invoice #001',
     },
     merchant: { name: 'Demo Store', verified: true },
     refunds: [
       {
-        refund_id: 'REFUND_001',
-        amount: 10000000n,
-        reason: 'Item out of stock',
-        status: 'Completed',
-        created_at: BigInt(Math.floor(Date.now() / 1000) - 1800),
-        executed_at: BigInt(Math.floor(Date.now() / 1000) - 900),
+        refund_id:   'REFUND_001',
+        amount:      5000000n,
+        reason:      'Item damaged in transit',
+        status:      'Completed',
+        created_at:  BigInt(now - 3600),
+        executed_at: BigInt(now - 1800),
+      },
+      {
+        refund_id:  'REFUND_002',
+        amount:     10000000n,
+        reason:     'Wrong size delivered',
+        status:     'Pending',
+        created_at: BigInt(now - 900),
+      },
+      {
+        refund_id:      'REFUND_003',
+        amount:         5000000n,
+        reason:         'Change of mind',
+        status:         'Rejected',
+        created_at:     BigInt(now - 5400),
+        dispute_reason: 'Item was used before return request was submitted.',
       },
     ],
   };
