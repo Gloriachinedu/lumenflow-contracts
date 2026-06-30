@@ -7,6 +7,7 @@ pub enum PaymentError {
     // Auth
     Unauthorized = 1,
     AdminAlreadySet = 2,
+    ContractPaused = 3,
 
     // Merchant
     MerchantNotFound = 10,

@@ -57,6 +57,86 @@ fn test_set_admin_twice_fails() {
     assert_eq!(result, Err(Ok(PaymentError::AdminAlreadySet)));
 }
 
+// ── Pause tests ───────────────────────────────────────────────────────────────
+
+#[test]
+fn test_pause_and_unpause() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    // Initially not paused
+    assert!(!client.is_paused());
+
+    // Admin can pause
+    client.pause(&admin);
+    assert!(client.is_paused());
+
+    // Admin can unpause
+    client.unpause(&admin);
+    assert!(!client.is_paused());
+}
+
+#[test]
+fn test_mutating_functions_reject_when_paused() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admin);
+    client.pause(&admin);
+
+    // Register merchant should fail when paused
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "info"),
+        &MerchantCategory::Retail,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
+}
+
+#[test]
+fn test_read_only_calls_work_while_paused() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    
+    client.set_admin(&admin);
+    
+    // Register merchant before pausing
+    client.register_merchant(
+        &merchant,
+        &str(&env, "My Store"),
+        &str(&env, "desc"),
+        &str(&env, "info"),
+        &MerchantCategory::Retail,
+    );
+    
+    // Pause contract
+    client.pause(&admin);
+    
+    // Read-only calls should still work
+    let m = client.get_merchant(&merchant);
+    assert_eq!(m.name, str(&env, "My Store"));
+    
+    // is_paused should work
+    assert!(client.is_paused());
+}
+
+#[test]
+fn test_pause_requires_admin() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    
+    client.set_admin(&admin);
+    
+    // Non-admin cannot pause
+    let result = client.try_pause(&non_admin);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
 // ── Merchant tests ────────────────────────────────────────────────────────────
 
 #[test]
@@ -368,8 +448,15 @@ fn test_get_payer_payment_history_with_filter() {
 #[test]
 fn test_pagination_limit() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let ids = [
+        str(&env, "PAG_0"),
+        str(&env, "PAG_1"),
+        str(&env, "PAG_2"),
+        str(&env, "PAG_3"),
+        str(&env, "PAG_4"),
+    ];
     for i in 0..5u32 {
-        let id = String::from_str(&env, &soroban_sdk::format!("PAG_{}", i));
+        let id = ids[i as usize].clone();
         let pub_key = bytes(&env, &[0u8; 32]);
         let sig = bytes(&env, &[0u8; 64]);
         client.process_payment_with_signature(
