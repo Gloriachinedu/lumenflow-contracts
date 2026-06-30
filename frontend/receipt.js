@@ -43,9 +43,40 @@ function refundStatusLabel(status) {
 }
 
 // ── Data fetching ─────────────────────────────────────────────────────────────
+//
+// Privacy note (resolves #354):
+//   The receipt page is publicly shareable, so we use `get_payment_summary`
+//   (the minimal, non-authenticated public endpoint) instead of
+//   `get_payment_by_id`.  This ensures that sensitive fields such as the
+//   payer address, memo, and tags are never loaded into the browser at all —
+//   not merely omitted at render time.
+//
+//   Fields fetched and rendered:  order_id, merchant_address (name only),
+//                                 amount, token, status, paid_at.
+//   Fields intentionally excluded: payer address, memo, tags, signatures.
 
 const CONTRACT_ID = window.LUMENFLOW_CONTRACT_ID || '';
 const RPC_URL     = window.LUMENFLOW_RPC_URL     || 'https://soroban-testnet.stellar.org';
+
+/**
+ * Extract only the fields the receipt page is allowed to display.
+ * Acts as a data-minimisation guard: even if the contract response
+ * shape changes, no unexpected sensitive field leaks through.
+ *
+ * @param {object} raw - raw payment object from the contract or demo data
+ * @returns {{ order_id, merchant_address, amount, token, status, paid_at }}
+ */
+function toPublicPaymentSummary(raw) {
+  return {
+    order_id:         raw.order_id,
+    merchant_address: raw.merchant_address,
+    amount:           raw.amount,
+    token:            raw.token,
+    status:           raw.status,
+    paid_at:          raw.paid_at,
+    // payer, memo, tags, signature — intentionally omitted
+  };
+}
 
 async function fetchPayment(orderId) {
   if (!CONTRACT_ID) return getDemoData(orderId);
@@ -56,15 +87,19 @@ async function fetchPayment(orderId) {
   const server   = new SorobanRpc.Server(RPC_URL);
   const contract = new Contract(CONTRACT_ID);
 
-  const callerArg = nativeToScVal('GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN', { type: 'address' });
-  const idArg     = nativeToScVal(orderId, { type: 'string' });
+  const idArg = nativeToScVal(orderId, { type: 'string' });
 
   try {
+    // Use get_payment_summary — the public endpoint that returns only
+    // non-sensitive metadata.  No caller address required.
     const result = await server.simulateTransaction(
-      contract.call('get_payment_by_id', callerArg, idArg)
+      contract.call('get_payment_summary', idArg)
     );
     if (SorobanRpc.Api.isSimulationError(result)) return null;
-    const payment = scValToNative(result.result.retval);
+
+    const rawPayment = scValToNative(result.result.retval);
+    // Apply allow-list to strip any unexpected fields
+    const payment = toPublicPaymentSummary(rawPayment);
 
     const merchantArg = nativeToScVal(payment.merchant_address, { type: 'address' });
     const mResult = await server.simulateTransaction(
@@ -83,16 +118,15 @@ async function fetchPayment(orderId) {
 function getDemoData(orderId) {
   if (orderId === 'NOT_FOUND') return null;
   return {
+    // Demo data matches the shape of get_payment_summary (public fields only).
+    // Sensitive fields (payer address, memo, tags) are intentionally absent.
     payment: {
       order_id:         orderId,
       merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON',
-      payer:            'GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN',
       token:            'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
       amount:           50000000n,
       status:           'Completed',
       paid_at:          BigInt(Math.floor(Date.now() / 1000) - 3600),
-      refunded_amount:  0n,
-      memo:             'Invoice #001',
     },
     merchant: { name: 'Demo Store', verified: true },
     refunds: [
