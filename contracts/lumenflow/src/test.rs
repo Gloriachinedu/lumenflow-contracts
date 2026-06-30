@@ -4535,3 +4535,189 @@ fn test_get_token_whitelist() {
     assert_eq!(list_after.len(), 1);
     assert!(list_after.contains(&token));
 }
+
+// ── Access control tests (Issue #355) ────────────────────────────────────────
+
+/// get_merchant is a public read — any caller can retrieve a merchant profile
+/// without authentication.
+#[test]
+fn test_get_merchant_is_public() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Public Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+
+    // Any random address can read merchant details without being authed
+    let info = client.get_merchant(&merchant);
+    assert_eq!(info.name, str(&env, "Public Store"));
+    assert!(!info.verified);
+}
+
+/// get_payment_by_id requires the caller to be the payer, merchant, or admin.
+/// An unrelated address must receive Unauthorized.
+#[test]
+fn test_get_payment_by_id_unauthorized_caller_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "AC_001", 500);
+
+    let outsider = Address::generate(&env);
+    let result = client.try_get_payment_by_id(&outsider, &str(&env, "AC_001"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+/// The payer is allowed to read their own payment via get_payment_by_id.
+#[test]
+fn test_get_payment_by_id_payer_allowed() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "AC_002", 500);
+
+    let payment = client.get_payment_by_id(&payer, &str(&env, "AC_002"));
+    assert_eq!(payment.amount, 500);
+}
+
+/// The merchant is allowed to read a payment they received.
+#[test]
+fn test_get_payment_by_id_merchant_allowed() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "AC_003", 500);
+
+    let payment = client.get_payment_by_id(&merchant, &str(&env, "AC_003"));
+    assert_eq!(payment.amount, 500);
+}
+
+/// The admin is allowed to read any payment.
+#[test]
+fn test_get_payment_by_id_admin_allowed() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "AC_004", 500);
+
+    let payment = client.get_payment_by_id(&admin, &str(&env, "AC_004"));
+    assert_eq!(payment.amount, 500);
+}
+
+/// get_global_payment_stats requires admin — a non-admin must receive Unauthorized.
+#[test]
+fn test_get_global_payment_stats_non_admin_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_get_global_payment_stats(&non_admin, &None, &None);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+/// get_global_payment_stats succeeds for the admin.
+#[test]
+fn test_get_global_payment_stats_admin_allowed() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let stats = client.get_global_payment_stats(&admin, &None, &None);
+    assert_eq!(stats.total_payments, 0);
+}
+
+/// get_refunds_for_order restricts access to payer, merchant, and admin.
+/// An unrelated address must receive Unauthorized.
+#[test]
+fn test_get_refunds_for_order_unauthorized_rejected() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "AC_005", 1000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REFUND_AC_005"),
+        &str(&env, "AC_005"),
+        &100,
+        &str(&env, "Test refund reason"),
+    );
+
+    let outsider = Address::generate(&env);
+    let result = client.try_get_refunds_for_order(&outsider, &str(&env, "AC_005"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+/// The payer can list refunds for their own payment.
+#[test]
+fn test_get_refunds_for_order_payer_allowed() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "AC_006", 1000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REFUND_AC_006"),
+        &str(&env, "AC_006"),
+        &100,
+        &str(&env, "Test refund reason"),
+    );
+
+    let refunds = client.get_refunds_for_order(&payer, &str(&env, "AC_006"));
+    assert_eq!(refunds.len(), 1);
+}
+
+/// verify_merchant is admin-only; a non-admin must receive Unauthorized.
+#[test]
+fn test_verify_merchant_requires_admin() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+
+    let result = client.try_verify_merchant(&non_admin, &merchant);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+/// verify_merchant succeeds for the admin and sets verified = true.
+#[test]
+fn test_verify_merchant_admin_sets_verified_flag() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Verified Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+
+    assert!(!client.get_merchant(&merchant).verified);
+    client.verify_merchant(&admin, &merchant);
+    assert!(client.get_merchant(&merchant).verified);
+}
+
+/// unverify_merchant clears the verified flag. Admin only.
+#[test]
+fn test_unverify_merchant_clears_verified_flag() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+    client.verify_merchant(&admin, &merchant);
+    assert!(client.get_merchant(&merchant).verified);
+
+    client.unverify_merchant(&admin, &merchant);
+    assert!(!client.get_merchant(&merchant).verified);
+}
