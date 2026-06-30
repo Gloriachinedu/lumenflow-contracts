@@ -4535,3 +4535,862 @@ fn test_get_token_whitelist() {
     assert_eq!(list_after.len(), 1);
     assert!(list_after.contains(&token));
 }
+
+// ── State rollback and error handling tests (#346) ────────────────────────────
+//
+// These tests verify that failed contract invocations do NOT leave partial
+// state changes behind.  Each test follows the pattern:
+//   1. Capture the "before" state.
+//   2. Trigger an operation that must fail.
+//   3. Assert the expected error is returned.
+//   4. Re-read state and confirm it is identical to the "before" snapshot.
+
+// ── Payment state rollback ─────────────────────────────────────────────────
+
+/// A payment with an invalid (zero) amount must not create a payment record
+/// and must not mutate the payer's payment history.
+#[test]
+fn test_state_unchanged_after_invalid_amount_payment() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // Capture history length before the failed call.
+    let before = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(before.total_matching, 0);
+
+    // Attempt a payment with amount = 0.
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "ROLLBACK_ZERO_AMT"),
+        &merchant,
+        &token,
+        &0,
+        &str(&env, "should fail"),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+
+    // State must be unchanged.
+    let after = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(after.total_matching, 0);
+}
+
+/// A payment to an unregistered merchant must be rejected and must not
+/// create a payment record.
+#[test]
+fn test_state_unchanged_after_payment_to_unregistered_merchant() {
+    let (env, client, _admin, _merchant, payer, token) = setup_payment_env();
+    let unknown_merchant = Address::generate(&env);
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "ROLLBACK_NO_MERCH"),
+        &unknown_merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MerchantNotFound)));
+
+    // No payment record must exist for this order_id.
+    let history = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(history.total_matching, 0);
+}
+
+/// A payment to an inactive merchant must be rejected and must not create
+/// a payment record or affect the merchant's stats.
+#[test]
+fn test_state_unchanged_after_payment_to_inactive_merchant() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.deactivate_merchant(&admin, &merchant);
+
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    let stats_before = client.get_merchant_stats(&merchant);
+
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "ROLLBACK_INACTIVE"),
+        &merchant,
+        &token,
+        &200,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MerchantInactive)));
+
+    // Merchant stats must not have changed.
+    let stats_after = client.get_merchant_stats(&merchant);
+    assert_eq!(stats_before.total_payments, stats_after.total_payments);
+    assert_eq!(stats_before.total_volume, stats_after.total_volume);
+}
+
+/// A duplicate order-ID payment must be rejected and must not create a second
+/// record or change the original payment.
+#[test]
+fn test_state_unchanged_after_duplicate_order_id() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // First payment succeeds.
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "ROLLBACK_DUP"),
+        &merchant,
+        &token,
+        &500,
+        &str(&env, "original"),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    let original = client.get_payment_by_id(&payer, &str(&env, "ROLLBACK_DUP"));
+    assert_eq!(original.amount, 500);
+
+    // Second call with the same order_id must fail.
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "ROLLBACK_DUP"),
+        &merchant,
+        &token,
+        &999,
+        &str(&env, "duplicate"),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::PaymentAlreadyExists)));
+
+    // Original payment record must be unmodified.
+    let after = client.get_payment_by_id(&payer, &str(&env, "ROLLBACK_DUP"));
+    assert_eq!(after.amount, 500);
+    assert_eq!(after.memo, str(&env, "original"));
+}
+
+/// A payment using a disallowed token must be rejected and must not create
+/// a payment record.
+#[test]
+fn test_state_unchanged_after_disallowed_token_payment() {
+    let (env, client, _admin, merchant, payer, _token) = setup_payment_env();
+    let bad_token_admin = Address::generate(&env);
+    let bad_token = create_token(&env, &bad_token_admin);
+    // bad_token is intentionally NOT added to the allowlist.
+    mint(&env, &bad_token, &bad_token_admin, &payer, 10_000);
+
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "ROLLBACK_BAD_TOKEN"),
+        &merchant,
+        &bad_token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+
+    let history = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(history.total_matching, 0);
+}
+
+// ── Refund state rollback ──────────────────────────────────────────────────
+
+/// Initiating a refund for an amount that exceeds the original payment must be
+/// rejected and must not create a refund record or alter the payment's
+/// refunded_amount.
+#[test]
+fn test_state_unchanged_after_refund_exceeds_original() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ROLLBACK_REF_EX", 500);
+
+    let payment_before = client.get_payment_by_id(&payer, &str(&env, "ROLLBACK_REF_EX"));
+    assert_eq!(payment_before.refunded_amount, 0);
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "ROLLBACK_REFUND_EX"),
+        &str(&env, "ROLLBACK_REF_EX"),
+        &600,
+        &str(&env, "too much"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundExceedsOriginal)));
+
+    // Payment record must be unchanged.
+    let payment_after = client.get_payment_by_id(&payer, &str(&env, "ROLLBACK_REF_EX"));
+    assert_eq!(payment_after.refunded_amount, 0);
+    assert!(matches!(payment_after.status, crate::types::PaymentStatus::Completed));
+}
+
+/// Initiating a refund after the refund window has expired must be rejected
+/// and must not create a refund record.
+#[test]
+fn test_state_unchanged_after_refund_window_expired() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ROLLBACK_REF_WIN", 1_000);
+
+    // Advance past the 30-day window.
+    env.ledger().with_mut(|l| {
+        l.timestamp += 31 * 24 * 3600;
+    });
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "ROLLBACK_REFUND_WIN"),
+        &str(&env, "ROLLBACK_REF_WIN"),
+        &100,
+        &str(&env, "late refund"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundWindowExpired)));
+
+    // Payment must still show zero refunded amount.
+    let payment = client.get_payment_by_id(&payer, &str(&env, "ROLLBACK_REF_WIN"));
+    assert_eq!(payment.refunded_amount, 0);
+    assert!(matches!(payment.status, crate::types::PaymentStatus::Completed));
+}
+
+/// Executing a refund that is still Pending (not yet approved) must be
+/// rejected; the refund must remain in Pending state.
+#[test]
+fn test_state_unchanged_after_execute_pending_refund() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ROLLBACK_REF_PEND", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "ROLLBACK_REFUND_PEND"),
+        &str(&env, "ROLLBACK_REF_PEND"),
+        &200,
+        &str(&env, "pending"),
+    );
+
+    let result = client.try_execute_refund(&str(&env, "ROLLBACK_REFUND_PEND"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundNotApproved)));
+
+    // Refund status must still be Pending.
+    let refund = client.get_refund(&str(&env, "ROLLBACK_REFUND_PEND"));
+    assert!(matches!(refund.status, crate::types::RefundStatus::Pending));
+
+    // Payment refunded_amount must still be zero.
+    let payment = client.get_payment_by_id(&payer, &str(&env, "ROLLBACK_REF_PEND"));
+    assert_eq!(payment.refunded_amount, 0);
+}
+
+/// Executing a refund that was rejected must be rejected; the refund must
+/// remain in Rejected state and the payment must be unchanged.
+#[test]
+fn test_state_unchanged_after_execute_rejected_refund() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ROLLBACK_REF_REJ", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "ROLLBACK_REFUND_REJ"),
+        &str(&env, "ROLLBACK_REF_REJ"),
+        &300,
+        &str(&env, "to reject"),
+    );
+    client.reject_refund(&merchant, &str(&env, "ROLLBACK_REFUND_REJ"));
+
+    let result = client.try_execute_refund(&str(&env, "ROLLBACK_REFUND_REJ"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundNotApproved)));
+
+    let refund = client.get_refund(&str(&env, "ROLLBACK_REFUND_REJ"));
+    assert!(matches!(refund.status, crate::types::RefundStatus::Rejected));
+
+    let payment = client.get_payment_by_id(&payer, &str(&env, "ROLLBACK_REF_REJ"));
+    assert_eq!(payment.refunded_amount, 0);
+}
+
+/// A duplicate refund ID must be rejected; the original refund record must
+/// remain intact.
+#[test]
+fn test_state_unchanged_after_duplicate_refund_id() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ROLLBACK_REF_DUP_ORD", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "ROLLBACK_REFUND_DUP"),
+        &str(&env, "ROLLBACK_REF_DUP_ORD"),
+        &200,
+        &str(&env, "original refund"),
+    );
+
+    let original = client.get_refund(&str(&env, "ROLLBACK_REFUND_DUP"));
+    assert_eq!(original.amount, 200);
+
+    // Second initiate with the same refund_id must fail.
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "ROLLBACK_REFUND_DUP"),
+        &str(&env, "ROLLBACK_REF_DUP_ORD"),
+        &150,
+        &str(&env, "duplicate attempt"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundAlreadyExists)));
+
+    // Original refund must be unchanged.
+    let after = client.get_refund(&str(&env, "ROLLBACK_REFUND_DUP"));
+    assert_eq!(after.amount, 200);
+    assert_eq!(after.reason, str(&env, "original refund"));
+}
+
+/// After a failed refund initiation (window expired), global stats must not
+/// be updated.
+#[test]
+fn test_global_stats_unchanged_after_failed_refund() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ROLLBACK_STATS_ORD", 1_000);
+
+    let stats_before = client.get_global_payment_stats(&admin, &None, &None);
+
+    env.ledger().with_mut(|l| {
+        l.timestamp += 31 * 24 * 3600;
+    });
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "ROLLBACK_STATS_REF"),
+        &str(&env, "ROLLBACK_STATS_ORD"),
+        &100,
+        &str(&env, "too late"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundWindowExpired)));
+
+    let stats_after = client.get_global_payment_stats(&admin, &None, &None);
+    assert_eq!(stats_before.total_refunds, stats_after.total_refunds);
+    assert_eq!(stats_before.total_refund_volume, stats_after.total_refund_volume);
+}
+
+// ── Merchant state rollback ────────────────────────────────────────────────
+
+/// Registering a merchant that is already registered must be rejected and
+/// must not overwrite the existing merchant record.
+#[test]
+fn test_state_unchanged_after_duplicate_merchant_registration() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Original Store"),
+        &str(&env, "original desc"),
+        &str(&env, "original@contact.com"),
+        &MerchantCategory::Retail,
+    );
+    let original = client.get_merchant(&merchant);
+    assert_eq!(original.name, str(&env, "Original Store"));
+
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "Overwrite Attempt"),
+        &str(&env, "bad desc"),
+        &str(&env, "bad@contact.com"),
+        &MerchantCategory::Food,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MerchantAlreadyRegistered)));
+
+    // Record must be identical to the original.
+    let after = client.get_merchant(&merchant);
+    assert_eq!(after.name, str(&env, "Original Store"));
+    assert_eq!(after.category, MerchantCategory::Retail);
+    assert_eq!(after.contact_info, str(&env, "original@contact.com"));
+}
+
+/// Deactivating a merchant by a non-admin caller must be rejected and must
+/// not change the merchant's active status.
+#[test]
+fn test_state_unchanged_after_unauthorized_deactivation() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Active Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+
+    let result = client.try_deactivate_merchant(&non_admin, &merchant);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+
+    // Merchant must still be active.
+    let m = client.get_merchant(&merchant);
+    assert!(m.active);
+}
+
+/// Verifying a non-existent merchant must fail and must not create a
+/// phantom merchant record.
+#[test]
+fn test_state_unchanged_after_verify_nonexistent_merchant() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let phantom = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_verify_merchant(&admin, &phantom);
+    assert_eq!(result, Err(Ok(PaymentError::MerchantNotFound)));
+
+    // is_registered must still return false.
+    assert!(!client.is_registered(&phantom));
+}
+
+// ── Multisig state rollback ────────────────────────────────────────────────
+
+/// Signing a multisig payment by a signer who has already signed must be
+/// rejected; the collected-signatures list must remain unchanged.
+#[test]
+fn test_state_unchanged_after_double_sign_multisig() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = soroban_sdk::vec![&env, signer.clone()];
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "ROLLBACK_MS_DSIGN"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+        &None,
+    );
+
+    client.sign_multisig_payment(
+        &signer,
+        &str(&env, "ROLLBACK_MS_DSIGN"),
+        &bytes(&env, &[1u8; 64]),
+    );
+
+    let ms_before = client.get_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_DSIGN"));
+    let sig_count_before = ms_before.collected.len();
+
+    // Attempt to sign again with the same signer.
+    let result = client.try_sign_multisig_payment(
+        &signer,
+        &str(&env, "ROLLBACK_MS_DSIGN"),
+        &bytes(&env, &[2u8; 64]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MultisigAlreadySigned)));
+
+    // Collected-signatures count must be unchanged.
+    let ms_after = client.get_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_DSIGN"));
+    assert_eq!(ms_after.collected.len(), sig_count_before);
+    assert!(!ms_after.executed);
+}
+
+/// Executing an already-executed multisig payment must be rejected; the
+/// executed flag must remain true and no second token transfer can occur.
+#[test]
+fn test_state_unchanged_after_double_execute_multisig() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let signers = soroban_sdk::vec![&env, signer.clone()];
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "ROLLBACK_MS_DEXEC"),
+        &merchant,
+        &token,
+        &300,
+        &signers,
+        &1,
+        &None,
+    );
+    client.sign_multisig_payment(
+        &signer,
+        &str(&env, "ROLLBACK_MS_DEXEC"),
+        &bytes(&env, &[1u8; 64]),
+    );
+    client.execute_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_DEXEC"));
+
+    let ms_executed = client.get_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_DEXEC"));
+    assert!(ms_executed.executed);
+
+    // Second execute must fail.
+    let result = client.try_execute_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_DEXEC"));
+    assert_eq!(result, Err(Ok(PaymentError::MultisigAlreadyExecuted)));
+
+    // State must still show executed.
+    let ms_after = client.get_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_DEXEC"));
+    assert!(ms_after.executed);
+}
+
+/// Executing a multisig payment with insufficient signatures must be
+/// rejected; the payment must remain unexecuted and no token transfer
+/// must occur.
+#[test]
+fn test_state_unchanged_after_insufficient_signatures_multisig() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+    let signers = soroban_sdk::vec![&env, signer1.clone(), signer2.clone()];
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "ROLLBACK_MS_INSIG"),
+        &merchant,
+        &token,
+        &400,
+        &signers,
+        &2,
+        &None,
+    );
+    // Only one of two required signatures.
+    client.sign_multisig_payment(
+        &signer1,
+        &str(&env, "ROLLBACK_MS_INSIG"),
+        &bytes(&env, &[1u8; 64]),
+    );
+
+    let result = client.try_execute_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_INSIG"));
+    assert_eq!(result, Err(Ok(PaymentError::InsufficientSignatures)));
+
+    // Payment must not be executed.
+    let ms = client.get_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_INSIG"));
+    assert!(!ms.executed);
+}
+
+/// Cancelling an already-cancelled multisig payment must be rejected; state
+/// must remain cancelled.
+#[test]
+fn test_state_unchanged_after_double_cancel_multisig() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let signers = soroban_sdk::vec![&env, signer.clone()];
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "ROLLBACK_MS_DCANCEL"),
+        &merchant,
+        &token,
+        &200,
+        &signers,
+        &1,
+        &None,
+    );
+    client.cancel_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_DCANCEL"));
+
+    let ms_cancelled = client.get_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_DCANCEL"));
+    assert!(ms_cancelled.cancelled);
+
+    let result = client.try_cancel_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_DCANCEL"));
+    assert_eq!(result, Err(Ok(PaymentError::MultisigAlreadyCancelled)));
+
+    let ms_after = client.get_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_DCANCEL"));
+    assert!(ms_after.cancelled);
+    assert!(!ms_after.executed);
+}
+
+// ── Contract-paused state rollback ─────────────────────────────────────────
+
+/// Any payment attempted while the contract is paused must be rejected and
+/// must not create a payment record.
+#[test]
+fn test_state_unchanged_after_payment_while_paused() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.pause_contract(&admin);
+
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "ROLLBACK_PAUSED_PAY"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
+
+    let history = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(history.total_matching, 0);
+}
+
+/// A refund initiation attempted while the contract is paused must be
+/// rejected and must not create a refund record.
+#[test]
+fn test_state_unchanged_after_refund_while_paused() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ROLLBACK_PAUSED_BASE", 1_000);
+
+    client.pause_contract(&admin);
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "ROLLBACK_PAUSED_REF"),
+        &str(&env, "ROLLBACK_PAUSED_BASE"),
+        &200,
+        &str(&env, "paused"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
+
+    // Payment refunded_amount must still be zero.
+    // Unpause first so we can read state.
+    client.unpause_contract(&admin);
+    let payment = client.get_payment_by_id(&payer, &str(&env, "ROLLBACK_PAUSED_BASE"));
+    assert_eq!(payment.refunded_amount, 0);
+}
+
+// ── Admin error handling state rollback ────────────────────────────────────
+
+/// A second set_admin call must fail with AdminAlreadySet and must not
+/// replace the stored admin.
+#[test]
+fn test_state_unchanged_after_second_set_admin() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let impostor = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_set_admin(&impostor);
+    assert_eq!(result, Err(Ok(PaymentError::AdminAlreadySet)));
+
+    // Original admin must still be stored.
+    let stored = env.as_contract(&client.address, || storage::get_admin(&env));
+    assert_eq!(stored, Some(admin));
+}
+
+/// An unauthorized admin transfer must not change the stored admin.
+#[test]
+fn test_state_unchanged_after_unauthorized_admin_transfer() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_transfer_admin(&non_admin, &new_admin);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+
+    // Admin must still be the original.
+    let stored = env.as_contract(&client.address, || storage::get_admin(&env));
+    assert_eq!(stored, Some(admin));
+}
+
+// ── Batch payment atomicity (extended) ────────────────────────────────────
+
+/// When a batch fails on the second item (invalid amount), the first item
+/// that succeeded inside the batch must NOT be persisted (atomicity).
+#[test]
+fn test_batch_payment_first_item_not_stored_on_later_failure() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let items = soroban_sdk::vec![
+        &env,
+        BatchPaymentItem {
+            order_id: str(&env, "BATCH_ATOM_OK"),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 100,
+            memo: str(&env, "valid"),
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        },
+        BatchPaymentItem {
+            order_id: str(&env, "BATCH_ATOM_FAIL"),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: -1,
+            memo: str(&env, "bad amount"),
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        },
+    ];
+
+    let result = client.try_batch_payment(&payer, &items);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+
+    // Neither item must appear in payer history.
+    let history = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(history.total_matching, 0);
+}
+
+/// When a batch fails because one item targets an inactive merchant, no
+/// items from that batch must be stored.
+#[test]
+fn test_batch_payment_no_partial_state_on_inactive_merchant() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    // Register a second merchant and immediately deactivate it.
+    let inactive_merchant = Address::generate(&env);
+    client.register_merchant(
+        &inactive_merchant,
+        &str(&env, "Inactive"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Other,
+    );
+    client.deactivate_merchant(&admin, &inactive_merchant);
+
+    let items = soroban_sdk::vec![
+        &env,
+        BatchPaymentItem {
+            order_id: str(&env, "BATCH_INACT_OK"),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 100,
+            memo: str(&env, "valid"),
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        },
+        BatchPaymentItem {
+            order_id: str(&env, "BATCH_INACT_FAIL"),
+            merchant_address: inactive_merchant.clone(),
+            token_address: token.clone(),
+            amount: 100,
+            memo: str(&env, "inactive merchant"),
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        },
+    ];
+
+    let result = client.try_batch_payment(&payer, &items);
+    assert_eq!(result, Err(Ok(PaymentError::MerchantInactive)));
+
+    // No payments must have been stored.
+    let history = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(history.total_matching, 0);
+}
+
+// ── Global stats unchanged on failure ─────────────────────────────────────
+
+/// Global stats must not change when a payment is rejected.
+#[test]
+fn test_global_stats_unchanged_after_failed_payment() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    let stats_before = client.get_global_payment_stats(&admin, &None, &None);
+
+    // Try an invalid-amount payment.
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+    let _ = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "ROLLBACK_STATS_PAY"),
+        &merchant,
+        &token,
+        &0,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+
+    let stats_after = client.get_global_payment_stats(&admin, &None, &None);
+    assert_eq!(stats_before.total_payments, stats_after.total_payments);
+    assert_eq!(stats_before.total_volume, stats_after.total_volume);
+}
+
+// ── Payment-request state rollback ────────────────────────────────────────
+
+/// Paying an expired payment request must be rejected and must not update
+/// the merchant's payment history.
+#[test]
+fn test_state_unchanged_after_expired_payment_request() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Create a request that expires in 60 seconds.
+    client.create_payment_request(
+        &merchant,
+        &str(&env, "ROLLBACK_REQ_EXP"),
+        &token,
+        &500,
+        &str(&env, "expires soon"),
+        &60,
+    );
+
+    // Advance past the TTL.
+    env.ledger().with_mut(|l| {
+        l.timestamp += 61;
+    });
+
+    let result = client.try_pay_payment_request(
+        &payer,
+        &str(&env, "ROLLBACK_REQ_EXP"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::PaymentExpired)));
+
+    // Merchant history must be empty.
+    let history = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(history.total_matching, 0);
+}
