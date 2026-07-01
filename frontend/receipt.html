@@ -91,6 +91,92 @@
     }
     .refund-item .refund-meta { color: #666; font-size: 0.8rem; margin-top: 0.3rem; }
 
+    /* ── Refund timeline ── */
+    .refund-timeline {
+      margin-top: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    .timeline-step {
+      border-left: 3px solid #ccc;
+      padding: 0.45rem 0.75rem;
+      font-size: 0.8rem;
+      color: #555;
+      position: relative;
+    }
+    .timeline-step::before {
+      content: '';
+      position: absolute;
+      left: -7px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #ccc;
+    }
+    .step-status-pending {
+      border-left-color: #f59e0b;
+      color: #b45309;
+    }
+    .step-status-pending::before { background: #f59e0b; }
+
+    .step-status-approved {
+      border-left-color: #22c55e;
+      color: #15803d;
+    }
+    .step-status-approved::before { background: #22c55e; }
+
+    .step-status-rejected {
+      border-left-color: #ef4444;
+      color: #b91c1c;
+    }
+    .step-status-rejected::before { background: #ef4444; }
+
+    .step-status-completed {
+      border-left-color: #6c47ff;
+      color: #6c47ff;
+    }
+    .step-status-completed::before { background: #6c47ff; }
+
+    .refund-status-icon {
+      font-style: normal;
+      margin-right: 0.25rem;
+    }
+
+    .dispute-badge {
+      display: inline-block;
+      background: #fff3cd;
+      color: #856404;
+      border: 1px solid #ffc107;
+      border-radius: 4px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 0.15rem 0.45rem;
+      margin-left: 0.35rem;
+      vertical-align: middle;
+    }
+
+    .dispute-section {
+      margin-top: 0.5rem;
+      padding: 0.5rem 0.6rem;
+      background: #fff8e1;
+      border-left: 3px solid #f59e0b;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      color: #7c5c00;
+    }
+    .dispute-section strong { display: block; margin-bottom: 0.2rem; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+
+    .help-link {
+      display: inline-block;
+      margin-top: 0.5rem;
+      font-size: 0.78rem;
+      color: #6c47ff;
+      text-decoration: underline;
+    }
+
     .actions {
       display: flex;
       gap: 0.75rem;
@@ -175,6 +261,7 @@
     <div class="field">
       <label>Amount Paid</label>
       <div class="value amount" id="field-amount"></div>
+      <div id="field-amount-xlm-eq" style="display:none;font-size:0.8rem;color:#888;margin-top:0.25rem;"></div>
       <div class="help-text">Total amount transferred in this transaction.</div>
     </div>
 
@@ -202,6 +289,13 @@
     </div>
 
     <div class="actions">
+      <label for="currency-display-select" style="display:flex;align-items:center;gap:0.5rem;flex:1 1 140px;font-size:0.8rem;font-weight:600;color:#555;">
+        Display as:
+        <select id="currency-display-select" style="flex:1;padding:0.4rem 0.6rem;border:1px solid #e0e0e0;border-radius:6px;font-size:0.85rem;outline:none;" aria-label="Currency display format">
+          <option value="native">Native Token</option>
+          <option value="xlm">XLM Equivalent</option>
+        </select>
+      </label>
       <button class="btn btn-outline" onclick="window.print()">🖨 Print</button>
       <button class="btn btn-primary" onclick="copyLink()">🔗 Copy Link</button>
     </div>
@@ -209,7 +303,7 @@
 </div>
 
 <script type="module">
-  import { CONTRACT_ID, RPC_URL, formatAmount, formatDate, renderModeBanner } from './lumenflow-shared.js';
+  import { CONTRACT_ID, RPC_URL, formatAmount, formatDate, renderModeBanner, formatTokenAmount, convertToXlm, getTokenMetadata } from './lumenflow-shared.js';
 
   // ── Routing ────────────────────────────────────────────────────────────────
   // Supports both:
@@ -221,6 +315,61 @@
     const match = path.match(/\/receipt\/([^/?#]+)/);
     if (match) return decodeURIComponent(match[1]);
     return new URLSearchParams(window.location.search).get('orderId');
+  }
+
+  function escapeHtml(str) {
+    return String(str ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  // ── Refund helpers ─────────────────────────────────────────────────────────
+  function refundStatusIcon(status) {
+    return { Pending: '⏳', Approved: '✔', Rejected: '✗', Completed: '✅' }[status] || '•';
+  }
+
+  function refundStatusLabel(status) {
+    return { Pending: 'Pending Review', Approved: 'Approved', Rejected: 'Rejected', Completed: 'Refunded' }[status] || status;
+  }
+
+  function refundStatusClass(status) {
+    return { Pending: 'step-status-pending', Approved: 'step-status-approved', Rejected: 'step-status-rejected', Completed: 'step-status-completed' }[status] || '';
+  }
+
+  function buildRefundTimeline(r) {
+    const steps = [];
+
+    // Step 1 — always present: submitted
+    steps.push(`<div class="timeline-step step-status-approved">
+      <em class="refund-status-icon">📩</em> Submitted — ${formatDate(r.created_at)}
+    </div>`);
+
+    // Step 2 — middle state
+    if (r.status === 'Completed' || r.status === 'Approved') {
+      steps.push(`<div class="timeline-step step-status-approved">
+        <em class="refund-status-icon">✔</em> Approved
+      </div>`);
+    } else if (r.status === 'Rejected') {
+      steps.push(`<div class="timeline-step step-status-rejected">
+        <em class="refund-status-icon">✗</em> Rejected
+      </div>`);
+    } else {
+      steps.push(`<div class="timeline-step step-status-pending">
+        <em class="refund-status-icon">⏳</em> Awaiting merchant review
+      </div>`);
+    }
+
+    // Step 3 — completed transfer
+    if (r.status === 'Completed' && r.executed_at) {
+      steps.push(`<div class="timeline-step step-status-completed">
+        <em class="refund-status-icon">✅</em> Refund transferred — ${formatDate(r.executed_at)}
+      </div>`);
+    }
+
+    return `<div class="refund-timeline">${steps.join('')}</div>`;
   }
 
   // ── Status badge (local to receipt page) ──────────────────────────────────
@@ -273,6 +422,7 @@
 
   function getDemoData(orderId) {
     if (orderId === 'NOT_FOUND') return null;
+    const now = Math.floor(Date.now() / 1000);
     return {
       payment: {
         order_id:         orderId,
@@ -280,13 +430,37 @@
         payer:            'GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN',
         token:            'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
         amount:           50000000n,
-        status:           'Completed',
-        paid_at:          BigInt(Math.floor(Date.now() / 1000) - 3600),
-        refunded_amount:  0n,
+        status:           'PartiallyRefunded',
+        paid_at:          BigInt(now - 7200),
+        refunded_amount:  15000000n,
         memo:             'Invoice #001',
       },
       merchant: { name: 'Demo Store', verified: true },
-      refunds:  [],
+      refunds: [
+        {
+          refund_id:   'REFUND_001',
+          amount:      5000000n,
+          reason:      'Item damaged in transit',
+          status:      'Completed',
+          created_at:  BigInt(now - 3600),
+          executed_at: BigInt(now - 1800),
+        },
+        {
+          refund_id:  'REFUND_002',
+          amount:     10000000n,
+          reason:     'Wrong size delivered',
+          status:     'Pending',
+          created_at: BigInt(now - 900),
+        },
+        {
+          refund_id:      'REFUND_003',
+          amount:         5000000n,
+          reason:         'Change of mind',
+          status:         'Rejected',
+          created_at:     BigInt(now - 5400),
+          dispute_reason: 'Item was used before return request was submitted.',
+        },
+      ],
     };
   }
 
@@ -295,9 +469,8 @@
   function renderReceipt({ payment, merchant, refunds }) {
     document.getElementById('field-order-id').textContent    = payment.order_id;
     document.getElementById('field-merchant-name').textContent = merchant.name || payment.merchant_address;
-    document.getElementById('field-amount').textContent      = formatAmount(payment.amount) + ' XLM';
-    document.getElementById('field-token').textContent       = payment.token;
     document.getElementById('field-date').textContent        = formatDate(payment.paid_at);
+    document.getElementById('field-token').textContent       = payment.token;
 
     if (merchant.verified) {
       document.getElementById('verified-badge').style.display = 'inline-flex';
@@ -308,20 +481,63 @@
     badge.textContent = label;
     badge.className   = 'badge ' + cls;
 
+    // ── Amount display (currency-aware) ───────────────────────────────────────
+    const amountEl    = document.getElementById('field-amount');
+    const xlmEqEl     = document.getElementById('field-amount-xlm-eq');
+    const currencyToggle = document.getElementById('currency-display-select');
+
+    function refreshAmount() {
+      const mode = currencyToggle ? currencyToggle.value : 'native';
+      if (mode === 'xlm') {
+        amountEl.textContent = convertToXlm(payment.amount, payment.token);
+      } else {
+        amountEl.textContent = formatTokenAmount(payment.amount, payment.token);
+      }
+      // Show XLM equivalent only when the token isn't already XLM
+      const isXlm = !payment.token || payment.token === 'native';
+      if (xlmEqEl) {
+        xlmEqEl.style.display = (!isXlm && mode === 'native') ? 'block' : 'none';
+        xlmEqEl.textContent   = '≈ ' + convertToXlm(payment.amount, payment.token);
+      }
+    }
+
+    refreshAmount();
+    if (currencyToggle) {
+      currencyToggle.addEventListener('change', refreshAmount);
+    }
+
     if (refunds && refunds.length > 0) {
       const list = document.getElementById('refunds-list');
       refunds.forEach(r => {
+        const needsHelp = r.status === 'Pending' || r.status === 'Rejected';
+        const disputeHtml = r.dispute_reason
+          ? `<div class="dispute-section">
+               <strong>⚠ Dispute Note</strong>
+               ${escapeHtml(r.dispute_reason)}
+             </div>`
+          : '';
+        const helpHtml = needsHelp
+          ? `<a class="help-link" href="mailto:support@lumenflow.io?subject=Refund%20query">Need help? Contact support →</a>`
+          : '';
+
         const item = document.createElement('div');
         item.className = 'refund-item';
         item.innerHTML = `
           <div class="refund-row">
-            <span><strong>${r.refund_id}</strong></span>
-            <span>${formatAmount(r.amount)} XLM</span>
+            <span>
+              <em class="refund-status-icon">${refundStatusIcon(r.status)}</em>
+              <strong>${escapeHtml(refundStatusLabel(r.status))}</strong>
+              ${r.dispute_reason ? '<span class="dispute-badge">⚠ Disputed</span>' : ''}
+            </span>
+            <span><strong>${formatTokenAmount(r.amount, payment.token)}</strong></span>
           </div>
-          <div class="refund-row">
-            <span class="refund-reason">${r.reason}</span>
-            <span>${r.status}</span>
-          </div>`;
+          <div class="refund-row" style="font-size:0.8rem;color:#666;">
+            <span><strong>Reason:</strong> ${escapeHtml(r.reason || '—')}</span>
+            <span>${formatDate(r.created_at)}</span>
+          </div>
+          ${disputeHtml}
+          ${buildRefundTimeline(r)}
+          ${helpHtml}`;
         list.appendChild(item);
       });
       document.getElementById('refunds-section').style.display = 'block';
