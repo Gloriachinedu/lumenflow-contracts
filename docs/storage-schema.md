@@ -75,4 +75,4 @@ The following keys grow with usage and have no automatic pruning:
 | `Multisig(String)` | One entry per multisig payment | No automatic pruning |
 | `MerchantList` | One address appended per registration | Append-only; deactivation does not remove from list |
 
-Operators running off-chain indexers should monitor ledger entry counts for the persistent keys above and schedule admin cleanup calls as needed.
+Operators running off-chain indexers should monitor ledger entry counts for the persistent keys above and schedule admin cleanup calls as needed..

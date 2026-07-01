@@ -303,6 +303,15 @@
           <option value="FullyRefunded">Fully Refunded</option>
         </select>
       </div>
+
+      <!-- Currency display toggle -->
+      <div class="filter-group">
+        <label for="currency-display-toggle">Display Amounts As</label>
+        <select id="currency-display-toggle" aria-label="Currency display format">
+          <option value="native">Native Token</option>
+          <option value="xlm">XLM Equivalent</option>
+        </select>
+      </div>
     </div>
 
     <div id="active-filters" class="active-filters" aria-live="polite">
@@ -429,6 +438,37 @@
   }
 
   // ── Formatting ──────────────────────────────────────────────────────────────
+  const TOKEN_METADATA = {
+    native: { symbol: 'XLM', decimals: 7, name: 'Stellar Lumens' },
+    CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC: { symbol: 'USDC', decimals: 6, name: 'USD Coin' },
+    CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75: { symbol: 'USDC', decimals: 6, name: 'USD Coin' },
+  };
+  const FALLBACK_METADATA = { symbol: 'TOKEN', decimals: 7, name: 'Unknown Token' };
+  function getTokenMetadata(tokenId) {
+    if (!tokenId) return FALLBACK_METADATA;
+    return TOKEN_METADATA[tokenId] || FALLBACK_METADATA;
+  }
+  const XLM_RATES = { XLM: 1, USDC: 8, TOKEN: 1 };
+  function formatTokenAmount(amount, tokenId) {
+    const { symbol, decimals } = getTokenMetadata(tokenId);
+    const value = Number(amount) / Math.pow(10, decimals);
+    const formatted = value.toLocaleString(undefined, {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    });
+    return `${formatted} ${symbol}`;
+  }
+  function convertToXlm(amount, tokenId) {
+    const { symbol, decimals } = getTokenMetadata(tokenId);
+    const humanAmount = Number(amount) / Math.pow(10, decimals);
+    const rate = XLM_RATES[symbol] ?? 1;
+    const xlmAmount = humanAmount * rate;
+    const formatted = xlmAmount.toLocaleString(undefined, {
+      minimumFractionDigits: 7,
+      maximumFractionDigits: 7,
+    });
+    return `${formatted} XLM`;
+  }
   function formatAmount(amount) {
     return (Number(amount) / 1e7).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 7 }) + ' XLM';
   }
@@ -512,13 +552,19 @@
       return;
     }
     empty.style.display = 'none';
+    const currencyMode = document.getElementById('currency-display-toggle')
+      ? document.getElementById('currency-display-toggle').value
+      : 'native';
     payments.forEach(p => {
+      const amountDisplay = currencyMode === 'xlm'
+        ? convertToXlm(p.amount, p.token)
+        : formatTokenAmount(p.amount, p.token);
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td data-label="Date">${formatDate(p.paid_at)}</td>
         <td data-label="Order ID"><code>${p.order_id}</code></td>
         <td data-label="Merchant"><code title="${p.merchant_address}">${p.merchant_address.slice(0,8)}…</code></td>
-        <td data-label="Amount" class="amount-cell">${formatAmount(p.amount)}</td>
+        <td data-label="Amount" class="amount-cell">${amountDisplay}</td>
         <td data-label="Status">${statusBadgeHtml(p.status)}</td>`;
       body.appendChild(tr);
     });
@@ -576,6 +622,13 @@
   window.retryFetch   = retryFetch;
   window.addEventListener('popstate', initFromUrl);
   renderModeBanner();
+
+  // ── Currency display toggle ─────────────────────────────────────────────────
+  const currencyToggleEl = document.getElementById('currency-display-toggle');
+  if (currencyToggleEl) {
+    currencyToggleEl.addEventListener('change', () => updateResults());
+  }
+
   initFromUrl();
 </script>
 
