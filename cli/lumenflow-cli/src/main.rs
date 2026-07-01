@@ -280,7 +280,15 @@ fn main() -> Result<()> {
             println!("  rpc_url:            {}", config.rpc_url);
             println!("  network_passphrase: {}", config.network_passphrase);
             println!("  contract_id:        {}", config.contract_id);
-            println!("  source_account:     {}", config.source_account.as_deref().unwrap_or("(not set)"));
+            // Redact the source account when printing configuration to avoid leaking secrets.
+            let source_display = config.source_account.as_deref().map(|s| {
+                if s.len() > 8 {
+                    format!("{}…{}", &s[..4], &s[s.len() - 4..])
+                } else {
+                    "*****".to_string()
+                }
+            }).unwrap_or_else(|| "(not set)".to_string());
+            println!("  source_account:     {}", source_display);
         }
         Commands::BatchPay { items } => {
             if items.is_empty() {
