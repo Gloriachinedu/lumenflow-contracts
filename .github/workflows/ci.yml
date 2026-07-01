@@ -121,7 +121,7 @@ jobs:
         run: cargo test --all-features auth
 
   frontend-lint:
-    name: Frontend Lint (HTML/JS)
+    name: Frontend Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
@@ -137,27 +137,16 @@ jobs:
       - name: Install lint dependencies
         run: npm ci
 
-      - name: Lint HTML
+      - name: Lint HTML (npm script)
         run: npm run lint:html
 
-      - name: Lint JS
+      - name: Lint JS (ESLint)
         run: npm run lint:js
 
-  frontend-lint:
-    name: Frontend HTML/CSS Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "20"
-
-      - name: Lint HTML files
+      - name: Lint HTML files (htmlhint direct)
         run: npx --yes htmlhint "frontend/**/*.html" --config .htmlhintrc
 
-      - name: Lint CSS files
+      - name: Lint CSS files (stylelint)
         run: npx --yes stylelint "frontend/**/*.css" --config '{"rules":{"block-no-empty":true,"color-no-invalid-hex":true,"no-duplicate-selectors":true}}'
 
   test-cli:
