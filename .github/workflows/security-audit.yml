@@ -9,8 +9,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  audit:
-    name: cargo-audit
+  cargo-audit:
+    name: Cargo Audit (Rust)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
@@ -18,7 +18,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537  # master
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88  # master
         with:
           toolchain: 1.87.0
 
@@ -36,3 +36,71 @@ jobs:
 
       - name: Run cargo-audit
         run: cargo audit --config audit.toml
+
+      - name: Upload cargo-audit report
+        if: always()
+        run: cargo audit --config audit.toml --json > cargo-audit-report.json 2>&1 || true
+
+      - name: Upload cargo audit report artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae6567c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: cargo-audit-report
+          path: cargo-audit-report.json
+          retention-days: 30
+
+  npm-audit:
+    name: npm Audit (Node.js)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      # ----- Root package (Playwright e2e tests) -----
+      - name: Audit root dependencies
+        id: root-audit
+        run: |
+          npm audit --audit-level=high --json > root-npm-audit.json 2>&1 || true
+          npm audit --audit-level=high
+        continue-on-error: false
+
+      # ----- SDK package -----
+      - name: Install SDK dependencies
+        working-directory: sdk
+        run: npm ci --ignore-scripts
+
+      - name: Audit SDK dependencies
+        id: sdk-audit
+        working-directory: sdk
+        run: |
+          npm audit --audit-level=high --json > ../sdk-npm-audit.json 2>&1 || true
+          npm audit --audit-level=high
+
+      # ----- Frontend package -----
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --ignore-scripts
+
+      - name: Audit frontend dependencies
+        id: frontend-audit
+        working-directory: frontend
+        run: |
+          npm audit --audit-level=high --json > ../frontend-npm-audit.json 2>&1 || true
+          npm audit --audit-level=high
+
+      - name: Upload npm audit reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae6567c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: npm-audit-reports
+          path: |
+            root-npm-audit.json
+            sdk-npm-audit.json
+            frontend-npm-audit.json
+          retention-days: 30

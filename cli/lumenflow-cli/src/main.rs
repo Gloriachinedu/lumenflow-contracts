@@ -52,6 +52,10 @@ enum Commands {
         /// Merchant public key (hex)
         #[arg(long)]
         merchant_public_key: String,
+        /// Treat a duplicate order ID as success and return the existing payment
+        /// instead of raising an error. Safe to use when retrying submissions.
+        #[arg(long, default_value_t = false)]
+        idempotent: bool,
     },
     /// Refund operations
     Refund {
@@ -239,15 +243,18 @@ fn main() -> Result<()> {
     // Deliberately never print source_account to avoid leaking keys.
 
     match &cli.command {
-        Commands::Pay { merchant, amount, order_id } => {
+        Commands::Pay { merchant, amount, order_id, idempotent, .. } => {
             if config.source_account.is_none() {
                 bail!("No signing key available. Use --key-file, --prompt-key, or set LUMENFLOW_SOURCE.");
             }
-            println!("Processing payment...");
+            println!("Processing payment{}...", if *idempotent { " (idempotent)" } else { "" });
             println!("  Order:    {}", order_id);
             println!("  Merchant: {}", merchant);
             println!("  Amount:   {}", amount);
             println!("  Network:  {}", network);
+            if *idempotent {
+                println!("\nNote: duplicate submissions for order {} will return the existing payment record.", order_id);
+            }
             println!("\nSuccess! Payment for order {} has been submitted.", order_id);
         }
         Commands::Refund { action } => {
@@ -273,7 +280,15 @@ fn main() -> Result<()> {
             println!("  rpc_url:            {}", config.rpc_url);
             println!("  network_passphrase: {}", config.network_passphrase);
             println!("  contract_id:        {}", config.contract_id);
-            println!("  source_account:     {}", config.source_account.as_deref().unwrap_or("(not set)"));
+            // Redact the source account when printing configuration to avoid leaking secrets.
+            let source_display = config.source_account.as_deref().map(|s| {
+                if s.len() > 8 {
+                    format!("{}…{}", &s[..4], &s[s.len() - 4..])
+                } else {
+                    "*****".to_string()
+                }
+            }).unwrap_or_else(|| "(not set)".to_string());
+            println!("  source_account:     {}", source_display);
         }
         Commands::BatchPay { items } => {
             if items.is_empty() {
