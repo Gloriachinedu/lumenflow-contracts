@@ -244,6 +244,16 @@
       outline: 2px solid #6c47ff;
       outline-offset: 2px;
     }
+
+    /* ── Verified Badge ───────────────────────────────────────────────────────── */
+    .verified-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      font-size: 0.7rem;
+      color: #1a9e5c;
+      font-weight: 600;
+    }
   </style>
 </head>
 <body>
@@ -301,6 +311,15 @@
           <option value="Completed">Completed</option>
           <option value="PartiallyRefunded">Partially Refunded</option>
           <option value="FullyRefunded">Fully Refunded</option>
+        </select>
+      </div>
+
+      <!-- Currency display toggle -->
+      <div class="filter-group">
+        <label for="currency-display-toggle">Display Amounts As</label>
+        <select id="currency-display-toggle" aria-label="Currency display format">
+          <option value="native">Native Token</option>
+          <option value="xlm">XLM Equivalent</option>
         </select>
       </div>
     </div>
@@ -429,6 +448,37 @@
   }
 
   // ── Formatting ──────────────────────────────────────────────────────────────
+  const TOKEN_METADATA = {
+    native: { symbol: 'XLM', decimals: 7, name: 'Stellar Lumens' },
+    CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC: { symbol: 'USDC', decimals: 6, name: 'USD Coin' },
+    CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75: { symbol: 'USDC', decimals: 6, name: 'USD Coin' },
+  };
+  const FALLBACK_METADATA = { symbol: 'TOKEN', decimals: 7, name: 'Unknown Token' };
+  function getTokenMetadata(tokenId) {
+    if (!tokenId) return FALLBACK_METADATA;
+    return TOKEN_METADATA[tokenId] || FALLBACK_METADATA;
+  }
+  const XLM_RATES = { XLM: 1, USDC: 8, TOKEN: 1 };
+  function formatTokenAmount(amount, tokenId) {
+    const { symbol, decimals } = getTokenMetadata(tokenId);
+    const value = Number(amount) / Math.pow(10, decimals);
+    const formatted = value.toLocaleString(undefined, {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    });
+    return `${formatted} ${symbol}`;
+  }
+  function convertToXlm(amount, tokenId) {
+    const { symbol, decimals } = getTokenMetadata(tokenId);
+    const humanAmount = Number(amount) / Math.pow(10, decimals);
+    const rate = XLM_RATES[symbol] ?? 1;
+    const xlmAmount = humanAmount * rate;
+    const formatted = xlmAmount.toLocaleString(undefined, {
+      minimumFractionDigits: 7,
+      maximumFractionDigits: 7,
+    });
+    return `${formatted} XLM`;
+  }
   function formatAmount(amount) {
     return (Number(amount) / 1e7).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 7 }) + ' XLM';
   }
@@ -436,10 +486,10 @@
 
   // ── Mock data (demo mode) ───────────────────────────────────────────────────
   const MOCK_DATA = [
-    { paid_at: BigInt(Math.floor(Date.now()/1000) - 86400), order_id: 'ORD-9921', merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON', amount: BigInt(1245000000), status: 'Completed'         },
-    { paid_at: BigInt(Math.floor(Date.now()/1000) - 172800), order_id: 'ORD-8832', merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON', amount: BigInt(120000000),  status: 'Completed'         },
-    { paid_at: BigInt(Math.floor(Date.now()/1000) - 259200), order_id: 'ORD-7712', merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON', amount: BigInt(159900000),  status: 'PartiallyRefunded' },
-    { paid_at: BigInt(Math.floor(Date.now()/1000) - 604800), order_id: 'ORD-6601', merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON', amount: BigInt(99900000),   status: 'FullyRefunded'     },
+    { paid_at: BigInt(Math.floor(Date.now()/1000) - 86400),  order_id: 'ORD-9921', merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON', amount: BigInt(1245000000), status: 'Completed',         merchant_verified: true  },
+    { paid_at: BigInt(Math.floor(Date.now()/1000) - 172800), order_id: 'ORD-8832', merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON', amount: BigInt(120000000),  status: 'Completed',         merchant_verified: true  },
+    { paid_at: BigInt(Math.floor(Date.now()/1000) - 259200), order_id: 'ORD-7712', merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON', amount: BigInt(159900000),  status: 'PartiallyRefunded', merchant_verified: false },
+    { paid_at: BigInt(Math.floor(Date.now()/1000) - 604800), order_id: 'ORD-6601', merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON', amount: BigInt(99900000),   status: 'FullyRefunded',     merchant_verified: false },
   ];
 
   // ── Soroban fetch ───────────────────────────────────────────────────────────
@@ -466,7 +516,36 @@
       throw new Error(result.error || 'Contract call failed');
     }
     const page = scValToNative(result.result.retval);
-    return page.payments || [];
+    const payments = page.payments || [];
+
+    // Enrich each payment with merchant verified status
+    const uniqueAddresses = [...new Set(payments.map(p => p.merchant_address))];
+    const verifiedMap = await fetchMerchantVerified(uniqueAddresses, { server, contract, nativeToScVal, scValToNative });
+    return payments.map(p => ({
+      ...p,
+      merchant_verified: verifiedMap[p.merchant_address] ?? false,
+    }));
+  }
+
+  // ── Batch-fetch merchant verified status ────────────────────────────────────
+  async function fetchMerchantVerified(addresses, { server, contract, nativeToScVal, scValToNative }) {
+    const verifiedMap = {};
+    await Promise.all(addresses.map(async (addr) => {
+      try {
+        const res = await server.simulateTransaction(
+          contract.call('get_merchant', nativeToScVal(addr, { type: 'address' }))
+        );
+        if (!res.error && res.result) {
+          const merchant = scValToNative(res.result.retval);
+          verifiedMap[addr] = merchant.verified === true;
+        } else {
+          verifiedMap[addr] = false;
+        }
+      } catch {
+        verifiedMap[addr] = false;
+      }
+    }));
+    return verifiedMap;
   }
 
   function buildFilterArg(nativeToScVal) {
@@ -512,13 +591,19 @@
       return;
     }
     empty.style.display = 'none';
+    const currencyMode = document.getElementById('currency-display-toggle')
+      ? document.getElementById('currency-display-toggle').value
+      : 'native';
     payments.forEach(p => {
+      const amountDisplay = currencyMode === 'xlm'
+        ? convertToXlm(p.amount, p.token)
+        : formatTokenAmount(p.amount, p.token);
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td data-label="Date">${formatDate(p.paid_at)}</td>
         <td data-label="Order ID"><code>${p.order_id}</code></td>
         <td data-label="Merchant"><code title="${p.merchant_address}">${p.merchant_address.slice(0,8)}…</code></td>
-        <td data-label="Amount" class="amount-cell">${formatAmount(p.amount)}</td>
+        <td data-label="Amount" class="amount-cell">${amountDisplay}</td>
         <td data-label="Status">${statusBadgeHtml(p.status)}</td>`;
       body.appendChild(tr);
     });
@@ -576,6 +661,13 @@
   window.retryFetch   = retryFetch;
   window.addEventListener('popstate', initFromUrl);
   renderModeBanner();
+
+  // ── Currency display toggle ─────────────────────────────────────────────────
+  const currencyToggleEl = document.getElementById('currency-display-toggle');
+  if (currencyToggleEl) {
+    currencyToggleEl.addEventListener('change', () => updateResults());
+  }
+
   initFromUrl();
 </script>
 

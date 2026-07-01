@@ -14,6 +14,21 @@ pub const MIN_REFUND_AMOUNT: i128 = 100;
 /// Maximum number of payment IDs stored per account index.
 pub const MAX_PAYMENT_IDS_PER_ACCOUNT: u32 = 10_000;
 
+// ── Config defaults ───────────────────────────────────────────────────────────
+
+/// Default platform fee: 0 bps (no fee). Admin should set explicitly at deploy time.
+pub const DEFAULT_PLATFORM_FEE_BPS: u32 = 0;
+/// Maximum allowed platform fee: 10 000 bps = 100 %. Prevents mis-configuration.
+pub const MAX_PLATFORM_FEE_BPS: u32 = 10_000;
+/// Default refund window: 30 days in seconds.
+pub const DEFAULT_REFUND_WINDOW_SECS: u64 = 30 * 24 * 3600;
+/// Minimum refund window: 1 hour in seconds. Prevents locking out refunds entirely.
+pub const MIN_REFUND_WINDOW_SECS: u64 = 3600;
+/// Default payment cleanup period: 30 days in seconds.
+pub const DEFAULT_CLEANUP_PERIOD_SECS: u64 = 30 * 24 * 3600;
+/// Default large-payment threshold in stroops (10 XLM equivalent).
+pub const DEFAULT_LARGE_PAYMENT_THRESHOLD: i128 = 10_000_000;
+
 // Approximate ledger-count equivalents (5-second ledgers):
 //   1 year  ≈ 6_307_200 ledgers
 //   2 years ≈ 12_614_400 ledgers
@@ -77,7 +92,7 @@ pub fn get_cleanup_period(env: &Env) -> u64 {
     env.storage()
         .instance()
         .get(&DataKey::CleanupPeriod)
-        .unwrap_or(30 * 24 * 3600)
+        .unwrap_or(DEFAULT_CLEANUP_PERIOD_SECS)
 }
 
 pub fn set_cleanup_period(env: &Env, period: u64) {
@@ -92,7 +107,7 @@ pub fn get_platform_fee_bps(env: &Env) -> u32 {
     env.storage()
         .instance()
         .get(&DataKey::PlatformFeeBps)
-        .unwrap_or(0)
+        .unwrap_or(DEFAULT_PLATFORM_FEE_BPS)
 }
 
 pub fn set_platform_fee_bps(env: &Env, fee_bps: u32) {
@@ -117,7 +132,7 @@ pub fn get_refund_window(env: &Env) -> u64 {
     env.storage()
         .instance()
         .get(&DataKey::RefundWindow)
-        .unwrap_or(30 * 24 * 3600) // default 30 days
+        .unwrap_or(DEFAULT_REFUND_WINDOW_SECS)
 }
 
 pub fn set_refund_window(env: &Env, window_secs: u64) {
@@ -132,7 +147,7 @@ pub fn get_large_payment_threshold(env: &Env) -> i128 {
     env.storage()
         .instance()
         .get(&DataKey::LargePaymentThreshold)
-        .unwrap_or(10_000_000)
+        .unwrap_or(DEFAULT_LARGE_PAYMENT_THRESHOLD)
 }
 
 pub fn set_large_payment_threshold(env: &Env, threshold: i128) {
@@ -408,26 +423,4 @@ pub fn set_multisig_expiry_duration(env: &Env, duration: u64) {
     env.storage()
         .instance()
         .set(&DataKey::MultisigExpiryDuration, &duration);
-}
-
-// ── Platform fee ──────────────────────────────────────────────────────────────
-
-/// Fee in basis points (100 bps = 1 %). Returns 0 if not set.
-pub fn get_platform_fee_bps(env: &Env) -> u32 {
-    env.storage()
-        .instance()
-        .get(&DataKey::PlatformFeeBps)
-        .unwrap_or(0u32)
-}
-
-pub fn set_platform_fee_bps(env: &Env, bps: u32) {
-    env.storage().instance().set(&DataKey::PlatformFeeBps, &bps);
-}
-
-pub fn get_fee_recipient(env: &Env) -> Option<Address> {
-    env.storage().instance().get(&DataKey::FeeRecipient)
-}
-
-pub fn set_fee_recipient(env: &Env, recipient: &Address) {
-    env.storage().instance().set(&DataKey::FeeRecipient, recipient);
 }
