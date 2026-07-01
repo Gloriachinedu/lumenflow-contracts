@@ -122,6 +122,9 @@ impl PaymentProcessingContract {
         fee_recipient: Address,
     ) -> Result<(), PaymentError> {
         require_admin(&env, &admin)?;
+        if fee_bps > storage::MAX_PLATFORM_FEE_BPS {
+            return Err(PaymentError::InvalidInput);
+        }
         storage::set_platform_fee_bps(&env, fee_bps);
         storage::set_fee_recipient(&env, &fee_recipient);
         Ok(())
@@ -194,6 +197,9 @@ impl PaymentProcessingContract {
         window_secs: u64,
     ) -> Result<(), PaymentError> {
         require_admin(&env, &admin)?;
+        if window_secs < storage::MIN_REFUND_WINDOW_SECS {
+            return Err(PaymentError::InvalidInput);
+        }
         storage::set_refund_window(&env, window_secs);
         env.events().publish(("lumenflow", "refund_window_set"), window_secs);
         Ok(())
