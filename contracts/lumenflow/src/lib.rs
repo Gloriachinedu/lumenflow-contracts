@@ -57,15 +57,20 @@ impl PaymentProcessingContract {
             return Err(PaymentError::AdminAlreadySet);
         }
 
-        // Note: Issue #83 - contract address validation requires SDK method access
-        // if admin.contract_id().is_some() {
-        //     return Err(PaymentError::InvalidAdminAddress);
-        // }
-
-        // Reject zero account address — XDR-encoded public key must not be all zeros
+        // Reject contract addresses and zero addresses.
+        // XDR-encodes ScAddress: first 4 bytes are the discriminant.
+        // ScAddress::Account  = 0x00000000
+        // ScAddress::Contract = 0x00000001
+        // Any address whose first-byte discriminant is non-zero is a contract.
         {
             use soroban_sdk::xdr::ToXdr;
             let raw = admin.clone().to_xdr(&env);
+            // Contract address: XDR discriminant byte [3] (big-endian u32) == 1
+            let is_contract_address = raw.get(3).map_or(false, |b| b != 0);
+            if is_contract_address {
+                return Err(PaymentError::InvalidAdminAddress);
+            }
+            // Reject zero account address — all XDR bytes must not be all zeros
             let all_zero = raw.iter().all(|b| b == 0);
             if all_zero {
                 return Err(PaymentError::InvalidAdminAddress);
