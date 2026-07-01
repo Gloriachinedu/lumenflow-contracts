@@ -111,12 +111,45 @@
       cursor: pointer;
     }
     #connect-wallet-btn:hover { opacity: 0.75; }
+
+    /* Demo security notice */
+    #demo-security-notice {
+      display: none; /* shown by JS when CONTRACT_ID is not set */
+      background: #fff3cd;
+      color: #856404;
+      border: 1.5px solid #ffe69c;
+      border-radius: 8px;
+      padding: 0.85rem 1.1rem;
+      margin-bottom: 1.25rem;
+      font-size: 0.88rem;
+      line-height: 1.55;
+    }
+    #demo-security-notice strong { display: block; margin-bottom: 0.35rem; font-size: 0.95rem; }
+    #demo-security-notice a { color: #856404; font-weight: 600; }
   </style>
 </head>
 <body>
 
 <h1>Multisig Payment</h1>
 <p class="subtitle">Initiate a payment that requires multiple signers to approve.</p>
+
+<!--
+  ⚠ DEMO SECURITY NOTICE (shown by JS when CONTRACT_ID is not configured)
+  This banner is intentionally visible in demo/preview mode so developers are
+  aware of the integration requirements before deploying to production.
+-->
+<div id="demo-security-notice" role="note" aria-label="Demo mode security notice">
+  <strong>⚠ Demo Mode — Not for Production Use</strong>
+  Signing logic on this page is a <strong>placeholder only</strong>. No real transactions are
+  sent and no funds are moved.<br><br>
+  <strong>Before going live you must:</strong>
+  <ul style="margin:0.4rem 0 0.4rem 1.2rem; padding:0;">
+    <li>Configure <code>LUMENFLOW_CONTRACT_ID</code>, <code>LUMENFLOW_NETWORK</code>, and <code>LUMENFLOW_RPC_URL</code>.</li>
+    <li>Integrate a Stellar browser wallet (e.g. <a href="https://www.freighter.app/" target="_blank" rel="noopener">Freighter</a>) using the <code>walletAdapter</code> hooks in this file.</li>
+    <li><strong>Never hardcode or expose private keys in frontend code.</strong></li>
+  </ul>
+  See <a href="../docs/multisig-guide.md" target="_blank" rel="noopener">docs/multisig-guide.md</a> for production integration instructions.
+</div>
 
 <!-- Wallet / mode status bar -->
 <div id="wallet-bar" class="demo" role="status" aria-live="polite">
@@ -476,7 +509,10 @@
 
   async function callInitiateMultisig({ paymentId, merchantAddress, tokenAddress, amount, signers, required }) {
     if (!CONTRACT_ID) {
-      // Demo mode: simulate success
+      // ⚠ DEMO MODE: The logic below is a placeholder. No real transaction is sent.
+      // In production, use a Stellar wallet (e.g. Freighter) to sign transactions.
+      // NEVER hardcode or expose private keys in frontend code.
+      // See docs/multisig-guide.md for production integration instructions.
       await new Promise(r => setTimeout(r, 600));
       return { success: true };
     }
@@ -514,6 +550,10 @@
 
   async function callSignMultisig(paymentId, signerAddress) {
     if (!CONTRACT_ID) {
+      // ⚠ DEMO MODE: The signing logic below is a placeholder. No real signature is produced.
+      // In production, use a Stellar wallet (e.g. Freighter) to sign transactions.
+      // NEVER hardcode or expose private keys in frontend code.
+      // See docs/multisig-guide.md for production integration instructions.
       await new Promise(r => setTimeout(r, 400));
       return { success: true };
     }
@@ -531,6 +571,9 @@
           'sign_multisig_payment',
           nativeToScVal(signerAddress, { type: 'address' }),
           nativeToScVal(paymentId,     { type: 'string'  }),
+          // ⚠ DEMO MODE: placeholder zero-bytes signature — replace with real wallet-signed bytes in production.
+          // In production, the wallet (e.g. Freighter) supplies the real ed25519 signature via signAndSubmit.
+          // NEVER derive or pass a real private key here.
           nativeToScVal(new Uint8Array(64)), // placeholder: real signature from wallet
         ))
         .setTimeout(30)
@@ -547,6 +590,10 @@
 
   async function callExecuteMultisig(paymentId) {
     if (!CONTRACT_ID) {
+      // ⚠ DEMO MODE: The execution logic below is a placeholder. No real transaction is sent.
+      // In production, use a Stellar wallet (e.g. Freighter) to sign transactions.
+      // NEVER hardcode or expose private keys in frontend code.
+      // See docs/multisig-guide.md for production integration instructions.
       await new Promise(r => setTimeout(r, 500));
       return { success: true };
     }
@@ -695,8 +742,17 @@
   window.submitForm      = submitForm;
   window.signPayment     = signPayment;
   window.executePayment  = executePayment;
+  window.connectWallet   = connectWallet;
 
   document.getElementById('required-sigs').addEventListener('input', validateThreshold);
+
+  // Show the demo security notice banner when no CONTRACT_ID is configured.
+  // This makes it explicit to developers that the page is in demo/placeholder mode.
+  if (!CONTRACT_ID) {
+    const notice = document.getElementById('demo-security-notice');
+    if (notice) notice.style.display = 'block';
+  }
+
   renderModeBanner();
   updateThresholdLabel();
 </script>
