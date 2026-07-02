@@ -238,20 +238,6 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
-    /// Add a token to the payment whitelist. Admin only.
-    pub fn add_allowed_token(env: Env, admin: Address, token: Address) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
-        storage::set_token_allowed(&env, &token, true);
-        Ok(())
-    }
-
-    /// Remove a token from the payment whitelist. Admin only.
-    pub fn remove_allowed_token(env: Env, admin: Address, token: Address) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
-        storage::set_token_allowed(&env, &token, false);
-        Ok(())
-    }
-
     // ── Merchant management ───────────────────────────────────────────────────
 
     /// Register a new merchant.
@@ -964,6 +950,7 @@ impl PaymentProcessingContract {
         order_id: String,
         refunded_amount: i128,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         let mut payment =
             storage::get_payment(&env, &order_id).ok_or(PaymentError::PaymentNotFound)?;
 
@@ -1334,6 +1321,7 @@ impl PaymentProcessingContract {
         caller: Address,
         refund_id: String,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         let refund = storage::get_refund(&env, &refund_id).ok_or(PaymentError::RefundNotFound)?;
         let payment =
             storage::get_payment(&env, &refund.order_id).ok_or(PaymentError::PaymentNotFound)?;
@@ -1355,6 +1343,7 @@ impl PaymentProcessingContract {
 
     /// Reject a refund. Merchant or admin only.
     pub fn reject_refund(env: Env, caller: Address, refund_id: String) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         let refund = storage::get_refund(&env, &refund_id).ok_or(PaymentError::RefundNotFound)?;
         let payment =
             storage::get_payment(&env, &refund.order_id).ok_or(PaymentError::PaymentNotFound)?;
@@ -1391,6 +1380,7 @@ impl PaymentProcessingContract {
     /// * [`PaymentError::RefundNotApproved`] — the refund is not in `Approved` state.
     /// * [`PaymentError::PaymentNotFound`] — the associated payment no longer exists.
     pub fn execute_refund(env: Env, refund_id: String) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         let refund = storage::get_refund(&env, &refund_id).ok_or(PaymentError::RefundNotFound)?;
 
         if !matches!(refund.status, RefundStatus::Approved) {

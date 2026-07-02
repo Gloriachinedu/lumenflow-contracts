@@ -17,13 +17,6 @@ pub fn require_not_paused(env: &Env) -> Result<(), PaymentError> {
     }
 }
 
-pub const MAX_MERCHANT_NAME_LEN: u32 = 64;
-pub const MAX_MERCHANT_DESCRIPTION_LEN: u32 = 256;
-pub const MAX_MERCHANT_CONTACT_INFO_LEN: u32 = 128;
-
-pub const MIN_REFUND_REASON_LEN: u32 = 10;
-pub const MAX_REFUND_REASON_LEN: u32 = 512;
-
 /// Require that `caller` is the stored admin.
 pub fn require_admin(env: &Env, caller: &Address) -> Result<(), PaymentError> {
     caller.require_auth();
@@ -81,9 +74,9 @@ pub fn require_valid_limit(limit: u32) -> Result<(), PaymentError> {
 /// In production Soroban the host provides `env.crypto().ed25519_verify`.
 pub fn verify_signature(
     env: &Env,
-    public_key: &Bytes,
-    payload: &Bytes,
-    signature: &Bytes,
+    public_key: &soroban_sdk::Bytes,
+    payload: &soroban_sdk::Bytes,
+    signature: &soroban_sdk::Bytes,
 ) -> Result<(), PaymentError> {
     let pk_bytes: soroban_sdk::BytesN<32> = public_key
         .clone()
