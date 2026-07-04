@@ -388,6 +388,33 @@ pub fn remove_payment_request(env: &Env, request_id: &String) {
         .remove(&DataKey::PaymentRequest(request_id.clone()));
 }
 
+// ── Nonce (replay protection) ─────────────────────────────────────────────────
+
+/// Return the current (next expected) nonce for `payer`. Starts at 0.
+pub fn get_nonce(env: &Env, payer: &Address) -> u64 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Nonce(payer.clone()))
+        .unwrap_or(0u64)
+}
+
+/// Increment the stored nonce for `payer` by 1.
+///
+/// Must be called *before* any external token transfers to follow the
+/// checks-effects-interactions pattern and prevent reentrancy-style replay.
+pub fn increment_nonce(env: &Env, payer: &Address) {
+    let current = get_nonce(env, payer);
+    let key = DataKey::Nonce(payer.clone());
+    env.storage()
+        .persistent()
+        .set(&key, &current.saturating_add(1));
+    // Extend TTL alongside payment records so the nonce stays live as long
+    // as the account is making payments (2-year window, same as payments).
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, PAYMENT_TTL_LEDGERS, PAYMENT_TTL_LEDGERS);
+}
+
 // ── Allowed Tokens ────────────────────────────────────────────────────────────
 
 pub fn is_token_allowed(env: &Env, token: &Address) -> bool {
