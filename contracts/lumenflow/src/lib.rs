@@ -79,12 +79,42 @@ impl PaymentProcessingContract {
     }
 
     /// Transfer admin rights to a new address.
+    ///
+    /// # Arguments
+    /// * `current_admin` - Must be the currently configured administrator. Must sign the call.
+    /// * `new_admin` - The address to receive admin rights. Must differ from `current_admin`
+    ///   and must not be the zero/all-zeros address.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `current_admin` is not the configured administrator.
+    /// * [`PaymentError::InvalidAdminAddress`] — `new_admin` is the zero address or is the
+    ///   same address as `current_admin` (self-transfer).
     pub fn transfer_admin(
         env: Env,
         current_admin: Address,
         new_admin: Address,
     ) -> Result<(), PaymentError> {
         require_admin(&env, &current_admin)?;
+
+        // Block self-transfer: transferring to the same address is a no-op at best
+        // and a misconfiguration hazard at worst.
+        if new_admin == current_admin {
+            return Err(PaymentError::InvalidAdminAddress);
+        }
+
+        // Block zero address: an all-zeros XDR-encoded public key would permanently
+        // lock the contract with no valid admin able to authenticate.
+        {
+            use soroban_sdk::xdr::ToXdr;
+            let raw = new_admin.clone().to_xdr(&env);
+            if raw.iter().all(|b| b == 0) {
+                return Err(PaymentError::InvalidAdminAddress);
+            }
+        }
+
         storage::set_admin(&env, &new_admin);
         env.events()
             .publish(("lumenflow", "admin_transferred"), (current_admin, new_admin));
