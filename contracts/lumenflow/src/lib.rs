@@ -769,6 +769,21 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Return the current (next expected) nonce for `payer`.
+    ///
+    /// Payers should call this before constructing a `process_payment_with_nonce`
+    /// transaction to obtain the exact nonce value the contract expects. The nonce
+    /// starts at 0 for new accounts and increments by 1 on every accepted call.
+    ///
+    /// # Arguments
+    /// * `payer` - The address whose nonce is queried.
+    ///
+    /// # Returns
+    /// The u64 nonce value. Returns 0 if the payer has never submitted a nonce payment.
+    pub fn get_payer_nonce(env: Env, payer: Address) -> u64 {
+        storage::get_nonce(&env, &payer)
+    }
+
     /// Pay multiple merchants in one transaction. Maximum 10 items. Atomic.
     ///
     /// All items are validated and transferred atomically — if any item fails the
