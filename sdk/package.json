@@ -7,7 +7,7 @@
   "files": ["dist", "src"],
   "scripts": {
     "build": "tsc",
-    "test": "jest --testPathPattern=src"
+    "test": "jest"
   },
   "keywords": ["stellar", "soroban", "lumenflow", "payments", "sdk"],
   "author": "LumenFlow Contributors",
@@ -22,9 +22,5 @@
     "jest": "30.4.2",
     "ts-jest": "29.4.11",
     "typescript": "6.0.3"
-  },
-  "jest": {
-    "preset": "ts-jest",
-    "testEnvironment": "node"
   }
 }

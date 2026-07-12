@@ -368,7 +368,26 @@
   // ── Config ──────────────────────────────────────────────────────────────────
   const CONTRACT_ID = window.LUMENFLOW_CONTRACT_ID || '';
   const RPC_URL     = window.LUMENFLOW_RPC_URL     || 'https://soroban-testnet.stellar.org';
+  const NETWORK     = window.LUMENFLOW_NETWORK     || 'testnet';
   const DEMO_MODE   = !CONTRACT_ID;
+
+  function renderModeBanner() {
+    const banner = document.createElement('div');
+    banner.id = 'lf-mode-banner';
+    banner.setAttribute('role', 'status');
+    banner.style.cssText = [
+      'position:sticky', 'top:0', 'z-index:1000',
+      'padding:0.4rem 1rem', 'font-size:0.8rem', 'font-weight:600',
+      'text-align:center',
+      DEMO_MODE
+        ? 'background:#fff3cd;color:#856404;'
+        : 'background:#d1f3e0;color:#1a5e37;',
+    ].join(';');
+    banner.textContent = DEMO_MODE
+      ? '⚠ Demo mode – displaying mock data. Set LUMENFLOW_CONTRACT_ID to connect to a live contract.'
+      : `✔ Live mode – connected to contract ${CONTRACT_ID.slice(0, 8)}… on ${NETWORK}.`;
+    document.body.prepend(banner);
+  }
 
   // ── State Management ────────────────────────────────────────────────────────
 

@@ -202,7 +202,7 @@ test('multisig page: execute button is disabled before threshold is met', async 
   await page.locator('#add-signer-btn').click();
   await page.locator('.signer-input').nth(0).fill(VALID_G_ADDRESS);
   // Second signer needs a different address (use a slight variation)
-  const VALID_G_ADDRESS_2 = 'GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN';
+  const VALID_G_ADDRESS_2 = 'GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWNY';
   await page.locator('.signer-input').nth(1).fill(VALID_G_ADDRESS_2);
   await page.locator('#required-sigs').fill('2');
 
