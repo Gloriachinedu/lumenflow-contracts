@@ -2,10 +2,10 @@
 
 extern crate alloc;
 
-mod error;
+pub mod error;
 mod helper;
 mod storage;
-mod types;
+pub mod types;
 
 #[cfg(test)]
 mod test;
@@ -21,7 +21,7 @@ use helper::{
 use types::{
     BatchPaymentItem, GlobalStats, Merchant, MerchantCategory, MerchantPage, MerchantStats,
     MultisigPayment, PaymentFilter, PaymentOrder, PaymentPage, PaymentRequest, PaymentStatus,
-    PaymentSummary, RefundRecord, RefundStatus, SortField, SortOrder, StatusFilter,
+    PaymentSummary, RefundRecord, RefundStatus, SignatureEntry, SortField, SortOrder, StatusFilter,
     SuspiciousActivityReason,
 };
 
@@ -57,26 +57,6 @@ impl PaymentProcessingContract {
             return Err(PaymentError::AdminAlreadySet);
         }
 
-        // Reject contract addresses and zero addresses.
-        // XDR-encodes ScAddress: first 4 bytes are the discriminant.
-        // ScAddress::Account  = 0x00000000
-        // ScAddress::Contract = 0x00000001
-        // Any address whose first-byte discriminant is non-zero is a contract.
-        {
-            use soroban_sdk::xdr::ToXdr;
-            let raw = admin.clone().to_xdr(&env);
-            // Contract address: XDR discriminant byte [3] (big-endian u32) == 1
-            let is_contract_address = raw.get(3).map_or(false, |b| b != 0);
-            if is_contract_address {
-                return Err(PaymentError::InvalidAdminAddress);
-            }
-            // Reject zero account address — all XDR bytes must not be all zeros
-            let all_zero = raw.iter().all(|b| b == 0);
-            if all_zero {
-                return Err(PaymentError::InvalidAdminAddress);
-            }
-        }
-
         admin.require_auth();
         storage::set_admin(&env, &admin);
         env.events().publish(("lumenflow", "admin_set"), admin);
@@ -104,8 +84,6 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         require_admin(&env, &current_admin)?;
 
-        // Block self-transfer: transferring to the same address is a no-op at best
-        // and a misconfiguration hazard at worst.
         if new_admin == current_admin {
             return Err(PaymentError::InvalidAdminAddress);
         }
@@ -1573,7 +1551,6 @@ impl PaymentProcessingContract {
             collected: Vec::new(&env),
             executed: false,
             cancelled: false,
-            initiator,
             created_at: now,
             expires_at: resolved_expires_at,
         };
@@ -1621,7 +1598,7 @@ impl PaymentProcessingContract {
             return Err(PaymentError::MultisigCancelled);
         }
 
-        if env.ledger().timestamp() >= ms.expires_at {
+        if env.ledger().timestamp() >= ms.expires_at.unwrap_or(u64::MAX) {
             return Err(PaymentError::MultisigExpired);
         }
 
@@ -1724,7 +1701,7 @@ impl PaymentProcessingContract {
             }
         }
 
-        if ms.signatures.len() < ms.required_signatures {
+        if ms.collected.len() < ms.required_signatures {
             return Err(PaymentError::InsufficientSignatures);
         }
 
@@ -1764,11 +1741,6 @@ impl PaymentProcessingContract {
     }
 
     // ── Versioning ────────────────────────────────────────────────────────────
-
-    /// Returns the contract version from the compiled package metadata.
-    pub fn get_contract_version(_env: Env) -> String {
-        String::from_str(&_env, env!("CARGO_PKG_VERSION"))
-    }
 
     /// Admin: record the current binary version on-chain (call once after deploy/upgrade).
     pub fn set_contract_version(env: Env, admin: Address) -> Result<(), PaymentError> {
@@ -1899,15 +1871,25 @@ impl PaymentProcessingContract {
         let total_matching = sorted.len();
         let mut result: Vec<PaymentOrder> = Vec::new(env);
         let mut next_cursor: Option<String> = None;
-        let mut last_included_id: Option<String> = None;
 
-        for (i, p) in sorted.iter().enumerate() {
-            if i as u32 >= limit {
-                next_cursor = last_included_id;
+        // Apply cursor: skip all entries up to and including the cursor record
+        let start_idx = if let Some(ref cursor_id) = cursor {
+            sorted.iter().position(|p| p.order_id == *cursor_id)
+                .map(|pos| pos + 1)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
+        for (count, i) in (start_idx..sorted.len() as usize).enumerate() {
+            if count as u32 >= limit {
+                // There are more results — set next_cursor to the last included id
+                next_cursor = result.last().map(|p| p.order_id.clone());
                 break;
             }
-            last_included_id = Some(p.order_id.clone());
-            result.push_back(p);
+            if let Some(p) = sorted.get(i as u32) {
+                result.push_back(p);
+            }
         }
 
         Ok(PaymentPage {

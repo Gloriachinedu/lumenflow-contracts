@@ -55,7 +55,7 @@ pub fn require_min_refund_amount(env: &Env, amount: i128) -> Result<(), PaymentE
     if amount >= storage::get_min_refund_amount(env) {
         Ok(())
     } else {
-        Err(PaymentError::InvalidAmount)
+        Err(PaymentError::RefundBelowMinimum)
     }
 }
 
@@ -87,7 +87,7 @@ pub fn verify_signature(
         .try_into()
         .map_err(|_| PaymentError::InvalidSignature)?;
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testutils"))]
     {
         // Preserve the existing test fixture behavior for zeroed mock values.
         if public_key.len() == 32

@@ -18,6 +18,7 @@ soroban-sdk = { version = "26.0.1", features = ["alloc"] }
 [dev-dependencies]
 soroban-sdk = { version = "26.0.1", features = ["testutils", "alloc"] }
 criterion = "0.8"
+lumenflow = { path = ".", features = ["testutils"] }
 
 [features]
 testutils = ["soroban-sdk/testutils"]

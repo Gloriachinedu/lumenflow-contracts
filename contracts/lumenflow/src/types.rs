@@ -138,7 +138,6 @@ pub struct MultisigPayment {
     pub collected: Vec<SignatureEntry>,
     pub executed: bool,
     pub cancelled: bool,
-    pub initiator: Address,
     pub created_at: u64,
     pub expires_at: Option<u64>,
 }

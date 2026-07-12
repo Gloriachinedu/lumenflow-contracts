@@ -64,6 +64,7 @@ pub enum DataKey {
     FeeRecipient,
     RefundWindow,
     Nonce(Address),
+    StoredVersion,
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -450,4 +451,18 @@ pub fn set_multisig_expiry_duration(env: &Env, duration: u64) {
     env.storage()
         .instance()
         .set(&DataKey::MultisigExpiryDuration, &duration);
+}
+
+// ── Contract version ──────────────────────────────────────────────────────────
+
+/// Retrieve the on-chain stored contract version string, if set.
+pub fn get_stored_version(env: &Env) -> Option<String> {
+    env.storage().instance().get(&DataKey::StoredVersion)
+}
+
+/// Persist the contract version string on-chain.
+pub fn set_stored_version(env: &Env, version: &String) {
+    env.storage()
+        .instance()
+        .set(&DataKey::StoredVersion, version);
 }
