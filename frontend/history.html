@@ -88,6 +88,13 @@
 
     .range-inputs input { width: 100%; }
 
+    .filter-group input.input-error { border-color: #c0392b; }
+    .filter-err {
+      display: none;
+      font-size: 0.75rem;
+      color: #c0392b;
+    }
+
     /* ── Active Filters (Chips) ──────────────────────────────────────────────── */
     .active-filters {
       display: flex;
@@ -270,7 +277,8 @@
       <!-- Merchant Address -->
       <div class="filter-group" style="grid-column: 1 / -1;">
         <label for="merchant-address">Merchant Address</label>
-        <input type="text" id="merchant-address" placeholder="G… your Stellar address" autocomplete="off">
+        <input type="text" id="merchant-address" placeholder="G… your Stellar address" autocomplete="off" aria-describedby="merchant-address-err">
+        <div class="filter-err" id="merchant-address-err" role="alert" aria-live="polite"></div>
       </div>
 
       <!-- Date Range -->
@@ -287,10 +295,12 @@
       <div class="filter-group">
         <label for="amount-min">Amount Range (XLM)</label>
         <div class="range-inputs">
-          <input type="number" id="amount-min" placeholder="Min" min="0" step="0.1">
+          <input type="number" id="amount-min" placeholder="Min" min="0" step="0.1" aria-describedby="amount-min-err">
           <span>to</span>
-          <input type="number" id="amount-max" placeholder="Max" min="0" step="0.1">
+          <input type="number" id="amount-max" placeholder="Max" min="0" step="0.1" aria-describedby="amount-max-err">
         </div>
+        <div class="filter-err" id="amount-min-err" role="alert" aria-live="polite"></div>
+        <div class="filter-err" id="amount-max-err" role="alert" aria-live="polite"></div>
       </div>
 
       <!-- Token -->
@@ -364,7 +374,9 @@
   </div>
 </div>
 
-<script>
+<script type="module">
+  import { validateAddress, validateAmount } from './validation.js';
+
   // ── Config ──────────────────────────────────────────────────────────────────
   const CONTRACT_ID = window.LUMENFLOW_CONTRACT_ID || '';
   const RPC_URL     = window.LUMENFLOW_RPC_URL     || 'https://soroban-testnet.stellar.org';
@@ -403,18 +415,28 @@
 
   // ── Initialize from URL ─────────────────────────────────────────────────────
 
+  // Dates must be YYYY-MM-DD and parseable; buildFilterArg converts them to
+  // BigInt, which throws on anything else.
+  function isValidDateParam(value) {
+    return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value));
+  }
+
   function initFromUrl() {
     const params = new URLSearchParams(window.location.search);
-    if (params.has('merchant_address')) {
-      filters.merchant_address = params.get('merchant_address');
-      document.getElementById('merchant-address').value = filters.merchant_address;
-    }
-    if (params.has('date_start')) { filters.date_start = params.get('date_start'); document.getElementById('date-start').value = filters.date_start; }
-    if (params.has('date_end'))   { filters.date_end   = params.get('date_end');   document.getElementById('date-end').value   = filters.date_end; }
-    if (params.has('amount_min')) { filters.amount_min = params.get('amount_min'); document.getElementById('amount-min').value = filters.amount_min; }
-    if (params.has('amount_max')) { filters.amount_max = params.get('amount_max'); document.getElementById('amount-max').value = filters.amount_max; }
-    if (params.has('token'))      { filters.token  = params.get('token');  document.getElementById('token-selector').value  = filters.token; }
-    if (params.has('status'))     { filters.status = params.get('status'); document.getElementById('status-selector').value = filters.status; }
+    inputBindings.forEach(({ id, key }) => {
+      if (!params.has(key)) return;
+      const value = params.get(key);
+      const validator = filterValidators[id];
+      if (validator) {
+        const message = validator(value);
+        showFilterError(id, message);
+        if (message) return; // invalid URL params are dropped, never sent to the contract
+      } else if ((key === 'date_start' || key === 'date_end') && value && !isValidDateParam(value)) {
+        return;
+      }
+      filters[key] = value;
+      document.getElementById(id).value = value;
+    });
     renderActiveFilters();
     updateResults();
   }
@@ -645,6 +667,15 @@
       return;
     }
 
+    // Guards against invalid addresses arriving via URL params as well.
+    if (validateAddress(merchant, { label: 'Merchant address' })) {
+      showTable();
+      renderRows([]);
+      document.getElementById('empty-state').style.display = 'block';
+      document.getElementById('empty-state').textContent   = 'Enter a valid merchant address (starts with G, 56 characters) to load payment history.';
+      return;
+    }
+
     showLoading();
     try {
       const payments = await fetchFromContract(merchant);
@@ -667,8 +698,28 @@
     { id: 'token-selector',   key: 'token'            },
     { id: 'status-selector',  key: 'status'           },
   ];
+  // Validators for free-text filter inputs; other filters need no validation.
+  const filterValidators = {
+    'merchant-address': v => validateAddress(v, { label: 'Merchant address', required: false }),
+    'amount-min':       v => validateAmount(v, { label: 'Min amount', allowZero: true, required: false }),
+    'amount-max':       v => validateAmount(v, { label: 'Max amount', allowZero: true, required: false }),
+  };
+
+  function showFilterError(id, message) {
+    const errEl = document.getElementById(`${id}-err`);
+    errEl.textContent = message;
+    errEl.style.display = message ? 'block' : 'none';
+    document.getElementById(id).classList.toggle('input-error', !!message);
+  }
+
   inputBindings.forEach(({ id, key }) => {
     document.getElementById(id).addEventListener('change', e => {
+      const validator = filterValidators[id];
+      if (validator) {
+        const message = validator(e.target.value);
+        showFilterError(id, message);
+        if (message) return; // invalid values are never applied or sent to the contract
+      }
       filters[key] = e.target.value;
       updateUrl();
       renderActiveFilters();

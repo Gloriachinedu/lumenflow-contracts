@@ -76,6 +76,13 @@
       font-family: monospace;
     }
     .merchant-bar input:focus { border-color: #6c47ff; }
+    .merchant-bar input.error { border-color: #c0392b; }
+    .merchant-bar .err-msg {
+      display: none;
+      font-size: 0.75rem;
+      color: #c0392b;
+      margin-top: 0.3rem;
+    }
 
     .btn {
       padding: 0.55rem 1.1rem;
@@ -88,6 +95,7 @@
       white-space: nowrap;
     }
     .btn:hover { opacity: 0.85; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .btn-primary { background: #6c47ff; color: #fff; }
 
     /* ── Stats grid ──────────────────────────────────────────────────────────── */
@@ -252,7 +260,8 @@
   <div class="merchant-bar">
     <div class="field">
       <label for="merchant-addr">Merchant Address</label>
-      <input id="merchant-addr" type="text" placeholder="G… (leave blank for demo)" />
+      <input id="merchant-addr" type="text" placeholder="G… (leave blank for demo)" aria-describedby="merchant-addr-err" />
+      <div class="err-msg" id="merchant-addr-err" role="alert" aria-live="polite"></div>
     </div>
     <button class="btn btn-primary" id="load-btn" onclick="loadDashboard()">Load</button>
   </div>
@@ -305,6 +314,7 @@
 
 <script type="module">
   import { DEMO_MODE, CONTRACT_ID, NETWORK, formatAmount, formatDate, renderModeBanner } from './lumenflow-shared.js';
+  import { validateAddress } from './validation.js';
 
   // ── Mode banner ──────────────────────────────────────────────────────────────
   renderModeBanner();
@@ -387,8 +397,23 @@
     return null;
   }
 
+  // -- Address validation -------------------------------------------------------
+  // Blank is allowed here: it falls back to demo data.
+  function validateMerchantInput() {
+    const input   = document.getElementById('merchant-addr');
+    const errEl   = document.getElementById('merchant-addr-err');
+    const message = validateAddress(input.value, { label: 'Merchant address', required: false });
+    errEl.textContent = message;
+    errEl.style.display = message ? 'block' : 'none';
+    input.classList.toggle('error', !!message);
+    document.getElementById('load-btn').disabled = !!message;
+    return !message;
+  }
+  document.getElementById('merchant-addr').addEventListener('input', validateMerchantInput);
+
   // ── Main loader ──────────────────────────────────────────────────────────────
   window.loadDashboard = async function() {
+    if (!validateMerchantInput()) return;
     const address = document.getElementById('merchant-addr').value.trim();
     const historyLink = document.getElementById('history-link');
     if (address) {

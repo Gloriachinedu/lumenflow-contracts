@@ -123,6 +123,12 @@ test('receipt page: shows not-found when no orderId query param is provided', as
   await expect(page.locator('#not-found')).toBeVisible({ timeout: 5_000 });
 });
 
+test('receipt page: rejects an over-long orderId without rendering a receipt', async ({ page }) => {
+  await page.goto(`${RECEIPT_URL}?orderId=${'X'.repeat(65)}`);
+  await expect(page.locator('#not-found')).toBeVisible({ timeout: 5_000 });
+  await expect(page.locator('#receipt-content')).toBeHidden();
+});
+
 // ── Responsive layout ─────────────────────────────────────────────────────────
 
 test('receipt page: renders correctly at mobile viewport (390x844)', async ({ page }) => {

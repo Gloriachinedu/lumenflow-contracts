@@ -304,6 +304,7 @@
 
 <script type="module">
   import { CONTRACT_ID, RPC_URL, formatAmount, formatDate, renderModeBanner, formatTokenAmount, convertToXlm, getTokenMetadata } from './lumenflow-shared.js';
+  import { validateOrderId } from './validation.js';
 
   // ── Routing ────────────────────────────────────────────────────────────────
   // Supports both:
@@ -562,8 +563,8 @@
   (async () => {
     renderModeBanner();
     const orderId = getOrderId();
-    if (!orderId) {
-      document.getElementById('missing-id').textContent = '(none)';
+    if (validateOrderId(orderId)) {
+      document.getElementById('missing-id').textContent = orderId || '(none)';
       document.getElementById('not-found').style.display = 'block';
       return;
     }
