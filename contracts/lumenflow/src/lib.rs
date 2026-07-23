@@ -22,7 +22,7 @@ use types::{
     BatchPaymentItem, GlobalStats, Merchant, MerchantCategory, MerchantPage, MerchantStats,
     MultisigPayment, PaymentFilter, PaymentOrder, PaymentPage, PaymentRequest, PaymentStatus,
     PaymentSummary, RefundRecord, RefundStatus, SignatureEntry, SortField, SortOrder, StatusFilter,
-    SuspiciousActivityReason,
+    Subscription, SubscriptionPlan, SubscriptionStatus, SuspiciousActivityReason,
 };
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -2093,5 +2093,379 @@ impl PaymentProcessingContract {
         env.events()
             .publish(("lumenflow", "payment_request_paid"), request_id);
         Ok(())
+    }
+
+    // -- Subscriptions ---------------------------------------------------------
+
+    /// Create a subscription plan that subscribers can later subscribe to.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator address. Must sign the call.
+    /// * `plan_id` - Unique, non-empty identifier for the plan (max 64 chars).
+    /// * `token` - Allowed token contract address used for recurring charges.
+    /// * `amount` - Positive token amount charged per billing cycle.
+    /// * `interval_secs` - Seconds that must elapse between charges. Must be non-zero.
+    /// * `max_cycles` - Maximum number of charges. Must be non-zero.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] - `admin` is not the configured administrator.
+    /// * [`PaymentError::InvalidInput`] - `plan_id` is empty or too long, or
+    ///   `interval_secs` or `max_cycles` is zero.
+    /// * [`PaymentError::InvalidAmount`] - `amount` is not positive.
+    /// * [`PaymentError::TokenNotAllowed`] - `token` is not on the allow-list.
+    /// * [`PaymentError::SubscriptionPlanAlreadyExists`] - a plan with `plan_id`
+    ///   already exists.
+    pub fn create_subscription_plan(
+        env: Env,
+        admin: Address,
+        plan_id: String,
+        token: Address,
+        amount: i128,
+        interval_secs: u64,
+        max_cycles: u32,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        require_admin(&env, &admin)?;
+        require_valid_id(&plan_id)?;
+        require_positive(amount)?;
+        if interval_secs == 0 || max_cycles == 0 {
+            return Err(PaymentError::InvalidInput);
+        }
+        if !storage::is_token_allowed(&env, &token) {
+            return Err(PaymentError::TokenNotAllowed);
+        }
+        if storage::get_subscription_plan(&env, &plan_id).is_some() {
+            return Err(PaymentError::SubscriptionPlanAlreadyExists);
+        }
+
+        let plan = SubscriptionPlan {
+            plan_id: plan_id.clone(),
+            token,
+            amount,
+            interval_secs,
+            max_cycles,
+            created_at: env.ledger().timestamp(),
+        };
+        storage::set_subscription_plan(&env, &plan);
+
+        env.events()
+            .publish(("lumenflow", "subscription_plan_created"), plan_id);
+        Ok(())
+    }
+
+    /// Subscribe `subscriber` to an existing plan, billed to `merchant`.
+    ///
+    /// The subscriber grants the contract a token allowance up front covering
+    /// every remaining cycle of this and any other of their active
+    /// subscriptions in the plan's token, so charges normally need no further
+    /// subscriber signature. The allowance expiry is capped by the network's
+    /// maximum entry TTL, which can be shorter than a long subscription's
+    /// lifetime; the subscriber refreshes it with
+    /// [`Self::renew_subscription_allowance`]. The first charge becomes due one
+    /// full interval after subscribing.
+    ///
+    /// # Arguments
+    /// * `merchant` - Registered, active merchant that will receive the charges.
+    /// * `subscriber` - Address to be charged each cycle. Must sign the call.
+    /// * `plan_id` - Identifier of an existing subscription plan.
+    /// * `subscription_id` - Unique, non-empty identifier for this subscription.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::InvalidInput`] - `subscription_id` is empty or too long.
+    /// * [`PaymentError::SubscriptionPlanNotFound`] - no plan exists with `plan_id`.
+    /// * [`PaymentError::SubscriptionAlreadyExists`] - a subscription with
+    ///   `subscription_id` already exists.
+    /// * [`PaymentError::MerchantNotFound`] - no merchant registered at `merchant`.
+    /// * [`PaymentError::MerchantInactive`] - the merchant has been deactivated.
+    pub fn subscribe(
+        env: Env,
+        merchant: Address,
+        subscriber: Address,
+        plan_id: String,
+        subscription_id: String,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        subscriber.require_auth();
+        require_valid_id(&subscription_id)?;
+
+        let plan = storage::get_subscription_plan(&env, &plan_id)
+            .ok_or(PaymentError::SubscriptionPlanNotFound)?;
+        if storage::get_subscription(&env, &subscription_id).is_some() {
+            return Err(PaymentError::SubscriptionAlreadyExists);
+        }
+
+        let m = storage::get_merchant(&env, &merchant).ok_or(PaymentError::MerchantNotFound)?;
+        if !m.active {
+            return Err(PaymentError::MerchantInactive);
+        }
+
+        let now = env.ledger().timestamp();
+        let sub = Subscription {
+            subscription_id: subscription_id.clone(),
+            plan_id,
+            merchant: merchant.clone(),
+            subscriber: subscriber.clone(),
+            status: SubscriptionStatus::Active,
+            cycles_charged: 0,
+            last_charged_at: now,
+            created_at: now,
+        };
+        storage::set_subscription(&env, &sub);
+
+        // SEP-41 approve SETS the (from, spender) allowance rather than adding
+        // to it, so the approved amount must cover the combined remaining
+        // cycles of every active subscription the subscriber has in this token.
+        // That running total is tracked in the reserve key.
+        let total = plan.amount.saturating_mul(plan.max_cycles as i128);
+        let reserve =
+            storage::get_subscription_reserve(&env, &subscriber, &plan.token).saturating_add(total);
+        storage::set_subscription_reserve(&env, &subscriber, &plan.token, reserve);
+        let token_client = token::Client::new(&env, &plan.token);
+        token_client.approve(
+            &subscriber,
+            &env.current_contract_address(),
+            &reserve,
+            &env.ledger().max_live_until_ledger(),
+        );
+
+        env.events().publish(
+            ("lumenflow", "subscription_created"),
+            (subscription_id, subscriber, merchant),
+        );
+        Ok(())
+    }
+
+    /// Charge one billing cycle of an active subscription.
+    ///
+    /// Transfers the plan amount from the subscriber to the merchant only if the
+    /// billing interval has elapsed since the last charge (or since subscribing)
+    /// and the subscription has cycles remaining. The transfer draws on the
+    /// allowance granted at subscribe time. Reaching `max_cycles` marks the
+    /// subscription `Completed`.
+    ///
+    /// # Arguments
+    /// * `merchant` - Must be the merchant on the subscription. Must sign the call.
+    /// * `subscription_id` - Identifier of the subscription to charge.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::SubscriptionNotFound`] - no subscription exists with
+    ///   `subscription_id`.
+    /// * [`PaymentError::Unauthorized`] - `merchant` is not the subscription's merchant.
+    /// * [`PaymentError::SubscriptionNotActive`] - the subscription was cancelled.
+    /// * [`PaymentError::SubscriptionPlanNotFound`] - the underlying plan record
+    ///   no longer exists.
+    /// * [`PaymentError::TokenNotAllowed`] - the plan's token has since been
+    ///   removed from the allow-list.
+    /// * [`PaymentError::MerchantNotFound`] - the merchant record no longer exists.
+    /// * [`PaymentError::MerchantInactive`] - the merchant has been deactivated.
+    /// * [`PaymentError::SubscriptionMaxCyclesReached`] - all cycles have been charged.
+    /// * [`PaymentError::SubscriptionIntervalNotElapsed`] - the billing interval
+    ///   has not yet elapsed.
+    pub fn charge_subscription(
+        env: Env,
+        merchant: Address,
+        subscription_id: String,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        merchant.require_auth();
+
+        let mut sub = storage::get_subscription(&env, &subscription_id)
+            .ok_or(PaymentError::SubscriptionNotFound)?;
+        if merchant != sub.merchant {
+            return Err(PaymentError::Unauthorized);
+        }
+        if matches!(sub.status, SubscriptionStatus::Cancelled) {
+            return Err(PaymentError::SubscriptionNotActive);
+        }
+
+        let plan = storage::get_subscription_plan(&env, &sub.plan_id)
+            .ok_or(PaymentError::SubscriptionPlanNotFound)?;
+
+        // Re-checked at charge time, matching the one-off payment paths: an
+        // admin deactivating the merchant or delisting the token must also
+        // stop recurring charges.
+        if !storage::is_token_allowed(&env, &plan.token) {
+            return Err(PaymentError::TokenNotAllowed);
+        }
+        let m = storage::get_merchant(&env, &sub.merchant).ok_or(PaymentError::MerchantNotFound)?;
+        if !m.active {
+            return Err(PaymentError::MerchantInactive);
+        }
+
+        // Checked before the Completed status so an exhausted subscription
+        // reports MaxCyclesReached rather than the generic NotActive.
+        if sub.cycles_charged >= plan.max_cycles {
+            return Err(PaymentError::SubscriptionMaxCyclesReached);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < sub.last_charged_at.saturating_add(plan.interval_secs) {
+            return Err(PaymentError::SubscriptionIntervalNotElapsed);
+        }
+
+        // Effects before interaction (checks-effects-interactions)
+        sub.cycles_charged += 1;
+        sub.last_charged_at = now;
+        if sub.cycles_charged >= plan.max_cycles {
+            sub.status = SubscriptionStatus::Completed;
+        }
+        storage::set_subscription(&env, &sub);
+
+        // transfer_from consumes the allowance; keep the reserve in step
+        let reserve = storage::get_subscription_reserve(&env, &sub.subscriber, &plan.token)
+            .saturating_sub(plan.amount);
+        storage::set_subscription_reserve(&env, &sub.subscriber, &plan.token, reserve);
+
+        let token_client = token::Client::new(&env, &plan.token);
+        token_client.transfer_from(
+            &env.current_contract_address(),
+            &sub.subscriber,
+            &sub.merchant,
+            &plan.amount,
+        );
+
+        env.events().publish(
+            ("lumenflow", "subscription_charged"),
+            (subscription_id, sub.cycles_charged, plan.amount),
+        );
+        Ok(())
+    }
+
+    /// Cancel an active subscription. No further charges are possible.
+    ///
+    /// The uncharged cycles are released from the subscriber's tracked reserve.
+    /// When the subscriber is the caller, the token allowance is also
+    /// re-approved down to the reserve still backing their other active
+    /// subscriptions (zero if none). A merchant-initiated cancel cannot shrink
+    /// the allowance (approve needs the subscriber's auth); the subscriber
+    /// clears the residual with [`Self::renew_subscription_allowance`].
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the subscription's merchant or subscriber. Must sign
+    ///   the call.
+    /// * `subscription_id` - Identifier of the subscription to cancel.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::SubscriptionNotFound`] - no subscription exists with
+    ///   `subscription_id`.
+    /// * [`PaymentError::Unauthorized`] - `caller` is neither the merchant nor
+    ///   the subscriber.
+    /// * [`PaymentError::SubscriptionNotActive`] - the subscription is already
+    ///   cancelled or completed.
+    /// * [`PaymentError::SubscriptionPlanNotFound`] - the underlying plan record
+    ///   no longer exists.
+    pub fn cancel_subscription(
+        env: Env,
+        caller: Address,
+        subscription_id: String,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        caller.require_auth();
+
+        let mut sub = storage::get_subscription(&env, &subscription_id)
+            .ok_or(PaymentError::SubscriptionNotFound)?;
+        if caller != sub.merchant && caller != sub.subscriber {
+            return Err(PaymentError::Unauthorized);
+        }
+        if !matches!(sub.status, SubscriptionStatus::Active) {
+            return Err(PaymentError::SubscriptionNotActive);
+        }
+
+        let plan = storage::get_subscription_plan(&env, &sub.plan_id)
+            .ok_or(PaymentError::SubscriptionPlanNotFound)?;
+
+        sub.status = SubscriptionStatus::Cancelled;
+        storage::set_subscription(&env, &sub);
+
+        let remaining = plan
+            .amount
+            .saturating_mul((plan.max_cycles - sub.cycles_charged) as i128);
+        let reserve = storage::get_subscription_reserve(&env, &sub.subscriber, &plan.token)
+            .saturating_sub(remaining);
+        storage::set_subscription_reserve(&env, &sub.subscriber, &plan.token, reserve);
+
+        // Shrinking the allowance needs the subscriber's auth, so it can only
+        // happen on subscriber-initiated cancels.
+        if caller == sub.subscriber {
+            token::Client::new(&env, &plan.token).approve(
+                &sub.subscriber,
+                &env.current_contract_address(),
+                &reserve,
+                &env.ledger().max_live_until_ledger(),
+            );
+        }
+
+        env.events().publish(
+            ("lumenflow", "subscription_cancelled"),
+            (subscription_id, caller),
+        );
+        Ok(())
+    }
+
+    /// Re-approve the contract's token allowance to exactly the reserve backing
+    /// `subscriber`'s active subscriptions in `token` (zero if none).
+    ///
+    /// Two uses: refreshing the allowance expiry, which is capped by the
+    /// network's maximum entry TTL and can lapse before a long subscription
+    /// finishes, and clearing residual allowance left behind by a
+    /// merchant-initiated cancel.
+    ///
+    /// # Arguments
+    /// * `subscriber` - Owner of the allowance. Must sign the call.
+    /// * `token` - Token contract the allowance is held in.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    pub fn renew_subscription_allowance(
+        env: Env,
+        subscriber: Address,
+        token: Address,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        subscriber.require_auth();
+
+        let reserve = storage::get_subscription_reserve(&env, &subscriber, &token);
+        token::Client::new(&env, &token).approve(
+            &subscriber,
+            &env.current_contract_address(),
+            &reserve,
+            &env.ledger().max_live_until_ledger(),
+        );
+        Ok(())
+    }
+
+    /// Get a subscription plan by ID.
+    ///
+    /// # Errors
+    /// * [`PaymentError::SubscriptionPlanNotFound`] - no plan exists with `plan_id`.
+    pub fn get_subscription_plan(
+        env: Env,
+        plan_id: String,
+    ) -> Result<SubscriptionPlan, PaymentError> {
+        storage::get_subscription_plan(&env, &plan_id).ok_or(PaymentError::SubscriptionPlanNotFound)
+    }
+
+    /// Get a subscription by ID.
+    ///
+    /// # Errors
+    /// * [`PaymentError::SubscriptionNotFound`] - no subscription exists with
+    ///   `subscription_id`.
+    pub fn get_subscription(
+        env: Env,
+        subscription_id: String,
+    ) -> Result<Subscription, PaymentError> {
+        storage::get_subscription(&env, &subscription_id).ok_or(PaymentError::SubscriptionNotFound)
     }
 }
