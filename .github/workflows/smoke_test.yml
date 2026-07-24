@@ -1,0 +1,33 @@
+name: Smoke Test (Testnet)
+
+on:
+  workflow_dispatch:
+    inputs:
+      contract_id:
+        description: Deployed contract ID to test
+        required: true
+
+jobs:
+  smoke:
+    name: Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Stellar CLI
+        run: |
+          curl -sSL https://github.com/stellar/stellar-cli/releases/latest/download/stellar-cli-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /usr/local/bin
+
+      - name: Run smoke test
+        env:
+          CONTRACT_ID: ${{ github.event.inputs.contract_id }}
+          ADMIN_KEY: ${{ secrets.TESTNET_ADMIN_KEY }}
+          MERCHANT_KEY: ${{ secrets.TESTNET_MERCHANT_KEY }}
+          PAYER_KEY: ${{ secrets.TESTNET_PAYER_KEY }}
+          TOKEN_ADDRESS: ${{ secrets.TESTNET_TOKEN_ADDRESS }}
+          ADMIN_ADDRESS: ${{ secrets.TESTNET_ADMIN_ADDRESS }}
+          MERCHANT_ADDRESS: ${{ secrets.TESTNET_MERCHANT_ADDRESS }}
+          PAYER_ADDRESS: ${{ secrets.TESTNET_PAYER_ADDRESS }}
+          NETWORK: testnet
+        run: ./scripts/smoke_test.sh
