@@ -244,6 +244,7 @@ impl PaymentProcessingContract {
         for item in payments.iter() {
             require_positive(item.amount)?;
             require_non_empty_string(&item.order_id)?;
+            validate_tags(&item.tags)?;
 
             if storage::get_payment(&env, &item.order_id).is_some() {
                 return Err(PaymentError::PaymentAlreadyExists);
@@ -276,6 +277,7 @@ impl PaymentProcessingContract {
                 paid_at: now,
                 refunded_amount: 0,
                 memo: item.memo.clone(),
+                tags: item.tags.clone(),
             };
 
             storage::set_payment(&env, &payment);

@@ -24,6 +24,7 @@ export enum PaymentErrorCode {
   InvalidInput = 50,
   PaginationLimitExceeded = 51,
   BatchSizeExceeded = 52,
+  InvalidTags = 53,
 }
 
 export const ERROR_MESSAGES: Record<PaymentErrorCode, string> = {
@@ -52,6 +53,7 @@ export const ERROR_MESSAGES: Record<PaymentErrorCode, string> = {
   [PaymentErrorCode.InvalidInput]: "One or more input fields are invalid or empty.",
   [PaymentErrorCode.PaginationLimitExceeded]: "The requested page size exceeds the maximum limit.",
   [PaymentErrorCode.BatchSizeExceeded]: "The payment batch exceeds the maximum size (10 items).",
+  [PaymentErrorCode.InvalidTags]: "Tags are invalid: maximum 5 tags allowed, each between 1 and 32 characters.",
 };
 
 export class LumenFlowError extends Error {

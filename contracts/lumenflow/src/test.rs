@@ -231,6 +231,107 @@ fn test_payment_inactive_merchant_fails() {
     assert_eq!(result, Err(Ok(PaymentError::MerchantInactive)));
 }
 
+#[test]
+fn test_batch_payment_with_tags_accepted() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut tags = Vec::new(&env);
+    tags.push_back(str(&env, "invoice"));
+    tags.push_back(str(&env, "q3-2026"));
+
+    let mut payments = Vec::new(&env);
+    payments.push_back(BatchPaymentItem {
+        order_id: str(&env, "TAGGED_001"),
+        merchant_address: merchant.clone(),
+        token_address: token.clone(),
+        amount: 250,
+        memo: str(&env, "Tagged batch item"),
+        tags: Some(tags),
+        signature: bytes(&env, &[0u8; 64]),
+        merchant_public_key: bytes(&env, &[0u8; 32]),
+    });
+
+    client.batch_payment(&payer, &payments);
+
+    let p = client.get_payment_by_id(&payer, &str(&env, "TAGGED_001"));
+    assert_eq!(p.amount, 250);
+    // Tags are stored on the PaymentOrder
+    assert!(p.tags.is_some());
+    assert_eq!(p.tags.unwrap().len(), 2);
+}
+
+#[test]
+fn test_batch_payment_invalid_tags_reject_full_batch() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Build a tag that is too long (> 32 chars)
+    let long_tag = str(&env, "this-tag-is-way-too-long-and-should-fail");
+    let mut bad_tags = Vec::new(&env);
+    bad_tags.push_back(long_tag);
+
+    let mut payments = Vec::new(&env);
+    // First item: valid, no tags
+    payments.push_back(BatchPaymentItem {
+        order_id: str(&env, "VALID_ITEM"),
+        merchant_address: merchant.clone(),
+        token_address: token.clone(),
+        amount: 100,
+        memo: str(&env, ""),
+        tags: None,
+        signature: bytes(&env, &[0u8; 64]),
+        merchant_public_key: bytes(&env, &[0u8; 32]),
+    });
+    // Second item: invalid tags
+    payments.push_back(BatchPaymentItem {
+        order_id: str(&env, "INVALID_TAG_ITEM"),
+        merchant_address: merchant.clone(),
+        token_address: token.clone(),
+        amount: 100,
+        memo: str(&env, ""),
+        tags: Some(bad_tags),
+        signature: bytes(&env, &[0u8; 64]),
+        merchant_public_key: bytes(&env, &[0u8; 32]),
+    });
+
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidTags)));
+
+    // Verify the whole batch was rejected (atomicity) — no payments recorded
+    let history = client.get_payer_payment_history(
+        &payer, &None, &10, &None, &SortField::Date, &SortOrder::Ascending,
+    );
+    assert_eq!(history.total, 0);
+}
+
+#[test]
+fn test_batch_payment_too_many_tags_reject() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Build 6 tags (limit is 5) — exceeds the maximum
+    let mut six_tags = Vec::new(&env);
+    six_tags.push_back(str(&env, "tag-one"));
+    six_tags.push_back(str(&env, "tag-two"));
+    six_tags.push_back(str(&env, "tag-three"));
+    six_tags.push_back(str(&env, "tag-four"));
+    six_tags.push_back(str(&env, "tag-five"));
+    six_tags.push_back(str(&env, "tag-six")); // 6th tag — exceeds limit
+
+    let mut payments = Vec::new(&env);
+    payments.push_back(BatchPaymentItem {
+        order_id: str(&env, "TOO_MANY_TAGS"),
+        merchant_address: merchant.clone(),
+        token_address: token.clone(),
+        amount: 100,
+        memo: str(&env, ""),
+        tags: Some(six_tags),
+        signature: bytes(&env, &[0u8; 64]),
+        merchant_public_key: bytes(&env, &[0u8; 32]),
+    });
+
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidTags)));
+}
+
 // ── Refund tests ──────────────────────────────────────────────────────────────
 
 fn make_payment(
@@ -270,6 +371,7 @@ fn test_batch_payment_success() {
             token_address: token.clone(),
             amount: 100,
             memo: str(&env, ""),
+            tags: None,
             signature: bytes(&env, &[0u8; 64]),
             merchant_public_key: bytes(&env, &[0u8; 32]),
         });
@@ -295,6 +397,7 @@ fn test_batch_payment_size_exceeded() {
             token_address: token.clone(),
             amount: 100,
             memo: str(&env, ""),
+            tags: None,
             signature: bytes(&env, &[0u8; 64]),
             merchant_public_key: bytes(&env, &[0u8; 32]),
         });
@@ -315,6 +418,7 @@ fn test_batch_payment_atomic_failure() {
         token_address: token.clone(),
         amount: 100,
         memo: str(&env, ""),
+        tags: None,
         signature: bytes(&env, &[0u8; 64]),
         merchant_public_key: bytes(&env, &[0u8; 32]),
     });
@@ -325,6 +429,7 @@ fn test_batch_payment_atomic_failure() {
         token_address: token.clone(),
         amount: -1,
         memo: str(&env, ""),
+        tags: None,
         signature: bytes(&env, &[0u8; 64]),
         merchant_public_key: bytes(&env, &[0u8; 32]),
     });
