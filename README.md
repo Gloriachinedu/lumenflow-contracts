@@ -372,6 +372,10 @@ Need help or want to discuss LumenFlow?
 
 ---
 
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for versioned milestone targets (v1.1, v1.2, v2.0) with estimated completion quarters and links to tracking issues.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). All contributions are welcome — bug fixes, features, documentation, and tests.
