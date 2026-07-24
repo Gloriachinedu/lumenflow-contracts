@@ -6,7 +6,7 @@ use alloc::format;
 
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
-    token::StellarAssetClient,
+    token::{StellarAssetClient, TokenClient},
     Address, Bytes, Env, String, Vec,
 };
 
@@ -15,6 +15,7 @@ use crate::{
     storage,
     types::{
         BatchPaymentItem, MerchantCategory, PaymentFilter, SortField, SortOrder, StatusFilter,
+        SubscriptionStatus,
     },
     PaymentProcessingContract, PaymentProcessingContractClient,
 };
@@ -5421,4 +5422,604 @@ fn test_state_unchanged_after_expired_payment_request() {
         &SortOrder::Ascending,
     );
     assert_eq!(history.total_matching, 0);
+}
+
+// -- Subscription tests (#559) -------------------------------------------------
+
+const PLAN_INTERVAL: u64 = 1_000;
+const PLAN_AMOUNT: i128 = 100;
+const PLAN_MAX_CYCLES: u32 = 3;
+
+/// Payment env plus a subscription plan "PLAN_1" (amount 100, interval 1000s, 3 cycles).
+fn setup_subscription_env() -> (
+    Env,
+    PaymentProcessingContractClient<'static>,
+    Address,
+    Address,
+    Address,
+    Address,
+) {
+    let (env, client, admin, merchant, subscriber, token) = setup_payment_env();
+    client.create_subscription_plan(
+        &admin,
+        &str(&env, "PLAN_1"),
+        &token,
+        &PLAN_AMOUNT,
+        &PLAN_INTERVAL,
+        &PLAN_MAX_CYCLES,
+    );
+    (env, client, admin, merchant, subscriber, token)
+}
+
+fn advance_time(env: &Env, secs: u64) {
+    env.ledger().with_mut(|l| {
+        l.timestamp += secs;
+    });
+}
+
+#[test]
+fn test_create_subscription_plan_success() {
+    let (env, client, _admin, _merchant, _subscriber, token) = setup_subscription_env();
+
+    // events().all() only reflects the most recent invocation, which is the
+    // create_subscription_plan call inside setup_subscription_env.
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "subscription_plan_created"),
+        "subscription_plan_created event must be emitted"
+    );
+
+    let plan = client.get_subscription_plan(&str(&env, "PLAN_1"));
+    assert_eq!(plan.token, token);
+    assert_eq!(plan.amount, PLAN_AMOUNT);
+    assert_eq!(plan.interval_secs, PLAN_INTERVAL);
+    assert_eq!(plan.max_cycles, PLAN_MAX_CYCLES);
+}
+
+#[test]
+fn test_create_subscription_plan_duplicate_fails() {
+    // Error 60: SubscriptionPlanAlreadyExists
+    let (env, client, admin, _merchant, _subscriber, token) = setup_subscription_env();
+    let result = client.try_create_subscription_plan(
+        &admin,
+        &str(&env, "PLAN_1"),
+        &token,
+        &PLAN_AMOUNT,
+        &PLAN_INTERVAL,
+        &PLAN_MAX_CYCLES,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionPlanAlreadyExists)));
+}
+
+#[test]
+fn test_create_subscription_plan_requires_admin() {
+    let (env, client, _admin, _merchant, _subscriber, token) = setup_subscription_env();
+    let non_admin = Address::generate(&env);
+    let result = client.try_create_subscription_plan(
+        &non_admin,
+        &str(&env, "PLAN_2"),
+        &token,
+        &PLAN_AMOUNT,
+        &PLAN_INTERVAL,
+        &PLAN_MAX_CYCLES,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_create_subscription_plan_validates_inputs() {
+    let (env, client, admin, _merchant, _subscriber, token) = setup_subscription_env();
+
+    let result = client.try_create_subscription_plan(
+        &admin,
+        &str(&env, "PLAN_2"),
+        &token,
+        &0,
+        &PLAN_INTERVAL,
+        &PLAN_MAX_CYCLES,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+
+    let result = client.try_create_subscription_plan(
+        &admin,
+        &str(&env, "PLAN_2"),
+        &token,
+        &PLAN_AMOUNT,
+        &0,
+        &PLAN_MAX_CYCLES,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+
+    let result = client.try_create_subscription_plan(
+        &admin,
+        &str(&env, "PLAN_2"),
+        &token,
+        &PLAN_AMOUNT,
+        &PLAN_INTERVAL,
+        &0,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+
+    let unknown_token = Address::generate(&env);
+    let result = client.try_create_subscription_plan(
+        &admin,
+        &str(&env, "PLAN_2"),
+        &unknown_token,
+        &PLAN_AMOUNT,
+        &PLAN_INTERVAL,
+        &PLAN_MAX_CYCLES,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+}
+
+#[test]
+fn test_subscribe_success() {
+    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "subscription_created"),
+        "subscription_created event must be emitted"
+    );
+
+    let sub = client.get_subscription(&str(&env, "SUB_1"));
+    assert_eq!(sub.plan_id, str(&env, "PLAN_1"));
+    assert_eq!(sub.merchant, merchant);
+    assert_eq!(sub.subscriber, subscriber);
+    assert_eq!(sub.status, SubscriptionStatus::Active);
+    assert_eq!(sub.cycles_charged, 0);
+}
+
+#[test]
+fn test_subscribe_duplicate_fails() {
+    // Error 61: SubscriptionAlreadyExists
+    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    let result = client.try_subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionAlreadyExists)));
+}
+
+#[test]
+fn test_subscribe_unknown_plan_fails() {
+    // Error 62: SubscriptionPlanNotFound
+    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+    let result = client.try_subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "NO_PLAN"),
+        &str(&env, "SUB_1"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionPlanNotFound)));
+}
+
+#[test]
+fn test_subscribe_unregistered_merchant_fails() {
+    let (env, client, _admin, _merchant, subscriber, _token) = setup_subscription_env();
+    let stranger = Address::generate(&env);
+    let result = client.try_subscribe(
+        &stranger,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MerchantNotFound)));
+}
+
+#[test]
+fn test_charge_subscription_success() {
+    let (env, client, _admin, merchant, subscriber, token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+
+    advance_time(&env, PLAN_INTERVAL);
+    client.charge_subscription(&merchant, &str(&env, "SUB_1"));
+
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "subscription_charged"),
+        "subscription_charged event must be emitted"
+    );
+
+    let token_client = TokenClient::new(&env, &token);
+    assert_eq!(token_client.balance(&merchant), PLAN_AMOUNT);
+    assert_eq!(token_client.balance(&subscriber), 10_000 - PLAN_AMOUNT);
+
+    let sub = client.get_subscription(&str(&env, "SUB_1"));
+    assert_eq!(sub.cycles_charged, 1);
+    assert_eq!(sub.status, SubscriptionStatus::Active);
+    assert_eq!(sub.last_charged_at, env.ledger().timestamp());
+}
+
+#[test]
+fn test_charge_subscription_unknown_fails() {
+    // Error 63: SubscriptionNotFound
+    let (env, client, _admin, merchant, _subscriber, _token) = setup_subscription_env();
+    let result = client.try_charge_subscription(&merchant, &str(&env, "NO_SUB"));
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionNotFound)));
+}
+
+#[test]
+fn test_charge_subscription_wrong_merchant_fails() {
+    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    advance_time(&env, PLAN_INTERVAL);
+
+    let stranger = Address::generate(&env);
+    let result = client.try_charge_subscription(&stranger, &str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_charge_subscription_interval_not_elapsed() {
+    // Error 66: SubscriptionIntervalNotElapsed
+    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+
+    // Immediately after subscribing
+    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::SubscriptionIntervalNotElapsed))
+    );
+
+    // One second short of the interval
+    advance_time(&env, PLAN_INTERVAL - 1);
+    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::SubscriptionIntervalNotElapsed))
+    );
+
+    // Immediately after a successful charge
+    advance_time(&env, 1);
+    client.charge_subscription(&merchant, &str(&env, "SUB_1"));
+    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::SubscriptionIntervalNotElapsed))
+    );
+}
+
+#[test]
+fn test_charge_subscription_max_cycles_reached() {
+    // Error 65: SubscriptionMaxCyclesReached
+    let (env, client, _admin, merchant, subscriber, token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+
+    for _ in 0..PLAN_MAX_CYCLES {
+        advance_time(&env, PLAN_INTERVAL);
+        client.charge_subscription(&merchant, &str(&env, "SUB_1"));
+    }
+
+    let sub = client.get_subscription(&str(&env, "SUB_1"));
+    assert_eq!(sub.cycles_charged, PLAN_MAX_CYCLES);
+    assert_eq!(sub.status, SubscriptionStatus::Completed);
+
+    advance_time(&env, PLAN_INTERVAL);
+    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionMaxCyclesReached)));
+
+    // No funds moved beyond the allowed cycles
+    let token_client = TokenClient::new(&env, &token);
+    assert_eq!(
+        token_client.balance(&merchant),
+        PLAN_AMOUNT * PLAN_MAX_CYCLES as i128
+    );
+
+    // The whole allowance is consumed at completion; nothing residual remains
+    assert_eq!(token_client.allowance(&subscriber, &client.address), 0);
+}
+
+#[test]
+fn test_charge_subscription_after_cancel_fails() {
+    // Error 64: SubscriptionNotActive
+    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    client.cancel_subscription(&subscriber, &str(&env, "SUB_1"));
+
+    advance_time(&env, PLAN_INTERVAL);
+    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionNotActive)));
+}
+
+#[test]
+fn test_cancel_subscription_by_subscriber() {
+    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    client.cancel_subscription(&subscriber, &str(&env, "SUB_1"));
+
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "subscription_cancelled"),
+        "subscription_cancelled event must be emitted"
+    );
+
+    let sub = client.get_subscription(&str(&env, "SUB_1"));
+    assert_eq!(sub.status, SubscriptionStatus::Cancelled);
+}
+
+#[test]
+fn test_cancel_subscription_by_merchant() {
+    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    client.cancel_subscription(&merchant, &str(&env, "SUB_1"));
+
+    let sub = client.get_subscription(&str(&env, "SUB_1"));
+    assert_eq!(sub.status, SubscriptionStatus::Cancelled);
+}
+
+#[test]
+fn test_cancel_subscription_unknown_fails() {
+    // Error 63: SubscriptionNotFound
+    let (env, client, _admin, _merchant, subscriber, _token) = setup_subscription_env();
+    let result = client.try_cancel_subscription(&subscriber, &str(&env, "NO_SUB"));
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionNotFound)));
+}
+
+#[test]
+fn test_cancel_subscription_by_stranger_fails() {
+    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+
+    let stranger = Address::generate(&env);
+    let result = client.try_cancel_subscription(&stranger, &str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_cancel_subscription_twice_fails() {
+    // Error 64: SubscriptionNotActive
+    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    client.cancel_subscription(&subscriber, &str(&env, "SUB_1"));
+    let result = client.try_cancel_subscription(&subscriber, &str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionNotActive)));
+}
+
+#[test]
+fn test_cancel_completed_subscription_fails() {
+    // Error 64: SubscriptionNotActive
+    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+
+    for _ in 0..PLAN_MAX_CYCLES {
+        advance_time(&env, PLAN_INTERVAL);
+        client.charge_subscription(&merchant, &str(&env, "SUB_1"));
+    }
+
+    let result = client.try_cancel_subscription(&subscriber, &str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionNotActive)));
+}
+
+#[test]
+fn test_charge_subscription_inactive_merchant_fails() {
+    let (env, client, admin, merchant, subscriber, token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    client.deactivate_merchant(&admin, &merchant);
+
+    advance_time(&env, PLAN_INTERVAL);
+    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::MerchantInactive)));
+
+    let token_client = TokenClient::new(&env, &token);
+    assert_eq!(token_client.balance(&merchant), 0);
+    let sub = client.get_subscription(&str(&env, "SUB_1"));
+    assert_eq!(sub.cycles_charged, 0);
+
+    // Reactivation restores charging
+    client.reactivate_merchant(&admin, &merchant);
+    client.charge_subscription(&merchant, &str(&env, "SUB_1"));
+    assert_eq!(token_client.balance(&merchant), PLAN_AMOUNT);
+}
+
+#[test]
+fn test_charge_subscription_delisted_token_fails() {
+    let (env, client, admin, merchant, subscriber, token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    client.remove_allowed_token(&admin, &token);
+
+    advance_time(&env, PLAN_INTERVAL);
+    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+
+    let sub = client.get_subscription(&str(&env, "SUB_1"));
+    assert_eq!(sub.cycles_charged, 0);
+}
+
+#[test]
+fn test_concurrent_subscriptions_same_token_all_cycles_charge() {
+    let (env, client, _admin, merchant, subscriber, token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_2"),
+    );
+
+    // The second subscribe must extend the shared allowance, not clobber it
+    let token_client = TokenClient::new(&env, &token);
+    let total = PLAN_AMOUNT * PLAN_MAX_CYCLES as i128 * 2;
+    assert_eq!(token_client.allowance(&subscriber, &client.address), total);
+
+    for _ in 0..PLAN_MAX_CYCLES {
+        advance_time(&env, PLAN_INTERVAL);
+        client.charge_subscription(&merchant, &str(&env, "SUB_1"));
+        client.charge_subscription(&merchant, &str(&env, "SUB_2"));
+    }
+
+    assert_eq!(token_client.balance(&merchant), total);
+    assert_eq!(token_client.allowance(&subscriber, &client.address), 0);
+}
+
+#[test]
+fn test_cancel_by_subscriber_shrinks_allowance_to_reserve() {
+    let (env, client, _admin, merchant, subscriber, token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_2"),
+    );
+
+    advance_time(&env, PLAN_INTERVAL);
+    client.charge_subscription(&merchant, &str(&env, "SUB_1"));
+    client.cancel_subscription(&subscriber, &str(&env, "SUB_1"));
+
+    // Only SUB_2's untouched cycles stay approved
+    let token_client = TokenClient::new(&env, &token);
+    assert_eq!(
+        token_client.allowance(&subscriber, &client.address),
+        PLAN_AMOUNT * PLAN_MAX_CYCLES as i128
+    );
+
+    client.cancel_subscription(&subscriber, &str(&env, "SUB_2"));
+    assert_eq!(token_client.allowance(&subscriber, &client.address), 0);
+}
+
+#[test]
+fn test_merchant_cancel_leaves_allowance_until_renewed() {
+    let (env, client, _admin, merchant, subscriber, token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    client.cancel_subscription(&merchant, &str(&env, "SUB_1"));
+
+    // Merchant cancel cannot shrink the allowance (needs subscriber auth)
+    let token_client = TokenClient::new(&env, &token);
+    assert_eq!(
+        token_client.allowance(&subscriber, &client.address),
+        PLAN_AMOUNT * PLAN_MAX_CYCLES as i128
+    );
+
+    client.renew_subscription_allowance(&subscriber, &token);
+    assert_eq!(token_client.allowance(&subscriber, &client.address), 0);
+}
+
+#[test]
+fn test_subscription_functions_reject_when_paused() {
+    let (env, client, admin, merchant, subscriber, token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    client.pause_contract(&admin);
+
+    let result = client.try_create_subscription_plan(
+        &admin,
+        &str(&env, "PLAN_2"),
+        &token,
+        &PLAN_AMOUNT,
+        &PLAN_INTERVAL,
+        &PLAN_MAX_CYCLES,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
+
+    let result = client.try_subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_2"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
+
+    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
+
+    let result = client.try_cancel_subscription(&subscriber, &str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
+
+    let result = client.try_renew_subscription_allowance(&subscriber, &token);
+    assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
 }

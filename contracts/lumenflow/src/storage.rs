@@ -3,7 +3,7 @@ use soroban_sdk::{contracttype, Address, Env, String, Vec};
 use crate::error::PaymentError;
 use crate::types::{
     DisputeRecord, GlobalStats, Merchant, MerchantStats, MultisigPayment, PaymentOrder,
-    PaymentRequest, RefundRecord,
+    PaymentRequest, RefundRecord, Subscription, SubscriptionPlan,
 };
 
 // ── TTL / limit constants ─────────────────────────────────────────────────────
@@ -36,6 +36,7 @@ pub const MERCHANT_TTL_LEDGERS: u32 = 12_614_400; // 2 years
 pub const PAYMENT_TTL_LEDGERS: u32 = 12_614_400;  // 2 years
 pub const REFUND_TTL_LEDGERS: u32 = 6_307_200;    // 1 year
 pub const MULTISIG_TTL_LEDGERS: u32 = 6_307_200;  // 1 year
+pub const SUBSCRIPTION_TTL_LEDGERS: u32 = 12_614_400; // 2 years
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -65,6 +66,9 @@ pub enum DataKey {
     RefundWindow,
     Nonce(Address),
     StoredVersion,
+    SubscriptionPlan(String),
+    Subscription(String),
+    SubscriptionReserve(Address, Address),
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -451,6 +455,62 @@ pub fn set_multisig_expiry_duration(env: &Env, duration: u64) {
     env.storage()
         .instance()
         .set(&DataKey::MultisigExpiryDuration, &duration);
+}
+
+// -- Subscriptions -------------------------------------------------------------
+
+pub fn get_subscription_plan(env: &Env, plan_id: &String) -> Option<SubscriptionPlan> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::SubscriptionPlan(plan_id.clone()))
+}
+
+pub fn set_subscription_plan(env: &Env, plan: &SubscriptionPlan) {
+    let key = DataKey::SubscriptionPlan(plan.plan_id.clone());
+    env.storage().persistent().set(&key, plan);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, SUBSCRIPTION_TTL_LEDGERS, SUBSCRIPTION_TTL_LEDGERS);
+}
+
+pub fn get_subscription(env: &Env, subscription_id: &String) -> Option<Subscription> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Subscription(subscription_id.clone()))
+}
+
+pub fn set_subscription(env: &Env, sub: &Subscription) {
+    let key = DataKey::Subscription(sub.subscription_id.clone());
+    env.storage().persistent().set(&key, sub);
+    // Extend TTL on every write so an actively charged subscription never
+    // silently expires between billing cycles.
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, SUBSCRIPTION_TTL_LEDGERS, SUBSCRIPTION_TTL_LEDGERS);
+}
+
+/// Total amount still chargeable across `subscriber`'s active subscriptions in
+/// `token`; the token allowance granted to the contract must cover this sum.
+pub fn get_subscription_reserve(env: &Env, subscriber: &Address, token: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::SubscriptionReserve(
+            subscriber.clone(),
+            token.clone(),
+        ))
+        .unwrap_or(0)
+}
+
+pub fn set_subscription_reserve(env: &Env, subscriber: &Address, token: &Address, amount: i128) {
+    let key = DataKey::SubscriptionReserve(subscriber.clone(), token.clone());
+    if amount <= 0 {
+        env.storage().persistent().remove(&key);
+    } else {
+        env.storage().persistent().set(&key, &amount);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, SUBSCRIPTION_TTL_LEDGERS, SUBSCRIPTION_TTL_LEDGERS);
+    }
 }
 
 // ── Contract version ──────────────────────────────────────────────────────────
