@@ -747,6 +747,10 @@ Get testnet XLM from the [Stellar Friendbot](https://friendbot.stellar.org).
 
 ## Troubleshooting
 
+For a full list of common errors (build, deploy, runtime, and upgrade) with causes and resolution steps, see the **[Troubleshooting Guide](docs/troubleshooting.md)**.
+
+Quick reference for the most frequent issues:
+
 **WASM target missing:**
 ```bash
 rustup target add wasm32-unknown-unknown
@@ -760,6 +764,8 @@ stellar network container restart local
 **Insufficient XLM for fees:** Fund your account via Friendbot (testnet) or acquire XLM (mainnet).
 
 **Test failures:** Ensure `soroban-sdk` version in `Cargo.toml` matches `rust-toolchain.toml` channel.
+
+> Found an error not listed? Open a PR using the [troubleshooting entry template](.github/ISSUE_TEMPLATE/troubleshooting_entry.yml).
 
 ---
 
