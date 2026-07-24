@@ -3,6 +3,8 @@
 **Scalable, secure, and decentralized smart contracts for Soroban on Stellar.**
 
 [![CI](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml/badge.svg)](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/AnnabelJoe/lumenflow-contracts/branch/main/graph/badge.svg)](https://codecov.io/gh/AnnabelJoe/lumenflow-contracts)
+[![Audit: Pending](https://img.shields.io/badge/Audit-Pending-orange)](docs/audit/audit-report-v1.0.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Stellar](https://img.shields.io/badge/Stellar-Soroban-blueviolet)](https://soroban.stellar.org)
 [![Discord](https://img.shields.io/discord/123456789012345678?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/lumenflow)
@@ -379,6 +381,21 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). All contributions are welcome — bug fi
 ## Security
 
 See [SECURITY.md](SECURITY.md) for responsible disclosure instructions.
+
+## Security Audit
+
+[![Audit: Pending](https://img.shields.io/badge/Audit-Pending-orange)](docs/audit/audit-report-v1.0.md)
+
+A formal third-party security audit of the LumenFlow smart contract is in progress before mainnet launch.
+
+| Item | Detail |
+|------|--------|
+| Audit report | [docs/audit/audit-report-v1.0.md](docs/audit/audit-report-v1.0.md) |
+| Audit scope | All public contract functions, storage layout, signature verification, access control |
+| Status | 🔴 Pending — audit in progress |
+| Mainnet deployment | Blocked until all Critical and High findings are resolved |
+
+All Critical findings will have remediation PRs before mainnet deployment. A re-audit is scheduled after any Critical finding remediation.
 
 ## License
 
