@@ -1,119 +1,137 @@
-/**
- * LumenFlow SDK — TypeScript type definitions
- *
- * These types mirror the Soroban contract types defined in
- * contracts/lumenflow/src/types.rs and are intended for use
- * in front-end applications and Node.js integrations.
- */
-
-// ── Merchant ──────────────────────────────────────────────────────────────────
-
-export type MerchantCategory = "Retail" | "Food" | "Services" | "Digital" | "Other";
+export enum MerchantCategory {
+  Retail = "Retail",
+  Food = "Food",
+  Services = "Services",
+  Digital = "Digital",
+  Other = "Other",
+}
 
 export interface Merchant {
   address: string;
   name: string;
   description: string;
-  contact_info: string;
+  contactInfo: string;
   category: MerchantCategory;
   active: boolean;
-  registered_at: number; // Unix timestamp (seconds)
-  total_received: bigint;
+  verified: boolean;
+  registeredAt: bigint;
+  totalReceived: bigint;
 }
 
-// ── Payment ───────────────────────────────────────────────────────────────────
-
-export type PaymentStatus = "Completed" | "PartiallyRefunded" | "FullyRefunded";
+export enum PaymentStatus {
+  Completed = "Completed",
+  PartiallyRefunded = "PartiallyRefunded",
+  FullyRefunded = "FullyRefunded",
+}
 
 export interface PaymentOrder {
-  order_id: string;
-  merchant_address: string;
+  orderId: string;
+  merchantAddress: string;
   payer: string;
   token: string;
   amount: bigint;
   status: PaymentStatus;
-  paid_at: number; // Unix timestamp (seconds)
-  refunded_amount: bigint;
+  paidAt: bigint;
+  refundedAmount: bigint;
   memo: string;
-  /**
-   * Optional tags for this payment. Maximum 5 tags, each 1–32 characters.
-   */
   tags?: string[];
+  note?: string;
 }
 
-/**
- * A single item in a batch payment request.
- *
- * Updated in issue #660: added the optional `tags` field so merchants
- * can label individual batch items the same way as single payments.
- */
-export interface BatchPaymentItem {
-  /** Unique order identifier for this item. Must not already exist on-chain. */
-  order_id: string;
-  /** Merchant receiving this payment. Must be a registered, active merchant. */
-  merchant_address: string;
-  /** SAC token address to transfer. */
-  token_address: string;
-  /** Payment amount in the token's smallest unit. Must be > 0. */
+export interface PaymentSummary {
+  orderId: string;
+  merchantAddress: string;
   amount: bigint;
-  /** Optional human-readable memo for this item. */
-  memo: string;
-  /**
-   * Optional tags for categorising this batch item.
-   *
-   * Rules (validated server-side with `validate_tags`):
-   * - Maximum **5** tags per item.
-   * - Each tag must be between **1** and **32** characters.
-   * - An invalid tag in any item causes the **entire batch** to be rejected.
-   *
-   * @example ["invoice", "q3-2026", "europe"]
-   */
-  tags?: string[];
-  /** ed25519 signature over `order_id_xdr || amount_be_bytes` by the merchant key. */
-  signature: Uint8Array;
-  /** ed25519 public key of the merchant (32 bytes). */
-  merchant_public_key: Uint8Array;
+  token: string;
+  status: PaymentStatus;
+  paidAt: bigint;
 }
 
-// ── Refund ────────────────────────────────────────────────────────────────────
+export interface PaymentRequest {
+  requestId: string;
+  merchant: string;
+  token: string;
+  amount: bigint;
+  memo: string;
+  expiresAt: bigint;
+}
 
-export type RefundStatus = "Pending" | "Approved" | "Rejected" | "Completed";
+export interface BatchPaymentItem {
+  orderId: string;
+  merchantAddress: string;
+  tokenAddress: string;
+  amount: bigint;
+  memo: string;
+  signature: Buffer;
+  merchantPublicKey: Buffer;
+}
+
+export enum RefundStatus {
+  Pending = "Pending",
+  Approved = "Approved",
+  Rejected = "Rejected",
+  Completed = "Completed",
+  Disputed = "Disputed",
+}
 
 export interface RefundRecord {
-  refund_id: string;
-  order_id: string;
+  refundId: string;
+  orderId: string;
   initiator: string;
   amount: bigint;
   reason: string;
   status: RefundStatus;
-  created_at: number; // Unix timestamp (seconds)
+  createdAt: bigint;
 }
 
-// ── Multisig ──────────────────────────────────────────────────────────────────
+export enum DisputeOutcome {
+  FavorPayer = "FavorPayer",
+  FavorMerchant = "FavorMerchant",
+}
+
+export interface DisputeRecord {
+  refundId: string;
+  payer: string;
+  evidence: string;
+  outcome?: DisputeOutcome;
+  createdAt: bigint;
+}
 
 export interface MultisigPayment {
-  payment_id: string;
-  merchant_address: string;
+  paymentId: string;
+  merchantAddress: string;
   token: string;
   amount: bigint;
-  required_signatures: number;
+  requiredSignatures: number;
   signers: string[];
-  signatures: Uint8Array[];
+  signatures: Buffer[];
+  signedBy: string[];
   executed: boolean;
-  created_at: number; // Unix timestamp (seconds)
+  createdAt: bigint;
 }
 
-// ── Query helpers ─────────────────────────────────────────────────────────────
+export enum SortField {
+  Date = "Date",
+  Amount = "Amount",
+}
 
-export type SortField = "Date" | "Amount";
-export type SortOrder = "Ascending" | "Descending";
-export type StatusFilter = "Any" | "Completed" | "PartiallyRefunded" | "FullyRefunded";
+export enum SortOrder {
+  Ascending = "Ascending",
+  Descending = "Descending",
+}
+
+export enum StatusFilter {
+  Any = "Any",
+  Completed = "Completed",
+  PartiallyRefunded = "PartiallyRefunded",
+  FullyRefunded = "FullyRefunded",
+}
 
 export interface PaymentFilter {
-  date_start?: number;
-  date_end?: number;
-  amount_min?: bigint;
-  amount_max?: bigint;
+  dateStart?: bigint;
+  dateEnd?: bigint;
+  amountMin?: bigint;
+  amountMax?: bigint;
   token?: string;
   status: StatusFilter;
   tag?: string;
@@ -121,16 +139,45 @@ export interface PaymentFilter {
 
 export interface PaymentPage {
   payments: PaymentOrder[];
-  next_cursor?: string;
+  nextCursor?: string;
   total: number;
 }
 
-// ── Stats ─────────────────────────────────────────────────────────────────────
-
 export interface GlobalStats {
-  total_payments: number;
-  total_volume: bigint;
-  total_refunds: number;
-  total_refund_volume: bigint;
-  active_merchants: number;
+  totalPayments: number;
+  totalVolume: bigint;
+  totalRefunds: number;
+  totalRefundVolume: bigint;
+  activeMerchants: number;
+}
+
+export enum SuspiciousActivityReason {
+  LargePayment = 1,
+  RapidRefunds = 2,
+  ManyAuthFailures = 3,
+}
+
+export interface SubscriptionPlan {
+  planId: string;
+  merchant: string;
+  token: string;
+  amount: bigint;
+  intervalSecs: bigint;
+  maxCycles: number;
+}
+
+export enum SubscriptionStatus {
+  Active = "Active",
+  Cancelled = "Cancelled",
+  Completed = "Completed",
+}
+
+export interface Subscription {
+  subscriptionId: string;
+  planId: string;
+  subscriber: string;
+  cyclesCharged: number;
+  lastChargedAt: bigint;
+  status: SubscriptionStatus;
+  createdAt: bigint;
 }
