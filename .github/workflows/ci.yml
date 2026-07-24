@@ -70,6 +70,7 @@ jobs:
         with:
           toolchain: 1.87.0
           targets: wasm32-unknown-unknown
+          components: llvm-tools-preview
 
       - name: Verify toolchain version
         run: rustc --version | grep "1.87.0"
