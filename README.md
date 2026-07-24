@@ -797,8 +797,10 @@ The server watches `**/*.html`, `**/*.css`, and `**/*.js` inside `frontend/` and
 Need help or want to discuss LumenFlow?
 
 - **Discord Server:** Join our [Discord community](https://discord.gg/lumenflow) to chat with developers and other users.
-- **GitHub Discussions:** Ask questions and share ideas in [GitHub Discussions](https://github.com/Gloriachinedu/lumenflow-contracts/discussions).
-- **Support Guidelines:** See [SUPPORT.md](SUPPORT.md) for details on where to get help and how to report bugs.
+- **Q&A Discussions:** Ask questions in [GitHub Discussions — Q&A](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/q-a).
+- **Developer Help:** SDK, deployment, and tooling questions in [Developer Help](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/developer-help).
+- **Feature Requests:** Propose and discuss new features in [Feature Requests](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/feature-requests).
+- **Support Guidelines:** See [SUPPORT.md](SUPPORT.md) for where to get help and how to report bugs.
 
 ---
 
