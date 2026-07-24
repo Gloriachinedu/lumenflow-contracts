@@ -90,4 +90,20 @@ Do **not** open a public issue for security vulnerabilities. See [SECURITY.md](S
 
 ## Questions
 
-Open a [GitHub Discussion](../../discussions) for questions, ideas, or general feedback.
+The right place for a question depends on its type:
+
+| Topic | Where to post |
+|-------|--------------|
+| General usage questions | [Q&A Discussions](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/q-a) |
+| SDK / integration help | [Developer Help Discussions](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/developer-help) |
+| Feature ideas | [Feature Requests Discussions](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/feature-requests) |
+| Confirmed bugs in contract code | [GitHub Issues](https://github.com/PrincessnJoy/lumenflow-contracts/issues) (Bug Report template) |
+| Security vulnerabilities | See [SECURITY.md](SECURITY.md) — **never** public channels |
+
+**Please do not open a GitHub Issue for questions.** Issues are reserved for
+confirmed bugs and actionable work items. Posting questions as issues makes the
+tracker harder to manage for everyone.
+
+Not sure whether something is a bug or a misconfiguration? Ask in
+[Developer Help](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/developer-help)
+first.
