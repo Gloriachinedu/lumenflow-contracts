@@ -55,63 +55,73 @@ test('multisig page: "Add signer" button is present', async ({ page }) => {
   await expect(page.locator('#add-signer-btn')).toBeVisible();
 });
 
-// ── Form validation — empty submission ────────────────────────────────────────
+// -- Form validation: inline errors and submit gating --------------------------
 
-test('multisig page: submitting empty form shows validation errors', async ({ page }) => {
+test('multisig page: submit button is disabled while the form is empty', async ({ page }) => {
   await page.goto(MULTISIG_URL);
-  await page.locator('#submit-btn').click();
-
-  // At least the Payment ID and Merchant Address error messages should appear.
-  await expect(page.locator('#err-payment-id')).toBeVisible();
-  await expect(page.locator('#err-merchant')).toBeVisible();
+  await expect(page.locator('#submit-btn')).toBeDisabled();
 });
 
-test('multisig page: payment ID error is shown when field is empty', async ({ page }) => {
+test('multisig page: payment ID error is shown when field is cleared', async ({ page }) => {
   await page.goto(MULTISIG_URL);
-  // Clear the field to ensure it's empty, then submit.
+  await page.locator('#payment-id').fill('MS_001');
   await page.locator('#payment-id').fill('');
-  await page.locator('#submit-btn').click();
   await expect(page.locator('#err-payment-id')).toBeVisible();
   await expect(page.locator('#err-payment-id')).toContainText(/required/i);
 });
 
+test('multisig page: payment ID longer than 64 characters shows an error', async ({ page }) => {
+  await page.goto(MULTISIG_URL);
+  await page.locator('#payment-id').fill('X'.repeat(65));
+  await expect(page.locator('#err-payment-id')).toBeVisible();
+  await expect(page.locator('#err-payment-id')).toContainText(/64/);
+  await expect(page.locator('#submit-btn')).toBeDisabled();
+});
+
 test('multisig page: merchant address error shown for invalid address', async ({ page }) => {
   await page.goto(MULTISIG_URL);
-  await page.locator('#payment-id').fill('MS_001');
   await page.locator('#merchant-address').fill('NOT_A_VALID_ADDRESS');
-  await page.locator('#submit-btn').click();
   await expect(page.locator('#err-merchant')).toBeVisible();
   await expect(page.locator('#err-merchant')).toContainText(/valid/i);
+  await expect(page.locator('#submit-btn')).toBeDisabled();
 });
 
 test('multisig page: token address error shown for invalid address', async ({ page }) => {
   await page.goto(MULTISIG_URL);
-  await page.locator('#payment-id').fill('MS_001');
-  await page.locator('#merchant-address').fill(VALID_G_ADDRESS);
   await page.locator('#token-address').fill('INVALID');
-  await page.locator('#submit-btn').click();
   await expect(page.locator('#err-token')).toBeVisible();
   await expect(page.locator('#err-token')).toContainText(/valid/i);
 });
 
-test('multisig page: amount error shown for zero or negative amount', async ({ page }) => {
+test('multisig page: amount error shown for zero amount', async ({ page }) => {
   await page.goto(MULTISIG_URL);
-  await page.locator('#payment-id').fill('MS_001');
-  await page.locator('#merchant-address').fill(VALID_G_ADDRESS);
-  await page.locator('#token-address').fill(VALID_C_ADDRESS);
   await page.locator('#amount').fill('0');
-  await page.locator('#submit-btn').click();
+  await expect(page.locator('#err-amount')).toBeVisible();
+  await expect(page.locator('#submit-btn')).toBeDisabled();
+});
+
+test('multisig page: amount error shown for negative amount', async ({ page }) => {
+  await page.goto(MULTISIG_URL);
+  await page.locator('#amount').fill('-5');
+  await expect(page.locator('#err-amount')).toBeVisible();
+  await expect(page.locator('#submit-btn')).toBeDisabled();
+});
+
+test('multisig page: amount error shown when field is cleared', async ({ page }) => {
+  await page.goto(MULTISIG_URL);
+  await page.locator('#amount').fill('100');
+  await page.locator('#amount').fill('');
   await expect(page.locator('#err-amount')).toBeVisible();
 });
 
-test('multisig page: amount error shown when field is empty', async ({ page }) => {
+test('multisig page: submit button enables once all fields are valid', async ({ page }) => {
   await page.goto(MULTISIG_URL);
   await page.locator('#payment-id').fill('MS_001');
   await page.locator('#merchant-address').fill(VALID_G_ADDRESS);
   await page.locator('#token-address').fill(VALID_C_ADDRESS);
-  await page.locator('#amount').fill('');
-  await page.locator('#submit-btn').click();
-  await expect(page.locator('#err-amount')).toBeVisible();
+  await page.locator('#amount').fill('5000000');
+  await page.locator('.signer-input').first().fill(VALID_G_ADDRESS);
+  await expect(page.locator('#submit-btn')).toBeEnabled();
 });
 
 // ── Signer management ─────────────────────────────────────────────────────────

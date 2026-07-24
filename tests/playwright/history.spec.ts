@@ -87,6 +87,31 @@ test('history page: merchant address input accepts text', async ({ page }) => {
   await expect(input).toHaveValue('GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON');
 });
 
+test('history page: invalid merchant address shows an inline error', async ({ page }) => {
+  await page.goto(HISTORY_URL);
+  const input = page.locator('#merchant-address');
+  await input.fill('not-an-address');
+  await input.blur();
+  await expect(page.locator('#merchant-address-err')).toBeVisible();
+  await expect(page.locator('#merchant-address-err')).toContainText(/valid/i);
+});
+
+test('history page: valid merchant address shows no inline error', async ({ page }) => {
+  await page.goto(HISTORY_URL);
+  const input = page.locator('#merchant-address');
+  await input.fill('GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON');
+  await input.blur();
+  await expect(page.locator('#merchant-address-err')).toBeHidden();
+});
+
+test('history page: negative minimum amount shows an inline error', async ({ page }) => {
+  await page.goto(HISTORY_URL);
+  const input = page.locator('#amount-min');
+  await input.fill('-5');
+  await input.blur();
+  await expect(page.locator('#amount-min-err')).toBeVisible();
+});
+
 test('history page: status selector has expected options', async ({ page }) => {
   await page.goto(HISTORY_URL);
   const options = page.locator('#status-selector option');
@@ -171,6 +196,20 @@ test('history page: pre-populated filters restored from URL query params', async
   await expect(select).toHaveValue('FullyRefunded');
   // Chip must appear for the pre-populated filter.
   await expect(page.locator('#active-filters .chip')).toHaveCount(1);
+});
+
+test('history page: invalid amount URL params are dropped and flagged', async ({ page }) => {
+  await page.goto(`${HISTORY_URL}?amount_min=-5&amount_max=abc`);
+  await expect(page.locator('#amount-min-err')).toBeVisible();
+  await expect(page.locator('#amount-max-err')).toBeVisible();
+  // Dropped values must not become active filters.
+  await expect(page.locator('#active-filters .chip')).toHaveCount(0);
+});
+
+test('history page: invalid merchant address URL param is dropped and flagged', async ({ page }) => {
+  await page.goto(`${HISTORY_URL}?merchant_address=not-an-address`);
+  await expect(page.locator('#merchant-address-err')).toBeVisible();
+  await expect(page.locator('#active-filters .chip')).toHaveCount(0);
 });
 
 // ── Responsive layout ─────────────────────────────────────────────────────────
