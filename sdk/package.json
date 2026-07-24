@@ -1,22 +1,26 @@
 {
   "name": "@lumenflow/sdk",
-  "version": "0.1.0",
-  "description": "LumenFlow TypeScript SDK",
+  "version": "0.2.0",
+  "description": "LumenFlow TypeScript SDK — Node.js wrapper for the LumenFlow Soroban contract",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": ["dist", "src"],
   "scripts": {
     "build": "tsc",
     "test": "jest"
   },
-  "keywords": [
-    "stellar",
-    "soroban",
-    "lumenflow",
-    "payments"
-  ],
+  "keywords": ["stellar", "soroban", "lumenflow", "payments", "sdk"],
   "author": "LumenFlow Contributors",
   "license": "MIT",
+  "dependencies": {
+    "@stellar/stellar-sdk": "^16.0.1",
+    "tweetnacl": "1.0.3"
+  },
   "devDependencies": {
-    "typescript": "^5.0.0"
+    "@types/jest": "30.0.0",
+    "@types/node": "26.1.0",
+    "jest": "30.4.2",
+    "ts-jest": "29.4.11",
+    "typescript": "6.0.3"
   }
 }

@@ -1,8 +1,6 @@
 # Rust
 /target/
 **/*.rs.bk
-# Cargo.lock is intentionally tracked for reproducible builds (see docs/release-hashes.md)
-# Do NOT add Cargo.lock here
 
 # WASM build artifacts
 *.wasm
@@ -28,3 +26,4 @@ identity/
 
 # Logs
 *.log
+node_modules/
