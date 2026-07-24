@@ -837,6 +837,21 @@ We maintain localized versions of the README to support Spanish and Portuguese r
 
 See [SECURITY.md](SECURITY.md) for responsible disclosure instructions.
 
+## Security Audit
+
+[![Audit: Pending](https://img.shields.io/badge/Audit-Pending-orange)](docs/audit/audit-report-v1.0.md)
+
+A formal third-party security audit of the LumenFlow smart contract is in progress before mainnet launch.
+
+| Item | Detail |
+|------|--------|
+| Audit report | [docs/audit/audit-report-v1.0.md](docs/audit/audit-report-v1.0.md) |
+| Audit scope | All public contract functions, storage layout, signature verification, access control |
+| Status | 🔴 Pending — audit in progress |
+| Mainnet deployment | Blocked until all Critical and High findings are resolved |
+
+All Critical findings will have remediation PRs before mainnet deployment. A re-audit is scheduled after any Critical finding remediation.
+
 ## License
 
 [MIT](LICENSE) © 2026 LumenFlow Contributors
