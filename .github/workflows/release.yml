@@ -15,10 +15,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain (pinned)
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.87.0
           targets: wasm32-unknown-unknown
+
+      - name: Verify toolchain version
+        run: rustc --version | grep "1.87.0"
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -29,22 +33,52 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Build WASM (release)
+      - name: Build WASM (release, locked)
         run: |
           cargo build \
             --target wasm32-unknown-unknown \
             --release \
-            --package lumenflow
+            --package lumenflow \
+            --locked
+
+      - name: Compute SHA-256 hash
+        id: hash
+        run: |
+          HASH=$(sha256sum target/wasm32-unknown-unknown/release/lumenflow.wasm | awk '{print $1}')
+          echo "sha256=$HASH" >> "$GITHUB_OUTPUT"
+          echo "## WASM Hash" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "SHA-256: $HASH" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Published SHA-256: $HASH"
 
       - name: Rename artifact
         run: |
           cp target/wasm32-unknown-unknown/release/lumenflow.wasm \
              lumenflow_${{ github.ref_name }}.wasm
 
+      - name: Write SHA-256 checksum file
+        run: |
+          echo "${{ steps.hash.outputs.sha256 }}  lumenflow_${{ github.ref_name }}.wasm" \
+            > lumenflow_${{ github.ref_name }}.wasm.sha256
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: lumenflow_${{ github.ref_name }}.wasm
+          files: |
+            lumenflow_${{ github.ref_name }}.wasm
+            lumenflow_${{ github.ref_name }}.wasm.sha256
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
+          body: |
+            ## WASM Verification
+
+            To verify the WASM binary, run:
+            ```bash
+            VERSION=${{ github.ref_name }} ./scripts/verify-build.sh
+            ```
+
+            **SHA-256:** `${{ steps.hash.outputs.sha256 }}`
+
+            See [docs/release-hashes.md](docs/release-hashes.md) for the full hash table and verification instructions.

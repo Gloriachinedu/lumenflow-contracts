@@ -97,12 +97,26 @@ jobs:
           key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-wasm-
 
-      - name: Build WASM
+      - name: Build WASM (locked)
         run: |
           cargo build \
             --target wasm32-unknown-unknown \
             --release \
-            --package lumenflow
+            --package lumenflow \
+            --locked
+
+      - name: Compute WASM SHA-256
+        id: wasm_hash
+        run: |
+          HASH=$(sha256sum target/wasm32-unknown-unknown/release/lumenflow.wasm | awk '{print $1}')
+          echo "sha256=$HASH" >> "$GITHUB_OUTPUT"
+          echo "WASM SHA-256: $HASH"
+
+      - name: Verify WASM hash against published hash (release tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          chmod +x scripts/verify-build.sh
+          VERSION="${{ github.ref_name }}" ./scripts/verify-build.sh
 
       - name: Upload WASM artifact
         uses: actions/upload-artifact@v4

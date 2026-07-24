@@ -344,6 +344,49 @@ Get testnet XLM from the [Stellar Friendbot](https://friendbot.stellar.org).
 
 ---
 
+## Verifying the Deployed WASM
+
+LumenFlow supports independent, reproducible verification of the deployed contract binary.
+Every release publishes a SHA-256 hash in [docs/release-hashes.md](docs/release-hashes.md)
+so that anyone can confirm the on-chain binary matches the open-source code.
+
+### Quick verify
+
+```bash
+# 1. Clone the repo at the release tag
+git clone https://github.com/PrincessnJoy/lumenflow-contracts.git
+cd lumenflow-contracts
+git checkout v1.0.0          # replace with the target version
+
+# 2. Install the pinned toolchain (reads rust-toolchain.toml automatically)
+rustup show
+
+# 3. Run the verification script
+./scripts/verify-build.sh v1.0.0
+```
+
+A passing run prints `✅  Hash match — build is reproducible for v1.0.0.`
+
+### What is checked
+
+| Factor | Pinned by |
+|--------|-----------|
+| Rust compiler version | `rust-toolchain.toml` (`channel = "1.87.0"`) |
+| All dependency versions | `Cargo.lock` (committed to this repo) |
+| Compiler flags | `[profile.release]` in `Cargo.toml` |
+
+### Compare against the on-chain binary
+
+```bash
+# Download the released artifact from GitHub Releases
+curl -LO https://github.com/PrincessnJoy/lumenflow-contracts/releases/download/v1.0.0/lumenflow_v1.0.0.wasm.sha256
+cat lumenflow_v1.0.0.wasm.sha256
+```
+
+Both the local build and the GitHub Release artifact must produce the same SHA-256.
+
+---
+
 ## Troubleshooting
 
 **WASM target missing:**
