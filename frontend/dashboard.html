@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Merchant Dashboard – LumenFlow</title>
+  <meta name="description" content="LumenFlow merchant dashboard: view your payment stats, recent transactions, and manage refunds." />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f5f7fa;
+      color: #1a1a2e;
+      min-height: 100vh;
+      padding: 2rem 1rem;
+    }
+
+    .container { max-width: 1000px; margin: 0 auto; }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 2rem;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    h1 { font-size: 1.5rem; font-weight: 700; color: #6c47ff; }
+    .subtitle { color: #666; font-size: 0.875rem; margin-top: 0.2rem; }
+
+    nav { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+    nav a {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #6c47ff;
+      text-decoration: none;
+      padding: 0.4rem 0.9rem;
+      border: 1.5px solid #6c47ff;
+      border-radius: 8px;
+      transition: background 0.15s, color 0.15s;
+    }
+    nav a:hover { background: #6c47ff; color: #fff; }
+
+    /* ── Merchant selector ───────────────────────────────────────────────────── */
+    .merchant-bar {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.05);
+      padding: 1rem 1.5rem;
+      margin-bottom: 1.5rem;
+      display: flex;
+      gap: 0.75rem;
+      align-items: flex-end;
+      flex-wrap: wrap;
+    }
+
+    .merchant-bar .field { margin: 0; flex: 1; min-width: 240px; }
+    .merchant-bar label {
+      display: block;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #555;
+      margin-bottom: 0.3rem;
+    }
+    .merchant-bar input {
+      width: 100%;
+      padding: 0.5rem 0.75rem;
+      border: 1.5px solid #dde1e7;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      outline: none;
+      font-family: monospace;
+    }
+    .merchant-bar input:focus { border-color: #6c47ff; }
+
+    .btn {
+      padding: 0.55rem 1.1rem;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+      white-space: nowrap;
+    }
+    .btn:hover { opacity: 0.85; }
+    .btn-primary { background: #6c47ff; color: #fff; }
+
+    /* ── Stats grid ──────────────────────────────────────────────────────────── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .stat-card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.05);
+      padding: 1.25rem 1.5rem;
+    }
+
+    .stat-card .stat-label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #888;
+      margin-bottom: 0.5rem;
+    }
+
+    .stat-card .stat-value {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: #6c47ff;
+      line-height: 1;
+    }
+
+    .stat-card .stat-sub {
+      font-size: 0.78rem;
+      color: #888;
+      margin-top: 0.35rem;
+    }
+
+    /* ── Payments table ──────────────────────────────────────────────────────── */
+    .panel {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.05);
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      overflow-x: auto;
+    }
+
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1.25rem;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .panel-header h2 {
+      font-size: 1rem;
+      font-weight: 700;
+    }
+
+    .panel-header a {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: #6c47ff;
+      text-decoration: none;
+    }
+    .panel-header a:hover { text-decoration: underline; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+
+    th {
+      text-align: left;
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #888;
+      padding: 0 0.75rem 0.75rem;
+      border-bottom: 1.5px solid #eee;
+    }
+
+    td {
+      padding: 0.8rem 0.75rem;
+      border-bottom: 1px solid #f0f0f0;
+      vertical-align: middle;
+    }
+
+    tr:last-child td { border-bottom: none; }
+
+    .order-id { font-family: monospace; font-size: 0.82rem; color: #444; }
+
+    .badge {
+      display: inline-block;
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 0.2rem 0.55rem;
+      border-radius: 999px;
+    }
+    .badge-completed        { background: #e6f9f0; color: #1a9e5c; }
+    .badge-partiallyrefunded { background: #fff8e1; color: #c68000; }
+    .badge-fullyrefunded    { background: #fff3e0; color: #e07b00; }
+    .badge-unknown          { background: #f0f0f0; color: #666; }
+
+    .amount { font-weight: 600; }
+
+    .action-link {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #6c47ff;
+      text-decoration: none;
+    }
+    .action-link:hover { text-decoration: underline; }
+
+    /* ── Refunds table ───────────────────────────────────────────────────────── */
+    .refund-id { font-family: monospace; font-size: 0.82rem; color: #444; }
+
+    .badge-pending  { background: #eff4ff; color: #3b5bdb; }
+    .badge-approved { background: #e6f9f0; color: #1a9e5c; }
+    .badge-rejected { background: #fff0f0; color: #e53e3e; }
+    .badge-executed { background: #e6f9f0; color: #1a9e5c; }
+
+    /* ── Empty / loading states ──────────────────────────────────────────────── */
+    .state-box {
+      text-align: center;
+      padding: 2.5rem 1rem;
+      color: #888;
+      font-size: 0.875rem;
+    }
+    .state-box .icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
+
+    /* ── Alert ───────────────────────────────────────────────────────────────── */
+    .alert {
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      margin-bottom: 1rem;
+    }
+    .alert-info    { background: #eff4ff; color: #3b5bdb; }
+    .alert-error   { background: #fff0f0; color: #e53e3e; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <div>
+      <h1>Merchant Dashboard</h1>
+      <p class="subtitle" id="merchant-subtitle">LumenFlow · Payment overview</p>
+    </div>
+    <nav>
+      <a href="history.html">Payment History</a>
+      <a href="receipt.html">View Receipt</a>
+      <a href="multisig.html">Multisig</a>
+    </nav>
+  </header>
+
+  <div id="mode-banner"></div>
+
+  <!-- Merchant address input -->
+  <div class="merchant-bar">
+    <div class="field">
+      <label for="merchant-addr">Merchant Address</label>
+      <input id="merchant-addr" type="text" placeholder="G… (leave blank for demo)" />
+    </div>
+    <button class="btn btn-primary" id="load-btn" onclick="loadDashboard()">Load</button>
+  </div>
+
+  <!-- Stats row -->
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-label">Total Volume</div>
+      <div class="stat-value" id="stat-volume">—</div>
+      <div class="stat-sub">XLM received</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Payments</div>
+      <div class="stat-value" id="stat-count">—</div>
+      <div class="stat-sub">completed</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Refunds Issued</div>
+      <div class="stat-value" id="stat-refunds">—</div>
+      <div class="stat-sub">total</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Avg Payment</div>
+      <div class="stat-value" id="stat-avg">—</div>
+      <div class="stat-sub">XLM per transaction</div>
+    </div>
+  </div>
+
+  <!-- Recent payments -->
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Recent Payments</h2>
+      <a href="history.html" id="history-link">View full history →</a>
+    </div>
+    <div id="payments-container">
+      <div class="state-box"><div class="icon">⏳</div>Enter a merchant address and click Load.</div>
+    </div>
+  </div>
+
+  <!-- Recent refunds -->
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Recent Refunds</h2>
+    </div>
+    <div id="refunds-container">
+      <div class="state-box"><div class="icon">⏳</div>Enter a merchant address and click Load.</div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { DEMO_MODE, CONTRACT_ID, NETWORK, formatAmount, formatDate, renderModeBanner } from './lumenflow-shared.js';
+
+  // ── Mode banner ──────────────────────────────────────────────────────────────
+  renderModeBanner();
+
+  // ── Mock data ────────────────────────────────────────────────────────────────
+  const MOCK_PAYMENTS = [
+    { order_id: 'ORDER_001', amount: 50_000_000n, status: 'Completed',          paid_at: 1750000000n, memo: 'Invoice #001' },
+    { order_id: 'ORDER_002', amount: 12_500_000n, status: 'PartiallyRefunded',  paid_at: 1749900000n, memo: 'Subscription' },
+    { order_id: 'ORDER_003', amount: 100_000_000n, status: 'Completed',         paid_at: 1749800000n, memo: 'Batch item' },
+    { order_id: 'ORDER_004', amount: 8_000_000n,  status: 'FullyRefunded',      paid_at: 1749700000n, memo: 'Cancelled order' },
+    { order_id: 'ORDER_005', amount: 25_000_000n, status: 'Completed',          paid_at: 1749600000n, memo: 'Invoice #005' },
+  ];
+
+  const MOCK_REFUNDS = [
+    { refund_id: 'REFUND_001', order_id: 'ORDER_002', amount: 5_000_000n,  status: 'Executed', reason: 'Partial return',    created_at: 1749950000n },
+    { refund_id: 'REFUND_002', order_id: 'ORDER_004', amount: 8_000_000n,  status: 'Executed', reason: 'Customer request',  created_at: 1749750000n },
+    { refund_id: 'REFUND_003', order_id: 'ORDER_003', amount: 10_000_000n, status: 'Pending',  reason: 'Dispute',           created_at: 1749820000n },
+  ];
+
+  // ── Helpers ──────────────────────────────────────────────────────────────────
+  function badgeClass(status) {
+    return 'badge badge-' + status.toLowerCase().replace(/\s/g, '');
+  }
+
+  function buildPaymentsTable(payments) {
+    if (!payments.length) {
+      return '<div class="state-box"><div class="icon">📭</div>No payments found.</div>';
+    }
+    const rows = payments.map(p => {
+      const receiptHref = `receipt.html?order_id=${encodeURIComponent(p.order_id)}`;
+      return `<tr>
+        <td class="order-id">${p.order_id}</td>
+        <td>${formatDate(p.paid_at)}</td>
+        <td class="amount">${formatAmount(p.amount)} XLM</td>
+        <td><span class="${badgeClass(p.status)}">${p.status}</span></td>
+        <td>${p.memo || '—'}</td>
+        <td><a class="action-link" href="${receiptHref}">Receipt</a></td>
+      </tr>`;
+    }).join('');
+    return `<table>
+      <thead><tr>
+        <th>Order ID</th><th>Date</th><th>Amount</th><th>Status</th><th>Memo</th><th></th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  }
+
+  function buildRefundsTable(refunds) {
+    if (!refunds.length) {
+      return '<div class="state-box"><div class="icon">✅</div>No refunds on record.</div>';
+    }
+    const rows = refunds.map(r => `<tr>
+      <td class="refund-id">${r.refund_id}</td>
+      <td class="order-id">${r.order_id}</td>
+      <td class="amount">${formatAmount(r.amount)} XLM</td>
+      <td><span class="${badgeClass(r.status)}">${r.status}</span></td>
+      <td>${r.reason}</td>
+      <td>${formatDate(r.created_at)}</td>
+    </tr>`).join('');
+    return `<table>
+      <thead><tr>
+        <th>Refund ID</th><th>Order ID</th><th>Amount</th><th>Status</th><th>Reason</th><th>Date</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  }
+
+  function computeStats(payments) {
+    const completed = payments.filter(p => p.status !== 'FullyRefunded');
+    const totalVol  = completed.reduce((s, p) => s + Number(p.amount), 0);
+    const refunds   = payments.filter(p => p.status !== 'Completed').length;
+    const avg       = completed.length ? totalVol / completed.length : 0;
+    return { totalVol, count: completed.length, refunds, avg };
+  }
+
+  // ── Live fetch (called when a contract is configured) ────────────────────────
+  async function fetchLiveData(address) {
+    // Real integration: call get_merchant_payment_history + get_merchant_stats via Stellar SDK.
+    // Returning null falls back to an error message.
+    return null;
+  }
+
+  // ── Main loader ──────────────────────────────────────────────────────────────
+  window.loadDashboard = async function() {
+    const address = document.getElementById('merchant-addr').value.trim();
+    const historyLink = document.getElementById('history-link');
+    if (address) {
+      const encoded = encodeURIComponent(address);
+      historyLink.href = `history.html?merchant=${encoded}`;
+      document.getElementById('merchant-subtitle').textContent = `LumenFlow · ${address.slice(0, 8)}…`;
+    }
+
+    let payments, refunds;
+    if (DEMO_MODE || !address) {
+      payments = MOCK_PAYMENTS;
+      refunds  = MOCK_REFUNDS;
+    } else {
+      const live = await fetchLiveData(address);
+      if (!live) {
+        document.getElementById('payments-container').innerHTML =
+          '<div class="alert alert-error">Could not load live data. Check console for details.</div>';
+        document.getElementById('refunds-container').innerHTML = '';
+        return;
+      }
+      ({ payments, refunds } = live);
+    }
+
+    const stats = computeStats(payments);
+    document.getElementById('stat-volume').textContent  = formatAmount(stats.totalVol)  + ' XLM';
+    document.getElementById('stat-count').textContent   = stats.count;
+    document.getElementById('stat-refunds').textContent = stats.refunds;
+    document.getElementById('stat-avg').textContent     = formatAmount(stats.avg) + ' XLM';
+
+    document.getElementById('payments-container').innerHTML = buildPaymentsTable(payments);
+    document.getElementById('refunds-container').innerHTML  = buildRefundsTable(refunds);
+  };
+
+  // Auto-load in demo mode
+  if (DEMO_MODE) loadDashboard();
+</script>
+</body>
+</html>
