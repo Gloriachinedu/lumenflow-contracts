@@ -84,6 +84,9 @@ pub struct BatchPaymentItem {
     pub token_address: Address,
     pub amount: i128,
     pub memo: String,
+    /// Optional tags for this batch item. Maximum 5 tags, each 1–32 characters.
+    /// Uses the same validation rules as `process_payment_with_signature`.
+    pub tags: Option<Vec<String>>,
     pub signature: Bytes,
     pub merchant_public_key: Bytes,
 }
