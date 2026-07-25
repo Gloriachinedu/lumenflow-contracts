@@ -80,6 +80,89 @@ lumenflow refund status --refund-id REFUND_001
 
 ---
 
+## Batch Payment from CSV
+
+Pay multiple merchants in a single command using a CSV file.
+
+### CSV format
+
+The file must have the following header and columns:
+
+```
+order_id,merchant_address,token_address,amount,memo
+```
+
+| Column | Description |
+|---|---|
+| `order_id` | Unique order identifier (non-empty string) |
+| `merchant_address` | Merchant Stellar address (starts with `G`, 56 chars) |
+| `token_address` | SAC token contract address (starts with `G`, 56 chars) |
+| `amount` | Positive integer amount in stroops |
+| `memo` | Free-text payment memo |
+
+See `payments.example.csv` for a ready-to-use example file.
+
+### Usage
+
+```bash
+lumenflow batch-pay \
+  --file payments.csv \
+  --signature <hex-encoded-64-byte-ed25519-signature> \
+  --merchant-public-key <hex-encoded-32-byte-public-key>
+```
+
+The `--signature` and `--merchant-public-key` flags apply to **all rows** in the
+file. Use this command when all payments share the same merchant keypair
+(e.g. batch payouts signed by the same merchant server).
+
+Optionally override the token address for all rows:
+
+```bash
+lumenflow batch-pay \
+  --file payments.csv \
+  --token GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5 \
+  --signature <sig> \
+  --merchant-public-key <pubkey>
+```
+
+### Output
+
+Results are printed as an ASCII table after all rows are processed:
+
+```
++----------+---------+------------------------------------------------------------------+
+| order_id | status  | tx_hash                                                          |
++----------+---------+------------------------------------------------------------------+
+| ORDER_001 | success | a3f4c…                                                          |
+| ORDER_002 | success | 9b12d…                                                          |
+| ORDER_003 | FAILED: Error(Contract, #22) | -                                |
++----------+---------+------------------------------------------------------------------+
+
+2/3 payment(s) succeeded.
+```
+
+Partial failures are reported per row — successful rows are not rolled back.
+The command exits with code 1 if any row failed.
+
+### Validation
+
+Before any submissions are made the CLI validates every row:
+
+- Header must match `order_id,merchant_address,token_address,amount,memo` exactly.
+- Each row must have exactly 5 columns.
+- `order_id` must be non-empty.
+- `merchant_address` and `token_address` must be valid Stellar addresses (start with `G`, exactly 56 characters).
+- `amount` must be a positive integer.
+
+If validation fails the entire CSV is rejected and no payments are submitted.
+
+### Limits
+
+A single `batch-pay` invocation processes at most **10 rows** (the contract's
+`batch_payment` limit). Split larger files and run the command multiple times.
+
+---
+
 ## Other Commands
 
 ```bash
