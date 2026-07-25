@@ -3,6 +3,7 @@
 **Scalable, secure, and decentralized smart contracts for Soroban on Stellar.**
 
 [![CI](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml/badge.svg)](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/Gloriachinedu/lumenflow-contracts/branch/main/graph/badge.svg)](https://codecov.io/gh/Gloriachinedu/lumenflow-contracts)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Stellar](https://img.shields.io/badge/Stellar-Soroban-blueviolet)](https://soroban.stellar.org)
 [![Audited by](https://img.shields.io/badge/Audited%20By-TBD-lightgrey)](docs/audit/audit-report.md)
@@ -202,6 +203,16 @@ cargo test test_successful_refund_flow
 
 # Full lint + test pipeline
 ./scripts/test.sh
+
+# Generate coverage report locally (requires cargo-llvm-cov)
+COVERAGE=1 ./scripts/test.sh
+# → writes lcov.info to the workspace root
+```
+
+Coverage threshold: **80% line coverage** is enforced in CI. Install `cargo-llvm-cov` once with:
+
+```bash
+cargo install cargo-llvm-cov --locked
 ```
 
 ## Benchmarking
@@ -461,6 +472,8 @@ stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network 
 ### Payment Processing
 
 For detailed information on the signature payload format and how to build it in various languages, see **[docs/signature-format.md](docs/signature-format.md)**.
+
+For batch payment processing (up to 10 items per call), error codes, partial failure handling, and idempotent re-submission, see **[docs/batch-payments.md](docs/batch-payments.md)**.
 
 ```bash
 # Process payment with signature
@@ -734,7 +747,54 @@ Get testnet XLM from the [Stellar Friendbot](https://friendbot.stellar.org).
 
 ---
 
+## Verifying the Deployed WASM
+
+LumenFlow supports independent, reproducible verification of the deployed contract binary.
+Every release publishes a SHA-256 hash in [docs/release-hashes.md](docs/release-hashes.md)
+so that anyone can confirm the on-chain binary matches the open-source code.
+
+### Quick verify
+
+```bash
+# 1. Clone the repo at the release tag
+git clone https://github.com/PrincessnJoy/lumenflow-contracts.git
+cd lumenflow-contracts
+git checkout v1.0.0          # replace with the target version
+
+# 2. Install the pinned toolchain (reads rust-toolchain.toml automatically)
+rustup show
+
+# 3. Run the verification script
+./scripts/verify-build.sh v1.0.0
+```
+
+A passing run prints `✅  Hash match — build is reproducible for v1.0.0.`
+
+### What is checked
+
+| Factor | Pinned by |
+|--------|-----------|
+| Rust compiler version | `rust-toolchain.toml` (`channel = "1.87.0"`) |
+| All dependency versions | `Cargo.lock` (committed to this repo) |
+| Compiler flags | `[profile.release]` in `Cargo.toml` |
+
+### Compare against the on-chain binary
+
+```bash
+# Download the released artifact from GitHub Releases
+curl -LO https://github.com/PrincessnJoy/lumenflow-contracts/releases/download/v1.0.0/lumenflow_v1.0.0.wasm.sha256
+cat lumenflow_v1.0.0.wasm.sha256
+```
+
+Both the local build and the GitHub Release artifact must produce the same SHA-256.
+
+---
+
 ## Troubleshooting
+
+For a full list of common errors (build, deploy, runtime, and upgrade) with causes and resolution steps, see the **[Troubleshooting Guide](docs/troubleshooting.md)**.
+
+Quick reference for the most frequent issues:
 
 **WASM target missing:**
 ```bash
@@ -750,6 +810,31 @@ stellar network container restart local
 
 **Test failures:** Ensure `soroban-sdk` version in `Cargo.toml` matches `rust-toolchain.toml` channel.
 
+> Found an error not listed? Open a PR using the [troubleshooting entry template](.github/ISSUE_TEMPLATE/troubleshooting_entry.yml).
+
+---
+
+## Frontend Dev Server
+
+A lightweight local preview server is included under `frontend/` for working on static UI pages without a production build step.
+
+**Requirements:** Node.js ≥ 18
+
+```bash
+# One-command start (installs deps on first run)
+./scripts/dev.sh
+```
+
+Or run directly:
+
+```bash
+cd frontend
+npm install   # first time only
+npm run dev   # starts http://localhost:3000 with live reload
+```
+
+The server watches `**/*.html`, `**/*.css`, and `**/*.js` inside `frontend/` and refreshes the browser automatically on changes.
+
 ---
 
 ## Community & Support
@@ -757,8 +842,10 @@ stellar network container restart local
 Need help or want to discuss LumenFlow?
 
 - **Discord Server:** Join our [Discord community](https://discord.gg/lumenflow) to chat with developers and other users.
-- **GitHub Discussions:** Ask questions and share ideas in [GitHub Discussions](https://github.com/Gloriachinedu/lumenflow-contracts/discussions).
-- **Support Guidelines:** See [SUPPORT.md](SUPPORT.md) for details on where to get help and how to report bugs.
+- **Q&A Discussions:** Ask questions in [GitHub Discussions — Q&A](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/q-a).
+- **Developer Help:** SDK, deployment, and tooling questions in [Developer Help](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/developer-help).
+- **Feature Requests:** Propose and discuss new features in [Feature Requests](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/feature-requests).
+- **Support Guidelines:** See [SUPPORT.md](SUPPORT.md) for where to get help and how to report bugs.
 
 ---
 
@@ -802,6 +889,21 @@ We maintain localized versions of the README to support Spanish and Portuguese r
 ## Security
 
 See [SECURITY.md](SECURITY.md) for responsible disclosure instructions.
+
+## Security Audit
+
+[![Audit: Pending](https://img.shields.io/badge/Audit-Pending-orange)](docs/audit/audit-report-v1.0.md)
+
+A formal third-party security audit of the LumenFlow smart contract is in progress before mainnet launch.
+
+| Item | Detail |
+|------|--------|
+| Audit report | [docs/audit/audit-report-v1.0.md](docs/audit/audit-report-v1.0.md) |
+| Audit scope | All public contract functions, storage layout, signature verification, access control |
+| Status | 🔴 Pending — audit in progress |
+| Mainnet deployment | Blocked until all Critical and High findings are resolved |
+
+All Critical findings will have remediation PRs before mainnet deployment. A re-audit is scheduled after any Critical finding remediation.
 
 ## License
 

@@ -53,13 +53,16 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # master
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c  # master
         with:
           toolchain: 1.87.0
           targets: wasm32-unknown-unknown
 
+      - name: Verify toolchain version
+        run: rustc --version | grep "1.87.0"
+
       - name: Cache cargo registry
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -83,7 +86,19 @@ jobs:
           cargo build --locked \
             --target wasm32-unknown-unknown \
             --release \
-            --package lumenflow
+            --package lumenflow \
+            --locked
+
+      - name: Compute SHA-256 hash
+        id: hash
+        run: |
+          HASH=$(sha256sum target/wasm32-unknown-unknown/release/lumenflow.wasm | awk '{print $1}')
+          echo "sha256=$HASH" >> "$GITHUB_OUTPUT"
+          echo "## WASM Hash" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "SHA-256: $HASH" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Published SHA-256: $HASH"
 
       - name: Install Stellar CLI
         run: |
@@ -119,10 +134,28 @@ jobs:
           cp target/wasm32-unknown-unknown/release/lumenflow.wasm \
              lumenflow_${{ github.ref_name }}.wasm
 
+      - name: Write SHA-256 checksum file
+        run: |
+          echo "${{ steps.hash.outputs.sha256 }}  lumenflow_${{ github.ref_name }}.wasm" \
+            > lumenflow_${{ github.ref_name }}.wasm.sha256
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b  # v3.0.1
         with:
-          files: lumenflow_${{ github.ref_name }}.wasm
+          files: |
+            lumenflow_${{ github.ref_name }}.wasm
+            lumenflow_${{ github.ref_name }}.wasm.sha256
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
+          body: |
+            ## WASM Verification
+
+            To verify the WASM binary, run:
+            ```bash
+            VERSION=${{ github.ref_name }} ./scripts/verify-build.sh
+            ```
+
+            **SHA-256:** `${{ steps.hash.outputs.sha256 }}`
+
+            See [docs/release-hashes.md](docs/release-hashes.md) for the full hash table and verification instructions.

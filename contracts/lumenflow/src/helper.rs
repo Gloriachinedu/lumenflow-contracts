@@ -6,6 +6,7 @@ use crate::types::MerchantCategory;
 
 pub const MAX_PAGE_LIMIT: u32 = 100;
 pub const REFUND_WINDOW_SECS: u64 = 30 * 24 * 3600; // 30 days
+pub const MULTISIG_EXPIRY_SECS: u64 = 7 * 24 * 3600; // 7 days
 
 /// Return ContractPaused if the contract is currently paused.
 pub fn require_not_paused(env: &Env) -> Result<(), PaymentError> {
@@ -15,13 +16,6 @@ pub fn require_not_paused(env: &Env) -> Result<(), PaymentError> {
         Ok(())
     }
 }
-
-pub const MAX_MERCHANT_NAME_LEN: u32 = 64;
-pub const MAX_MERCHANT_DESCRIPTION_LEN: u32 = 256;
-pub const MAX_MERCHANT_CONTACT_INFO_LEN: u32 = 128;
-
-pub const MIN_REFUND_REASON_LEN: u32 = 10;
-pub const MAX_REFUND_REASON_LEN: u32 = 512;
 
 /// Require that `caller` is the stored admin.
 pub fn require_admin(env: &Env, caller: &Address) -> Result<(), PaymentError> {
@@ -61,7 +55,7 @@ pub fn require_min_refund_amount(env: &Env, amount: i128) -> Result<(), PaymentE
     if amount >= storage::get_min_refund_amount(env) {
         Ok(())
     } else {
-        Err(PaymentError::InvalidAmount)
+        Err(PaymentError::RefundBelowMinimum)
     }
 }
 
@@ -80,9 +74,9 @@ pub fn require_valid_limit(limit: u32) -> Result<(), PaymentError> {
 /// In production Soroban the host provides `env.crypto().ed25519_verify`.
 pub fn verify_signature(
     env: &Env,
-    public_key: &Bytes,
-    payload: &Bytes,
-    signature: &Bytes,
+    public_key: &soroban_sdk::Bytes,
+    payload: &soroban_sdk::Bytes,
+    signature: &soroban_sdk::Bytes,
 ) -> Result<(), PaymentError> {
     let pk_bytes: soroban_sdk::BytesN<32> = public_key
         .clone()
@@ -93,7 +87,7 @@ pub fn verify_signature(
         .try_into()
         .map_err(|_| PaymentError::InvalidSignature)?;
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testutils"))]
     {
         // Preserve the existing test fixture behavior for zeroed mock values.
         if public_key.len() == 32

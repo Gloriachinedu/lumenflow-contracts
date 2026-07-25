@@ -3,7 +3,7 @@ use soroban_sdk::{contracttype, Address, Env, String, Vec};
 use crate::error::PaymentError;
 use crate::types::{
     DisputeRecord, GlobalStats, Merchant, MerchantStats, MultisigPayment, PaymentOrder,
-    PaymentRequest, RefundRecord,
+    PaymentRequest, RefundRecord, Subscription, SubscriptionPlan,
 };
 
 // ── TTL / limit constants ─────────────────────────────────────────────────────
@@ -14,6 +14,21 @@ pub const MIN_REFUND_AMOUNT: i128 = 100;
 /// Maximum number of payment IDs stored per account index.
 pub const MAX_PAYMENT_IDS_PER_ACCOUNT: u32 = 10_000;
 
+// ── Config defaults ───────────────────────────────────────────────────────────
+
+/// Default platform fee: 0 bps (no fee). Admin should set explicitly at deploy time.
+pub const DEFAULT_PLATFORM_FEE_BPS: u32 = 0;
+/// Maximum allowed platform fee: 10 000 bps = 100 %. Prevents mis-configuration.
+pub const MAX_PLATFORM_FEE_BPS: u32 = 10_000;
+/// Default refund window: 30 days in seconds.
+pub const DEFAULT_REFUND_WINDOW_SECS: u64 = 30 * 24 * 3600;
+/// Minimum refund window: 1 hour in seconds. Prevents locking out refunds entirely.
+pub const MIN_REFUND_WINDOW_SECS: u64 = 3600;
+/// Default payment cleanup period: 30 days in seconds.
+pub const DEFAULT_CLEANUP_PERIOD_SECS: u64 = 30 * 24 * 3600;
+/// Default large-payment threshold in stroops (10 XLM equivalent).
+pub const DEFAULT_LARGE_PAYMENT_THRESHOLD: i128 = 10_000_000;
+
 // Approximate ledger-count equivalents (5-second ledgers):
 //   1 year  ≈ 6_307_200 ledgers
 //   2 years ≈ 12_614_400 ledgers
@@ -21,6 +36,7 @@ pub const MERCHANT_TTL_LEDGERS: u32 = 12_614_400; // 2 years
 pub const PAYMENT_TTL_LEDGERS: u32 = 12_614_400;  // 2 years
 pub const REFUND_TTL_LEDGERS: u32 = 6_307_200;    // 1 year
 pub const MULTISIG_TTL_LEDGERS: u32 = 6_307_200;  // 1 year
+pub const SUBSCRIPTION_TTL_LEDGERS: u32 = 12_614_400; // 2 years
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -48,6 +64,11 @@ pub enum DataKey {
     PlatformFeeBps,
     FeeRecipient,
     RefundWindow,
+    Nonce(Address),
+    StoredVersion,
+    SubscriptionPlan(String),
+    Subscription(String),
+    SubscriptionReserve(Address, Address),
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -76,7 +97,7 @@ pub fn get_cleanup_period(env: &Env) -> u64 {
     env.storage()
         .instance()
         .get(&DataKey::CleanupPeriod)
-        .unwrap_or(30 * 24 * 3600)
+        .unwrap_or(DEFAULT_CLEANUP_PERIOD_SECS)
 }
 
 pub fn set_cleanup_period(env: &Env, period: u64) {
@@ -91,7 +112,7 @@ pub fn get_platform_fee_bps(env: &Env) -> u32 {
     env.storage()
         .instance()
         .get(&DataKey::PlatformFeeBps)
-        .unwrap_or(0)
+        .unwrap_or(DEFAULT_PLATFORM_FEE_BPS)
 }
 
 pub fn set_platform_fee_bps(env: &Env, fee_bps: u32) {
@@ -116,7 +137,7 @@ pub fn get_refund_window(env: &Env) -> u64 {
     env.storage()
         .instance()
         .get(&DataKey::RefundWindow)
-        .unwrap_or(30 * 24 * 3600) // default 30 days
+        .unwrap_or(DEFAULT_REFUND_WINDOW_SECS)
 }
 
 pub fn set_refund_window(env: &Env, window_secs: u64) {
@@ -131,7 +152,7 @@ pub fn get_large_payment_threshold(env: &Env) -> i128 {
     env.storage()
         .instance()
         .get(&DataKey::LargePaymentThreshold)
-        .unwrap_or(10_000_000)
+        .unwrap_or(DEFAULT_LARGE_PAYMENT_THRESHOLD)
 }
 
 pub fn set_large_payment_threshold(env: &Env, threshold: i128) {
@@ -372,6 +393,33 @@ pub fn remove_payment_request(env: &Env, request_id: &String) {
         .remove(&DataKey::PaymentRequest(request_id.clone()));
 }
 
+// ── Nonce (replay protection) ─────────────────────────────────────────────────
+
+/// Return the current (next expected) nonce for `payer`. Starts at 0.
+pub fn get_nonce(env: &Env, payer: &Address) -> u64 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Nonce(payer.clone()))
+        .unwrap_or(0u64)
+}
+
+/// Increment the stored nonce for `payer` by 1.
+///
+/// Must be called *before* any external token transfers to follow the
+/// checks-effects-interactions pattern and prevent reentrancy-style replay.
+pub fn increment_nonce(env: &Env, payer: &Address) {
+    let current = get_nonce(env, payer);
+    let key = DataKey::Nonce(payer.clone());
+    env.storage()
+        .persistent()
+        .set(&key, &current.saturating_add(1));
+    // Extend TTL alongside payment records so the nonce stays live as long
+    // as the account is making payments (2-year window, same as payments).
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, PAYMENT_TTL_LEDGERS, PAYMENT_TTL_LEDGERS);
+}
+
 // ── Allowed Tokens ────────────────────────────────────────────────────────────
 
 pub fn is_token_allowed(env: &Env, token: &Address) -> bool {
@@ -409,24 +457,72 @@ pub fn set_multisig_expiry_duration(env: &Env, duration: u64) {
         .set(&DataKey::MultisigExpiryDuration, &duration);
 }
 
-// ── Platform fee ──────────────────────────────────────────────────────────────
+// -- Subscriptions -------------------------------------------------------------
 
-/// Fee in basis points (100 bps = 1 %). Returns 0 if not set.
-pub fn get_platform_fee_bps(env: &Env) -> u32 {
+pub fn get_subscription_plan(env: &Env, plan_id: &String) -> Option<SubscriptionPlan> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::SubscriptionPlan(plan_id.clone()))
+}
+
+pub fn set_subscription_plan(env: &Env, plan: &SubscriptionPlan) {
+    let key = DataKey::SubscriptionPlan(plan.plan_id.clone());
+    env.storage().persistent().set(&key, plan);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, SUBSCRIPTION_TTL_LEDGERS, SUBSCRIPTION_TTL_LEDGERS);
+}
+
+pub fn get_subscription(env: &Env, subscription_id: &String) -> Option<Subscription> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Subscription(subscription_id.clone()))
+}
+
+pub fn set_subscription(env: &Env, sub: &Subscription) {
+    let key = DataKey::Subscription(sub.subscription_id.clone());
+    env.storage().persistent().set(&key, sub);
+    // Extend TTL on every write so an actively charged subscription never
+    // silently expires between billing cycles.
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, SUBSCRIPTION_TTL_LEDGERS, SUBSCRIPTION_TTL_LEDGERS);
+}
+
+/// Total amount still chargeable across `subscriber`'s active subscriptions in
+/// `token`; the token allowance granted to the contract must cover this sum.
+pub fn get_subscription_reserve(env: &Env, subscriber: &Address, token: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::SubscriptionReserve(
+            subscriber.clone(),
+            token.clone(),
+        ))
+        .unwrap_or(0)
+}
+
+pub fn set_subscription_reserve(env: &Env, subscriber: &Address, token: &Address, amount: i128) {
+    let key = DataKey::SubscriptionReserve(subscriber.clone(), token.clone());
+    if amount <= 0 {
+        env.storage().persistent().remove(&key);
+    } else {
+        env.storage().persistent().set(&key, &amount);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, SUBSCRIPTION_TTL_LEDGERS, SUBSCRIPTION_TTL_LEDGERS);
+    }
+}
+
+// ── Contract version ──────────────────────────────────────────────────────────
+
+/// Retrieve the on-chain stored contract version string, if set.
+pub fn get_stored_version(env: &Env) -> Option<String> {
+    env.storage().instance().get(&DataKey::StoredVersion)
+}
+
+/// Persist the contract version string on-chain.
+pub fn set_stored_version(env: &Env, version: &String) {
     env.storage()
         .instance()
-        .get(&DataKey::PlatformFeeBps)
-        .unwrap_or(0u32)
-}
-
-pub fn set_platform_fee_bps(env: &Env, bps: u32) {
-    env.storage().instance().set(&DataKey::PlatformFeeBps, &bps);
-}
-
-pub fn get_fee_recipient(env: &Env) -> Option<Address> {
-    env.storage().instance().get(&DataKey::FeeRecipient)
-}
-
-pub fn set_fee_recipient(env: &Env, recipient: &Address) {
-    env.storage().instance().set(&DataKey::FeeRecipient, recipient);
+        .set(&DataKey::StoredVersion, version);
 }
