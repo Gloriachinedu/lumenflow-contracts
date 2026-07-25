@@ -95,6 +95,57 @@ lumenflow stats
 
 ---
 
+## Rate Limiting & Error Handling
+
+The LumenFlow CLI makes HTTP calls to Stellar Horizon and Soroban RPC endpoints. These are subject to rate limits:
+
+| Endpoint | Default limit |
+|---|---|
+| Horizon REST API (per IP) | 3 600 requests/hour |
+| Horizon SSE streaming | up to 100 events/second |
+
+When a rate limit is exceeded, Horizon returns **HTTP 429 Too Many Requests** along with a `Retry-After` header specifying the number of seconds to wait before issuing the next request. The CLI respects this header automatically.
+
+### Automatic retries
+
+The CLI uses the same exponential backoff helper as the SDK ([`sdk/src/retry.ts`](../../sdk/src/retry.ts)) for all outbound Horizon and RPC reads. It retries up to **3 times** with a base delay of **200 ms**, doubling on each attempt (capped at **5 000 ms**) plus a random jitter to avoid request storms.
+
+### Handling 429 errors manually
+
+If you hit rate limits in scripts that wrap the CLI, add a `sleep` before retrying:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+MAX_ATTEMPTS=4
+ATTEMPT=0
+DELAY=2
+
+until lumenflow history --merchant "$MERCHANT_ADDR"; do
+  ATTEMPT=$((ATTEMPT + 1))
+  if [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
+    echo "ERROR: command failed after $MAX_ATTEMPTS attempts" >&2
+    exit 1
+  fi
+  echo "Rate limited — retrying in ${DELAY}s (attempt $ATTEMPT/$MAX_ATTEMPTS)…"
+  sleep "$DELAY"
+  DELAY=$((DELAY * 2))
+done
+```
+
+### Reducing request volume
+
+To stay within the 3 600 req/hour budget in automated workflows:
+
+- Use `--limit` flags to fetch larger pages rather than issuing many small requests.
+- Add a short `sleep` between commands in batch scripts (`sleep 0.3` keeps you well under 1 req/s).
+- For high-volume integrations, run your own Horizon instance or use an API key with a higher quota.
+
+For complete documentation on Horizon rate limits, `Retry-After` semantics, and JavaScript/TypeScript exponential backoff examples, see **[docs/api-rate-limits.md](../../docs/api-rate-limits.md)**.
+
+---
+
 ## Building
 
 ```bash
