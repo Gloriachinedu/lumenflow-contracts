@@ -55,6 +55,55 @@ await client.processPaymentWithNonce(
 );
 ```
 
+## Idempotent Payment Submission
+
+`processPayment()` accepts an optional `idempotencyKey` parameter that prevents
+double-submission under network retries or race conditions.
+
+```typescript
+// First call — hits the RPC node and executes the payment
+await client.processPayment(
+  payerAddress,
+  'ORDER-123',
+  merchantAddress,
+  tokenAddress,
+  10000000n,
+  'Payment for coffee',
+  null,
+  0n,                  // nonce
+  'idem-key-ORDER-123' // idempotency key
+);
+
+// Second call with the same key within 5 minutes — returns the
+// cached result immediately without a new RPC call
+await client.processPayment(
+  payerAddress,
+  'ORDER-123',
+  merchantAddress,
+  tokenAddress,
+  10000000n,
+  'Payment for coffee',
+  null,
+  0n,
+  'idem-key-ORDER-123' // same key → cache hit, no network call
+);
+```
+
+**How it works**
+
+- The key is stored alongside its result and a 5-minute expiry timestamp in
+  `sessionStorage` (browser) or an in-memory `Map` (Node.js / server-side).
+- A duplicate call with the same key within the TTL returns the cached result
+  without contacting the RPC node, guarding against double-charges on retry.
+- After 5 minutes the entry expires and the next call will hit the network again.
+- If the underlying call **throws**, the error is propagated and nothing is cached
+  so the caller can safely retry with the same key.
+- Omitting `idempotencyKey` disables caching entirely — the call always hits the
+  network (matches the behaviour of `processPaymentWithNonce` directly).
+
+The low-level cache helpers (`getCached`, `setCached`, `evictCached`,
+`withIdempotency`) are exported from the package for advanced use-cases.
+
 ## Error Handling
 
 The SDK maps numeric contract error codes to human-readable messages and provides a typed `LumenFlowError` object.

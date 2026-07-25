@@ -33,6 +33,7 @@ import {
   Subscription,
 } from "./types";
 import { LumenFlowError, PaymentErrorCode } from "./errors";
+import { withIdempotency } from "./idempotency";
 
 export type Signer = (tx: Transaction) => Promise<Transaction> | Transaction;
 
@@ -190,6 +191,58 @@ export class LumenFlowClient {
       tags,
       nonce,
     ]);
+  }
+
+  /**
+   * Submit a payment with optional client-side idempotency protection.
+   *
+   * This convenience method wraps {@link processPaymentWithNonce}.  When
+   * `idempotencyKey` is supplied the SDK caches the result and returns the
+   * same result for any subsequent call with the same key, without issuing
+   * a new RPC request.  Cache entries expire after 5 minutes.
+   *
+   * @param payer           - Address of the account funding the payment.
+   * @param orderId         - Unique order identifier for contract-level deduplication.
+   * @param merchantAddress - Registered, active merchant receiving the funds.
+   * @param tokenAddress    - Allowed token contract address.
+   * @param amount          - Positive token amount in the token's smallest unit.
+   * @param memo            - Optional free-text note (max 256 characters).
+   * @param tags            - Optional string tags (max 10 tags, 32 chars each).
+   * @param nonce           - Replay-prevention nonce (fetch current and increment by 1).
+   * @param idempotencyKey  - Optional caller-supplied key.  Identical keys within
+   *                          the 5-minute TTL return the cached result without a new call.
+   *
+   * @example
+   * ```typescript
+   * // First call — hits the network
+   * await client.processPayment(payer, 'ORDER-1', merchant, token, 1000n, 'memo', null, 0n, 'key-abc');
+   * // Second call with same key within 5 min — returns cached result, no RPC call
+   * await client.processPayment(payer, 'ORDER-1', merchant, token, 1000n, 'memo', null, 0n, 'key-abc');
+   * ```
+   */
+  async processPayment(
+    payer: string,
+    orderId: string,
+    merchantAddress: string,
+    tokenAddress: string,
+    amount: bigint,
+    memo: string,
+    tags: string[] | null,
+    nonce: bigint,
+    idempotencyKey?: string
+  ): Promise<void> {
+    return withIdempotency(idempotencyKey, () =>
+      this.processPaymentWithNonce(
+        payer,
+        orderId,
+        merchantAddress,
+        tokenAddress,
+        amount,
+        memo,
+        tags,
+        nonce
+      )
+    );
   }
 
   async batchPayment(

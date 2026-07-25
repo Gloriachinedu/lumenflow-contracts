@@ -12,6 +12,49 @@
 
 ---
 
+## Install
+
+Pre-built CLI binaries are published with every [GitHub Release](https://github.com/Gloriachinedu/lumenflow-contracts/releases).
+
+**Linux (x86_64)**
+```bash
+curl -fsSL https://github.com/Gloriachinedu/lumenflow-contracts/releases/latest/download/lumenflow-cli-v<VERSION>-x86_64-unknown-linux-gnu.tar.gz \
+  | tar -xz -C /usr/local/bin lumenflow-cli
+```
+
+**Linux (arm64)**
+```bash
+curl -fsSL https://github.com/Gloriachinedu/lumenflow-contracts/releases/latest/download/lumenflow-cli-v<VERSION>-aarch64-unknown-linux-gnu.tar.gz \
+  | tar -xz -C /usr/local/bin lumenflow-cli
+```
+
+**macOS (x86_64)**
+```bash
+curl -fsSL https://github.com/Gloriachinedu/lumenflow-contracts/releases/latest/download/lumenflow-cli-v<VERSION>-x86_64-apple-darwin.tar.gz \
+  | tar -xz -C /usr/local/bin lumenflow-cli
+```
+
+**macOS (Apple Silicon / arm64)**
+```bash
+curl -fsSL https://github.com/Gloriachinedu/lumenflow-contracts/releases/latest/download/lumenflow-cli-v<VERSION>-aarch64-apple-darwin.tar.gz \
+  | tar -xz -C /usr/local/bin lumenflow-cli
+```
+
+**Windows (x86_64, PowerShell)**
+```powershell
+Invoke-WebRequest -Uri "https://github.com/Gloriachinedu/lumenflow-contracts/releases/latest/download/lumenflow-cli-v<VERSION>-x86_64-pc-windows-msvc.zip" -OutFile lumenflow-cli.zip
+Expand-Archive lumenflow-cli.zip -DestinationPath $env:USERPROFILE\bin
+```
+
+Replace `<VERSION>` with the desired release tag (e.g. `1.0.0`). Checksums for each archive are published as `.sha256` files alongside the binaries on the release page.
+
+**Install from source**
+```bash
+cargo install --path cli/lumenflow-cli
+```
+
+---
+
 ## Overview
 
 LumenFlow is a production-grade payment processing smart contract for the [Stellar Soroban](https://soroban.stellar.org) network. It provides:
@@ -25,6 +68,7 @@ LumenFlow is a production-grade payment processing smart contract for the [Stell
 
 ## Security & Docs
 
+- **Full contract API reference** (all functions, parameters, return types, errors): [`docs/api-reference.md`](docs/api-reference.md)
 - Architecture overview available in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Audit plan and scope published in `docs/audit/audit-report.md`
 - Refund lifecycle state diagram available in `docs/refund-lifecycle.md`
