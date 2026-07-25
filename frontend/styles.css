@@ -1,0 +1,208 @@
+/* LumenFlow Design System — shared across all frontend pages */
+
+/* ── Reset ─────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── Base ───────────────────────────────────────────────────────────────────── */
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #f5f7fa;
+  color: #1a1a2e;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 2rem 1rem;
+}
+
+/* ── Card ───────────────────────────────────────────────────────────────────── */
+.card {
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 2px 16px rgba(0,0,0,0.08);
+  max-width: 600px;
+  width: 100%;
+  padding: 2rem;
+  margin-bottom: 1.5rem;
+}
+
+.card h2 {
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: 1.25rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #eee;
+}
+
+/* ── Typography ─────────────────────────────────────────────────────────────── */
+/* #5a3fd6 on #f5f7fa = 5.0:1 (WCAG AA) */
+h1 { font-size: 1.4rem; font-weight: 700; color: #5a3fd6; margin-bottom: 0.25rem; }
+/* #595959 on #f5f7fa = 7.0:1 (WCAG AA) */
+.subtitle { color: #595959; font-size: 0.875rem; margin-bottom: 1.5rem; }
+
+/* ── Form fields ────────────────────────────────────────────────────────────── */
+.field { margin-bottom: 1rem; }
+
+.field label {
+  display: block;
+  /* min 0.75rem (12px) for legibility; darkened to #595959 for contrast */
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #595959;
+  margin-bottom: 0.3rem;
+}
+
+/* min-height: 44px satisfies WCAG 2.5.5 target size */
+.field input, .field select {
+  width: 100%;
+  min-height: 44px;
+  padding: 0.65rem 0.75rem;
+  border: 1.5px solid #dde1e7;
+  border-radius: 8px;
+  font-size: 1rem;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.field input:focus, .field select:focus { border-color: #5a3fd6; }
+.field input.error { border-color: #c0392b; }
+
+/* #767676 on white = 4.54:1 (WCAG AA) */
+.field .hint { font-size: 0.75rem; color: #767676; margin-top: 0.25rem; }
+.field .help-text { font-size: 0.75rem; color: #595959; margin-top: 0.3rem; }
+
+/* #c0392b on white = 5.0:1 (WCAG AA) */
+.field .err-msg { font-size: 0.75rem; color: #c0392b; margin-top: 0.25rem; display: none; }
+.field .err-msg.visible { display: block; }
+
+/* ── Buttons ────────────────────────────────────────────────────────────────── */
+/* min-height: 44px + min-width: 44px satisfies WCAG 2.5.5 */
+.btn {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0.65rem 1.25rem;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, box-shadow 0.12s;
+}
+.btn:hover { opacity: 0.85; }
+.btn:disabled { cursor: not-allowed; opacity: 0.5; }
+
+button, input, textarea, select { min-height: 44px; min-width: 44px; }
+
+.btn-primary { background: #5a3fd6; color: #fff; }
+.btn-primary:disabled { background: #b0a0e8; opacity: 1; }
+.btn-outline { background: #fff; color: #5a3fd6; border: 1.5px solid #5a3fd6; }
+.btn-full { width: 100%; padding: 0.75rem; font-size: 1rem; font-weight: 700; margin-top: 0.5rem; }
+
+/* 44×44 minimum touch target */
+.btn-icon {
+  background: none;
+  border: 1.5px solid #dde1e7;
+  border-radius: 8px;
+  width: 44px;
+  height: 44px;
+  cursor: pointer;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s, box-shadow 0.12s;
+}
+.btn-icon:hover { background: #f0ecff; border-color: #5a3fd6; }
+
+.btn-link {
+  font-size: 0.875rem;
+  color: #5a3fd6;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0.25rem 0;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+.btn-link:hover { text-decoration: underline; }
+
+/* Focus styles for keyboard users */
+.btn:focus, .btn-icon:focus, .btn-link:focus, input:focus, select:focus, textarea:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(90,63,214,0.12);
+}
+
+/* ── Badges ─────────────────────────────────────────────────────────────────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+}
+/* all badge foreground colours verified ≥ 4.5:1 against their backgrounds */
+.badge-completed { background: #e6f9f0; color: #0e7a45; }
+.badge-refunded  { background: #fff3e0; color: #b45309; }
+.badge-partial   { background: #fff8e1; color: #92600a; }
+.badge-unknown   { background: #f0f0f0; color: #595959; }
+
+/* ── Alerts ─────────────────────────────────────────────────────────────────── */
+.alert {
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  margin-bottom: 1rem;
+}
+.alert-success { background: #e6f9f0; color: #0e7a45; }
+.alert-error   { background: #fff0f0; color: #c0392b; }
+.alert-info    { background: #eff4ff; color: #1e3fad; }
+
+/* ── Validation message ─────────────────────────────────────────────────────── */
+.validation-msg {
+  font-size: 0.875rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  margin-top: 0.5rem;
+  display: none;
+}
+.validation-msg.ok  { background: #e6f9f0; color: #0e7a45; display: block; }
+.validation-msg.bad { background: #fff0f0; color: #c0392b; display: block; }
+
+/* ── Divider ────────────────────────────────────────────────────────────────── */
+.divider {
+  border: none;
+  border-top: 1px dashed #e0e0e0;
+  margin: 1.25rem 0;
+}
+
+/* ── State boxes (loading / empty / 404) ────────────────────────────────────── */
+.state-box {
+  text-align: center;
+  padding: 3rem 1rem;
+}
+.state-box .icon { font-size: 3rem; margin-bottom: 1rem; }
+.state-box h2 { font-size: 1.2rem; margin-bottom: 0.5rem; }
+.state-box p  { color: #595959; font-size: 0.9rem; }
+.state-box .next-steps {
+  margin-top: 1rem;
+  font-size: 0.875rem;
+  color: #595959;
+  background: #f5f7fa;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  text-align: left;
+}
+
+/* ── Print ──────────────────────────────────────────────────────────────────── */
+@media print {
+  body { background: #fff; padding: 0; }
+  .card { box-shadow: none; border-radius: 0; max-width: 100%; }
+  .actions { display: none; }
+}
