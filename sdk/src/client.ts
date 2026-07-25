@@ -33,6 +33,7 @@ import {
   Subscription,
 } from "./types";
 import { LumenFlowError, PaymentErrorCode } from "./errors";
+import { withIdempotency, IdempotentResult } from "./idempotency";
 
 export type Signer = (tx: Transaction) => Promise<Transaction> | Transaction;
 
@@ -168,6 +169,41 @@ export class LumenFlowClient {
       signature,
       merchantPublicKey,
     ]);
+  }
+
+  /**
+   * Idempotent variant of processPaymentWithSignature.
+   *
+   * If the contract returns PaymentAlreadyExists (code 21) the existing
+   * payment record is fetched and returned with `duplicate: true` so callers
+   * can safely retry without special-casing the error.
+   */
+  async processPaymentIdempotent(
+    payer: string,
+    orderId: string,
+    merchantAddress: string,
+    tokenAddress: string,
+    amount: bigint,
+    memo: string,
+    tags: string[] | null,
+    signature: Buffer,
+    merchantPublicKey: Buffer
+  ): Promise<IdempotentResult<PaymentOrder | null>> {
+    return withIdempotency(
+      () =>
+        this.invoke("process_payment_with_signature", [
+          new Address(payer),
+          orderId,
+          new Address(merchantAddress),
+          new Address(tokenAddress),
+          amount,
+          memo,
+          tags,
+          signature,
+          merchantPublicKey,
+        ]),
+      () => this.call("get_payment_by_id", [new Address(payer), orderId])
+    );
   }
 
   async processPaymentWithNonce(

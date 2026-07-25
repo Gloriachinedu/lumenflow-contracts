@@ -36,6 +36,26 @@ Every contract function and its required authorisation.
 | `create_payment_request` | `merchant` | |
 | `pay_payment_request` | `payer` | |
 
+## Admin Transfer Security (issue #347)
+
+`transfer_admin` is an irreversible, high-impact operation. The following edge cases
+are explicitly blocked by the contract:
+
+| Edge case | Error returned | Reason |
+|---|---|---|
+| `new_admin == current_admin` (self-transfer) | `InvalidAdminAddress` | A self-transfer is a configuration error that silently succeeds and provides no security value. |
+| `new_admin` is the zero/all-zeros address | `InvalidAdminAddress` | Setting the zero address as admin would permanently lock the contract because no real key can authenticate as the zero address. |
+| Caller is not the current admin | `Unauthorized` | Only the incumbent admin can hand over privileges. |
+
+**Best practices:**
+
+- Always verify `new_admin` is a funded, operational Stellar account before calling
+  `transfer_admin`. An accidental transfer to a lost key permanently locks admin access.
+- Consider a two-step handover pattern off-chain: have the new admin call a read-only
+  admin function to confirm the transfer took effect before decommissioning the old key.
+- Audit logs: the `lumenflow/admin_transferred` event emitted on every successful
+  transfer provides an on-chain trail for post-incident review.
+
 ## Auth Helpers (`helper.rs`)
 
 | Helper | Behaviour |

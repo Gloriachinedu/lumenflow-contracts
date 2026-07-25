@@ -102,3 +102,32 @@ cargo build -p lumenflow-cli --release
 ```
 
 The binary is output to `target/release/lumenflow`.
+
+## Secrets and local config
+
+Keep secret keys and environment-specific config out of version control. Recommended practices:
+
+- Store secret keys in files outside the repository (e.g. in your home directory) and reference them with `--key-file`.
+- Use interactive prompt (`--prompt-key`) for short-lived use rather than embedding keys in files.
+- Use your OS keyring or a managed secrets service for production keys (AWS Secrets Manager, HashiCorp Vault, etc.).
+- In CI, use the provider's secret store and never echo secrets in logs.
+
+Example `.gitignore` entries (add to your project's `.gitignore`):
+
+```
+# LumenFlow and local env
+.lumenflow.toml
+.env.local
+.env.*.local
+# key files
+*.key
+.secrets/
+# avoid committing exported files that may contain secrets
+exported-keys/
+```
+
+CLI behavior notes:
+
+- The CLI supports `--key-file` (reads a single-line secret key) and `--prompt-key` (hidden prompt). Keys read from either source are not printed to stdout/stderr.
+- Avoid passing secret values directly on the command line where shell history may record them.
+
