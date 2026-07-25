@@ -4,6 +4,7 @@
    - Execute (calls wallet if connected)
    - Wallet modal with Freighter / Albedo handlers
    - Polling for updates (mocked fetch)
+   - Dark mode toggle synced with localStorage key 'lumenflow_theme'
 */
 
 const state = {
@@ -190,4 +191,26 @@ setInterval(fetchRefunds, 10000);
 const saved = localStorage.getItem('wallet');
 if (saved) {
   try { state.wallet = JSON.parse(saved); accountEl.textContent = shorten(state.wallet.account); } catch(e){}
+}
+
+// ── Dark mode ─────────────────────────────────────────────────────────────────
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  // Use the same key as the main frontend so preferences are shared
+  localStorage.setItem('lumenflow_theme', theme);
+  const btn = document.getElementById('themeToggle');
+  if (btn) btn.textContent = theme === 'dark' ? '☀️ Light' : '🌙 Dark';
+}
+
+const themeToggleBtn = document.getElementById('themeToggle');
+if (themeToggleBtn) {
+  themeToggleBtn.addEventListener('click', () => {
+    const current = document.documentElement.getAttribute('data-theme') || 'light';
+    applyTheme(current === 'dark' ? 'light' : 'dark');
+  });
+
+  // Sync button label with initial theme set by the inline script
+  const initialTheme = document.documentElement.getAttribute('data-theme') || 'light';
+  themeToggleBtn.textContent = initialTheme === 'dark' ? '☀️ Light' : '🌙 Dark';
 }
