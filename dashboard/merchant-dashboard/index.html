@@ -4,18 +4,34 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Merchant Dashboard — Refunds</title>
+  <!-- Apply stored theme before first paint to prevent flash of unstyled content -->
+  <script>
+    (function () {
+      const stored = localStorage.getItem('lumenflow_theme');
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      if (stored === 'dark' || (!stored && prefersDark)) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      } else if (stored === 'light') {
+        document.documentElement.setAttribute('data-theme', 'light');
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="../shared.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <a href="#content" class="skip-link">Skip to content</a>
   <header class="site-header">
     <h1 id="pageTitle">Merchant Refunds</h1>
-    <div id="account" class="account">Not connected</div>
+    <div style="display:flex;align-items:center;gap:12px">
+      <div id="account" class="account">Not connected</div>
+      <button id="connectWallet">Connect Wallet</button>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode">🌙 Dark</button>
+    </div>
   </header>
 
   <main>
     <section class="controls">
-      <button id="connectWallet">Connect Wallet</button>
     </section>
 
     <nav class="tabs" role="tablist" aria-label="Refund status tabs">
@@ -42,7 +58,7 @@
     </section>
   </main>
 
-  <!-- Wallet + Confirm modals -->
+  <!-- Wallet modal -->
   <div id="walletModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="walletTitle">
     <div class="modal-content">
       <h2 id="walletTitle">Connect Wallet</h2>
@@ -52,6 +68,7 @@
     </div>
   </div>
 
+  <!-- Confirm modal -->
   <div id="confirmModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="confirmTitle">
     <div class="modal-content">
       <h2 id="confirmTitle" class="visually-hidden">Confirmation</h2>
