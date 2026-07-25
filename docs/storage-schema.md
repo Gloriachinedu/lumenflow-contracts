@@ -1,152 +1,119 @@
-# Storage Schema — LumenFlow Contract
+# Storage Schema Reference
 
-This document describes every storage key used by the LumenFlow Soroban smart contract, including the storage tier (instance / persistent / temporary), the data type stored, retention policy, TTL behaviour, and approximate ledger rent cost.
+This document describes the on-chain storage layout used by the LumenFlow contract. It is intended for developers writing migration scripts, off-chain indexers, or tooling that reads contract state directly.
 
-> Cross-reference: [docs/ARCHITECTURE.md](ARCHITECTURE.md) — Architecture Overview
-
----
-
-## Storage Tiers
-
-Soroban offers three storage tiers. Each has different cost and lifetime semantics:
-
-| Tier | Lifetime | Rent model | Use in LumenFlow |
-|------|----------|------------|-----------------|
-| **Instance** | Lives as long as the contract instance is live | Charged per ledger as part of instance rent | Small, global config values |
-| **Persistent** | Survives across ledgers; evicted if rent runs out | Per-entry rent; must be extended or data is evicted | Per-entity records (merchants, payments, refunds) |
-| **Temporary** | Automatically deleted after TTL expires | Cheap; no eviction penalty — entry simply disappears | Short-lived request state (payment requests) |
+The storage keys are defined in the `DataKey` enum in [`contracts/lumenflow/src/storage.rs`](../contracts/lumenflow/src/storage.rs).
 
 ---
 
-## Storage Key Reference
+## Key Layout
 
-### Instance Storage Keys
-
-All instance keys share a single rent ledger with the contract instance. Rent is paid as long as the contract is alive; no per-key extension is needed.
-
-| Key | Value type | Retention | Default value | Max records | Notes |
-|-----|-----------|-----------|---------------|-------------|-------|
-| `Admin` | `Address` | **Permanent** | None (must be set once at init) | 1 | Single admin address; set via `set_admin`. Cannot be unset. |
-| `CleanupPeriod` | `u64` (seconds) | **Permanent** (configurable) | `2_592_000` (30 days) | 1 | Admin can update via `set_payment_cleanup_period`. Applies to `cleanup_expired_payments`. |
-| `GlobalStats` | `GlobalStats` struct | **Permanent** | Zero-initialised on first read | 1 | Counters use saturating arithmetic; never panics on overflow. |
-| `MerchantList` | `Vec<Address>` | **Permanent** | Empty `Vec` | Unbounded¹ | Append-only list of registered merchant addresses. |
-| `LargePaymentThreshold` | `i128` | **Permanent** (configurable) | `10_000_000` (10 M units) | 1 | Payments above this value emit a `lumenflow/suspicious_activity` event. Admin-configurable. |
-| `MaxRefundsPerOrder` | `u32` | **Permanent** (configurable) | `5` | 1 | Hard cap on refund records per order. Admin-configurable. |
-
-> ¹ `MerchantList` grows unboundedly as merchants register. If this list becomes very large, instance storage rent increases. A pagination-friendly index design is planned (see ADR-004 in `docs/adr/`).
-
----
-
-### Persistent Storage Keys
-
-Each persistent entry has its own rent ledger. Entries that are not refreshed will be **evicted** (data lost) once their rent runs out. The contract currently does not explicitly bump TTLs on reads — integrators running archive nodes should monitor entry lifetimes.
-
-Default minimum lifetime for persistent entries in Soroban testnet/mainnet is controlled by network-level parameters (`ledgerSeqLedgerCloseTime`, `minPersistentTTL`). As of Stellar Protocol 21, `minPersistentTTL` is **518400 ledgers ≈ 30 days** and `maxPersistentTTL` is **3110400 ledgers ≈ 180 days**.
-
-| Key | Value type | Retention | Cleanup-eligible | Max records | Notes |
-|-----|-----------|-----------|-----------------|-------------|-------|
-| `Merchant(Address)` | `Merchant` struct | **Permanent** (while rent paid) | No | One per merchant address | Removed only via explicit admin action. Deactivation sets `active = false` but keeps the record. |
-| `Payment(String)` | `PaymentOrder` struct | **Cleanup-eligible** | **Yes** — deleted by `cleanup_expired_payments` | One per `order_id` | Eligible for cleanup after `CleanupPeriod` seconds from `paid_at`. Can also be explicitly archived by admin via `archive_payment_record`. |
-| `MerchantPayments(Address)` | `Vec<String>` (order IDs) | **Cleanup-eligible** | **Yes** — index updated when payment is removed | One per merchant | Index of order IDs for a merchant. Updated in sync with `Payment` removals. |
-| `PayerPayments(Address)` | `Vec<String>` (order IDs) | **Cleanup-eligible** | **Yes** — index updated when payment is removed | One per payer | Index of order IDs for a payer. Updated in sync with `Payment` removals. |
-| `Refund(String)` | `RefundRecord` struct | **Permanent** (while rent paid) | No | One per `refund_id`; max `MaxRefundsPerOrder` per order | Refund records are never auto-deleted. |
-| `Multisig(String)` | `MultisigPayment` struct | **Permanent** (while rent paid) | No | One per `payment_id` | Multisig records are retained after execution (`executed = true`). |
-| `OrderRefundCount(String)` | `u32` | **Permanent** (while rent paid) | No | One per `order_id` | Tracks number of refunds per order to enforce `MaxRefundsPerOrder`. |
+| Key Variant | Storage Type | Value Type | TTL Policy | Notes |
+|---|---|---|---|---|
+| `Admin` | Instance | `Address` | Lives with contract instance | Set once; immutable after `set_admin` |
+| `CleanupPeriod` | Instance | `u64` (seconds) | Lives with contract instance | Defaults to 2592000 (30 days) |
+| `GlobalStats` | Instance | `GlobalStats` | Lives with contract instance | Saturating counters; never removed |
+| `LargePaymentThreshold` | Instance | `i128` | Lives with contract instance | Defaults to 10,000,000 units |
+| `MaxRefundsPerOrder` | Instance | `u32` | Lives with contract instance | Defaults to 5 |
+| `MerchantList` | Instance | `Vec<Address>` | Lives with contract instance | Append-only list of all registered merchants |
+| `Merchant(Address)` | Persistent | `Merchant` | No explicit TTL; persists until removed | One entry per registered merchant address |
+| `Payment(String)` | Persistent | `PaymentOrder` | Removed by `archive_payment_record` or `cleanup_expired_payments` | Keyed by `order_id` |
+| `MerchantPayments(Address)` | Persistent | `Vec<String>` | Updated on archive/cleanup | List of `order_id` values for a merchant |
+| `PayerPayments(Address)` | Persistent | `Vec<String>` | Updated on archive/cleanup | List of `order_id` values for a payer |
+| `Refund(String)` | Persistent | `RefundRecord` | No explicit TTL | Keyed by `refund_id` |
+| `OrderRefundCount(String)` | Persistent | `u32` | No explicit TTL | Keyed by `order_id`; enforces `MaxRefundsPerOrder` |
+| `Multisig(String)` | Persistent | `MultisigPayment` | No explicit TTL | Keyed by `payment_id` |
+| `PaymentRequest(String)` | Temporary | `PaymentRequest` | Expires with ledger TTL | Keyed by `request_id`; auto-expires |
+| `AllowedToken(Address)` | Instance | `()` (presence flag) | Lives with contract instance | Presence = allowed; absence = not allowed |
+| `SubscriptionPlan(String)` | Persistent | `SubscriptionPlan` | TTL extended to 2 years on every write | Keyed by `plan_id`; created by admin |
+| `Subscription(String)` | Persistent | `Subscription` | TTL extended to 2 years on every write | Keyed by `subscription_id`; one entry per subscription |
+| `SubscriptionReserve(Address, Address)` | Persistent | `i128` | TTL extended to 2 years on every write | Keyed by (subscriber, token); removed when it drops to zero |
 
 ---
 
-### Temporary Storage Keys
+## XDR Encoding
 
-Temporary entries have a network-defined maximum TTL (Protocol 21: **`maxTempTTL` = 3110400 ledgers ≈ 180 days**; minimum useful TTL set by the contract at write time). When the TTL expires the entry is **silently deleted** — no eviction event is emitted.
+Soroban serialises `#[contracttype]` enum variants as XDR `ScVal`. Each `DataKey` variant is encoded as an `ScVec` whose first element is the discriminant symbol and whose remaining elements are the variant's fields.
 
-| Key | Value type | TTL | Configurable TTL | Notes |
-|-----|-----------|-----|-----------------|-------|
-| `PaymentRequest(String)` | `PaymentRequest` struct | Set to `expires_at` field in the record | Yes — caller sets `expires_at` at creation | Deleted automatically once `expires_at` is reached. No explicit remove is needed after payment. `remove_payment_request` is called on successful payment for immediate cleanup. |
+| Key Variant | XDR Representation |
+|---|---|
+| `Admin` | `ScVec[ScSymbol("Admin")]` |
+| `CleanupPeriod` | `ScVec[ScSymbol("CleanupPeriod")]` |
+| `GlobalStats` | `ScVec[ScSymbol("GlobalStats")]` |
+| `LargePaymentThreshold` | `ScVec[ScSymbol("LargePaymentThreshold")]` |
+| `MaxRefundsPerOrder` | `ScVec[ScSymbol("MaxRefundsPerOrder")]` |
+| `MerchantList` | `ScVec[ScSymbol("MerchantList")]` |
+| `Merchant(addr)` | `ScVec[ScSymbol("Merchant"), ScAddress(addr)]` |
+| `Payment(order_id)` | `ScVec[ScSymbol("Payment"), ScString(order_id)]` |
+| `MerchantPayments(addr)` | `ScVec[ScSymbol("MerchantPayments"), ScAddress(addr)]` |
+| `PayerPayments(addr)` | `ScVec[ScSymbol("PayerPayments"), ScAddress(addr)]` |
+| `Refund(refund_id)` | `ScVec[ScSymbol("Refund"), ScString(refund_id)]` |
+| `OrderRefundCount(order_id)` | `ScVec[ScSymbol("OrderRefundCount"), ScString(order_id)]` |
+| `Multisig(payment_id)` | `ScVec[ScSymbol("Multisig"), ScString(payment_id)]` |
+| `PaymentRequest(request_id)` | `ScVec[ScSymbol("PaymentRequest"), ScString(request_id)]` |
+| `AllowedToken(addr)` | `ScVec[ScSymbol("AllowedToken"), ScAddress(addr)]` |
+| `SubscriptionPlan(plan_id)` | `ScVec[ScSymbol("SubscriptionPlan"), ScString(plan_id)]` |
+| `Subscription(subscription_id)` | `ScVec[ScSymbol("Subscription"), ScString(subscription_id)]` |
+| `SubscriptionReserve(subscriber, token)` | `ScVec[ScSymbol("SubscriptionReserve"), ScAddress(subscriber), ScAddress(token)]` |
 
----
+To read a key with the Stellar CLI:
 
-## TTL Values and Defaults
-
-| Parameter | Default | Source | Configurable by |
-|-----------|---------|--------|----------------|
-| `CleanupPeriod` | `2_592_000` s (30 days) | `storage.rs: get_cleanup_period()` | Admin via `set_payment_cleanup_period` |
-| Payment request TTL | Caller-supplied `expires_at` | `types.rs: PaymentRequest.expires_at` | Caller at creation time |
-| Persistent entry min TTL | Network param `minPersistentTTL` (~30 days) | Stellar protocol | Network governance |
-| Persistent entry max TTL | Network param `maxPersistentTTL` (~180 days) | Stellar protocol | Network governance |
-
----
-
-## `cleanup_expired_payments` Behaviour
-
-The `cleanup_expired_payments` admin function removes stale payment records from persistent storage.
-
-### Which keys are deleted
-
-For each `order_id` in the global payment index where `paid_at + CleanupPeriod < current_ledger_timestamp`:
-
-1. `Payment(order_id)` — the payment record itself.
-2. The `order_id` entry is removed from `MerchantPayments(merchant_address)`.
-3. The `order_id` entry is removed from `PayerPayments(payer_address)`.
-
-**Not deleted by this function:**
-- `Refund(refund_id)` records associated with the payment.
-- `OrderRefundCount(order_id)`.
-- `GlobalStats` (counters are not decremented).
-- `Merchant` records.
-
-### Preconditions
-
-| Condition | Error if violated |
-|-----------|------------------|
-| Caller must be the current admin | `ContractError::Unauthorized` |
-| Contract must have been initialised (admin set) | `ContractError::NotInitialized` |
-
-### Idempotency
-
-`cleanup_expired_payments` is safe to call multiple times. Payments that have already been removed are silently skipped.
+```bash
+stellar contract read \
+  --id <CONTRACT_ID> \
+  --key '{"vec":[{"symbol":"Payment"},{"string":"ORDER_001"}]}' \
+  --network testnet
+```
 
 ---
 
-## Storage Cost Estimates
+## Unbounded Growth Keys
 
-Soroban charges **ledger rent** for persistent and instance storage. Rent is denominated in XLM stroops per byte per ledger. The following estimates use **Stellar Protocol 21 mainnet parameters** (1 stroop = 0.0000001 XLM; rent fee ≈ 1000 stroops/byte/ledger at 100 ledgers/day write fee; subject to network fee market).
+The following keys grow with usage and have no automatic pruning:
 
-> These are order-of-magnitude estimates. Actual costs depend on network congestion and fee-market conditions. Use the [Stellar fee estimator](https://developers.stellar.org/docs/fundamentals-and-concepts/fees-resource-limits-metering) for current rates.
+| Key | Growth Driver | Mitigation |
+|---|---|---|
+| `Payment(String)` | One entry per payment order | `cleanup_expired_payments` (admin) and `archive_payment_record` (admin) remove stale entries |
+| `MerchantPayments(Address)` | One `order_id` appended per payment | Entries are removed in sync with `Payment` cleanup/archive |
+| `PayerPayments(Address)` | One `order_id` appended per payment | Entries are removed in sync with `Payment` cleanup/archive |
+| `Refund(String)` | One entry per refund request | No automatic pruning; manual cleanup not yet implemented |
+| `OrderRefundCount(String)` | One entry per order that has refunds | Bounded per order by `MaxRefundsPerOrder`; not pruned after order removal |
+| `Multisig(String)` | One entry per multisig payment | No automatic pruning |
+| `MerchantList` | One address appended per registration | Append-only; deactivation does not remove from list |
+| `SubscriptionPlan(String)` | One entry per plan created | No automatic pruning |
+| `Subscription(String)` | One entry per subscription | No automatic pruning; cancelled/completed records are kept for history |
+| `SubscriptionReserve(Address, Address)` | One entry per (subscriber, token) with active subscriptions | Removed automatically when the reserve reaches zero |
 
-| Entry | Approx. serialised size | 30-day rent (XLM, est.) | Notes |
-|-------|------------------------|------------------------|-------|
-| `Admin` (instance) | ~56 bytes | Included in instance rent | Part of contract instance |
-| `GlobalStats` (instance) | ~80 bytes | Included in instance rent | Part of contract instance |
-| `MerchantList` (instance, 100 merchants) | ~3.2 KB | Included in instance rent | Grows with merchant count |
-| `Merchant(Address)` | ~300–500 bytes | ~0.001–0.002 XLM | Per registered merchant |
-| `Payment(String)` | ~400–700 bytes | ~0.001–0.003 XLM | Per payment order; deleted after cleanup |
-| `MerchantPayments(Address)` (100 orders) | ~3.2 KB | ~0.010 XLM | Per active merchant; shrinks as payments are cleaned |
-| `PayerPayments(Address)` (100 orders) | ~3.2 KB | ~0.010 XLM | Per payer |
-| `Refund(String)` | ~250–400 bytes | ~0.001–0.002 XLM | Per refund record; permanent |
-| `Multisig(String)` | ~600–900 bytes | ~0.002–0.004 XLM | Per multisig payment |
-| `PaymentRequest(String)` (temporary) | ~200–300 bytes | Negligible (temporary) | Auto-expires; cheap |
-
-**Rough total for an active merchant with 1 000 payments and 50 refunds:**  
-~5–15 XLM/month in storage rent, dominated by `PayerPayments` and `MerchantPayments` index growth.
+Operators running off-chain indexers should monitor ledger entry counts for the persistent keys above and schedule admin cleanup calls as needed..
 
 ---
 
-## Record Limits
+## Subscription Records
 
-| Storage key | Hard limit | Enforced by |
-|------------|-----------|-------------|
-| Refunds per order | `MaxRefundsPerOrder` (default: 5) | `increment_order_refund_count` + check in `initiate_refund` |
-| Paginated query results | 100 items per page | `get_merchant_payment_history`, `get_payer_payment_history` |
-| Batch payment items | 10 items per batch | `process_batch_payment` input validation |
-| Multisig signers | No hard cap (practical: ≤ 20) | Gas / resource limits on invocation |
-| Merchant list | No hard cap | Instance storage size limits (see note above) |
+Value types stored under the subscription keys (defined in `contracts/lumenflow/src/types.rs`):
 
----
+`SubscriptionPlan` (key: `SubscriptionPlan(plan_id)`):
 
-## See Also
+| Field | Type | Notes |
+|---|---|---|
+| `plan_id` | `String` | Unique plan identifier (max 64 chars) |
+| `token` | `Address` | Token contract used for every charge; must be on the allow-list at creation |
+| `amount` | `i128` | Positive amount charged per billing cycle |
+| `interval_secs` | `u64` | Seconds required between charges; non-zero |
+| `max_cycles` | `u32` | Maximum number of charges; non-zero |
+| `created_at` | `u64` | Ledger timestamp at creation |
 
-- [docs/ARCHITECTURE.md](ARCHITECTURE.md) — High-level architecture, storage tier rationale
-- `contracts/lumenflow/src/storage.rs` — Storage helper implementation
-- `contracts/lumenflow/src/types.rs` — Data structure definitions
-- [docs/auth-model.md](auth-model.md) — Who can read/write each key
-- [docs/refund-lifecycle.md](refund-lifecycle.md) — Refund state machine and storage transitions
+`Subscription` (key: `Subscription(subscription_id)`):
+
+| Field | Type | Notes |
+|---|---|---|
+| `subscription_id` | `String` | Unique subscription identifier (max 64 chars) |
+| `plan_id` | `String` | References the `SubscriptionPlan` key |
+| `merchant` | `Address` | Receives each charge; only address allowed to call `charge_subscription` |
+| `subscriber` | `Address` | Charged each cycle; authorised the subscription |
+| `status` | `SubscriptionStatus` | `Active`, `Cancelled`, or `Completed` |
+| `cycles_charged` | `u32` | Number of successful charges so far |
+| `last_charged_at` | `u64` | Interval anchor: subscribe time until the first charge, then the last charge time |
+| `created_at` | `u64` | Ledger timestamp at subscribe time |
+
+Lifecycle: `subscribe` writes an `Active` record with `cycles_charged = 0`, adds `amount * max_cycles` to the subscriber's `SubscriptionReserve` for the plan's token, and approves the contract for the full reserve. SEP-41 `approve` sets (not adds to) the per-(from, spender) allowance, so the reserve tracks the combined remaining cycles of all of the subscriber's active subscriptions in that token and every `subscribe` re-approves that total. `charge_subscription` requires `now >= last_charged_at + interval_secs` and `cycles_charged < max_cycles`, and re-checks at charge time that the plan token is still on the allow-list and the merchant is still active, so admin deactivation or token delisting also stops recurring charges. A successful charge draws the plan amount from the allowance via `transfer_from`, decrements the reserve, increments `cycles_charged`, resets `last_charged_at`, and sets status to `Completed` when `max_cycles` is reached, at which point that subscription's share of the allowance has been fully consumed. `cancel_subscription` (merchant or subscriber) sets status to `Cancelled` and releases the uncharged cycles from the reserve; a subscriber-initiated cancel also re-approves the allowance down to the new reserve, while a merchant-initiated cancel cannot (approve needs the subscriber's auth) and leaves a residual allowance the subscriber can clear with `renew_subscription_allowance`. Cancelled and completed subscriptions can never be charged again. The allowance itself lives on the token contract, not in this contract's storage, and its expiry is capped by the network's maximum entry TTL, which can be shorter than a long subscription's lifetime; `renew_subscription_allowance` re-approves the current reserve with a fresh expiry whenever needed.
