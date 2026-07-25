@@ -268,6 +268,8 @@ stellar contract invoke --id $CONTRACT_ID --source-account $CALLER_KEY --network
 
 For detailed information on the signature payload format and how to build it in various languages, see **[docs/signature-format.md](docs/signature-format.md)**.
 
+For batch payment processing (up to 10 items per call), error codes, partial failure handling, and idempotent re-submission, see **[docs/batch-payments.md](docs/batch-payments.md)**.
+
 ```bash
 # Process payment with signature
 stellar contract invoke --id $CONTRACT_ID --source-account $PAYER_KEY --network $NETWORK \
