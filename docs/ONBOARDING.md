@@ -4,6 +4,54 @@ Welcome to LumenFlow! This guide takes you from zero to running tests locally an
 
 ---
 
+## Merchant and payer quickstart
+
+### Merchant flow
+
+1. Open the merchant dashboard in [frontend/merchant-dashboard/index.html](../frontend/merchant-dashboard/index.html) or the shared pages in [frontend/history.html](../frontend/history.html) and [frontend/multisig.html](../frontend/multisig.html).
+2. Register your merchant profile with the contract using the CLI or SDK. A typical CLI example is:
+
+```bash
+stellar contract invoke \
+  --id "$CONTRACT_ID" \
+  --source-account "$MERCHANT_KEY" \
+  -- register_merchant \
+  --merchant_address "$MERCHANT_ADDRESS" \
+  --name "Demo Store" \
+  --description "Accepts payments for digital goods" \
+  --contact_info "ops@example.com" \
+  --category Retail
+```
+
+3. Review incoming payments in the dashboard, then use the refund workflow if a customer requests a reversal.
+4. Use the receipt experience in [frontend/receipt.html](../frontend/receipt.html) to verify the final payment status and any refund history.
+
+### Payer flow
+
+1. Start from the receipt page in [frontend/receipt.html](../frontend/receipt.html) to look up an order by ID.
+2. Submit a payment using the SDK or CLI. A minimal SDK example is:
+
+```ts
+import { signPaymentPayload } from '../sdk/src/signPaymentPayload';
+
+const payload = Buffer.from('order-001');
+const signature = signPaymentPayload(payload, secretKey);
+```
+
+3. If a refund is needed, initiate it through the payer or merchant flow and monitor the refund lifecycle until it completes.
+4. Use the receipt view to confirm payment state, refund history, and the transaction summary after the payment is processed.
+
+### Common end-to-end flows
+
+- Registration: the merchant registers, is activated, and begins receiving payments.
+- Payment: the payer submits a signed payment request and receives a receipt.
+- Refund: the payer or merchant initiates a refund, the merchant approves or rejects it, and the refund is executed.
+- Receipt lookup: a payer or merchant opens the receipt page by order ID to inspect payment and refund details.
+
+Suggested visuals for this guide include a merchant dashboard screenshot, a receipt page screenshot on mobile and desktop, and the refund lifecycle diagram in [docs/refund-lifecycle.md](./refund-lifecycle.md).
+
+---
+
 ## 1. Prerequisites (~10 min)
 
 Install the following tools:

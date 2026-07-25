@@ -364,6 +364,14 @@
                   },
                   {
                     "key": {
+                      "symbol": "collected"
+                    },
+                    "val": {
+                      "vec": []
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "created_at"
                     },
                     "val": {
@@ -416,22 +424,6 @@
                     },
                     "val": {
                       "u32": 2
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "signatures"
-                    },
-                    "val": {
-                      "vec": []
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "signed_by"
-                    },
-                    "val": {
-                      "vec": []
                     }
                   },
                   {

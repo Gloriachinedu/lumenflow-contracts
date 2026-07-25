@@ -25,6 +25,9 @@ The storage keys are defined in the `DataKey` enum in [`contracts/lumenflow/src/
 | `Multisig(String)` | Persistent | `MultisigPayment` | No explicit TTL | Keyed by `payment_id` |
 | `PaymentRequest(String)` | Temporary | `PaymentRequest` | Expires with ledger TTL | Keyed by `request_id`; auto-expires |
 | `AllowedToken(Address)` | Instance | `()` (presence flag) | Lives with contract instance | Presence = allowed; absence = not allowed |
+| `SubscriptionPlan(String)` | Persistent | `SubscriptionPlan` | TTL extended to 2 years on every write | Keyed by `plan_id`; created by admin |
+| `Subscription(String)` | Persistent | `Subscription` | TTL extended to 2 years on every write | Keyed by `subscription_id`; one entry per subscription |
+| `SubscriptionReserve(Address, Address)` | Persistent | `i128` | TTL extended to 2 years on every write | Keyed by (subscriber, token); removed when it drops to zero |
 
 ---
 
@@ -49,6 +52,9 @@ Soroban serialises `#[contracttype]` enum variants as XDR `ScVal`. Each `DataKey
 | `Multisig(payment_id)` | `ScVec[ScSymbol("Multisig"), ScString(payment_id)]` |
 | `PaymentRequest(request_id)` | `ScVec[ScSymbol("PaymentRequest"), ScString(request_id)]` |
 | `AllowedToken(addr)` | `ScVec[ScSymbol("AllowedToken"), ScAddress(addr)]` |
+| `SubscriptionPlan(plan_id)` | `ScVec[ScSymbol("SubscriptionPlan"), ScString(plan_id)]` |
+| `Subscription(subscription_id)` | `ScVec[ScSymbol("Subscription"), ScString(subscription_id)]` |
+| `SubscriptionReserve(subscriber, token)` | `ScVec[ScSymbol("SubscriptionReserve"), ScAddress(subscriber), ScAddress(token)]` |
 
 To read a key with the Stellar CLI:
 
@@ -74,5 +80,40 @@ The following keys grow with usage and have no automatic pruning:
 | `OrderRefundCount(String)` | One entry per order that has refunds | Bounded per order by `MaxRefundsPerOrder`; not pruned after order removal |
 | `Multisig(String)` | One entry per multisig payment | No automatic pruning |
 | `MerchantList` | One address appended per registration | Append-only; deactivation does not remove from list |
+| `SubscriptionPlan(String)` | One entry per plan created | No automatic pruning |
+| `Subscription(String)` | One entry per subscription | No automatic pruning; cancelled/completed records are kept for history |
+| `SubscriptionReserve(Address, Address)` | One entry per (subscriber, token) with active subscriptions | Removed automatically when the reserve reaches zero |
 
-Operators running off-chain indexers should monitor ledger entry counts for the persistent keys above and schedule admin cleanup calls as needed.
+Operators running off-chain indexers should monitor ledger entry counts for the persistent keys above and schedule admin cleanup calls as needed..
+
+---
+
+## Subscription Records
+
+Value types stored under the subscription keys (defined in `contracts/lumenflow/src/types.rs`):
+
+`SubscriptionPlan` (key: `SubscriptionPlan(plan_id)`):
+
+| Field | Type | Notes |
+|---|---|---|
+| `plan_id` | `String` | Unique plan identifier (max 64 chars) |
+| `token` | `Address` | Token contract used for every charge; must be on the allow-list at creation |
+| `amount` | `i128` | Positive amount charged per billing cycle |
+| `interval_secs` | `u64` | Seconds required between charges; non-zero |
+| `max_cycles` | `u32` | Maximum number of charges; non-zero |
+| `created_at` | `u64` | Ledger timestamp at creation |
+
+`Subscription` (key: `Subscription(subscription_id)`):
+
+| Field | Type | Notes |
+|---|---|---|
+| `subscription_id` | `String` | Unique subscription identifier (max 64 chars) |
+| `plan_id` | `String` | References the `SubscriptionPlan` key |
+| `merchant` | `Address` | Receives each charge; only address allowed to call `charge_subscription` |
+| `subscriber` | `Address` | Charged each cycle; authorised the subscription |
+| `status` | `SubscriptionStatus` | `Active`, `Cancelled`, or `Completed` |
+| `cycles_charged` | `u32` | Number of successful charges so far |
+| `last_charged_at` | `u64` | Interval anchor: subscribe time until the first charge, then the last charge time |
+| `created_at` | `u64` | Ledger timestamp at subscribe time |
+
+Lifecycle: `subscribe` writes an `Active` record with `cycles_charged = 0`, adds `amount * max_cycles` to the subscriber's `SubscriptionReserve` for the plan's token, and approves the contract for the full reserve. SEP-41 `approve` sets (not adds to) the per-(from, spender) allowance, so the reserve tracks the combined remaining cycles of all of the subscriber's active subscriptions in that token and every `subscribe` re-approves that total. `charge_subscription` requires `now >= last_charged_at + interval_secs` and `cycles_charged < max_cycles`, and re-checks at charge time that the plan token is still on the allow-list and the merchant is still active, so admin deactivation or token delisting also stops recurring charges. A successful charge draws the plan amount from the allowance via `transfer_from`, decrements the reserve, increments `cycles_charged`, resets `last_charged_at`, and sets status to `Completed` when `max_cycles` is reached, at which point that subscription's share of the allowance has been fully consumed. `cancel_subscription` (merchant or subscriber) sets status to `Cancelled` and releases the uncharged cycles from the reserve; a subscriber-initiated cancel also re-approves the allowance down to the new reserve, while a merchant-initiated cancel cannot (approve needs the subscriber's auth) and leaves a residual allowance the subscriber can clear with `renew_subscription_allowance`. Cancelled and completed subscriptions can never be charged again. The allowance itself lives on the token contract, not in this contract's storage, and its expiry is capped by the network's maximum entry TTL, which can be shorter than a long subscription's lifetime; `renew_subscription_allowance` re-approves the current reserve with a fresh expiry whenever needed.

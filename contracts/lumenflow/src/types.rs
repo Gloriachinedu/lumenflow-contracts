@@ -84,6 +84,9 @@ pub struct BatchPaymentItem {
     pub token_address: Address,
     pub amount: i128,
     pub memo: String,
+    /// Optional tags for this batch item. Maximum 5 tags, each 1–32 characters.
+    /// Uses the same validation rules as `process_payment_with_signature`.
+    pub tags: Option<Vec<String>>,
     pub signature: Bytes,
     pub merchant_public_key: Bytes,
 }
@@ -113,20 +116,31 @@ pub struct RefundRecord {
 
 // ── Multisig ──────────────────────────────────────────────────────────────────
 
+/// A single entry pairing a signer address with their signature bytes.
+/// Stored as one vector instead of two parallel vectors to reduce on-chain
+/// storage overhead and keep the signer↔signature relationship explicit.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SignatureEntry {
+    pub signer: Address,
+    pub signature: Bytes,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MultisigPayment {
     pub payment_id: String,
+    pub initiator: Address,
     pub merchant_address: Address,
     pub token: Address,
     pub amount: i128,
     pub required_signatures: u32,
     pub signers: Vec<Address>,
-    pub signatures: Vec<Bytes>,
-    pub signed_by: Vec<Address>,
+    /// Collected signatures. Each entry bundles signer address + signature bytes
+    /// in a single `SignatureEntry`, replacing the previous two parallel vectors.
+    pub collected: Vec<SignatureEntry>,
     pub executed: bool,
     pub cancelled: bool,
-    pub initiator: Address,
     pub created_at: u64,
     pub expires_at: Option<u64>,
 }
@@ -230,4 +244,40 @@ pub enum SuspiciousActivityReason {
     LargePayment = 1,
     RapidRefunds = 2,
     ManyAuthFailures = 3,
+}
+
+// -- Subscriptions -------------------------------------------------------------
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SubscriptionStatus {
+    Active,
+    Cancelled,
+    Completed,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubscriptionPlan {
+    pub plan_id: String,
+    pub token: Address,
+    pub amount: i128,
+    pub interval_secs: u64,
+    pub max_cycles: u32,
+    pub created_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Subscription {
+    pub subscription_id: String,
+    pub plan_id: String,
+    pub merchant: Address,
+    pub subscriber: Address,
+    pub status: SubscriptionStatus,
+    pub cycles_charged: u32,
+    /// Timestamp the interval is measured from: subscribe time until the first
+    /// charge, then the time of the most recent charge.
+    pub last_charged_at: u64,
+    pub created_at: u64,
 }

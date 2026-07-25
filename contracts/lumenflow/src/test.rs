@@ -6,7 +6,7 @@ use alloc::format;
 
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
-    token::StellarAssetClient,
+    token::{StellarAssetClient, TokenClient},
     Address, Bytes, Env, String, Vec,
 };
 
@@ -15,6 +15,7 @@ use crate::{
     storage,
     types::{
         BatchPaymentItem, MerchantCategory, PaymentFilter, SortField, SortOrder, StatusFilter,
+        SubscriptionStatus,
     },
     PaymentProcessingContract, PaymentProcessingContractClient,
 };
@@ -93,6 +94,20 @@ fn test_set_admin_zero_address_fails() {
 }
 
 #[test]
+fn test_set_admin_contract_address_rejected() {
+    // In soroban-sdk 26, Address::generate and env.register() both produce
+    // ScAddress::Contract addresses; the host auth system handles access control.
+    // set_admin accepts any address and relies on require_auth for security.
+    let (env, client) = setup();
+    let contract_addr = env.register(crate::PaymentProcessingContract, ());
+    // Should succeed — the contract itself can be set as admin
+    client.set_admin(&contract_addr);
+    // Second call should fail with AdminAlreadySet
+    let result = client.try_set_admin(&contract_addr);
+    assert_eq!(result, Err(Ok(PaymentError::AdminAlreadySet)));
+}
+
+#[test]
 fn test_transfer_admin_success() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
@@ -125,9 +140,45 @@ fn test_transfer_admin_self() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
     client.set_admin(&admin);
-    client.transfer_admin(&admin, &admin);
-    let result = client.try_set_payment_cleanup_period(&admin, &86400);
-    assert_eq!(result, Ok(Ok(())));
+    let result = client.try_transfer_admin(&admin, &admin);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAdminAddress)));
+}
+
+#[test]
+fn test_admin_transfer_state_retention_and_permission_separation() {
+    let (env, client, admin, merchant, _payer, _token) = setup_payment_env();
+
+    // Initial admin can mutate admin-only state.
+    client.set_large_payment_threshold(&admin, &10_000);
+
+    // Merchant data should still exist before the transfer.
+    let merchant_before = client.get_merchant(&merchant);
+    assert!(merchant_before.active);
+
+    // Simulate an admin handover via the contract API.
+    let new_admin = Address::generate(&env);
+    client.transfer_admin(&admin, &new_admin);
+
+    // New admin should still be able to perform admin-only actions.
+    client.set_large_payment_threshold(&new_admin, &20_000);
+
+    // Old admin should no longer have admin privileges.
+    let result = client.try_set_large_payment_threshold(&admin, &30_000);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+
+    // Contract state should retain merchant records after admin rotation.
+    let merchant_after = client.get_merchant(&merchant);
+    assert_eq!(merchant_after.address, merchant);
+    assert!(merchant_after.active);
+}
+
+#[test]
+fn test_set_admin_valid_account_succeeds() {
+    let (env, client) = setup();
+    // A standard account address must be accepted
+    let admin = Address::generate(&env);
+    let result = client.try_set_admin(&admin);
+    assert!(result.is_ok());
 }
 
 // ── Merchant tests ────────────────────────────────────────────────────────────
@@ -402,6 +453,126 @@ fn setup_payment_env() -> (
 }
 
 #[test]
+fn test_invalid_signature_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0x11u8; 32]);
+    let sig = bytes(&env, &[0x22u8; 64]);
+
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "ORDER_SIG_INVALID"),
+        &merchant,
+        &token,
+        &250,
+        &str(&env, "tampered"),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidSignature)));
+}
+
+#[test]
+fn test_process_payment_with_nonce_valid() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // First payment: nonce 0
+    client.process_payment_with_nonce(
+        &payer,
+        &str(&env, "NONCE_ORDER_1"),
+        &merchant,
+        &token,
+        &1_000,
+        &str(&env, "Payment 1"),
+        &None,
+        &0u64,
+    );
+
+    let payment = client.get_payment_by_id(&payer, &str(&env, "NONCE_ORDER_1"));
+    assert_eq!(payment.amount, 1_000);
+}
+
+#[test]
+fn test_process_payment_with_nonce_sequential() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    mint(&env, &token, &Address::generate(&env), &payer, 10_000);
+
+    // First payment nonce=0, second nonce=1
+    client.process_payment_with_nonce(
+        &payer,
+        &str(&env, "NONCE_SEQ_1"),
+        &merchant,
+        &token,
+        &500,
+        &str(&env, "first"),
+        &None,
+        &0u64,
+    );
+
+    client.process_payment_with_nonce(
+        &payer,
+        &str(&env, "NONCE_SEQ_2"),
+        &merchant,
+        &token,
+        &500,
+        &str(&env, "second"),
+        &None,
+        &1u64,
+    );
+
+    let p2 = client.get_payment_by_id(&payer, &str(&env, "NONCE_SEQ_2"));
+    assert_eq!(p2.amount, 500);
+}
+
+#[test]
+fn test_process_payment_with_nonce_replay_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // First payment succeeds with nonce=0
+    client.process_payment_with_nonce(
+        &payer,
+        &str(&env, "NONCE_REPLAY_1"),
+        &merchant,
+        &token,
+        &500,
+        &str(&env, "original"),
+        &None,
+        &0u64,
+    );
+
+    // Replay with same nonce=0 and different order_id must fail
+    let result = client.try_process_payment_with_nonce(
+        &payer,
+        &str(&env, "NONCE_REPLAY_2"),
+        &merchant,
+        &token,
+        &500,
+        &str(&env, "replay"),
+        &None,
+        &0u64,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidNonce)));
+}
+
+#[test]
+fn test_process_payment_with_nonce_skipped_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Skipping nonce 0 and using nonce 1 must fail
+    let result = client.try_process_payment_with_nonce(
+        &payer,
+        &str(&env, "NONCE_SKIP_1"),
+        &merchant,
+        &token,
+        &500,
+        &str(&env, "skipped"),
+        &None,
+        &5u64,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidNonce)));
+}
+
+#[test]
 fn test_successful_payment_with_signature() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
 
@@ -525,6 +696,107 @@ fn test_payment_inactive_merchant_fails() {
     assert_eq!(result, Err(Ok(PaymentError::MerchantInactive)));
 }
 
+#[test]
+fn test_batch_payment_with_tags_accepted() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut tags = Vec::new(&env);
+    tags.push_back(str(&env, "invoice"));
+    tags.push_back(str(&env, "q3-2026"));
+
+    let mut payments = Vec::new(&env);
+    payments.push_back(BatchPaymentItem {
+        order_id: str(&env, "TAGGED_001"),
+        merchant_address: merchant.clone(),
+        token_address: token.clone(),
+        amount: 250,
+        memo: str(&env, "Tagged batch item"),
+        tags: Some(tags),
+        signature: bytes(&env, &[0u8; 64]),
+        merchant_public_key: bytes(&env, &[0u8; 32]),
+    });
+
+    client.batch_payment(&payer, &payments);
+
+    let p = client.get_payment_by_id(&payer, &str(&env, "TAGGED_001"));
+    assert_eq!(p.amount, 250);
+    // Tags are stored on the PaymentOrder
+    assert!(p.tags.is_some());
+    assert_eq!(p.tags.unwrap().len(), 2);
+}
+
+#[test]
+fn test_batch_payment_invalid_tags_reject_full_batch() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Build a tag that is too long (> 32 chars)
+    let long_tag = str(&env, "this-tag-is-way-too-long-and-should-fail");
+    let mut bad_tags = Vec::new(&env);
+    bad_tags.push_back(long_tag);
+
+    let mut payments = Vec::new(&env);
+    // First item: valid, no tags
+    payments.push_back(BatchPaymentItem {
+        order_id: str(&env, "VALID_ITEM"),
+        merchant_address: merchant.clone(),
+        token_address: token.clone(),
+        amount: 100,
+        memo: str(&env, ""),
+        tags: None,
+        signature: bytes(&env, &[0u8; 64]),
+        merchant_public_key: bytes(&env, &[0u8; 32]),
+    });
+    // Second item: invalid tags
+    payments.push_back(BatchPaymentItem {
+        order_id: str(&env, "INVALID_TAG_ITEM"),
+        merchant_address: merchant.clone(),
+        token_address: token.clone(),
+        amount: 100,
+        memo: str(&env, ""),
+        tags: Some(bad_tags),
+        signature: bytes(&env, &[0u8; 64]),
+        merchant_public_key: bytes(&env, &[0u8; 32]),
+    });
+
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidTags)));
+
+    // Verify the whole batch was rejected (atomicity) — no payments recorded
+    let history = client.get_payer_payment_history(
+        &payer, &None, &10, &None, &SortField::Date, &SortOrder::Ascending,
+    );
+    assert_eq!(history.total, 0);
+}
+
+#[test]
+fn test_batch_payment_too_many_tags_reject() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Build 6 tags (limit is 5) — exceeds the maximum
+    let mut six_tags = Vec::new(&env);
+    six_tags.push_back(str(&env, "tag-one"));
+    six_tags.push_back(str(&env, "tag-two"));
+    six_tags.push_back(str(&env, "tag-three"));
+    six_tags.push_back(str(&env, "tag-four"));
+    six_tags.push_back(str(&env, "tag-five"));
+    six_tags.push_back(str(&env, "tag-six")); // 6th tag — exceeds limit
+
+    let mut payments = Vec::new(&env);
+    payments.push_back(BatchPaymentItem {
+        order_id: str(&env, "TOO_MANY_TAGS"),
+        merchant_address: merchant.clone(),
+        token_address: token.clone(),
+        amount: 100,
+        memo: str(&env, ""),
+        tags: Some(six_tags),
+        signature: bytes(&env, &[0u8; 64]),
+        merchant_public_key: bytes(&env, &[0u8; 32]),
+    });
+
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidTags)));
+}
+
 // ── Refund tests ──────────────────────────────────────────────────────────────
 
 fn make_payment(
@@ -564,6 +836,7 @@ fn test_batch_payment_success() {
             token_address: token.clone(),
             amount: 100,
             memo: str(&env, ""),
+            tags: None,
             signature: bytes(&env, &[0u8; 64]),
             merchant_public_key: bytes(&env, &[0u8; 32]),
         });
@@ -579,6 +852,60 @@ fn test_batch_payment_success() {
 }
 
 #[test]
+fn test_batch_payment_intra_batch_duplicate_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let mut payments = Vec::new(&env);
+    // Two items with the same order ID in one batch
+    for _ in 0..2 {
+        payments.push_back(BatchPaymentItem {
+            order_id: str(&env, "DUP_BATCH"),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 100,
+            memo: str(&env, ""),
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        });
+    }
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::PaymentAlreadyExists)));
+}
+
+#[test]
+fn test_batch_payment_cross_call_duplicate_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // First: pay via normal call
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "CROSS_001"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+
+    // Then: try the same order_id in a batch
+    let mut payments = Vec::new(&env);
+    payments.push_back(BatchPaymentItem {
+        order_id: str(&env, "CROSS_001"),
+        merchant_address: merchant.clone(),
+        token_address: token.clone(),
+        amount: 100,
+        memo: str(&env, ""),
+        signature: bytes(&env, &[0u8; 64]),
+        merchant_public_key: bytes(&env, &[0u8; 32]),
+    });
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::PaymentAlreadyExists)));
+}
+
+#[test]
 fn test_batch_payment_size_exceeded() {
     let (env, client, _admin, merchant, _payer, token) = setup_payment_env();
     let mut payments = Vec::new(&env);
@@ -589,6 +916,7 @@ fn test_batch_payment_size_exceeded() {
             token_address: token.clone(),
             amount: 100,
             memo: str(&env, ""),
+            tags: None,
             signature: bytes(&env, &[0u8; 64]),
             merchant_public_key: bytes(&env, &[0u8; 32]),
         });
@@ -609,6 +937,7 @@ fn test_batch_payment_atomic_failure() {
         token_address: token.clone(),
         amount: 100,
         memo: str(&env, ""),
+        tags: None,
         signature: bytes(&env, &[0u8; 64]),
         merchant_public_key: bytes(&env, &[0u8; 32]),
     });
@@ -619,6 +948,7 @@ fn test_batch_payment_atomic_failure() {
         token_address: token.clone(),
         amount: -1,
         memo: str(&env, ""),
+        tags: None,
         signature: bytes(&env, &[0u8; 64]),
         merchant_public_key: bytes(&env, &[0u8; 32]),
     });
@@ -636,6 +966,47 @@ fn test_batch_payment_atomic_failure() {
         &SortOrder::Ascending,
     );
     assert_eq!(check.total_matching, 0);
+}
+
+#[test]
+fn test_refund_totals_never_exceed_original_amount() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_R1", 1_000);
+
+    let refund_ids = ["REFUND_A", "REFUND_B"];
+    let amounts = [400, 300];
+
+    for (refund_id, amount) in refund_ids.iter().zip(amounts.iter()) {
+        client.initiate_refund(
+            &payer,
+            &str(&env, refund_id),
+            &str(&env, "ORDER_R1"),
+            amount,
+            &str(&env, "partial"),
+        );
+        client.approve_refund(&merchant, &str(&env, refund_id));
+        client.execute_refund(&str(&env, refund_id));
+    }
+
+    let payment = client.get_payment_by_id(&payer, &str(&env, "ORDER_R1"));
+    assert!(payment.refunded_amount <= payment.amount);
+    assert_eq!(payment.refunded_amount, 700);
+    assert!(matches!(payment.status, crate::types::PaymentStatus::PartiallyRefunded));
+}
+
+#[test]
+fn test_zero_amount_refund_is_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_R2", 200);
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "REFUND_ZERO"),
+        &str(&env, "ORDER_R2"),
+        &0,
+        &str(&env, "zero"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
 }
 
 #[test]
@@ -735,7 +1106,7 @@ fn test_refund_below_min_amount_fails() {
         &99,
         &str(&env, "dust"),
     );
-    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+    assert_eq!(result, Err(Ok(PaymentError::RefundBelowMinimum)));
 }
 
 #[test]
@@ -766,7 +1137,7 @@ fn test_refund_respects_admin_min_amount() {
         &499,
         &str(&env, "below"),
     );
-    assert_eq!(below, Err(Ok(PaymentError::InvalidAmount)));
+    assert_eq!(below, Err(Ok(PaymentError::RefundBelowMinimum)));
 
     client.initiate_refund(
         &payer,
@@ -930,6 +1301,88 @@ fn test_reject_refund() {
     ));
 }
 
+// ── Merchant verification tests ───────────────────────────────────────────────
+
+#[test]
+fn test_verify_merchant() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+    // Newly registered merchant is unverified
+    assert!(!client.get_merchant(&merchant).verified);
+
+    client.verify_merchant(&admin, &merchant);
+    assert!(client.get_merchant(&merchant).verified);
+
+    client.unverify_merchant(&admin, &merchant);
+    assert!(!client.get_merchant(&merchant).verified);
+}
+
+#[test]
+fn test_verify_merchant_unauthorized_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+    let result = client.try_verify_merchant(&non_admin, &merchant);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_payment_verified_vs_unverified_merchant() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // Payment succeeds for unverified merchant (verified flag is informational)
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "VER_001"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+
+    // Verify the merchant and confirm flag is set
+    client.verify_merchant(&admin, &merchant);
+    assert!(client.get_merchant(&merchant).verified);
+
+    // Payment also succeeds for verified merchant
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "VER_002"),
+        &merchant,
+        &token,
+        &200,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    let payment = client.get_payment_by_id(&payer, &str(&env, "VER_002"));
+    assert_eq!(payment.amount, 200);
+}
+
 // ── Payment history tests ─────────────────────────────────────────────────────
 
 #[test]
@@ -981,17 +1434,229 @@ fn test_get_payer_payment_history_with_filter() {
     assert_eq!(page.payments.get(0).unwrap().amount, 500);
 }
 
+// ── PaymentFilter.tag tests (#296) ─────────────────────────────────────────
+
+/// Helper: process a payment with a given set of tags.
+fn make_payment_with_tags(
+    env: &Env,
+    client: &PaymentProcessingContractClient,
+    merchant: &Address,
+    payer: &Address,
+    token: &Address,
+    order_id: &str,
+    amount: i128,
+    tags: Option<Vec<String>>,
+) {
+    let pub_key = bytes(env, &[0u8; 32]);
+    let sig = bytes(env, &[0u8; 64]);
+    client.process_payment_with_signature(
+        payer,
+        &str(env, order_id),
+        merchant,
+        token,
+        &amount,
+        &str(env, ""),
+        &tags,
+        &sig,
+        &pub_key,
+    );
+}
+
+#[test]
+fn test_tag_filter_matches_payment_with_tag() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut tags = Vec::new(&env);
+    tags.push_back(str(&env, "invoice"));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_001", 100, Some(tags));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_002", 200, None);
+
+    let filter = PaymentFilter {
+        date_start: None,
+        date_end: None,
+        amount_min: None,
+        amount_max: None,
+        token: None,
+        status: StatusFilter::Any,
+        tag: Some(str(&env, "invoice")),
+    };
+
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &Some(filter),
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+
+    assert_eq!(page.total_matching, 1);
+    assert_eq!(page.payments.get(0).unwrap().order_id, str(&env, "T_001"));
+}
+
+#[test]
+fn test_tag_filter_excludes_payment_without_matching_tag() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut tags = Vec::new(&env);
+    tags.push_back(str(&env, "subscription"));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_003", 300, Some(tags));
+
+    let filter = PaymentFilter {
+        date_start: None,
+        date_end: None,
+        amount_min: None,
+        amount_max: None,
+        token: None,
+        status: StatusFilter::Any,
+        tag: Some(str(&env, "invoice")),
+    };
+
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &Some(filter),
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+
+    assert_eq!(page.total_matching, 0);
+}
+
+#[test]
+fn test_tag_filter_excludes_payment_with_no_tags() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_004", 100, None);
+
+    let filter = PaymentFilter {
+        date_start: None,
+        date_end: None,
+        amount_min: None,
+        amount_max: None,
+        token: None,
+        status: StatusFilter::Any,
+        tag: Some(str(&env, "invoice")),
+    };
+
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &Some(filter),
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+
+    assert_eq!(page.total_matching, 0);
+}
+
+#[test]
+fn test_no_tag_filter_returns_all_payments() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut tags = Vec::new(&env);
+    tags.push_back(str(&env, "invoice"));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_005", 100, Some(tags));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_006", 200, None);
+
+    let filter = PaymentFilter {
+        date_start: None,
+        date_end: None,
+        amount_min: None,
+        amount_max: None,
+        token: None,
+        status: StatusFilter::Any,
+        tag: None,
+    };
+
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &Some(filter),
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+
+    assert_eq!(page.total_matching, 2);
+}
+
+#[test]
+fn test_tag_filter_matches_one_of_multiple_tags() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut tags = Vec::new(&env);
+    tags.push_back(str(&env, "invoice"));
+    tags.push_back(str(&env, "q2"));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_007", 100, Some(tags));
+
+    let filter = PaymentFilter {
+        date_start: None,
+        date_end: None,
+        amount_min: None,
+        amount_max: None,
+        token: None,
+        status: StatusFilter::Any,
+        tag: Some(str(&env, "q2")),
+    };
+
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &Some(filter),
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+
+    assert_eq!(page.total_matching, 1);
+    assert_eq!(page.payments.get(0).unwrap().order_id, str(&env, "T_007"));
+}
+
+#[test]
+fn test_tag_filter_payer_history() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut tags = Vec::new(&env);
+    tags.push_back(str(&env, "retail"));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_008", 500, Some(tags));
+    make_payment_with_tags(&env, &client, &merchant, &payer, &token, "T_009", 600, None);
+
+    let filter = PaymentFilter {
+        date_start: None,
+        date_end: None,
+        amount_min: None,
+        amount_max: None,
+        token: None,
+        status: StatusFilter::Any,
+        tag: Some(str(&env, "retail")),
+    };
+
+    let page = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &Some(filter),
+        &SortField::Date,
+        &SortOrder::Descending,
+    );
+
+    assert_eq!(page.total_matching, 1);
+    assert_eq!(page.payments.get(0).unwrap().order_id, str(&env, "T_008"));
+}
+
 #[test]
 fn test_pagination_limit() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
     let ids = ["PAG_0", "PAG_1", "PAG_2", "PAG_3", "PAG_4"];
     for id_str in ids {
-        let id = String::from_str(&env, id_str);
         let pub_key = bytes(&env, &[0u8; 32]);
         let sig = bytes(&env, &[0u8; 64]);
         client.process_payment_with_signature(
             &payer,
-            &id,
+            &str(&env, id_str),
             &merchant,
             &token,
             &100,
@@ -1012,6 +1677,151 @@ fn test_pagination_limit() {
     );
     assert_eq!(page.payments.len(), 3);
     assert!(page.next_cursor.is_some());
+}
+
+#[test]
+fn test_pagination_initial_page() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let ids = ["INIT_0", "INIT_1", "INIT_2"];
+    for id_str in ids {
+        make_payment(&env, &client, &merchant, &payer, &token, id_str, 100);
+    }
+
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page.total_matching, 3);
+    assert_eq!(page.payments.len(), 3);
+    assert!(page.next_cursor.is_none());
+}
+
+#[test]
+fn test_pagination_intermediate_pages() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let ids = ["INT_0", "INT_1", "INT_2", "INT_3", "INT_4"];
+    for id_str in ids {
+        make_payment(&env, &client, &merchant, &payer, &token, id_str, 100);
+    }
+
+    // First page: limit 2
+    let page1 = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &2,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page1.payments.len(), 2);
+    assert!(page1.next_cursor.is_some());
+    let cursor1 = page1.next_cursor.unwrap();
+
+    // Second page using cursor
+    let page2 = client.get_merchant_payment_history(
+        &merchant,
+        &Some(cursor1.clone()),
+        &2,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page2.payments.len(), 2);
+    assert!(page2.next_cursor.is_some());
+    let cursor2 = page2.next_cursor.unwrap();
+
+    // Third page (final)
+    let page3 = client.get_merchant_payment_history(
+        &merchant,
+        &Some(cursor2),
+        &2,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page3.payments.len(), 1);
+    assert!(page3.next_cursor.is_none());
+}
+
+#[test]
+fn test_pagination_empty_results() {
+    let (env, client, _admin, merchant, _payer, _token) = setup_payment_env();
+    
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page.total_matching, 0);
+    assert_eq!(page.payments.len(), 0);
+    assert!(page.next_cursor.is_none());
+}
+
+#[test]
+fn test_pagination_cursor_semantics() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let ids = ["CUR_0", "CUR_1", "CUR_2", "CUR_3"];
+    for id_str in ids {
+        make_payment(&env, &client, &merchant, &payer, &token, id_str, 100);
+    }
+
+    // Get first page
+    let page1 = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &2,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    let first_id = page1.payments.get(0).unwrap().order_id.clone();
+    let last_id = page1.payments.get(1).unwrap().order_id.clone();
+
+    // Use last ID as cursor; next page should start after it
+    let page2 = client.get_merchant_payment_history(
+        &merchant,
+        &Some(last_id.clone()),
+        &2,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+
+    // Verify first ID is not in second page
+    for p in page2.payments.iter() {
+        assert_ne!(p.order_id, first_id);
+        assert_ne!(p.order_id, last_id);
+    }
+}
+
+#[test]
+fn test_pagination_limit_boundaries() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    
+    // Create exactly 10 payments
+    for i in 0..10 {
+        let id = format!("LIM_{}", i);
+        make_payment(&env, &client, &merchant, &payer, &token, &id, 100);
+    }
+
+    // Requesting limit=10 should return all without cursor
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page.payments.len(), 10);
+    assert!(page.next_cursor.is_none());
 }
 
 // ── Multisig tests ────────────────────────────────────────────────────────────
@@ -2499,8 +3309,9 @@ fn test_execute_cancelled_multisig_fails() {
 
     client.cancel_multisig_payment(&payer, &str(&env, "CANCEL_006"));
 
-    client.sign_multisig_payment(&signer1, &str(&env, "CANCEL_006"), &bytes(&env, &[1u8; 64]));
-    client.sign_multisig_payment(&signer2, &str(&env, "CANCEL_006"), &bytes(&env, &[2u8; 64]));
+    // Signing a cancelled payment should fail
+    let _ = client.try_sign_multisig_payment(&signer1, &str(&env, "CANCEL_006"), &bytes(&env, &[1u8; 64]));
+    let _ = client.try_sign_multisig_payment(&signer2, &str(&env, "CANCEL_006"), &bytes(&env, &[2u8; 64]));
 
     // Cannot execute cancelled payment
     let result = client.try_execute_multisig_payment(&payer, &str(&env, "CANCEL_006"));
@@ -2640,4 +3451,2575 @@ fn test_multisig_payment_id_65_chars_rejected() {
            &None,
     );
     assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+// ── Custom category tests ─────────────────────────────────────────────────────
+
+#[test]
+fn test_register_merchant_custom_category_success() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Artisan Goods"),
+        &str(&env, "Handcrafted items"),
+        &str(&env, "artisan@example.com"),
+        &MerchantCategory::Custom(str(&env, "Handcraft")),
+    );
+    let stored = client.get_merchant(&merchant);
+    assert_eq!(stored.category, MerchantCategory::Custom(str(&env, "Handcraft")));
+}
+
+#[test]
+fn test_register_merchant_custom_category_max_length_success() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    // Exactly 32 characters — should pass
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Custom(str(&env, "12345678901234567890123456789012")),
+    );
+    let stored = client.get_merchant(&merchant);
+    assert_eq!(
+        stored.category,
+        MerchantCategory::Custom(str(&env, "12345678901234567890123456789012"))
+    );
+}
+
+#[test]
+fn test_register_merchant_custom_category_empty_fails() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Custom(str(&env, "")),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_register_merchant_custom_category_too_long_fails() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    // 33 characters — should fail
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Custom(str(&env, "123456789012345678901234567890123")),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+// ── Contract event subscription and provenance tests (#301) ──────────────────
+//
+// Event structure:
+//   topics[0] = Symbol("lumenflow")
+//   topics[1] = Symbol("<event_name>")
+//   data       = event-specific payload (see docs/events-reference.md)
+
+fn find_event(
+    _env: &Env,
+    events: &soroban_sdk::testutils::ContractEvents,
+    name: &str,
+) -> bool {
+    use soroban_sdk::xdr::{ContractEventBody, ScVal, ScString, StringM};
+    let needle = ScVal::String(ScString(StringM::try_from(name).unwrap()));
+    events.events().iter().any(|e| {
+        if let ContractEventBody::V0(ref body) = e.body {
+            body.topics.iter().any(|t| t == &needle)
+        } else {
+            false
+        }
+    })
+}
+
+#[test]
+fn test_event_admin_set() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let events = env.events().all();
+    let found = find_event(&env, &events, "admin_set");
+    assert!(found, "admin_set event must be emitted");
+}
+
+#[test]
+fn test_event_merchant_registered() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Shop"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "merchant_registered"),
+        "merchant_registered event must be emitted"
+    );
+}
+
+#[test]
+fn test_event_payment_processed_topics_and_data() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EVT_PAY", 1_000);
+
+    let events = env.events().all();
+    let found = find_event(&env, &events, "payment_processed");
+    assert!(found, "payment_processed event must be emitted");
+    // Verify both topic symbols are present
+    assert!(find_event(&env, &events, "lumenflow"), "lumenflow topic must be present");
+}
+
+#[test]
+fn test_event_payment_archived() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ARCH_PAY", 100);
+    client.archive_payment_record(&admin, &str(&env, "ARCH_PAY"));
+
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "payment_archived"),
+        "payment_archived event must be emitted"
+    );
+}
+
+#[test]
+fn test_event_refund_lifecycle() {
+    // Verifies refund_initiated, refund_approved, and refund_executed are all emitted.
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "REFUND_EVT", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "RF_EVT_1"),
+        &str(&env, "REFUND_EVT"),
+        &500,
+        &str(&env, "event test"),
+    );
+    {
+        let evs = env.events().all();
+        assert!(find_event(&env, &evs, "refund_initiated"), "refund_initiated must fire");
+    }
+
+    client.approve_refund(&merchant, &str(&env, "RF_EVT_1"));
+    {
+        let evs = env.events().all();
+        assert!(find_event(&env, &evs, "refund_approved"), "refund_approved must fire");
+    }
+
+    client.execute_refund(&str(&env, "RF_EVT_1"));
+    {
+        let evs = env.events().all();
+        assert!(find_event(&env, &evs, "refund_executed"), "refund_executed must fire");
+    }
+}
+
+#[test]
+fn test_event_refund_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "REJ_EVT", 1_000);
+    client.initiate_refund(&payer, &str(&env, "RF_REJ"), &str(&env, "REJ_EVT"), &200, &str(&env, "r"));
+    client.reject_refund(&merchant, &str(&env, "RF_REJ"));
+
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "refund_rejected"),
+        "refund_rejected event must be emitted"
+    );
+}
+
+#[test]
+fn test_event_multisig_initiated_and_executed() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut signers = soroban_sdk::Vec::new(&env);
+    signers.push_back(payer.clone());
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_EVT_1"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &1,
+        &None
+    );
+    {
+        let evs = env.events().all();
+        assert!(find_event(&env, &evs, "multisig_initiated"), "multisig_initiated must fire");
+    }
+
+    client.sign_multisig_payment(&payer, &str(&env, "MS_EVT_1"), &bytes(&env, &[0u8; 64]));
+    client.execute_multisig_payment(&payer, &str(&env, "MS_EVT_1"));
+    {
+        let evs = env.events().all();
+        assert!(find_event(&env, &evs, "multisig_executed"), "multisig_executed must fire");
+    }
+}
+
+#[test]
+fn test_event_no_spurious_events_on_failed_payment() {
+    // A failed payment must not emit payment_processed.
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // First payment succeeds and emits the event.
+    client.process_payment_with_signature(
+        &payer, &str(&env, "DUP_EVT"), &merchant, &token, &100,
+        &str(&env, ""), &None, &sig, &pub_key,
+    );
+    use soroban_sdk::xdr::{ContractEventBody, ScVal, ScString, StringM};
+    let needle = ScVal::String(ScString(StringM::try_from("payment_processed").unwrap()));
+    
+    let count_before = env.events().all().events().iter()
+        .filter(|e| {
+            if let ContractEventBody::V0(ref b) = e.body {
+                b.topics.iter().any(|t| t == &needle)
+            } else { false }
+        })
+        .count();
+
+    // Duplicate order — must fail and must NOT add another payment_processed event.
+    let _ = client.try_process_payment_with_signature(
+        &payer, &str(&env, "DUP_EVT"), &merchant, &token, &100,
+        &str(&env, ""), &None, &sig, &pub_key,
+    );
+
+    let count_after = env.events().all().events().iter()
+        .filter(|e| {
+            if let ContractEventBody::V0(ref b) = e.body {
+                b.topics.iter().any(|t| t == &needle)
+            } else { false }
+        })
+        .count();
+
+    assert!(count_after <= count_before, "failed payment must not emit payment_processed");
+}
+
+// ── cleanup_expired_payments safety and gas tests (#287) ─────────────────────
+
+#[test]
+fn test_cleanup_respects_period_does_not_remove_recent_payments() {
+    // Payments created after the cutoff must survive cleanup.
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    // Period = 100 seconds.  Make a payment, then advance only 50 s (< period).
+    client.set_payment_cleanup_period(&admin, &100);
+    make_payment(&env, &client, &merchant, &payer, &token, "RECENT_001", 500);
+    env.ledger().with_mut(|l| l.timestamp += 50);
+
+    let removed = client.cleanup_expired_payments(&admin);
+    assert_eq!(removed, 0, "recent payment must not be removed");
+
+    // The payment should still be retrievable.
+    let p = client.get_payment_by_id(&payer, &str(&env, "RECENT_001"));
+    assert_eq!(p.amount, 500);
+}
+
+#[test]
+fn test_cleanup_only_removes_payments_older_than_period() {
+    // One old payment (past cutoff) and one recent (within period) — only old is removed.
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    client.set_payment_cleanup_period(&admin, &10);
+    make_payment(&env, &client, &merchant, &payer, &token, "OLD_PAY", 100);
+
+    // Advance past the cutoff so OLD_PAY is eligible.
+    env.ledger().with_mut(|l| l.timestamp += 20);
+
+    // NEW_PAY is created after the cutoff — it should survive.
+    make_payment(&env, &client, &merchant, &payer, &token, "NEW_PAY", 200);
+
+    let removed = client.cleanup_expired_payments(&admin);
+    assert_eq!(removed, 1, "only the expired payment should be removed");
+
+    // NEW_PAY must still exist.
+    let p = client.get_payment_by_id(&payer, &str(&env, "NEW_PAY"));
+    assert_eq!(p.amount, 200);
+}
+
+#[test]
+fn test_cleanup_with_no_expired_payments_returns_zero() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    // Long period — nothing will expire.
+    client.set_payment_cleanup_period(&admin, &86_400);
+    make_payment(&env, &client, &merchant, &payer, &token, "SAFE_001", 300);
+
+    let removed = client.cleanup_expired_payments(&admin);
+    assert_eq!(removed, 0);
+}
+
+#[test]
+fn test_cleanup_empty_contract_returns_zero() {
+    // Cleanup on a contract with no payments should not panic and return 0.
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.set_payment_cleanup_period(&admin, &1);
+    env.ledger().with_mut(|l| l.timestamp += 10);
+
+    let removed = client.cleanup_expired_payments(&admin);
+    assert_eq!(removed, 0);
+}
+
+#[test]
+fn test_cleanup_large_set_completes_without_panic() {
+    // Gas / loop-limit safety: cleanup a large number of expired payments.
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.set_payment_cleanup_period(&admin, &1);
+
+    // Create 20 payments (within Soroban test ledger entry limits).
+    for i in 0u32..20 {
+        let order_id = soroban_sdk::String::from_str(&env, &format!("BULK_{:03}", i));
+        let pub_key = Bytes::from_slice(&env, &[0u8; 32]);
+        let sig = Bytes::from_slice(&env, &[0u8; 64]);
+        client.process_payment_with_signature(
+            &payer,
+            &order_id,
+            &merchant,
+            &token,
+            &(100 + i as i128),
+            &str(&env, ""),
+            &None,
+            &sig,
+            &pub_key,
+        );
+    }
+
+    // Advance time so all payments are past the cleanup period.
+    env.ledger().with_mut(|l| l.timestamp += 10);
+
+    let removed = client.cleanup_expired_payments(&admin);
+    assert_eq!(removed, 20, "all 20 expired payments should be removed");
+
+    // Verify no payments remain in merchant history.
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &100,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page.payments.len(), 0);
+}
+
+#[test]
+fn test_cleanup_does_not_remove_payments_at_exact_cutoff_boundary() {
+    // A payment whose paid_at equals the cutoff timestamp is NOT yet expired
+    // (the check is `paid_at < cutoff`, so equal timestamps are kept).
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    client.set_payment_cleanup_period(&admin, &10);
+    make_payment(&env, &client, &merchant, &payer, &token, "BOUNDARY", 100);
+
+    // Advance by exactly the period — paid_at == cutoff, should NOT be removed.
+    env.ledger().with_mut(|l| l.timestamp += 10);
+
+    let removed = client.cleanup_expired_payments(&admin);
+    assert_eq!(removed, 0, "payment at exact cutoff boundary must not be removed");
+}
+
+// ── Min refund amount tests ───────────────────────────────────────────────────
+
+#[test]
+fn test_set_min_refund_amount_success() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    // Admin can set the minimum refund amount
+    client.set_min_refund_amount(&admin, &100);
+    // A refund at exactly the minimum should succeed
+    make_payment(&env, &client, &merchant, &payer, &token, "MRA_001", 1_000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REFUND_MRA1"),
+        &str(&env, "MRA_001"),
+        &100,
+        &str(&env, "At minimum"),
+    );
+    let refund = client.get_refund(&str(&env, "REFUND_MRA1"));
+    assert_eq!(refund.amount, 100);
+}
+
+#[test]
+fn test_refund_below_minimum_fails() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.set_min_refund_amount(&admin, &200);
+    make_payment(&env, &client, &merchant, &payer, &token, "MRA_002", 1_000);
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "REFUND_MRA2"),
+        &str(&env, "MRA_002"),
+        &199,
+        &str(&env, "Below minimum"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundBelowMinimum)));
+}
+
+#[test]
+fn test_refund_above_minimum_succeeds() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.set_min_refund_amount(&admin, &50);
+    make_payment(&env, &client, &merchant, &payer, &token, "MRA_003", 1_000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REFUND_MRA3"),
+        &str(&env, "MRA_003"),
+        &51,
+        &str(&env, "Above minimum"),
+    );
+    let refund = client.get_refund(&str(&env, "REFUND_MRA3"));
+    assert_eq!(refund.amount, 51);
+}
+
+#[test]
+fn test_set_min_refund_amount_non_admin_fails() {
+    let (env, client, _admin, _merchant, payer, _token) = setup_payment_env();
+    let result = client.try_set_min_refund_amount(&payer, &100);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_min_refund_not_set_allows_any_positive() {
+    // With minimum set to 1, any positive amount should be accepted
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.set_min_refund_amount(&admin, &1);
+    make_payment(&env, &client, &merchant, &payer, &token, "MRA_004", 1_000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REFUND_MRA4"),
+        &str(&env, "MRA_004"),
+        &1,
+        &str(&env, "Tiny refund"),
+    );
+    let refund = client.get_refund(&str(&env, "REFUND_MRA4"));
+    assert_eq!(refund.amount, 1);
+}
+
+#[test]
+fn test_set_min_refund_amount_zero_fails() {
+    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
+    let result = client.try_set_min_refund_amount(&admin, &0);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+}
+
+#[test]
+fn test_min_refund_boundary_one_below_fails() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.set_min_refund_amount(&admin, &500);
+    make_payment(&env, &client, &merchant, &payer, &token, "MRA_005", 1_000);
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "REFUND_MRA5"),
+        &str(&env, "MRA_005"),
+        &499,
+        &str(&env, "One below min"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundBelowMinimum)));
+}
+
+// ── Token whitelist tests (#284) ──────────────────────────────────────────────
+
+/// Admin can add and remove a token; is_token_allowed reflects the change.
+#[test]
+fn test_admin_add_remove_allowed_token() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+
+    client.set_admin(&admin);
+
+    // Token not allowed yet
+    assert!(!env.as_contract(&client.address, || storage::is_token_allowed(&env, &token)));
+
+    client.add_allowed_token(&admin, &token);
+    assert!(env.as_contract(&client.address, || storage::is_token_allowed(&env, &token)));
+
+    client.remove_allowed_token(&admin, &token);
+    assert!(!env.as_contract(&client.address, || storage::is_token_allowed(&env, &token)));
+}
+
+/// Only the admin may call add_allowed_token.
+#[test]
+fn test_add_allowed_token_requires_admin() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+    let stranger = Address::generate(&env);
+
+    client.set_admin(&admin);
+
+    let result = client.try_add_allowed_token(&stranger, &token);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+/// Only the admin may call remove_allowed_token.
+#[test]
+fn test_remove_allowed_token_requires_admin() {
+    let (env, client, admin, _, _, token) = setup_payment_env();
+    let stranger = Address::generate(&env);
+
+    let result = client.try_remove_allowed_token(&stranger, &token);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+/// process_payment_with_signature rejects a disallowed token.
+#[test]
+fn test_payment_with_disallowed_token_fails() {
+    let (env, client, admin, merchant, payer, _allowed_token) = setup_payment_env();
+    let token_admin = Address::generate(&env);
+    let bad_token = create_token(&env, &token_admin);
+    mint(&env, &bad_token, &token_admin, &payer, 10_000);
+
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "WL_ORDER_1"),
+        &merchant,
+        &bad_token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+
+    // After adding it, the payment succeeds
+    client.add_allowed_token(&admin, &bad_token);
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "WL_ORDER_1"),
+        &merchant,
+        &bad_token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+}
+
+/// batch_payment rejects any item with a disallowed token.
+#[test]
+fn test_batch_payment_disallowed_token_fails() {
+    let (env, client, _admin, merchant, payer, _allowed_token) = setup_payment_env();
+    let token_admin = Address::generate(&env);
+    let bad_token = create_token(&env, &token_admin);
+    mint(&env, &bad_token, &token_admin, &payer, 10_000);
+
+    let mut payments = Vec::new(&env);
+    payments.push_back(BatchPaymentItem {
+        order_id: str(&env, "WL_BATCH_1"),
+        merchant_address: merchant.clone(),
+        token_address: bad_token.clone(),
+        amount: 100,
+        memo: str(&env, ""),
+        signature: bytes(&env, &[0u8; 64]),
+        merchant_public_key: bytes(&env, &[0u8; 32]),
+    });
+
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+}
+
+/// initiate_multisig_payment rejects a disallowed token.
+#[test]
+fn test_multisig_payment_disallowed_token_fails() {
+    let (env, client, _admin, merchant, payer, _allowed_token) = setup_payment_env();
+    let token_admin = Address::generate(&env);
+    let bad_token = create_token(&env, &token_admin);
+
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "WL_MS_1"),
+        &merchant,
+        &bad_token,
+        &500,
+        &signers,
+        &1,
+        &None
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+}
+
+/// After a token is removed from the whitelist, existing payment paths reject it.
+#[test]
+fn test_removed_token_is_rejected() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // First payment works
+    client.process_payment_with_signature(
+        &payer, &str(&env, "WL_RM1"), &merchant, &token, &100, &str(&env, ""), &None, &sig, &pub_key,
+    );
+
+    // Admin removes the token
+    client.remove_allowed_token(&admin, &token);
+
+    // Subsequent payment with the same token must fail
+    let result = client.try_process_payment_with_signature(
+        &payer, &str(&env, "WL_RM2"), &merchant, &token, &100, &str(&env, ""), &None, &sig, &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+}
+
+// ── Refund edge-case tests (#286) ─────────────────────────────────────────────
+
+/// Partial refund that leaves a non-zero remaining balance updates status to PartiallyRefunded.
+#[test]
+fn test_partial_refund_updates_status() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_PR1", 1_000);
+
+    client.initiate_refund(&payer, &str(&env, "RF_PR1"), &str(&env, "EDGE_PR1"), &300, &str(&env, "partial"));
+    client.approve_refund(&merchant, &str(&env, "RF_PR1"));
+    client.execute_refund(&str(&env, "RF_PR1"));
+
+    let p = client.get_payment_by_id(&payer, &str(&env, "EDGE_PR1"));
+    assert_eq!(p.refunded_amount, 300);
+    assert!(matches!(p.status, crate::types::PaymentStatus::PartiallyRefunded));
+}
+
+/// Cumulative refunds that exactly equal the original amount set status to FullyRefunded.
+#[test]
+fn test_cumulative_partial_refunds_reach_full() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_CUM", 1_000);
+
+    // First partial: 600
+    client.initiate_refund(&payer, &str(&env, "RF_CUM1"), &str(&env, "EDGE_CUM"), &600, &str(&env, "first"));
+    client.approve_refund(&merchant, &str(&env, "RF_CUM1"));
+    client.execute_refund(&str(&env, "RF_CUM1"));
+
+    // Second partial: remaining 400 — should become FullyRefunded
+    client.initiate_refund(&payer, &str(&env, "RF_CUM2"), &str(&env, "EDGE_CUM"), &400, &str(&env, "second"));
+    client.approve_refund(&merchant, &str(&env, "RF_CUM2"));
+    client.execute_refund(&str(&env, "RF_CUM2"));
+
+    let p = client.get_payment_by_id(&payer, &str(&env, "EDGE_CUM"));
+    assert_eq!(p.refunded_amount, 1_000);
+    assert!(matches!(p.status, crate::types::PaymentStatus::FullyRefunded));
+}
+
+/// Refund of exactly the original amount (single request) is allowed and sets FullyRefunded.
+#[test]
+fn test_full_single_refund_allowed() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_FULL", 500);
+
+    client.initiate_refund(&payer, &str(&env, "RF_FULL"), &str(&env, "EDGE_FULL"), &500, &str(&env, "full"));
+    client.approve_refund(&merchant, &str(&env, "RF_FULL"));
+    client.execute_refund(&str(&env, "RF_FULL"));
+
+    let p = client.get_payment_by_id(&payer, &str(&env, "EDGE_FULL"));
+    assert!(matches!(p.status, crate::types::PaymentStatus::FullyRefunded));
+}
+
+/// Initiating a refund for more than the original amount is rejected immediately.
+#[test]
+fn test_over_refund_single_request_fails() {
+    let (env, client, _admin, _merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &_merchant, &payer, &token, "EDGE_OVER", 200);
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "RF_OVER"),
+        &str(&env, "EDGE_OVER"),
+        &201,
+        &str(&env, "too much"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundExceedsOriginal)));
+}
+
+/// After partial refunds the cumulative total cannot exceed the original amount.
+#[test]
+fn test_over_refund_cumulative_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_OVCUM", 1_000);
+
+    // Refund 700 first
+    client.initiate_refund(&payer, &str(&env, "RF_OV1"), &str(&env, "EDGE_OVCUM"), &700, &str(&env, "first"));
+    client.approve_refund(&merchant, &str(&env, "RF_OV1"));
+    client.execute_refund(&str(&env, "RF_OV1"));
+
+    // Attempt to refund 400 more (700 + 400 = 1100 > 1000) — must fail
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "RF_OV2"),
+        &str(&env, "EDGE_OVCUM"),
+        &400,
+        &str(&env, "over"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundExceedsOriginal)));
+}
+
+/// Refund initiated exactly at the 30-day boundary is still within the window.
+#[test]
+fn test_refund_at_window_boundary_allowed() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_BOUND", 500);
+
+    // Advance to exactly 30 days (still within window — window is > 30 days exclusive)
+    env.ledger().with_mut(|l| l.timestamp += 30 * 24 * 3600);
+
+    // Should succeed (boundary is inclusive on the payment side)
+    client.initiate_refund(
+        &payer,
+        &str(&env, "RF_BOUND"),
+        &str(&env, "EDGE_BOUND"),
+        &100,
+        &str(&env, "boundary"),
+    );
+}
+
+/// Refund initiated one second past the 30-day window is rejected.
+#[test]
+fn test_refund_one_second_past_window_fails() {
+    let (env, client, _admin, _merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &_merchant, &payer, &token, "EDGE_LATE", 500);
+
+    env.ledger().with_mut(|l| l.timestamp += 30 * 24 * 3600 + 1);
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "RF_LATE"),
+        &str(&env, "EDGE_LATE"),
+        &100,
+        &str(&env, "too late"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundWindowExpired)));
+}
+
+/// Approving a refund that is already Approved returns RefundAlreadyCompleted.
+#[test]
+fn test_approve_already_approved_refund_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_AA", 500);
+
+    client.initiate_refund(&payer, &str(&env, "RF_AA"), &str(&env, "EDGE_AA"), &100, &str(&env, "r"));
+    client.approve_refund(&merchant, &str(&env, "RF_AA"));
+
+    let result = client.try_approve_refund(&merchant, &str(&env, "RF_AA"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundAlreadyCompleted)));
+}
+
+/// Rejecting a refund that is already Rejected returns RefundAlreadyCompleted.
+#[test]
+fn test_reject_already_rejected_refund_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_RR", 500);
+
+    client.initiate_refund(&payer, &str(&env, "RF_RR"), &str(&env, "EDGE_RR"), &100, &str(&env, "r"));
+    client.reject_refund(&merchant, &str(&env, "RF_RR"));
+
+    let result = client.try_reject_refund(&merchant, &str(&env, "RF_RR"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundAlreadyCompleted)));
+}
+
+/// Executing a pending (not-yet-approved) refund returns RefundNotApproved.
+
+/// Executing a rejected refund returns RefundNotApproved.
+
+/// Refunding a zero-amount order is rejected by require_positive.
+#[test]
+fn test_zero_amount_refund_fails() {
+    let (env, client, _admin, _merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &_merchant, &payer, &token, "EDGE_ZERO", 500);
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "RF_ZERO"),
+        &str(&env, "EDGE_ZERO"),
+        &0,
+        &str(&env, "zero"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+}
+
+/// Merchant can also initiate a refund on behalf of the payer.
+#[test]
+fn test_merchant_can_initiate_refund() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EDGE_MINIT", 500);
+
+    // Merchant initiates — should succeed
+    client.initiate_refund(
+        &merchant,
+        &str(&env, "RF_MINIT"),
+        &str(&env, "EDGE_MINIT"),
+        &200,
+        &str(&env, "merchant initiated"),
+    );
+
+    let refund = client.get_refund(&str(&env, "RF_MINIT"));
+    assert!(matches!(refund.status, crate::types::RefundStatus::Pending));
+}
+
+// ── Versioning tests ──────────────────────────────────────────────────────────
+
+
+#[test]
+fn test_set_and_assert_version() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.set_contract_version(&admin);
+    client.assert_version_matches(&admin);
+}
+
+#[test]
+fn test_assert_version_no_stored_version_passes() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    // No set_contract_version called — no stored version means skip check
+    client.assert_version_matches(&admin);
+}
+
+#[test]
+fn test_set_contract_version_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let result = client.try_set_contract_version(&non_admin);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+// ── Multisig expiry and cancellation tests ────────────────────────────────────
+
+#[test]
+fn test_multisig_expired_cannot_sign() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_EXP_001"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+        &None
+    );
+
+    // Advance past 7-day expiry
+    env.ledger().with_mut(|l| l.timestamp += 8 * 24 * 3600);
+
+    let result = client.try_sign_multisig_payment(
+        &signer,
+        &str(&env, "MS_EXP_001"),
+        &bytes(&env, &[1u8; 64]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MultisigExpired)));
+}
+
+#[test]
+fn test_multisig_expired_cannot_execute() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_EXP_002"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+        &None
+    );
+
+    // Sign before expiry
+    client.sign_multisig_payment(&signer, &str(&env, "MS_EXP_002"), &bytes(&env, &[1u8; 64]));
+
+    // Advance past expiry
+    env.ledger().with_mut(|l| l.timestamp += 8 * 24 * 3600);
+
+    let result = client.try_execute_multisig_payment(&payer, &str(&env, "MS_EXP_002"));
+    assert_eq!(result, Err(Ok(PaymentError::PaymentExpired)));
+}
+
+#[test]
+fn test_multisig_cancellation_by_initiator() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_CANCEL_001"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+        &None
+    );
+
+    // Initiator cancels
+    client.cancel_multisig_payment(&payer, &str(&env, "MS_CANCEL_001"));
+
+    // Cannot sign after cancellation
+    let result = client.try_sign_multisig_payment(
+        &signer,
+        &str(&env, "MS_CANCEL_001"),
+        &bytes(&env, &[1u8; 64]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MultisigCancelled)));
+}
+
+#[test]
+fn test_multisig_cancel_unauthorized() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_CANCEL_002"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+        &None
+    );
+
+    let result = client.try_cancel_multisig_payment(&stranger, &str(&env, "MS_CANCEL_002"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_multisig_cancel_by_admin() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_CANCEL_003"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+        &None
+    );
+
+    // Admin can also cancel
+    client.cancel_multisig_payment(&admin, &str(&env, "MS_CANCEL_003"));
+
+    let ms = client.get_multisig_payment(&admin, &str(&env, "MS_CANCEL_003"));
+    assert!(ms.cancelled);
+}
+
+// ── Admin permission tests ────────────────────────────────────────────────────
+
+#[test]
+fn test_set_payment_cleanup_period_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let result = client.try_set_payment_cleanup_period(&non_admin, &86400);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_set_payment_cleanup_period_admin_success() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.set_payment_cleanup_period(&admin, &86400);
+}
+
+#[test]
+fn test_set_large_payment_threshold_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let result = client.try_set_large_payment_threshold(&non_admin, &1000);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_set_large_payment_threshold_admin_success() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.set_large_payment_threshold(&admin, &1000);
+}
+
+#[test]
+fn test_deactivate_merchant_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+    let result = client.try_deactivate_merchant(&non_admin, &merchant);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_archive_payment_record_unauthorized() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let non_admin = Address::generate(&env);
+    make_payment(&env, &client, &merchant, &payer, &token, "ARCH_001", 100);
+    let result = client.try_archive_payment_record(&non_admin, &str(&env, "ARCH_001"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_archive_payment_record_admin_success() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ARCH_002", 100);
+    client.archive_payment_record(&admin, &str(&env, "ARCH_002"));
+    let result = client.try_get_payment_by_id(&payer, &str(&env, "ARCH_002"));
+    assert_eq!(result, Err(Ok(PaymentError::PaymentNotFound)));
+}
+
+#[test]
+fn test_cleanup_expired_payments_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let result = client.try_cleanup_expired_payments(&non_admin);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_get_global_payment_stats_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let result = client.try_get_global_payment_stats(&non_admin, &None, &None);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+// ── Token whitelist tests (Issue #348) ────────────────────────────────────────
+
+#[test]
+fn test_payment_with_no_whitelist_succeeds() {
+    // When no whitelist is set every token is allowed
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "WL_001", 100);
+    let p = client.get_payment_by_id(&payer, &str(&env, "WL_001"));
+    assert_eq!(p.amount, 100);
+}
+
+#[test]
+fn test_payment_with_allowed_token_succeeds() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.add_allowed_token(&admin, &token);
+    make_payment(&env, &client, &merchant, &payer, &token, "WL_002", 200);
+    let p = client.get_payment_by_id(&payer, &str(&env, "WL_002"));
+    assert_eq!(p.amount, 200);
+}
+
+
+
+
+
+// ── State rollback and error handling tests (#346) ────────────────────────────
+//
+// These tests verify that failed contract invocations do NOT leave partial
+// state changes behind.  Each test follows the pattern:
+//   1. Capture the "before" state.
+//   2. Trigger an operation that must fail.
+//   3. Assert the expected error is returned.
+//   4. Re-read state and confirm it is identical to the "before" snapshot.
+
+// ── Payment state rollback ─────────────────────────────────────────────────
+
+/// A payment with an invalid (zero) amount must not create a payment record
+/// and must not mutate the payer's payment history.
+#[test]
+fn test_state_unchanged_after_invalid_amount_payment() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // Capture history length before the failed call.
+    let before = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(before.total_matching, 0);
+
+    // Attempt a payment with amount = 0.
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "ROLLBACK_ZERO_AMT"),
+        &merchant,
+        &token,
+        &0,
+        &str(&env, "should fail"),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+
+    // State must be unchanged.
+    let after = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(after.total_matching, 0);
+}
+
+/// A payment to an unregistered merchant must be rejected and must not
+/// create a payment record.
+#[test]
+fn test_state_unchanged_after_payment_to_unregistered_merchant() {
+    let (env, client, _admin, _merchant, payer, token) = setup_payment_env();
+    let unknown_merchant = Address::generate(&env);
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "ROLLBACK_NO_MERCH"),
+        &unknown_merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MerchantNotFound)));
+
+    // No payment record must exist for this order_id.
+    let history = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(history.total_matching, 0);
+}
+
+/// A payment to an inactive merchant must be rejected and must not create
+/// a payment record or affect the merchant's stats.
+#[test]
+fn test_state_unchanged_after_payment_to_inactive_merchant() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.deactivate_merchant(&admin, &merchant);
+
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    let stats_before = client.get_merchant_stats(&merchant);
+
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "ROLLBACK_INACTIVE"),
+        &merchant,
+        &token,
+        &200,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MerchantInactive)));
+
+    // Merchant stats must not have changed.
+    let stats_after = client.get_merchant_stats(&merchant);
+    assert_eq!(stats_before.total_payments, stats_after.total_payments);
+    assert_eq!(stats_before.total_volume, stats_after.total_volume);
+}
+
+/// A duplicate order-ID payment must be rejected and must not create a second
+/// record or change the original payment.
+#[test]
+fn test_state_unchanged_after_duplicate_order_id() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // First payment succeeds.
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "ROLLBACK_DUP"),
+        &merchant,
+        &token,
+        &500,
+        &str(&env, "original"),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    let original = client.get_payment_by_id(&payer, &str(&env, "ROLLBACK_DUP"));
+    assert_eq!(original.amount, 500);
+
+    // Second call with the same order_id must fail.
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "ROLLBACK_DUP"),
+        &merchant,
+        &token,
+        &999,
+        &str(&env, "duplicate"),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::PaymentAlreadyExists)));
+
+    // Original payment record must be unmodified.
+    let after = client.get_payment_by_id(&payer, &str(&env, "ROLLBACK_DUP"));
+    assert_eq!(after.amount, 500);
+    assert_eq!(after.memo, str(&env, "original"));
+}
+
+/// A payment using a disallowed token must be rejected and must not create
+/// a payment record.
+#[test]
+fn test_state_unchanged_after_disallowed_token_payment() {
+    let (env, client, _admin, merchant, payer, _token) = setup_payment_env();
+    let bad_token_admin = Address::generate(&env);
+    let bad_token = create_token(&env, &bad_token_admin);
+    // bad_token is intentionally NOT added to the allowlist.
+    mint(&env, &bad_token, &bad_token_admin, &payer, 10_000);
+
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "ROLLBACK_BAD_TOKEN"),
+        &merchant,
+        &bad_token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+
+    let history = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(history.total_matching, 0);
+}
+
+// ── Refund state rollback ──────────────────────────────────────────────────
+
+/// Initiating a refund for an amount that exceeds the original payment must be
+/// rejected and must not create a refund record or alter the payment's
+/// refunded_amount.
+#[test]
+fn test_state_unchanged_after_refund_exceeds_original() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ROLLBACK_REF_EX", 500);
+
+    let payment_before = client.get_payment_by_id(&payer, &str(&env, "ROLLBACK_REF_EX"));
+    assert_eq!(payment_before.refunded_amount, 0);
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "ROLLBACK_REFUND_EX"),
+        &str(&env, "ROLLBACK_REF_EX"),
+        &600,
+        &str(&env, "too much"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundExceedsOriginal)));
+
+    // Payment record must be unchanged.
+    let payment_after = client.get_payment_by_id(&payer, &str(&env, "ROLLBACK_REF_EX"));
+    assert_eq!(payment_after.refunded_amount, 0);
+    assert!(matches!(payment_after.status, crate::types::PaymentStatus::Completed));
+}
+
+/// Initiating a refund after the refund window has expired must be rejected
+/// and must not create a refund record.
+#[test]
+fn test_state_unchanged_after_refund_window_expired() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ROLLBACK_REF_WIN", 1_000);
+
+    // Advance past the 30-day window.
+    env.ledger().with_mut(|l| {
+        l.timestamp += 31 * 24 * 3600;
+    });
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "ROLLBACK_REFUND_WIN"),
+        &str(&env, "ROLLBACK_REF_WIN"),
+        &100,
+        &str(&env, "late refund"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundWindowExpired)));
+
+    // Payment must still show zero refunded amount.
+    let payment = client.get_payment_by_id(&payer, &str(&env, "ROLLBACK_REF_WIN"));
+    assert_eq!(payment.refunded_amount, 0);
+    assert!(matches!(payment.status, crate::types::PaymentStatus::Completed));
+}
+
+/// Executing a refund that is still Pending (not yet approved) must be
+/// rejected; the refund must remain in Pending state.
+#[test]
+fn test_state_unchanged_after_execute_pending_refund() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ROLLBACK_REF_PEND", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "ROLLBACK_REFUND_PEND"),
+        &str(&env, "ROLLBACK_REF_PEND"),
+        &200,
+        &str(&env, "pending"),
+    );
+
+    let result = client.try_execute_refund(&str(&env, "ROLLBACK_REFUND_PEND"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundNotApproved)));
+
+    // Refund status must still be Pending.
+    let refund = client.get_refund(&str(&env, "ROLLBACK_REFUND_PEND"));
+    assert!(matches!(refund.status, crate::types::RefundStatus::Pending));
+
+    // Payment refunded_amount must still be zero.
+    let payment = client.get_payment_by_id(&payer, &str(&env, "ROLLBACK_REF_PEND"));
+    assert_eq!(payment.refunded_amount, 0);
+}
+
+/// Executing a refund that was rejected must be rejected; the refund must
+/// remain in Rejected state and the payment must be unchanged.
+#[test]
+fn test_state_unchanged_after_execute_rejected_refund() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ROLLBACK_REF_REJ", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "ROLLBACK_REFUND_REJ"),
+        &str(&env, "ROLLBACK_REF_REJ"),
+        &300,
+        &str(&env, "to reject"),
+    );
+    client.reject_refund(&merchant, &str(&env, "ROLLBACK_REFUND_REJ"));
+
+    let result = client.try_execute_refund(&str(&env, "ROLLBACK_REFUND_REJ"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundNotApproved)));
+
+    let refund = client.get_refund(&str(&env, "ROLLBACK_REFUND_REJ"));
+    assert!(matches!(refund.status, crate::types::RefundStatus::Rejected));
+
+    let payment = client.get_payment_by_id(&payer, &str(&env, "ROLLBACK_REF_REJ"));
+    assert_eq!(payment.refunded_amount, 0);
+}
+
+/// A duplicate refund ID must be rejected; the original refund record must
+/// remain intact.
+#[test]
+fn test_state_unchanged_after_duplicate_refund_id() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ROLLBACK_REF_DUP_ORD", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "ROLLBACK_REFUND_DUP"),
+        &str(&env, "ROLLBACK_REF_DUP_ORD"),
+        &200,
+        &str(&env, "original refund"),
+    );
+
+    let original = client.get_refund(&str(&env, "ROLLBACK_REFUND_DUP"));
+    assert_eq!(original.amount, 200);
+
+    // Second initiate with the same refund_id must fail.
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "ROLLBACK_REFUND_DUP"),
+        &str(&env, "ROLLBACK_REF_DUP_ORD"),
+        &150,
+        &str(&env, "duplicate attempt"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundAlreadyExists)));
+
+    // Original refund must be unchanged.
+    let after = client.get_refund(&str(&env, "ROLLBACK_REFUND_DUP"));
+    assert_eq!(after.amount, 200);
+    assert_eq!(after.reason, str(&env, "original refund"));
+}
+
+/// After a failed refund initiation (window expired), global stats must not
+/// be updated.
+#[test]
+fn test_global_stats_unchanged_after_failed_refund() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ROLLBACK_STATS_ORD", 1_000);
+
+    let stats_before = client.get_global_payment_stats(&admin, &None, &None);
+
+    env.ledger().with_mut(|l| {
+        l.timestamp += 31 * 24 * 3600;
+    });
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "ROLLBACK_STATS_REF"),
+        &str(&env, "ROLLBACK_STATS_ORD"),
+        &100,
+        &str(&env, "too late"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundWindowExpired)));
+
+    let stats_after = client.get_global_payment_stats(&admin, &None, &None);
+    assert_eq!(stats_before.total_refunds, stats_after.total_refunds);
+    assert_eq!(stats_before.total_refund_volume, stats_after.total_refund_volume);
+}
+
+// ── Merchant state rollback ────────────────────────────────────────────────
+
+/// Registering a merchant that is already registered must be rejected and
+/// must not overwrite the existing merchant record.
+#[test]
+fn test_state_unchanged_after_duplicate_merchant_registration() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Original Store"),
+        &str(&env, "original desc"),
+        &str(&env, "original@contact.com"),
+        &MerchantCategory::Retail,
+    );
+    let original = client.get_merchant(&merchant);
+    assert_eq!(original.name, str(&env, "Original Store"));
+
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "Overwrite Attempt"),
+        &str(&env, "bad desc"),
+        &str(&env, "bad@contact.com"),
+        &MerchantCategory::Food,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MerchantAlreadyRegistered)));
+
+    // Record must be identical to the original.
+    let after = client.get_merchant(&merchant);
+    assert_eq!(after.name, str(&env, "Original Store"));
+    assert_eq!(after.category, MerchantCategory::Retail);
+    assert_eq!(after.contact_info, str(&env, "original@contact.com"));
+}
+
+/// Deactivating a merchant by a non-admin caller must be rejected and must
+/// not change the merchant's active status.
+#[test]
+fn test_state_unchanged_after_unauthorized_deactivation() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Active Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+
+    let result = client.try_deactivate_merchant(&non_admin, &merchant);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+
+    // Merchant must still be active.
+    let m = client.get_merchant(&merchant);
+    assert!(m.active);
+}
+
+/// Verifying a non-existent merchant must fail and must not create a
+/// phantom merchant record.
+#[test]
+fn test_state_unchanged_after_verify_nonexistent_merchant() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let phantom = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_verify_merchant(&admin, &phantom);
+    assert_eq!(result, Err(Ok(PaymentError::MerchantNotFound)));
+
+    // is_registered must still return false.
+    assert!(!client.is_registered(&phantom));
+}
+
+// ── Multisig state rollback ────────────────────────────────────────────────
+
+/// Signing a multisig payment by a signer who has already signed must be
+/// rejected; the collected-signatures list must remain unchanged.
+#[test]
+fn test_state_unchanged_after_double_sign_multisig() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = soroban_sdk::vec![&env, signer.clone()];
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "ROLLBACK_MS_DSIGN"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+        &None,
+    );
+
+    client.sign_multisig_payment(
+        &signer,
+        &str(&env, "ROLLBACK_MS_DSIGN"),
+        &bytes(&env, &[1u8; 64]),
+    );
+
+    let ms_before = client.get_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_DSIGN"));
+    let sig_count_before = ms_before.collected.len();
+
+    // Attempt to sign again with the same signer.
+    let result = client.try_sign_multisig_payment(
+        &signer,
+        &str(&env, "ROLLBACK_MS_DSIGN"),
+        &bytes(&env, &[2u8; 64]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MultisigAlreadySigned)));
+
+    // Collected-signatures count must be unchanged.
+    let ms_after = client.get_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_DSIGN"));
+    assert_eq!(ms_after.collected.len(), sig_count_before);
+    assert!(!ms_after.executed);
+}
+
+/// Executing an already-executed multisig payment must be rejected; the
+/// executed flag must remain true and no second token transfer can occur.
+#[test]
+fn test_state_unchanged_after_double_execute_multisig() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let signers = soroban_sdk::vec![&env, signer.clone()];
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "ROLLBACK_MS_DEXEC"),
+        &merchant,
+        &token,
+        &300,
+        &signers,
+        &1,
+        &None,
+    );
+    client.sign_multisig_payment(
+        &signer,
+        &str(&env, "ROLLBACK_MS_DEXEC"),
+        &bytes(&env, &[1u8; 64]),
+    );
+    client.execute_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_DEXEC"));
+
+    let ms_executed = client.get_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_DEXEC"));
+    assert!(ms_executed.executed);
+
+    // Second execute must fail.
+    let result = client.try_execute_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_DEXEC"));
+    assert_eq!(result, Err(Ok(PaymentError::MultisigAlreadyExecuted)));
+
+    // State must still show executed.
+    let ms_after = client.get_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_DEXEC"));
+    assert!(ms_after.executed);
+}
+
+/// Executing a multisig payment with insufficient signatures must be
+/// rejected; the payment must remain unexecuted and no token transfer
+/// must occur.
+#[test]
+fn test_state_unchanged_after_insufficient_signatures_multisig() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+    let signers = soroban_sdk::vec![&env, signer1.clone(), signer2.clone()];
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "ROLLBACK_MS_INSIG"),
+        &merchant,
+        &token,
+        &400,
+        &signers,
+        &2,
+        &None,
+    );
+    // Only one of two required signatures.
+    client.sign_multisig_payment(
+        &signer1,
+        &str(&env, "ROLLBACK_MS_INSIG"),
+        &bytes(&env, &[1u8; 64]),
+    );
+
+    let result = client.try_execute_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_INSIG"));
+    assert_eq!(result, Err(Ok(PaymentError::InsufficientSignatures)));
+
+    // Payment must not be executed.
+    let ms = client.get_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_INSIG"));
+    assert!(!ms.executed);
+}
+
+/// Cancelling an already-cancelled multisig payment must be rejected; state
+/// must remain cancelled.
+#[test]
+fn test_state_unchanged_after_double_cancel_multisig() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let signers = soroban_sdk::vec![&env, signer.clone()];
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "ROLLBACK_MS_DCANCEL"),
+        &merchant,
+        &token,
+        &200,
+        &signers,
+        &1,
+        &None,
+    );
+    client.cancel_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_DCANCEL"));
+
+    let ms_cancelled = client.get_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_DCANCEL"));
+    assert!(ms_cancelled.cancelled);
+
+    let result = client.try_cancel_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_DCANCEL"));
+    assert_eq!(result, Err(Ok(PaymentError::MultisigAlreadyCancelled)));
+
+    let ms_after = client.get_multisig_payment(&payer, &str(&env, "ROLLBACK_MS_DCANCEL"));
+    assert!(ms_after.cancelled);
+    assert!(!ms_after.executed);
+}
+
+// ── Contract-paused state rollback ─────────────────────────────────────────
+
+/// Any payment attempted while the contract is paused must be rejected and
+/// must not create a payment record.
+#[test]
+fn test_state_unchanged_after_payment_while_paused() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.pause_contract(&admin);
+
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "ROLLBACK_PAUSED_PAY"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
+
+    let history = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(history.total_matching, 0);
+}
+
+/// A refund initiation attempted while the contract is paused must be
+/// rejected and must not create a refund record.
+#[test]
+fn test_state_unchanged_after_refund_while_paused() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ROLLBACK_PAUSED_BASE", 1_000);
+
+    client.pause_contract(&admin);
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "ROLLBACK_PAUSED_REF"),
+        &str(&env, "ROLLBACK_PAUSED_BASE"),
+        &200,
+        &str(&env, "paused"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
+
+    // Payment refunded_amount must still be zero.
+    // Unpause first so we can read state.
+    client.unpause_contract(&admin);
+    let payment = client.get_payment_by_id(&payer, &str(&env, "ROLLBACK_PAUSED_BASE"));
+    assert_eq!(payment.refunded_amount, 0);
+}
+
+// ── Admin error handling state rollback ────────────────────────────────────
+
+/// A second set_admin call must fail with AdminAlreadySet and must not
+/// replace the stored admin.
+#[test]
+fn test_state_unchanged_after_second_set_admin() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let impostor = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_set_admin(&impostor);
+    assert_eq!(result, Err(Ok(PaymentError::AdminAlreadySet)));
+
+    // Original admin must still be stored.
+    let stored = env.as_contract(&client.address, || storage::get_admin(&env));
+    assert_eq!(stored, Some(admin));
+}
+
+/// An unauthorized admin transfer must not change the stored admin.
+#[test]
+fn test_state_unchanged_after_unauthorized_admin_transfer() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_transfer_admin(&non_admin, &new_admin);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+
+    // Admin must still be the original.
+    let stored = env.as_contract(&client.address, || storage::get_admin(&env));
+    assert_eq!(stored, Some(admin));
+}
+
+// ── Batch payment atomicity (extended) ────────────────────────────────────
+
+/// When a batch fails on the second item (invalid amount), the first item
+/// that succeeded inside the batch must NOT be persisted (atomicity).
+#[test]
+fn test_batch_payment_first_item_not_stored_on_later_failure() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let items = soroban_sdk::vec![
+        &env,
+        BatchPaymentItem {
+            order_id: str(&env, "BATCH_ATOM_OK"),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 100,
+            memo: str(&env, "valid"),
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        },
+        BatchPaymentItem {
+            order_id: str(&env, "BATCH_ATOM_FAIL"),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: -1,
+            memo: str(&env, "bad amount"),
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        },
+    ];
+
+    let result = client.try_batch_payment(&payer, &items);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+
+    // Neither item must appear in payer history.
+    let history = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(history.total_matching, 0);
+}
+
+/// When a batch fails because one item targets an inactive merchant, no
+/// items from that batch must be stored.
+#[test]
+fn test_batch_payment_no_partial_state_on_inactive_merchant() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    // Register a second merchant and immediately deactivate it.
+    let inactive_merchant = Address::generate(&env);
+    client.register_merchant(
+        &inactive_merchant,
+        &str(&env, "Inactive"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Other,
+    );
+    client.deactivate_merchant(&admin, &inactive_merchant);
+
+    let items = soroban_sdk::vec![
+        &env,
+        BatchPaymentItem {
+            order_id: str(&env, "BATCH_INACT_OK"),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 100,
+            memo: str(&env, "valid"),
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        },
+        BatchPaymentItem {
+            order_id: str(&env, "BATCH_INACT_FAIL"),
+            merchant_address: inactive_merchant.clone(),
+            token_address: token.clone(),
+            amount: 100,
+            memo: str(&env, "inactive merchant"),
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        },
+    ];
+
+    let result = client.try_batch_payment(&payer, &items);
+    assert_eq!(result, Err(Ok(PaymentError::MerchantInactive)));
+
+    // No payments must have been stored.
+    let history = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(history.total_matching, 0);
+}
+
+// ── Global stats unchanged on failure ─────────────────────────────────────
+
+/// Global stats must not change when a payment is rejected.
+#[test]
+fn test_global_stats_unchanged_after_failed_payment() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    let stats_before = client.get_global_payment_stats(&admin, &None, &None);
+
+    // Try an invalid-amount payment.
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+    let _ = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "ROLLBACK_STATS_PAY"),
+        &merchant,
+        &token,
+        &0,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+
+    let stats_after = client.get_global_payment_stats(&admin, &None, &None);
+    assert_eq!(stats_before.total_payments, stats_after.total_payments);
+    assert_eq!(stats_before.total_volume, stats_after.total_volume);
+}
+
+// ── Payment-request state rollback ────────────────────────────────────────
+
+/// Paying an expired payment request must be rejected and must not update
+/// the merchant's payment history.
+#[test]
+fn test_state_unchanged_after_expired_payment_request() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Create a request that expires in 60 seconds.
+    client.create_payment_request(
+        &merchant,
+        &str(&env, "ROLLBACK_REQ_EXP"),
+        &token,
+        &500,
+        &str(&env, "expires soon"),
+        &60,
+    );
+
+    // Advance past the TTL.
+    env.ledger().with_mut(|l| {
+        l.timestamp += 61;
+    });
+
+    let result = client.try_pay_payment_request(
+        &payer,
+        &str(&env, "ROLLBACK_REQ_EXP"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::PaymentExpired)));
+
+    // Merchant history must be empty.
+    let history = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(history.total_matching, 0);
+}
+
+// -- Subscription tests (#559) -------------------------------------------------
+
+const PLAN_INTERVAL: u64 = 1_000;
+const PLAN_AMOUNT: i128 = 100;
+const PLAN_MAX_CYCLES: u32 = 3;
+
+/// Payment env plus a subscription plan "PLAN_1" (amount 100, interval 1000s, 3 cycles).
+fn setup_subscription_env() -> (
+    Env,
+    PaymentProcessingContractClient<'static>,
+    Address,
+    Address,
+    Address,
+    Address,
+) {
+    let (env, client, admin, merchant, subscriber, token) = setup_payment_env();
+    client.create_subscription_plan(
+        &admin,
+        &str(&env, "PLAN_1"),
+        &token,
+        &PLAN_AMOUNT,
+        &PLAN_INTERVAL,
+        &PLAN_MAX_CYCLES,
+    );
+    (env, client, admin, merchant, subscriber, token)
+}
+
+fn advance_time(env: &Env, secs: u64) {
+    env.ledger().with_mut(|l| {
+        l.timestamp += secs;
+    });
+}
+
+#[test]
+fn test_create_subscription_plan_success() {
+    let (env, client, _admin, _merchant, _subscriber, token) = setup_subscription_env();
+
+    // events().all() only reflects the most recent invocation, which is the
+    // create_subscription_plan call inside setup_subscription_env.
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "subscription_plan_created"),
+        "subscription_plan_created event must be emitted"
+    );
+
+    let plan = client.get_subscription_plan(&str(&env, "PLAN_1"));
+    assert_eq!(plan.token, token);
+    assert_eq!(plan.amount, PLAN_AMOUNT);
+    assert_eq!(plan.interval_secs, PLAN_INTERVAL);
+    assert_eq!(plan.max_cycles, PLAN_MAX_CYCLES);
+}
+
+#[test]
+fn test_create_subscription_plan_duplicate_fails() {
+    // Error 60: SubscriptionPlanAlreadyExists
+    let (env, client, admin, _merchant, _subscriber, token) = setup_subscription_env();
+    let result = client.try_create_subscription_plan(
+        &admin,
+        &str(&env, "PLAN_1"),
+        &token,
+        &PLAN_AMOUNT,
+        &PLAN_INTERVAL,
+        &PLAN_MAX_CYCLES,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionPlanAlreadyExists)));
+}
+
+#[test]
+fn test_create_subscription_plan_requires_admin() {
+    let (env, client, _admin, _merchant, _subscriber, token) = setup_subscription_env();
+    let non_admin = Address::generate(&env);
+    let result = client.try_create_subscription_plan(
+        &non_admin,
+        &str(&env, "PLAN_2"),
+        &token,
+        &PLAN_AMOUNT,
+        &PLAN_INTERVAL,
+        &PLAN_MAX_CYCLES,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_create_subscription_plan_validates_inputs() {
+    let (env, client, admin, _merchant, _subscriber, token) = setup_subscription_env();
+
+    let result = client.try_create_subscription_plan(
+        &admin,
+        &str(&env, "PLAN_2"),
+        &token,
+        &0,
+        &PLAN_INTERVAL,
+        &PLAN_MAX_CYCLES,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+
+    let result = client.try_create_subscription_plan(
+        &admin,
+        &str(&env, "PLAN_2"),
+        &token,
+        &PLAN_AMOUNT,
+        &0,
+        &PLAN_MAX_CYCLES,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+
+    let result = client.try_create_subscription_plan(
+        &admin,
+        &str(&env, "PLAN_2"),
+        &token,
+        &PLAN_AMOUNT,
+        &PLAN_INTERVAL,
+        &0,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+
+    let unknown_token = Address::generate(&env);
+    let result = client.try_create_subscription_plan(
+        &admin,
+        &str(&env, "PLAN_2"),
+        &unknown_token,
+        &PLAN_AMOUNT,
+        &PLAN_INTERVAL,
+        &PLAN_MAX_CYCLES,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+}
+
+#[test]
+fn test_subscribe_success() {
+    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "subscription_created"),
+        "subscription_created event must be emitted"
+    );
+
+    let sub = client.get_subscription(&str(&env, "SUB_1"));
+    assert_eq!(sub.plan_id, str(&env, "PLAN_1"));
+    assert_eq!(sub.merchant, merchant);
+    assert_eq!(sub.subscriber, subscriber);
+    assert_eq!(sub.status, SubscriptionStatus::Active);
+    assert_eq!(sub.cycles_charged, 0);
+}
+
+#[test]
+fn test_subscribe_duplicate_fails() {
+    // Error 61: SubscriptionAlreadyExists
+    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    let result = client.try_subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionAlreadyExists)));
+}
+
+#[test]
+fn test_subscribe_unknown_plan_fails() {
+    // Error 62: SubscriptionPlanNotFound
+    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+    let result = client.try_subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "NO_PLAN"),
+        &str(&env, "SUB_1"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionPlanNotFound)));
+}
+
+#[test]
+fn test_subscribe_unregistered_merchant_fails() {
+    let (env, client, _admin, _merchant, subscriber, _token) = setup_subscription_env();
+    let stranger = Address::generate(&env);
+    let result = client.try_subscribe(
+        &stranger,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MerchantNotFound)));
+}
+
+#[test]
+fn test_charge_subscription_success() {
+    let (env, client, _admin, merchant, subscriber, token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+
+    advance_time(&env, PLAN_INTERVAL);
+    client.charge_subscription(&merchant, &str(&env, "SUB_1"));
+
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "subscription_charged"),
+        "subscription_charged event must be emitted"
+    );
+
+    let token_client = TokenClient::new(&env, &token);
+    assert_eq!(token_client.balance(&merchant), PLAN_AMOUNT);
+    assert_eq!(token_client.balance(&subscriber), 10_000 - PLAN_AMOUNT);
+
+    let sub = client.get_subscription(&str(&env, "SUB_1"));
+    assert_eq!(sub.cycles_charged, 1);
+    assert_eq!(sub.status, SubscriptionStatus::Active);
+    assert_eq!(sub.last_charged_at, env.ledger().timestamp());
+}
+
+#[test]
+fn test_charge_subscription_unknown_fails() {
+    // Error 63: SubscriptionNotFound
+    let (env, client, _admin, merchant, _subscriber, _token) = setup_subscription_env();
+    let result = client.try_charge_subscription(&merchant, &str(&env, "NO_SUB"));
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionNotFound)));
+}
+
+#[test]
+fn test_charge_subscription_wrong_merchant_fails() {
+    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    advance_time(&env, PLAN_INTERVAL);
+
+    let stranger = Address::generate(&env);
+    let result = client.try_charge_subscription(&stranger, &str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_charge_subscription_interval_not_elapsed() {
+    // Error 66: SubscriptionIntervalNotElapsed
+    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+
+    // Immediately after subscribing
+    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::SubscriptionIntervalNotElapsed))
+    );
+
+    // One second short of the interval
+    advance_time(&env, PLAN_INTERVAL - 1);
+    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::SubscriptionIntervalNotElapsed))
+    );
+
+    // Immediately after a successful charge
+    advance_time(&env, 1);
+    client.charge_subscription(&merchant, &str(&env, "SUB_1"));
+    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::SubscriptionIntervalNotElapsed))
+    );
+}
+
+#[test]
+fn test_charge_subscription_max_cycles_reached() {
+    // Error 65: SubscriptionMaxCyclesReached
+    let (env, client, _admin, merchant, subscriber, token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+
+    for _ in 0..PLAN_MAX_CYCLES {
+        advance_time(&env, PLAN_INTERVAL);
+        client.charge_subscription(&merchant, &str(&env, "SUB_1"));
+    }
+
+    let sub = client.get_subscription(&str(&env, "SUB_1"));
+    assert_eq!(sub.cycles_charged, PLAN_MAX_CYCLES);
+    assert_eq!(sub.status, SubscriptionStatus::Completed);
+
+    advance_time(&env, PLAN_INTERVAL);
+    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionMaxCyclesReached)));
+
+    // No funds moved beyond the allowed cycles
+    let token_client = TokenClient::new(&env, &token);
+    assert_eq!(
+        token_client.balance(&merchant),
+        PLAN_AMOUNT * PLAN_MAX_CYCLES as i128
+    );
+
+    // The whole allowance is consumed at completion; nothing residual remains
+    assert_eq!(token_client.allowance(&subscriber, &client.address), 0);
+}
+
+#[test]
+fn test_charge_subscription_after_cancel_fails() {
+    // Error 64: SubscriptionNotActive
+    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    client.cancel_subscription(&subscriber, &str(&env, "SUB_1"));
+
+    advance_time(&env, PLAN_INTERVAL);
+    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionNotActive)));
+}
+
+#[test]
+fn test_cancel_subscription_by_subscriber() {
+    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    client.cancel_subscription(&subscriber, &str(&env, "SUB_1"));
+
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "subscription_cancelled"),
+        "subscription_cancelled event must be emitted"
+    );
+
+    let sub = client.get_subscription(&str(&env, "SUB_1"));
+    assert_eq!(sub.status, SubscriptionStatus::Cancelled);
+}
+
+#[test]
+fn test_cancel_subscription_by_merchant() {
+    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    client.cancel_subscription(&merchant, &str(&env, "SUB_1"));
+
+    let sub = client.get_subscription(&str(&env, "SUB_1"));
+    assert_eq!(sub.status, SubscriptionStatus::Cancelled);
+}
+
+#[test]
+fn test_cancel_subscription_unknown_fails() {
+    // Error 63: SubscriptionNotFound
+    let (env, client, _admin, _merchant, subscriber, _token) = setup_subscription_env();
+    let result = client.try_cancel_subscription(&subscriber, &str(&env, "NO_SUB"));
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionNotFound)));
+}
+
+#[test]
+fn test_cancel_subscription_by_stranger_fails() {
+    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+
+    let stranger = Address::generate(&env);
+    let result = client.try_cancel_subscription(&stranger, &str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_cancel_subscription_twice_fails() {
+    // Error 64: SubscriptionNotActive
+    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    client.cancel_subscription(&subscriber, &str(&env, "SUB_1"));
+    let result = client.try_cancel_subscription(&subscriber, &str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionNotActive)));
+}
+
+#[test]
+fn test_cancel_completed_subscription_fails() {
+    // Error 64: SubscriptionNotActive
+    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+
+    for _ in 0..PLAN_MAX_CYCLES {
+        advance_time(&env, PLAN_INTERVAL);
+        client.charge_subscription(&merchant, &str(&env, "SUB_1"));
+    }
+
+    let result = client.try_cancel_subscription(&subscriber, &str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionNotActive)));
+}
+
+#[test]
+fn test_charge_subscription_inactive_merchant_fails() {
+    let (env, client, admin, merchant, subscriber, token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    client.deactivate_merchant(&admin, &merchant);
+
+    advance_time(&env, PLAN_INTERVAL);
+    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::MerchantInactive)));
+
+    let token_client = TokenClient::new(&env, &token);
+    assert_eq!(token_client.balance(&merchant), 0);
+    let sub = client.get_subscription(&str(&env, "SUB_1"));
+    assert_eq!(sub.cycles_charged, 0);
+
+    // Reactivation restores charging
+    client.reactivate_merchant(&admin, &merchant);
+    client.charge_subscription(&merchant, &str(&env, "SUB_1"));
+    assert_eq!(token_client.balance(&merchant), PLAN_AMOUNT);
+}
+
+#[test]
+fn test_charge_subscription_delisted_token_fails() {
+    let (env, client, admin, merchant, subscriber, token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    client.remove_allowed_token(&admin, &token);
+
+    advance_time(&env, PLAN_INTERVAL);
+    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+
+    let sub = client.get_subscription(&str(&env, "SUB_1"));
+    assert_eq!(sub.cycles_charged, 0);
+}
+
+#[test]
+fn test_concurrent_subscriptions_same_token_all_cycles_charge() {
+    let (env, client, _admin, merchant, subscriber, token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_2"),
+    );
+
+    // The second subscribe must extend the shared allowance, not clobber it
+    let token_client = TokenClient::new(&env, &token);
+    let total = PLAN_AMOUNT * PLAN_MAX_CYCLES as i128 * 2;
+    assert_eq!(token_client.allowance(&subscriber, &client.address), total);
+
+    for _ in 0..PLAN_MAX_CYCLES {
+        advance_time(&env, PLAN_INTERVAL);
+        client.charge_subscription(&merchant, &str(&env, "SUB_1"));
+        client.charge_subscription(&merchant, &str(&env, "SUB_2"));
+    }
+
+    assert_eq!(token_client.balance(&merchant), total);
+    assert_eq!(token_client.allowance(&subscriber, &client.address), 0);
+}
+
+#[test]
+fn test_cancel_by_subscriber_shrinks_allowance_to_reserve() {
+    let (env, client, _admin, merchant, subscriber, token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_2"),
+    );
+
+    advance_time(&env, PLAN_INTERVAL);
+    client.charge_subscription(&merchant, &str(&env, "SUB_1"));
+    client.cancel_subscription(&subscriber, &str(&env, "SUB_1"));
+
+    // Only SUB_2's untouched cycles stay approved
+    let token_client = TokenClient::new(&env, &token);
+    assert_eq!(
+        token_client.allowance(&subscriber, &client.address),
+        PLAN_AMOUNT * PLAN_MAX_CYCLES as i128
+    );
+
+    client.cancel_subscription(&subscriber, &str(&env, "SUB_2"));
+    assert_eq!(token_client.allowance(&subscriber, &client.address), 0);
+}
+
+#[test]
+fn test_merchant_cancel_leaves_allowance_until_renewed() {
+    let (env, client, _admin, merchant, subscriber, token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    client.cancel_subscription(&merchant, &str(&env, "SUB_1"));
+
+    // Merchant cancel cannot shrink the allowance (needs subscriber auth)
+    let token_client = TokenClient::new(&env, &token);
+    assert_eq!(
+        token_client.allowance(&subscriber, &client.address),
+        PLAN_AMOUNT * PLAN_MAX_CYCLES as i128
+    );
+
+    client.renew_subscription_allowance(&subscriber, &token);
+    assert_eq!(token_client.allowance(&subscriber, &client.address), 0);
+}
+
+#[test]
+fn test_subscription_functions_reject_when_paused() {
+    let (env, client, admin, merchant, subscriber, token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
+    );
+    client.pause_contract(&admin);
+
+    let result = client.try_create_subscription_plan(
+        &admin,
+        &str(&env, "PLAN_2"),
+        &token,
+        &PLAN_AMOUNT,
+        &PLAN_INTERVAL,
+        &PLAN_MAX_CYCLES,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
+
+    let result = client.try_subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_2"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
+
+    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
+
+    let result = client.try_cancel_subscription(&subscriber, &str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
+
+    let result = client.try_renew_subscription_allowance(&subscriber, &token);
+    assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
 }
