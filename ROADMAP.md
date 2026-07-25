@@ -19,6 +19,7 @@ This document outlines planned features and milestones for LumenFlow. It is upda
 - [ ] **Merchant tiers** — volume-based rate adjustments and feature gating
 - [ ] **Subscription payments** — recurring payment schedules with on-chain scheduling
 - [ ] **Cross-asset payments** — accept any Stellar asset, auto-convert to merchant's preferred token
+- [ ] **Merchant payout & settlement reporting** — aggregated settlement summaries with CSV/JSON export for accounting and tax reconciliation; see [docs/merchant-payout-reporting.md](docs/merchant-payout-reporting.md) for full spec ([#371](https://github.com/Gloriachinedu/lumenflow-contracts/issues/371))
 
 ---
 

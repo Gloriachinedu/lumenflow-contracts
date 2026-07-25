@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Merchant Onboarding – LumenFlow</title>
+  <meta name="description" content="Register your business on LumenFlow in a few simple steps." />
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    body { align-items: center; }
+
+    /* ── Step indicator ──────────────────────────────────────────────────── */
+    .wizard-steps {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 0;
+      margin-bottom: 2rem;
+      max-width: 600px;
+      width: 100%;
+    }
+    .step-node {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      flex: 1;
+      position: relative;
+    }
+    .step-node:not(:last-child)::after {
+      content: '';
+      position: absolute;
+      top: 16px;
+      left: calc(50% + 16px);
+      width: calc(100% - 32px);
+      height: 2px;
+      background: #e0e0e0;
+    }
+    .step-node.completed::after { background: #6c47ff; }
+    .step-circle {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: #e0e0e0;
+      color: #888;
+      font-size: 0.8rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1;
+      transition: background 0.2s, color 0.2s;
+    }
+    .step-node.active   .step-circle { background: #6c47ff; color: #fff; }
+    .step-node.completed .step-circle { background: #6c47ff; color: #fff; }
+    .step-label {
+      font-size: 0.68rem;
+      color: #888;
+      margin-top: 0.3rem;
+      text-align: center;
+      white-space: nowrap;
+    }
+    .step-node.active   .step-label { color: #6c47ff; font-weight: 600; }
+    .step-node.completed .step-label { color: #6c47ff; }
+
+    /* ── Wizard card ─────────────────────────────────────────────────────── */
+    .wizard-card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 2px 16px rgba(0,0,0,0.08);
+      max-width: 560px;
+      width: 100%;
+      padding: 2rem;
+      margin-bottom: 1.5rem;
+    }
+    .wizard-card h2 {
+      font-size: 1.3rem;
+      font-weight: 700;
+      color: #1a1a2e;
+      margin-bottom: 0.4rem;
+      border: none;
+    }
+    .wizard-subtitle {
+      color: #666;
+      font-size: 0.9rem;
+      margin-bottom: 1.5rem;
+    }
+
+    /* ── Step screens ────────────────────────────────────────────────────── */
+    .wizard-step { display: none; }
+    .wizard-step.active { display: block; }
+
+    /* ── Benefit cards (step 1) ──────────────────────────────────────────── */
+    .benefits-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .benefit-card {
+      background: #f5f7fa;
+      border-radius: 10px;
+      padding: 1rem;
+      text-align: center;
+    }
+    .benefit-card .icon { font-size: 1.75rem; margin-bottom: 0.5rem; }
+    .benefit-card strong { display: block; font-size: 0.82rem; color: #1a1a2e; }
+    .benefit-card span { font-size: 0.75rem; color: #888; }
+
+    /* ── Wallet buttons (step 2) ─────────────────────────────────────────── */
+    .wallet-options { display: flex; gap: 1rem; margin-bottom: 1.25rem; flex-wrap: wrap; }
+    .wallet-btn {
+      flex: 1 1 180px;
+      padding: 0.75rem 1rem;
+      border: 1.5px solid #dde1e7;
+      border-radius: 10px;
+      background: #fff;
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #1a1a2e;
+      transition: border-color 0.15s, background 0.15s;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .wallet-btn:hover { border-color: #6c47ff; background: #f5f0ff; }
+    .wallet-btn.connected { border-color: #1a9e5c; color: #1a9e5c; background: #f0fbf5; }
+
+    .address-display {
+      background: #f5f7fa;
+      border-radius: 8px;
+      padding: 0.6rem 0.8rem;
+      font-size: 0.8rem;
+      font-family: monospace;
+      color: #555;
+      word-break: break-all;
+      margin-bottom: 0.75rem;
+      min-height: 36px;
+    }
+
+    /* ── Review summary (step 4) ─────────────────────────────────────────── */
+    .review-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid #f0f0f0;
+      font-size: 0.88rem;
+    }
+    .review-row:last-child { border-bottom: none; }
+    .review-label { color: #888; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .review-value { font-weight: 600; color: #1a1a2e; text-align: right; max-width: 60%; word-break: break-word; }
+
+    .fee-info {
+      background: #f5f0ff;
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      font-size: 0.85rem;
+      color: #6c47ff;
+      margin: 1rem 0;
+    }
+
+    .tx-status {
+      display: none;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      margin-top: 0.75rem;
+    }
+    .tx-status.pending  { background: #fff8e1; color: #c68000; display: block; }
+    .tx-status.success  { background: #e6f9f0; color: #1a9e5c; display: block; }
+
+    /* ── Done step (step 5) ──────────────────────────────────────────────── */
+    .done-address {
+      background: #f5f0ff;
+      border-radius: 8px;
+      padding: 0.6rem 0.8rem;
+      font-size: 0.8rem;
+      font-family: monospace;
+      color: #6c47ff;
+      word-break: break-all;
+      margin-bottom: 1.25rem;
+    }
+    .next-steps-list { list-style: none; margin-bottom: 1.5rem; }
+    .next-steps-list li {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid #f0f0f0;
+      font-size: 0.9rem;
+    }
+    .next-steps-list li:last-child { border-bottom: none; }
+    .next-steps-list a { color: #6c47ff; font-weight: 600; text-decoration: none; }
+    .next-steps-list a:hover { text-decoration: underline; }
+
+    /* ── Nav buttons ─────────────────────────────────────────────────────── */
+    .wizard-nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 1.5rem;
+      gap: 0.75rem;
+    }
+    .wizard-nav .btn { flex: 1; min-height: 44px; }
+
+    @media (max-width: 480px) {
+      .benefits-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Step indicator -->
+<div class="wizard-steps" id="stepIndicator" role="list" aria-label="Onboarding steps">
+  <div class="step-node active" id="step-node-1" role="listitem">
+    <div class="step-circle" aria-label="Step 1">1</div>
+    <div class="step-label">Welcome</div>
+  </div>
+  <div class="step-node" id="step-node-2" role="listitem">
+    <div class="step-circle" aria-label="Step 2">2</div>
+    <div class="step-label">Wallet</div>
+  </div>
+  <div class="step-node" id="step-node-3" role="listitem">
+    <div class="step-circle" aria-label="Step 3">3</div>
+    <div class="step-label">Details</div>
+  </div>
+  <div class="step-node" id="step-node-4" role="listitem">
+    <div class="step-circle" aria-label="Step 4">4</div>
+    <div class="step-label">Review</div>
+  </div>
+  <div class="step-node" id="step-node-5" role="listitem">
+    <div class="step-circle" aria-label="Step 5">5</div>
+    <div class="step-label">Done</div>
+  </div>
+</div>
+
+<div class="wizard-card">
+
+  <!-- Step 1: Welcome -->
+  <section class="wizard-step active" id="step-1" aria-labelledby="step1-heading">
+    <h2 id="step1-heading">Welcome to LumenFlow 🌟</h2>
+    <p class="wizard-subtitle">Accept payments on Stellar in minutes. Let's get your merchant account set up.</p>
+
+    <div class="benefits-grid">
+      <div class="benefit-card">
+        <div class="icon">⚡</div>
+        <strong>Instant Settlement</strong>
+        <span>Funds settle in seconds on Stellar</span>
+      </div>
+      <div class="benefit-card">
+        <div class="icon">💸</div>
+        <strong>Low Fees</strong>
+        <span>Minimal platform fees, no hidden costs</span>
+      </div>
+      <div class="benefit-card">
+        <div class="icon">🔐</div>
+        <strong>Multi-sig Security</strong>
+        <span>Optional multi-party approval for payments</span>
+      </div>
+    </div>
+
+    <div class="wizard-nav">
+      <button class="btn btn-primary btn-full" onclick="goToStep(2)">Get Started →</button>
+    </div>
+  </section>
+
+  <!-- Step 2: Connect Wallet -->
+  <section class="wizard-step" id="step-2" aria-labelledby="step2-heading">
+    <h2 id="step2-heading">Connect Your Stellar Wallet</h2>
+    <p class="wizard-subtitle">Your wallet address becomes your merchant identity on the Stellar network.</p>
+
+    <div class="wallet-options">
+      <button class="wallet-btn" id="btn-freighter" onclick="connectFreighter()">
+        <span>🔑</span> Connect Freighter
+      </button>
+      <button class="wallet-btn" id="btn-albedo" onclick="connectAlbedo()">
+        <span>🔑</span> Connect Albedo
+      </button>
+    </div>
+
+    <div class="field">
+      <label for="wallet-address">Connected Address</label>
+      <div class="address-display" id="wallet-address" aria-live="polite">Not connected — click a wallet above</div>
+    </div>
+
+    <div id="already-registered" class="alert alert-info" style="display:none">
+      ℹ️ This address is already registered. You can proceed or <a href="history.html">view your dashboard</a>.
+    </div>
+
+    <div class="wizard-nav">
+      <button class="btn btn-outline" onclick="goToStep(1)">← Back</button>
+      <button class="btn btn-primary" id="btn-next-2" onclick="goToStep(3)">Continue →</button>
+    </div>
+
+    <p style="font-size:0.78rem;color:#aaa;margin-top:0.75rem;text-align:center">
+      No wallet? <button class="btn-link" onclick="useDemo()">Continue in demo mode</button>
+    </p>
+  </section>
+
+  <!-- Step 3: Business Details -->
+  <section class="wizard-step" id="step-3" aria-labelledby="step3-heading">
+    <h2 id="step3-heading">Tell Us About Your Business</h2>
+    <p class="wizard-subtitle">This information will be stored on-chain with your merchant profile.</p>
+
+    <form id="business-form" novalidate>
+      <div class="field">
+        <label for="biz-name">Business Name <span style="color:#e53e3e">*</span></label>
+        <input type="text" id="biz-name" placeholder="e.g. Acme Store" maxlength="80" autocomplete="organization" />
+        <div class="err-msg" id="err-biz-name">Business name is required.</div>
+      </div>
+
+      <div class="field">
+        <label for="biz-desc">Description <span style="color:#e53e3e">*</span></label>
+        <textarea id="biz-desc" rows="3" placeholder="Brief description of your products or services…" maxlength="280"
+          style="width:100%;padding:0.55rem 0.75rem;border:1.5px solid #dde1e7;border-radius:8px;font-size:0.9rem;outline:none;resize:vertical;transition:border-color 0.15s;font-family:inherit"></textarea>
+        <div class="err-msg" id="err-biz-desc">Description is required.</div>
+      </div>
+
+      <div class="field">
+        <label for="biz-email">Contact Email <span style="color:#e53e3e">*</span></label>
+        <input type="email" id="biz-email" placeholder="support@yourbusiness.com" autocomplete="email" />
+        <div class="err-msg" id="err-biz-email">A valid email address is required.</div>
+      </div>
+
+      <div class="field">
+        <label for="biz-category">Category <span style="color:#e53e3e">*</span></label>
+        <select id="biz-category">
+          <option value="">— Select a category —</option>
+          <option value="Retail">Retail</option>
+          <option value="Services">Services</option>
+          <option value="Digital">Digital / Software</option>
+          <option value="Food">Food &amp; Beverage</option>
+          <option value="Other">Other</option>
+        </select>
+        <div class="err-msg" id="err-biz-category">Please select a category.</div>
+      </div>
+    </form>
+
+    <div class="wizard-nav">
+      <button class="btn btn-outline" onclick="goToStep(2)">← Back</button>
+      <button class="btn btn-primary" onclick="validateAndNext()">Continue →</button>
+    </div>
+  </section>
+
+  <!-- Step 4: Review & Register -->
+  <section class="wizard-step" id="step-4" aria-labelledby="step4-heading">
+    <h2 id="step4-heading">Review &amp; Register</h2>
+    <p class="wizard-subtitle">Check your details before submitting to the Stellar network.</p>
+
+    <div id="review-summary"></div>
+
+    <div class="fee-info">
+      💡 Platform fee: <strong>2.5%</strong> per transaction · Refund window: <strong>30 days</strong> · Min refund: <strong>100 stroops</strong>
+    </div>
+
+    <button class="btn btn-primary btn-full" id="btn-register" onclick="registerMerchant()">
+      🚀 Register Merchant
+    </button>
+
+    <div class="tx-status" id="tx-status"></div>
+
+    <div class="wizard-nav" style="margin-top:1rem">
+      <button class="btn btn-outline" onclick="goToStep(3)">← Back</button>
+    </div>
+  </section>
+
+  <!-- Step 5: Done -->
+  <section class="wizard-step" id="step-5" aria-labelledby="step5-heading">
+    <h2 id="step5-heading">🎉 You're Registered!</h2>
+    <p class="wizard-subtitle">Your merchant profile is live on the Stellar network. Here's what to do next.</p>
+
+    <div class="field">
+      <label>Your Merchant Address</label>
+      <div class="done-address" id="done-address" aria-live="polite">—</div>
+    </div>
+
+    <ul class="next-steps-list">
+      <li>✅ <span>Share your <a href="receipt.html">payment receipt link</a> with customers</span></li>
+      <li>✅ <span>Browse your <a href="history.html">payment history</a></span></li>
+      <li>✅ <span>Manage refunds from your <a href="../dashboard/merchant-dashboard/index.html">merchant dashboard</a></span></li>
+      <li>📖 <span>Read the <a href="../docs/merchant-onboarding.md">onboarding guide</a> for advanced settings</span></li>
+    </ul>
+
+    <a href="../dashboard/merchant-dashboard/index.html" class="btn btn-primary btn-full" style="display:block;text-align:center;text-decoration:none;line-height:2.5">
+      Go to Dashboard →
+    </a>
+  </section>
+
+</div>
+
+<script>
+  // ── State ──────────────────────────────────────────────────────────────────
+  const form = {
+    walletAddress: '',
+    name: '',
+    description: '',
+    email: '',
+    category: '',
+    isDemo: false,
+  };
+
+  let currentStep = 1;
+
+  // ── Step navigation ────────────────────────────────────────────────────────
+  function goToStep(n) {
+    document.getElementById(`step-${currentStep}`).classList.remove('active');
+    document.getElementById(`step-node-${currentStep}`).classList.remove('active');
+    if (n > currentStep) {
+      document.getElementById(`step-node-${currentStep}`).classList.add('completed');
+    } else {
+      // going back — remove completed from current
+      document.getElementById(`step-node-${currentStep}`).classList.remove('completed');
+    }
+    currentStep = n;
+    document.getElementById(`step-${n}`).classList.add('active');
+    document.getElementById(`step-node-${n}`).classList.add('active');
+    document.getElementById(`step-node-${n}`).setAttribute('aria-current', 'step');
+
+    if (n === 4) buildReview();
+    if (n === 5) document.getElementById('done-address').textContent =
+      form.walletAddress || 'G…(demo address)';
+
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  // ── Wallet connect ─────────────────────────────────────────────────────────
+  async function connectFreighter() {
+    if (window.freighter) {
+      try {
+        const resp = await window.freighter.getConnectedAccount();
+        setWallet(resp.publicKey, 'btn-freighter');
+      } catch {
+        alert('Freighter connection failed. Make sure the extension is installed and unlocked.');
+      }
+    } else {
+      alert('Freighter extension not found. Install it from https://www.freighter.app/');
+    }
+  }
+
+  async function connectAlbedo() {
+    if (window.albedo) {
+      try {
+        const resp = await window.albedo.publicKey({});
+        setWallet(resp.pubkey, 'btn-albedo');
+      } catch {
+        alert('Albedo connection failed.');
+      }
+    } else {
+      alert('Albedo not available. Visit https://albedo.link/');
+    }
+  }
+
+  function setWallet(address, btnId) {
+    form.walletAddress = address;
+    document.getElementById('wallet-address').textContent = address;
+    document.querySelectorAll('.wallet-btn').forEach(b => b.classList.remove('connected'));
+    document.getElementById(btnId).classList.add('connected');
+  }
+
+  function useDemo() {
+    form.isDemo = true;
+    setWallet('GDEMO…LUMENFLOW1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'btn-freighter');
+  }
+
+  // ── Form validation (step 3) ───────────────────────────────────────────────
+  function validateAndNext() {
+    const name     = document.getElementById('biz-name').value.trim();
+    const desc     = document.getElementById('biz-desc').value.trim();
+    const email    = document.getElementById('biz-email').value.trim();
+    const category = document.getElementById('biz-category').value;
+
+    let valid = true;
+
+    function setError(id, fieldId, show) {
+      const err   = document.getElementById(id);
+      const input = document.getElementById(fieldId);
+      err.classList.toggle('visible', show);
+      if (input) input.classList.toggle('error', show);
+      if (show) valid = false;
+    }
+
+    setError('err-biz-name',     'biz-name',     !name);
+    setError('err-biz-desc',     'biz-desc',      !desc);
+    setError('err-biz-email',    'biz-email',     !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
+    setError('err-biz-category', 'biz-category',  !category);
+
+    if (!valid) return;
+
+    form.name        = name;
+    form.description = desc;
+    form.email       = email;
+    form.category    = category;
+
+    goToStep(4);
+  }
+
+  // ── Review summary (step 4) ────────────────────────────────────────────────
+  function buildReview() {
+    const rows = [
+      { label: 'Wallet Address', value: form.walletAddress || '(demo)' },
+      { label: 'Business Name',  value: form.name },
+      { label: 'Description',    value: form.description },
+      { label: 'Contact Email',  value: form.email },
+      { label: 'Category',       value: form.category },
+    ];
+    document.getElementById('review-summary').innerHTML = rows.map(r => `
+      <div class="review-row">
+        <span class="review-label">${r.label}</span>
+        <span class="review-value">${escapeHtml(r.value)}</span>
+      </div>`).join('');
+  }
+
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  // ── Register (step 4 → 5) ──────────────────────────────────────────────────
+  async function registerMerchant() {
+    const btn = document.getElementById('btn-register');
+    const status = document.getElementById('tx-status');
+
+    btn.disabled = true;
+    btn.textContent = '⏳ Submitting…';
+    status.className = 'tx-status pending';
+    status.textContent = '⏳ Transaction pending — waiting for network confirmation…';
+
+    // Demo: simulate a 2-second network delay
+    await new Promise(r => setTimeout(r, 2000));
+
+    status.className = 'tx-status success';
+    status.textContent = '✅ Registration confirmed! Your merchant profile is live.';
+    btn.textContent = '✅ Registered';
+
+    setTimeout(() => goToStep(5), 1000);
+  }
+</script>
+</body>
+</html>
