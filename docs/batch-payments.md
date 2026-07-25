@@ -1,224 +1,130 @@
-# Batch Payment Processing
+# Batch Payments
 
-LumenFlow supports processing up to **10 payments in a single contract invocation** via `process_batch_payment`. This document covers the batch format, atomicity guarantees, error handling, and idempotent re-submission.
+The `batch_payment` function lets a payer send up to **10** payments to different
+merchants in a single, atomic transaction. If any item fails validation or
+signature verification, the **entire batch is reverted** — no partial state is
+written.
 
----
+## Function signature
 
-## Overview
-
-| Property | Value |
-|----------|-------|
-| Max batch size | **10 items** |
-| Atomicity | **Non-atomic** — each item is processed independently |
-| Idempotency | **Yes** — duplicate `order_id` values are skipped |
-| Auth required | Payer must authorise the invocation |
-
----
-
-## Request Format
-
-Each item in the batch is a `BatchPaymentItem` object. The batch is submitted as a JSON array in the `items` parameter.
-
-### `BatchPaymentItem` fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `order_id` | string | Unique order identifier. Duplicate IDs are skipped (idempotent). |
-| `merchant_address` | string (Address) | Stellar address of the recipient merchant. |
-| `token_address` | string (Address) | SAC token contract address. |
-| `amount` | integer (i128) | Payment amount in token base units. |
-| `memo` | string | Human-readable memo (max 128 chars). |
-| `signature` | bytes (hex or base64) | Ed25519 signature over the payment payload. See [docs/signature-format.md](signature-format.md). |
-| `merchant_public_key` | bytes (hex or base64) | 32-byte Ed25519 public key of the merchant, used to verify `signature`. |
-
----
-
-## Complete 3-Item Batch Example
-
-```json
-{
-  "payer": "GBPAYER1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-  "items": [
-    {
-      "order_id": "ORDER_2024_001",
-      "merchant_address": "GMERCHANT_ALPHA_ADDR",
-      "token_address": "GDAO_USDC_TOKEN_CONTRACT",
-      "amount": 5000,
-      "memo": "Invoice #001 - Web design",
-      "signature": "a1b2c3d4e5f6...",
-      "merchant_public_key": "ed25519pubkey01..."
-    },
-    {
-      "order_id": "ORDER_2024_002",
-      "merchant_address": "GMERCHANT_BETA_ADDR",
-      "token_address": "GDAO_USDC_TOKEN_CONTRACT",
-      "amount": 12000,
-      "memo": "Invoice #002 - Hosting",
-      "signature": "b2c3d4e5f6a1...",
-      "merchant_public_key": "ed25519pubkey02..."
-    },
-    {
-      "order_id": "ORDER_2024_003",
-      "merchant_address": "GMERCHANT_GAMMA_ADDR",
-      "token_address": "GDAO_USDC_TOKEN_CONTRACT",
-      "amount": 800,
-      "memo": "Invoice #003 - Domain renewal",
-      "signature": "c3d4e5f6a1b2...",
-      "merchant_public_key": "ed25519pubkey03..."
-    }
-  ]
-}
+```rust
+pub fn batch_payment(
+    env: Env,
+    payer: Address,
+    payments: Vec<BatchPaymentItem>,
+) -> Result<(), PaymentError>
 ```
 
-### CLI invocation
+## `BatchPaymentItem` fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `order_id` | `String` | ✅ | Unique order ID. Must not already exist on-chain. |
+| `merchant_address` | `Address` | ✅ | Registered, active merchant. |
+| `token_address` | `Address` | ✅ | SAC token to transfer. |
+| `amount` | `i128` | ✅ | Transfer amount in the token's smallest unit. Must be > 0. |
+| `memo` | `String` | ✅ | Human-readable description (may be empty). |
+| `tags` | `Option<Vec<String>>` | ✅* | Optional tags for categorising this item (see below). |
+| `signature` | `Bytes` | ✅ | ed25519 signature over `order_id_xdr \|\| amount_be_bytes`. |
+| `merchant_public_key` | `Bytes` | ✅ | 32-byte ed25519 public key of the merchant. |
+
+> *`tags` is optional — pass `None` / `null` / `undefined` if not needed.
+
+## Tags field (added in v1.1)
+
+The `tags` field mirrors the same field available on `process_payment_with_signature`.
+It allows merchants to attach metadata labels to individual batch items for
+reporting, reconciliation, and filtering.
+
+### Rules
+
+- **Maximum 5 tags** per batch item.
+- Each tag must be between **1 and 32 characters**.
+- Tags are validated using the shared `validate_tags` helper — the same rules
+  apply as for single payments.
+- An **invalid tag in any item causes the entire batch to be rejected**
+  (`PaymentError::InvalidTags`).
+
+### Example (Rust)
+
+```rust
+let mut tags = Vec::new(&env);
+tags.push_back(String::from_str(&env, "invoice"));
+tags.push_back(String::from_str(&env, "q3-2026"));
+
+let item = BatchPaymentItem {
+    order_id: String::from_str(&env, "ORDER_001"),
+    merchant_address: merchant.clone(),
+    token_address: token.clone(),
+    amount: 1_000,
+    memo: String::from_str(&env, "Monthly subscription"),
+    tags: Some(tags),
+    signature: sig,
+    merchant_public_key: pub_key,
+};
+```
+
+### Example (TypeScript SDK)
+
+```typescript
+import { BatchPaymentItem } from "@lumenflow/sdk";
+
+const item: BatchPaymentItem = {
+  order_id: "ORDER_001",
+  merchant_address: "G...",
+  token_address: "C...",
+  amount: 1000n,
+  memo: "Monthly subscription",
+  tags: ["invoice", "q3-2026"],      // ← optional tags
+  signature: new Uint8Array(64),
+  merchant_public_key: new Uint8Array(32),
+};
+```
+
+### Example (CLI)
 
 ```bash
-stellar contract invoke \
-  --id $CONTRACT_ID \
-  --source-account $PAYER_KEY \
-  --network $NETWORK \
-  -- process_batch_payment \
-  --payer $PAYER_ADDRESS \
-  --items '[
-    {"order_id":"ORDER_2024_001","merchant_address":"GMERCHANT_ALPHA_ADDR","token_address":"GDAO_USDC_TOKEN_CONTRACT","amount":5000,"memo":"Invoice #001","signature":"a1b2c3...","merchant_public_key":"ed25519key01..."},
-    {"order_id":"ORDER_2024_002","merchant_address":"GMERCHANT_BETA_ADDR","token_address":"GDAO_USDC_TOKEN_CONTRACT","amount":12000,"memo":"Invoice #002","signature":"b2c3d4...","merchant_public_key":"ed25519key02..."},
-    {"order_id":"ORDER_2024_003","merchant_address":"GMERCHANT_GAMMA_ADDR","token_address":"GDAO_USDC_TOKEN_CONTRACT","amount":800,"memo":"Invoice #003","signature":"c3d4e5...","merchant_public_key":"ed25519key03..."}
-  ]'
+stellar contract invoke --id $CONTRACT_ID --source-account $PAYER_KEY --network $NETWORK \
+  -- batch_payment \
+  --payer <payer-address> \
+  --payments '[{
+    "order_id": "ORDER_001",
+    "merchant_address": "<merchant>",
+    "token_address": "<token>",
+    "amount": 1000,
+    "memo": "Monthly sub",
+    "tags": ["invoice", "q3-2026"],
+    "signature": "<sig-bytes>",
+    "merchant_public_key": "<pub-key-bytes>"
+  }]'
 ```
 
----
+## Tags stored in `PaymentOrder`
 
-## Atomicity Guarantee
-
-**Batch payments are non-atomic.** Each item is processed independently inside the contract:
-
-- If item 1 succeeds and item 2 fails, item 1's payment is **finalised on-chain**.
-- The contract does **not** roll back previously processed items when a later item fails.
-- The caller receives a per-item result array indicating which items succeeded and which failed.
-
-### Result structure
-
-```json
-{
-  "results": [
-    { "order_id": "ORDER_2024_001", "status": "success" },
-    { "order_id": "ORDER_2024_002", "status": "error", "code": "InvalidSignature" },
-    { "order_id": "ORDER_2024_003", "status": "success" }
-  ]
-}
-```
-
----
-
-## Partial Failure Scenarios
-
-### Scenario: Item 2 of 3 fails signature validation
-
-Suppose items 1 and 3 have valid signatures but item 2 has an incorrect `signature` field.
-
-**What happens:**
-
-1. Item 1 (`ORDER_2024_001`) — signature verified ✅ → payment processed, tokens transferred, event emitted.
-2. Item 2 (`ORDER_2024_002`) — signature verification fails ❌ → error recorded, **no tokens transferred**, processing continues.
-3. Item 3 (`ORDER_2024_003`) — signature verified ✅ → payment processed, tokens transferred, event emitted.
-
-**Result:**
-
-```json
-{
-  "results": [
-    { "order_id": "ORDER_2024_001", "status": "success" },
-    { "order_id": "ORDER_2024_002", "status": "error", "code": "InvalidSignature" },
-    { "order_id": "ORDER_2024_003", "status": "success" }
-  ]
-}
-```
-
-The payer is only charged for items 1 and 3. Item 2 must be corrected and re-submitted.
-
----
-
-## Error Codes
-
-| Code | Meaning | Recovery |
-|------|---------|----------|
-| `InvalidSignature` | Ed25519 signature did not verify against the payload and merchant public key | Re-compute the signature; see [docs/signature-format.md](signature-format.md) |
-| `DuplicateOrderId` | An order with this `order_id` already exists on-chain | This is the idempotency mechanism — already paid, no action needed |
-| `MerchantNotFound` | The `merchant_address` is not registered | Verify the merchant address; check registration status |
-| `MerchantInactive` | The merchant account has been deactivated | Contact the merchant or use a different merchant |
-| `InsufficientBalance` | Payer does not hold enough tokens | Top up the payer account before retrying |
-| `BatchTooLarge` | More than 10 items submitted | Split into multiple batches of ≤ 10 items |
-| `InvalidAmount` | Amount is zero or negative | Provide a positive `amount` |
-
----
-
-## Idempotent Re-submission
-
-Because `order_id` is the idempotency key, re-submitting a batch that was partially processed is safe:
-
-- Items that **already succeeded** (their `order_id` exists on-chain) will be returned with `status: "error", code: "DuplicateOrderId"` — **no double charge occurs**.
-- Items that **failed** (no on-chain record) will be retried normally.
-
-### Re-submission workflow
-
-1. Receive partial batch result.
-2. Identify failed items and fix the root cause (e.g. recompute signatures).
-3. Re-submit the **full original batch** or just the failed items — both approaches are safe.
-4. Items that were already paid will be silently skipped via the duplicate-order-id guard.
-
-### Example: re-submitting after item 2 failure
+Tags provided on a `BatchPaymentItem` are written to the resulting `PaymentOrder`
+record. You can retrieve them via:
 
 ```bash
-# Fix the signature for ORDER_2024_002 and re-submit all three items.
-# ORDER_2024_001 and ORDER_2024_003 will return DuplicateOrderId (safe).
-# ORDER_2024_002 will be processed if the new signature is correct.
-
-stellar contract invoke \
-  --id $CONTRACT_ID \
-  --source-account $PAYER_KEY \
-  --network $NETWORK \
-  -- process_batch_payment \
-  --payer $PAYER_ADDRESS \
-  --items '[
-    {"order_id":"ORDER_2024_001","merchant_address":"GMERCHANT_ALPHA_ADDR","token_address":"GDAO_USDC_TOKEN_CONTRACT","amount":5000,"memo":"Invoice #001","signature":"a1b2c3...","merchant_public_key":"ed25519key01..."},
-    {"order_id":"ORDER_2024_002","merchant_address":"GMERCHANT_BETA_ADDR","token_address":"GDAO_USDC_TOKEN_CONTRACT","amount":12000,"memo":"Invoice #002","signature":"FIXED_SIGNATURE...","merchant_public_key":"ed25519key02..."},
-    {"order_id":"ORDER_2024_003","merchant_address":"GMERCHANT_GAMMA_ADDR","token_address":"GDAO_USDC_TOKEN_CONTRACT","amount":800,"memo":"Invoice #003","signature":"c3d4e5...","merchant_public_key":"ed25519key03..."}
-  ]'
+stellar contract invoke --id $CONTRACT_ID -- get_payment_by_id \
+  --caller <address> --order_id "ORDER_001"
 ```
 
----
+The response's `tags` field will contain the values you supplied.
 
-## Limits and Constraints
+## Error codes
 
-| Constraint | Value | Notes |
-|-----------|-------|-------|
-| Max items per batch | **10** | Enforced at contract entry; returns `BatchTooLarge` if exceeded |
-| `order_id` uniqueness | Global, permanent | Once a payment is processed, that `order_id` can never be reused |
-| Token approval | Payer must pre-approve the contract for the **total** amount | Single token approval covering sum of all items in the batch |
-| Memo max length | 128 characters | Truncated in events if longer |
+| Error | Cause |
+|-------|-------|
+| `BatchSizeExceeded` | More than 10 items in the batch |
+| `InvalidAmount` | Any item has `amount ≤ 0` |
+| `InvalidTags` | Any item has > 5 tags, an empty tag, or a tag > 32 chars |
+| `PaymentAlreadyExists` | Any `order_id` already exists on-chain |
+| `MerchantNotFound` | Any `merchant_address` is not registered |
+| `MerchantInactive` | Any merchant is deactivated |
+| `InvalidSignature` | Signature verification fails for any item |
 
----
+## Atomicity guarantee
 
-## Token Approval
-
-Before calling `process_batch_payment`, the payer must approve the contract to spend the **sum of all item amounts**. For a 3-item batch totalling 17 800 units:
-
-```bash
-stellar contract invoke \
-  --id $TOKEN_CONTRACT \
-  --source-account $PAYER_KEY \
-  --network $NETWORK \
-  -- approve \
-  --from $PAYER_ADDRESS \
-  --spender $CONTRACT_ID \
-  --amount 17800 \
-  --expiration_ledger $EXPIRY_LEDGER
-```
-
----
-
-## See Also
-
-- [docs/signature-format.md](signature-format.md) — How to build the ed25519 payment signature
-- [docs/events-reference.md](events-reference.md) — Events emitted per processed item (`lumenflow/payment_processed`)
-- [README.md Payment Processing section](../README.md#payment-processing) — Single payment CLI reference
+All items are validated and signatures verified **before** any token transfer
+occurs. If the contract returns an error, no funds move and no payment records
+are written.

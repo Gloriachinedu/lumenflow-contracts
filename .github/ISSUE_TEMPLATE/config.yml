@@ -1,0 +1,20 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🙋 Q&A (Questions & Answers)
+    url: https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/q-a
+    about: Ask the community any question about LumenFlow.
+  - name: 🛠️ Developer Help
+    url: https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/developer-help
+    about: Get help with SDK integration, tooling, and contract deployment.
+  - name: 💡 Feature Requests
+    url: https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/feature-requests
+    about: Suggest new features and vote on existing proposals.
+  - name: 🎉 Show and Tell
+    url: https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/show-and-tell
+    about: Share what you have built with LumenFlow.
+  - name: 📢 Announcements
+    url: https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/announcements
+    about: Official project announcements and release notes.
+  - name: 💬 Discord Community
+    url: https://discord.gg/lumenflow
+    about: Join the LumenFlow Discord for real-time community chat.
