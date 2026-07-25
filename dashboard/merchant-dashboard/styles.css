@@ -1,19 +1,240 @@
-:root{--accent:#0b66ff}
-body{font-family:system-ui,Arial,Helvetica,sans-serif;margin:0;padding:16px;color:#0b1726}
-.site-header{display:flex;justify-content:space-between;align-items:center}
-.tabs{margin:12px 0}
-.tab{margin-right:8px}
-button{padding:6px 10px;border:1px solid #ccc;background:#fff;border-radius:4px}
-button:focus{outline:3px solid rgba(11,102,255,.25)}
-.empty{padding:24px;border:1px dashed #ddd;color:#666}
-table{width:100%;border-collapse:collapse}
-th,td{padding:8px;border-bottom:1px solid #eee;text-align:left}
-.modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);align-items:center;justify-content:center}
-.modal-content{background:#fff;padding:16px;border-radius:8px;min-width:280px}
+/* ==========================================================================
+   Merchant Dashboard — styles.css
+   Imports theme tokens from ../shared.css and applies them.
+   WCAG 2.1 AA contrast ratios are maintained in both light and dark modes.
+   ========================================================================== */
 
-/* Simple responsive */
-@media (max-width:600px){table,thead,tbody,tr,th,td{display:block}}
+/* Layout ------------------------------------------------------------------- */
+body {
+  font-family: system-ui, Arial, Helvetica, sans-serif;
+  margin: 0;
+  padding: 16px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  min-height: 100vh;
+  transition: background 0.2s, color 0.2s;
+}
 
-.skip-link{position:absolute;left:-999px;top:auto;width:1px;height:1px;overflow:hidden}
-.skip-link:focus{left:8px;top:8px;width:auto;height:auto;padding:8px;background:#fff;border:1px solid #ccc}
-.visually-hidden{position:absolute!important;height:1px;width:1px;overflow:hidden;clip:rect(1px,1px,1px,1px);white-space:nowrap}
+/* Header ------------------------------------------------------------------- */
+.site-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: 16px;
+}
+
+.site-header h1 {
+  font-size: 1.25rem;
+  margin: 0;
+  color: var(--color-text);
+}
+
+/* Tabs --------------------------------------------------------------------- */
+.tabs {
+  margin: 12px 0;
+}
+
+.tab {
+  margin-right: 8px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.tab:hover {
+  background: var(--color-surface-alt);
+}
+
+.tab[aria-selected="true"] {
+  background: var(--color-accent);
+  color: var(--color-accent-text);
+  border-color: var(--color-accent);
+}
+
+/* Buttons ------------------------------------------------------------------ */
+button {
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+button:hover {
+  background: var(--color-surface-alt);
+  border-color: var(--color-accent);
+}
+
+button:focus {
+  outline: 3px solid rgba(88, 166, 255, 0.35);
+  outline-offset: 2px;
+}
+
+/* Primary action buttons (Approve, Execute) */
+button[data-action="approve"],
+button[data-action="execute"] {
+  background: var(--color-accent);
+  color: var(--color-accent-text);
+  border-color: var(--color-accent);
+}
+
+button[data-action="approve"]:hover,
+button[data-action="execute"]:hover {
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+}
+
+/* Danger action buttons (Reject) */
+button[data-action="reject"] {
+  background: var(--color-danger);
+  color: #fff;
+  border-color: var(--color-danger);
+}
+
+button[data-action="reject"]:hover {
+  background: var(--color-danger-hover);
+  border-color: var(--color-danger-hover);
+}
+
+/* Empty state -------------------------------------------------------------- */
+.empty {
+  padding: 24px;
+  border: 1px dashed var(--color-border);
+  color: var(--color-text-muted);
+  border-radius: var(--radius);
+  text-align: center;
+}
+
+/* Table -------------------------------------------------------------------- */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+}
+
+th, td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+}
+
+th {
+  background: var(--color-surface-alt);
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+tr:last-child td {
+  border-bottom: none;
+}
+
+tr:hover td {
+  background: var(--color-surface-alt);
+}
+
+/* Account indicator -------------------------------------------------------- */
+.account {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  font-family: monospace;
+}
+
+/* Modal -------------------------------------------------------------------- */
+.modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal[aria-hidden="false"] {
+  display: flex;
+}
+
+.modal-content {
+  background: var(--color-surface);
+  color: var(--color-text);
+  padding: 20px 24px;
+  border-radius: var(--radius-lg);
+  min-width: 280px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--color-border);
+}
+
+.modal-content h2 {
+  margin-top: 0;
+  margin-bottom: 12px;
+  font-size: 1rem;
+}
+
+/* Skip link ---------------------------------------------------------------- */
+.skip-link {
+  position: absolute;
+  left: -999px;
+  top: auto;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+.skip-link:focus {
+  left: 8px;
+  top: 8px;
+  width: auto;
+  height: auto;
+  padding: 8px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  z-index: 200;
+}
+
+/* Visually hidden (screen-reader only) ------------------------------------- */
+.visually-hidden {
+  position: absolute !important;
+  height: 1px;
+  width: 1px;
+  overflow: hidden;
+  clip: rect(1px, 1px, 1px, 1px);
+  white-space: nowrap;
+}
+
+/* Controls bar ------------------------------------------------------------- */
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+/* Responsive --------------------------------------------------------------- */
+@media (max-width: 600px) {
+  table, thead, tbody, tr, th, td {
+    display: block;
+  }
+
+  td::before {
+    content: attr(data-label) ': ';
+    font-weight: 700;
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
+    display: block;
+  }
+}

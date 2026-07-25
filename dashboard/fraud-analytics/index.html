@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Fraud Analytics — LumenFlow</title>
+  <!-- Apply stored theme before first paint to prevent flash of unstyled content -->
+  <script>
+    (function () {
+      const stored = localStorage.getItem('lumenflow_theme');
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      if (stored === 'dark' || (!stored && prefersDark)) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      } else if (stored === 'light') {
+        document.documentElement.setAttribute('data-theme', 'light');
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="../shared.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <a href="#content" class="skip-link">Skip to content</a>
+  <header class="site-header">
+    <h1>Fraud Analytics</h1>
+    <div class="header-actions">
+      <span id="streamStatus" class="status-indicator reconnecting" role="status" aria-live="polite">Connecting</span>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode">🌙 Dark</button>
+    </div>
+  </header>
+
+  <main id="content">
+    <div class="metrics-grid">
+      <div class="metric-card">
+        <div class="label">Total Alerts</div>
+        <div class="value" id="metricTotal">—</div>
+      </div>
+      <div class="metric-card danger">
+        <div class="label">High Severity</div>
+        <div class="value" id="metricHigh">—</div>
+      </div>
+      <div class="metric-card warning">
+        <div class="label">Medium Severity</div>
+        <div class="value" id="metricMedium">—</div>
+      </div>
+      <div class="metric-card">
+        <div class="label">Monitored Addresses</div>
+        <div class="value" id="metricAddresses">—</div>
+      </div>
+    </div>
+
+    <h2 class="section-title">Recent Suspicious Activity</h2>
+    <div class="table-wrapper">
+      <div id="emptyState" class="empty">No suspicious activity detected.</div>
+      <table id="eventsTable" aria-label="Suspicious activity events" style="display:none">
+        <thead>
+          <tr>
+            <th scope="col">Time</th>
+            <th scope="col">Address</th>
+            <th scope="col">Reason</th>
+            <th scope="col">Amount</th>
+            <th scope="col">Severity</th>
+          </tr>
+        </thead>
+        <tbody id="eventsBody"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>
