@@ -798,6 +798,42 @@ See [`src/errors.ts`](src/errors.ts) for the full list of error codes.
 
 ---
 
+## Rate Limiting
+
+The LumenFlow SDK communicates with Stellar Horizon and Soroban RPC endpoints. Both are subject to rate limits. The SDF public Horizon instance allows **3 600 requests per hour per IP** in standard REST mode, and up to **100 events/second** on Server-Sent Events streaming connections.
+
+When a limit is exceeded Horizon responds with **HTTP 429 Too Many Requests** and a `Retry-After` header indicating how many seconds to wait before retrying.
+
+### Built-in retry logic
+
+The SDK includes a production-ready exponential backoff helper in [`src/retry.ts`](src/retry.ts) that is applied automatically to all RPC read operations performed through `LumenFlowClient`. The default policy retries up to **3 attempts** with a base delay of **200 ms**, capped at **5 000 ms**, and **20% jitter** to avoid thundering-herd behaviour.
+
+You can override the retry policy per call:
+
+```typescript
+const merchant = await client.getMerchant(address, {
+  maxAttempts: 5,
+  baseDelayMs: 500,
+  maxDelayMs: 15_000,
+  jitter: 0.3,
+});
+```
+
+The `withRetry` helper can also be used directly for custom Horizon queries:
+
+```typescript
+import { withRetry } from '@lumenflow/sdk/retry';
+
+const stats = await withRetry(
+  () => fetch('https://horizon-testnet.stellar.org/fee_stats').then(r => r.json()),
+  { maxAttempts: 4, baseDelayMs: 300 }
+);
+```
+
+Errors that are automatically retried: `TypeError` (network failure), HTTP 408, 429, 500, 502, 503, 504. `LumenFlowError` contract errors are **not** retried and propagate immediately.
+
+For full documentation on Horizon rate limits, `Retry-After` header handling, and a standalone exponential backoff implementation, see **[docs/api-rate-limits.md](../docs/api-rate-limits.md)**.
+
 ## Development
 
 ```bash
@@ -806,4 +842,74 @@ npm run build
 
 # Test
 npm test
+```
+
+---
+
+## Real-Time Payment Notifications
+
+`subscribeToPayments` opens a Horizon [Server-Sent Events](https://developers.stellar.org/docs/data/horizon/api-reference/resources/operations/object/payment) (SSE) stream for a merchant address and delivers strongly-typed `PaymentEvent` objects to a callback in real time.
+
+- Lower latency than HTTP polling
+- Automatic reconnection after 30 seconds of inactivity
+- Cleanly closable via `unsubscribe()`
+
+### Basic usage
+
+```typescript
+import { subscribeToPayments } from '@lumenflow/sdk';
+
+const subscription = subscribeToPayments(
+  'GABC...merchantAddress',           // Stellar merchant account
+  (event) => {
+    console.log('Payment received!');
+    console.log('  From:    ', event.payer);
+    console.log('  Amount:  ', event.amount.toString(), 'stroops');
+    console.log('  Token:   ', event.token);
+    console.log('  Order ID:', event.order_id);
+  },
+  {
+    horizonUrl: 'https://horizon-testnet.stellar.org', // default: testnet
+  },
+);
+
+// When you no longer need the subscription:
+subscription.unsubscribe();
+```
+
+### Options
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `horizonUrl` | `string` | testnet URL | Horizon base URL |
+| `inactivityTimeoutMs` | `number` | `30_000` | Reconnect after N ms of silence |
+| `eventSourceFactory` | `EventSourceFactory` | Global `EventSource` | Override in tests or custom environments |
+
+### PaymentEvent shape
+
+```typescript
+interface PaymentEvent {
+  type: string;             // e.g. "payment"
+  order_id: string;         // Horizon operation ID
+  merchant_address: string; // "to" address
+  payer: string;            // "from" address
+  token: string;            // asset code or "native"
+  amount: bigint;           // in stroops (1 XLM = 10_000_000 stroops)
+  timestamp: bigint;        // Unix seconds
+  raw: Record<string, unknown>; // full Horizon payload
+}
+```
+
+### Testnet vs mainnet
+
+```typescript
+// Testnet
+const sub = subscribeToPayments(merchant, callback, {
+  horizonUrl: 'https://horizon-testnet.stellar.org',
+});
+
+// Mainnet
+const sub = subscribeToPayments(merchant, callback, {
+  horizonUrl: 'https://horizon.stellar.org',
+});
 ```
