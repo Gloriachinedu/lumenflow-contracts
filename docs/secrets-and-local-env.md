@@ -74,4 +74,4 @@ docker compose up -d stellar # start the local Stellar quickstart node
 
 `docker compose config` resolves and type-checks `docker-compose.yml`. The
 committed compose file contains no secrets; it only sets the public `NETWORK`
-value for the local quickstart node, so it is safe to commit as-is.
+value for the local quickstart node, so it is safe to commit as-is..

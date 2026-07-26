@@ -4,12 +4,98 @@
 
 [![CI](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml/badge.svg)](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml)
 [![Coverage](https://codecov.io/gh/Gloriachinedu/lumenflow-contracts/branch/main/graph/badge.svg)](https://codecov.io/gh/Gloriachinedu/lumenflow-contracts)
+[![WASM Size](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FGloriachinedu%2Flumenflow-contracts%2Fmain%2Fwasm-size-history.json&query=%24.entries%5B-1%3A%5D%5B0%5D.size_kb&suffix=%20KB&label=WASM%20size&color=blue)](wasm-size-history.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Stellar](https://img.shields.io/badge/Stellar-Soroban-blueviolet)](https://soroban.stellar.org)
 [![Audited by](https://img.shields.io/badge/Audited%20By-TBD-lightgrey)](docs/audit/audit-report.md)
 [![Discord](https://img.shields.io/discord/123456789012345678?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/lumenflow)
 
 [English](README.md) | [Español](README.es.md) | [Português](README.pt.md)
+
+---
+
+## Quick Start
+
+Spin up a local Stellar node, deploy the contract, and seed it with test data in one command:
+
+```bash
+# Set the deployer key and seed keys, then start everything
+export SOURCE_ACCOUNT=<your-local-secret-key>
+export ADMIN_KEY=<admin-secret>   ADMIN_ADDRESS=<admin-address>
+export MERCHANT1_KEY=<m1-secret>  MERCHANT1_ADDRESS=<m1-address>
+export MERCHANT2_KEY=<m2-secret>  MERCHANT2_ADDRESS=<m2-address>
+export MERCHANT3_KEY=<m3-secret>  MERCHANT3_ADDRESS=<m3-address>
+export PAYER_KEY=<payer-secret>   PAYER_ADDRESS=<payer-address>
+export TOKEN_ADDRESS=<sac-token-address>
+
+docker compose up
+```
+
+The `setup` service waits for the Stellar node to pass its health check, then
+builds and deploys the contract, writes the `CONTRACT_ID` to a shared volume at
+`/shared/contract-id.txt`, and seeds 3 merchants, 5 payments, and 2 refunds.
+
+Generate local keys with:
+
+```bash
+stellar keys generate --network local alice
+stellar keys address alice
+```
+
+Fund them via the local Friendbot:
+
+```bash
+curl "http://localhost:8000/friendbot?addr=<address>"
+```
+
+Tear everything down (including the shared volume) with:
+
+```bash
+docker compose down -v
+```
+
+---
+
+## Install
+
+Pre-built CLI binaries are published with every [GitHub Release](https://github.com/Gloriachinedu/lumenflow-contracts/releases).
+
+**Linux (x86_64)**
+```bash
+curl -fsSL https://github.com/Gloriachinedu/lumenflow-contracts/releases/latest/download/lumenflow-cli-v<VERSION>-x86_64-unknown-linux-gnu.tar.gz \
+  | tar -xz -C /usr/local/bin lumenflow-cli
+```
+
+**Linux (arm64)**
+```bash
+curl -fsSL https://github.com/Gloriachinedu/lumenflow-contracts/releases/latest/download/lumenflow-cli-v<VERSION>-aarch64-unknown-linux-gnu.tar.gz \
+  | tar -xz -C /usr/local/bin lumenflow-cli
+```
+
+**macOS (x86_64)**
+```bash
+curl -fsSL https://github.com/Gloriachinedu/lumenflow-contracts/releases/latest/download/lumenflow-cli-v<VERSION>-x86_64-apple-darwin.tar.gz \
+  | tar -xz -C /usr/local/bin lumenflow-cli
+```
+
+**macOS (Apple Silicon / arm64)**
+```bash
+curl -fsSL https://github.com/Gloriachinedu/lumenflow-contracts/releases/latest/download/lumenflow-cli-v<VERSION>-aarch64-apple-darwin.tar.gz \
+  | tar -xz -C /usr/local/bin lumenflow-cli
+```
+
+**Windows (x86_64, PowerShell)**
+```powershell
+Invoke-WebRequest -Uri "https://github.com/Gloriachinedu/lumenflow-contracts/releases/latest/download/lumenflow-cli-v<VERSION>-x86_64-pc-windows-msvc.zip" -OutFile lumenflow-cli.zip
+Expand-Archive lumenflow-cli.zip -DestinationPath $env:USERPROFILE\bin
+```
+
+Replace `<VERSION>` with the desired release tag (e.g. `1.0.0`). Checksums for each archive are published as `.sha256` files alongside the binaries on the release page.
+
+**Install from source**
+```bash
+cargo install --path cli/lumenflow-cli
+```
 
 ---
 
@@ -26,13 +112,14 @@ LumenFlow is a production-grade payment processing smart contract for the [Stell
 
 ## Security & Docs
 
+- **Full contract API reference** (all functions, parameters, return types, errors): [`docs/api-reference.md`](docs/api-reference.md)
 - Architecture overview available in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Audit plan and scope published in `docs/audit/audit-report.md`
 - Refund lifecycle state diagram available in `docs/refund-lifecycle.md`
 - Testing guidance available in `docs/testing-guide.md`
 - Multisig payment flow guide available in `docs/multisig-guide.md`
 - Secrets and secure local environment setup in [`docs/secrets-and-local-env.md`](docs/secrets-and-local-env.md)
-- Accessibility statement and WCAG 2.1 AA compliance report in [`ACCESSIBILITY.md`](ACCESSIBILITY.md)
+- Payment link generator guide in [`docs/payment-link-guide.md`](docs/payment-link-guide.md)
 
 ## Refund lifecycle overview
 
@@ -474,6 +561,8 @@ stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network 
 
 For detailed information on the signature payload format and how to build it in various languages, see **[docs/signature-format.md](docs/signature-format.md)**.
 
+For batch payment processing (up to 10 items per call), error codes, partial failure handling, and idempotent re-submission, see **[docs/batch-payments.md](docs/batch-payments.md)**.
+
 ```bash
 # Process payment with signature
 stellar contract invoke --id $CONTRACT_ID --source-account $PAYER_KEY --network $NETWORK \
@@ -746,7 +835,54 @@ Get testnet XLM from the [Stellar Friendbot](https://friendbot.stellar.org).
 
 ---
 
+## Verifying the Deployed WASM
+
+LumenFlow supports independent, reproducible verification of the deployed contract binary.
+Every release publishes a SHA-256 hash in [docs/release-hashes.md](docs/release-hashes.md)
+so that anyone can confirm the on-chain binary matches the open-source code.
+
+### Quick verify
+
+```bash
+# 1. Clone the repo at the release tag
+git clone https://github.com/PrincessnJoy/lumenflow-contracts.git
+cd lumenflow-contracts
+git checkout v1.0.0          # replace with the target version
+
+# 2. Install the pinned toolchain (reads rust-toolchain.toml automatically)
+rustup show
+
+# 3. Run the verification script
+./scripts/verify-build.sh v1.0.0
+```
+
+A passing run prints `✅  Hash match — build is reproducible for v1.0.0.`
+
+### What is checked
+
+| Factor | Pinned by |
+|--------|-----------|
+| Rust compiler version | `rust-toolchain.toml` (`channel = "1.87.0"`) |
+| All dependency versions | `Cargo.lock` (committed to this repo) |
+| Compiler flags | `[profile.release]` in `Cargo.toml` |
+
+### Compare against the on-chain binary
+
+```bash
+# Download the released artifact from GitHub Releases
+curl -LO https://github.com/PrincessnJoy/lumenflow-contracts/releases/download/v1.0.0/lumenflow_v1.0.0.wasm.sha256
+cat lumenflow_v1.0.0.wasm.sha256
+```
+
+Both the local build and the GitHub Release artifact must produce the same SHA-256.
+
+---
+
 ## Troubleshooting
+
+For a full list of common errors (build, deploy, runtime, and upgrade) with causes and resolution steps, see the **[Troubleshooting Guide](docs/troubleshooting.md)**.
+
+Quick reference for the most frequent issues:
 
 **WASM target missing:**
 ```bash
@@ -761,6 +897,8 @@ stellar network container restart local
 **Insufficient XLM for fees:** Fund your account via Friendbot (testnet) or acquire XLM (mainnet).
 
 **Test failures:** Ensure `soroban-sdk` version in `Cargo.toml` matches `rust-toolchain.toml` channel.
+
+> Found an error not listed? Open a PR using the [troubleshooting entry template](.github/ISSUE_TEMPLATE/troubleshooting_entry.yml).
 
 ---
 
@@ -792,8 +930,10 @@ The server watches `**/*.html`, `**/*.css`, and `**/*.js` inside `frontend/` and
 Need help or want to discuss LumenFlow?
 
 - **Discord Server:** Join our [Discord community](https://discord.gg/lumenflow) to chat with developers and other users.
-- **GitHub Discussions:** Ask questions and share ideas in [GitHub Discussions](https://github.com/Gloriachinedu/lumenflow-contracts/discussions).
-- **Support Guidelines:** See [SUPPORT.md](SUPPORT.md) for details on where to get help and how to report bugs.
+- **Q&A Discussions:** Ask questions in [GitHub Discussions — Q&A](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/q-a).
+- **Developer Help:** SDK, deployment, and tooling questions in [Developer Help](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/developer-help).
+- **Feature Requests:** Propose and discuss new features in [Feature Requests](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/feature-requests).
+- **Support Guidelines:** See [SUPPORT.md](SUPPORT.md) for where to get help and how to report bugs.
 
 ---
 
@@ -837,6 +977,21 @@ We maintain localized versions of the README to support Spanish and Portuguese r
 ## Security
 
 See [SECURITY.md](SECURITY.md) for responsible disclosure instructions.
+
+## Security Audit
+
+[![Audit: Pending](https://img.shields.io/badge/Audit-Pending-orange)](docs/audit/audit-report-v1.0.md)
+
+A formal third-party security audit of the LumenFlow smart contract is in progress before mainnet launch.
+
+| Item | Detail |
+|------|--------|
+| Audit report | [docs/audit/audit-report-v1.0.md](docs/audit/audit-report-v1.0.md) |
+| Audit scope | All public contract functions, storage layout, signature verification, access control |
+| Status | 🔴 Pending — audit in progress |
+| Mainnet deployment | Blocked until all Critical and High findings are resolved |
+
+All Critical findings will have remediation PRs before mainnet deployment. A re-audit is scheduled after any Critical finding remediation.
 
 ## License
 

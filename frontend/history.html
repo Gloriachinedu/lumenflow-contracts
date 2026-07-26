@@ -88,6 +88,13 @@
 
     .range-inputs input { width: 100%; }
 
+    .filter-group input.input-error { border-color: #c0392b; }
+    .filter-err {
+      display: none;
+      font-size: 0.75rem;
+      color: #c0392b;
+    }
+
     /* ── Active Filters (Chips) ──────────────────────────────────────────────── */
     .active-filters {
       display: flex;
@@ -228,6 +235,34 @@
       color: #888;
     }
 
+    /* ── Skeleton loading rows ────────────────────────────────────────────────── */
+    .skeleton-body tr td {
+      padding: 1rem;
+      border-bottom: 1px solid #f9f9f9;
+    }
+
+    .skeleton-cell {
+      display: inline-block;
+      border-radius: 4px;
+      background: linear-gradient(90deg, #e8e8e8 25%, #f5f5f5 50%, #e8e8e8 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+      height: 14px;
+      vertical-align: middle;
+    }
+
+    @keyframes shimmer {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    /* Vary widths so columns look realistic */
+    .skeleton-cell.w-date   { width: 120px; }
+    .skeleton-cell.w-id     { width: 90px; }
+    .skeleton-cell.w-addr   { width: 110px; }
+    .skeleton-cell.w-amount { width: 80px; }
+    .skeleton-cell.w-status { width: 70px; }
+
     /* ── Accessibility ────────────────────────────────────────────────────────── */
     .sr-only {
       position: absolute;
@@ -240,9 +275,25 @@
       border: 0;
     }
 
-    button:focus-visible, input:focus-visible, select:focus-visible {
-      outline: 2px solid #6c47ff;
+    /* WCAG 2.1 AA focus ring: #6c47ff on white = 5.4:1 contrast ratio,
+       exceeds the 3:1 minimum for non-text focus indicators (SC 1.4.11). */
+    button:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    a:focus-visible {
+      outline: 3px solid #6c47ff;
       outline-offset: 2px;
+      border-radius: 3px;
+    }
+
+    /* ── Verified Badge ───────────────────────────────────────────────────────── */
+    .verified-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      font-size: 0.7rem;
+      color: #1a9e5c;
+      font-weight: 600;
     }
   </style>
 </head>
@@ -260,7 +311,8 @@
       <!-- Merchant Address -->
       <div class="filter-group" style="grid-column: 1 / -1;">
         <label for="merchant-address">Merchant Address</label>
-        <input type="text" id="merchant-address" placeholder="G… your Stellar address" autocomplete="off">
+        <input type="text" id="merchant-address" placeholder="G… your Stellar address" autocomplete="off" aria-describedby="merchant-address-err">
+        <div class="filter-err" id="merchant-address-err" role="alert" aria-live="polite"></div>
       </div>
 
       <!-- Date Range -->
@@ -277,10 +329,12 @@
       <div class="filter-group">
         <label for="amount-min">Amount Range (XLM)</label>
         <div class="range-inputs">
-          <input type="number" id="amount-min" placeholder="Min" min="0" step="0.1">
+          <input type="number" id="amount-min" placeholder="Min" min="0" step="0.1" aria-describedby="amount-min-err">
           <span>to</span>
-          <input type="number" id="amount-max" placeholder="Max" min="0" step="0.1">
+          <input type="number" id="amount-max" placeholder="Max" min="0" step="0.1" aria-describedby="amount-max-err">
         </div>
+        <div class="filter-err" id="amount-min-err" role="alert" aria-live="polite"></div>
+        <div class="filter-err" id="amount-max-err" role="alert" aria-live="polite"></div>
       </div>
 
       <!-- Token -->
@@ -303,6 +357,15 @@
           <option value="FullyRefunded">Fully Refunded</option>
         </select>
       </div>
+
+      <!-- Currency display toggle -->
+      <div class="filter-group">
+        <label for="currency-display-toggle">Display Amounts As</label>
+        <select id="currency-display-toggle" aria-label="Currency display format">
+          <option value="native">Native Token</option>
+          <option value="xlm">XLM Equivalent</option>
+        </select>
+      </div>
     </div>
 
     <div id="active-filters" class="active-filters" aria-live="polite">
@@ -310,9 +373,9 @@
     </div>
   </section>
 
-  <div class="results-card">
+  <div class="results-card" id="results-region" aria-live="polite" aria-atomic="false" aria-label="Payment history results">
     <!-- Loading state -->
-    <div id="loading-state" style="display:none;padding:3rem;text-align:center;color:#888;" role="status" aria-live="polite">
+    <div id="loading-state" style="display:none;padding:3rem;text-align:center;color:#888;" role="status" aria-live="polite" aria-label="Loading payments">
       ⏳ Loading payments…
     </div>
 
@@ -339,17 +402,38 @@
         <!-- Rows will be rendered here -->
       </tbody>
     </table>
-    <div id="empty-state" class="empty-state" style="display:none">
+    <div id="empty-state" class="empty-state" style="display:none" role="status" aria-label="No payments found matching your filters" aria-live="polite">
       No payments found matching your filters.
     </div>
   </div>
 </div>
 
-<script>
+<script type="module">
+  import { validateAddress, validateAmount } from './validation.js';
+
   // ── Config ──────────────────────────────────────────────────────────────────
   const CONTRACT_ID = window.LUMENFLOW_CONTRACT_ID || '';
   const RPC_URL     = window.LUMENFLOW_RPC_URL     || 'https://soroban-testnet.stellar.org';
+  const NETWORK     = window.LUMENFLOW_NETWORK     || 'testnet';
   const DEMO_MODE   = !CONTRACT_ID;
+
+  function renderModeBanner() {
+    const banner = document.createElement('div');
+    banner.id = 'lf-mode-banner';
+    banner.setAttribute('role', 'status');
+    banner.style.cssText = [
+      'position:sticky', 'top:0', 'z-index:1000',
+      'padding:0.4rem 1rem', 'font-size:0.8rem', 'font-weight:600',
+      'text-align:center',
+      DEMO_MODE
+        ? 'background:#fff3cd;color:#856404;'
+        : 'background:#d1f3e0;color:#1a5e37;',
+    ].join(';');
+    banner.textContent = DEMO_MODE
+      ? '⚠ Demo mode – displaying mock data. Set LUMENFLOW_CONTRACT_ID to connect to a live contract.'
+      : `✔ Live mode – connected to contract ${CONTRACT_ID.slice(0, 8)}… on ${NETWORK}.`;
+    document.body.prepend(banner);
+  }
 
   // ── State Management ────────────────────────────────────────────────────────
 
@@ -365,18 +449,28 @@
 
   // ── Initialize from URL ─────────────────────────────────────────────────────
 
+  // Dates must be YYYY-MM-DD and parseable; buildFilterArg converts them to
+  // BigInt, which throws on anything else.
+  function isValidDateParam(value) {
+    return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value));
+  }
+
   function initFromUrl() {
     const params = new URLSearchParams(window.location.search);
-    if (params.has('merchant_address')) {
-      filters.merchant_address = params.get('merchant_address');
-      document.getElementById('merchant-address').value = filters.merchant_address;
-    }
-    if (params.has('date_start')) { filters.date_start = params.get('date_start'); document.getElementById('date-start').value = filters.date_start; }
-    if (params.has('date_end'))   { filters.date_end   = params.get('date_end');   document.getElementById('date-end').value   = filters.date_end; }
-    if (params.has('amount_min')) { filters.amount_min = params.get('amount_min'); document.getElementById('amount-min').value = filters.amount_min; }
-    if (params.has('amount_max')) { filters.amount_max = params.get('amount_max'); document.getElementById('amount-max').value = filters.amount_max; }
-    if (params.has('token'))      { filters.token  = params.get('token');  document.getElementById('token-selector').value  = filters.token; }
-    if (params.has('status'))     { filters.status = params.get('status'); document.getElementById('status-selector').value = filters.status; }
+    inputBindings.forEach(({ id, key }) => {
+      if (!params.has(key)) return;
+      const value = params.get(key);
+      const validator = filterValidators[id];
+      if (validator) {
+        const message = validator(value);
+        showFilterError(id, message);
+        if (message) return; // invalid URL params are dropped, never sent to the contract
+      } else if ((key === 'date_start' || key === 'date_end') && value && !isValidDateParam(value)) {
+        return;
+      }
+      filters[key] = value;
+      document.getElementById(id).value = value;
+    });
     renderActiveFilters();
     updateResults();
   }
@@ -429,6 +523,37 @@
   }
 
   // ── Formatting ──────────────────────────────────────────────────────────────
+  const TOKEN_METADATA = {
+    native: { symbol: 'XLM', decimals: 7, name: 'Stellar Lumens' },
+    CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC: { symbol: 'USDC', decimals: 6, name: 'USD Coin' },
+    CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75: { symbol: 'USDC', decimals: 6, name: 'USD Coin' },
+  };
+  const FALLBACK_METADATA = { symbol: 'TOKEN', decimals: 7, name: 'Unknown Token' };
+  function getTokenMetadata(tokenId) {
+    if (!tokenId) return FALLBACK_METADATA;
+    return TOKEN_METADATA[tokenId] || FALLBACK_METADATA;
+  }
+  const XLM_RATES = { XLM: 1, USDC: 8, TOKEN: 1 };
+  function formatTokenAmount(amount, tokenId) {
+    const { symbol, decimals } = getTokenMetadata(tokenId);
+    const value = Number(amount) / Math.pow(10, decimals);
+    const formatted = value.toLocaleString(undefined, {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    });
+    return `${formatted} ${symbol}`;
+  }
+  function convertToXlm(amount, tokenId) {
+    const { symbol, decimals } = getTokenMetadata(tokenId);
+    const humanAmount = Number(amount) / Math.pow(10, decimals);
+    const rate = XLM_RATES[symbol] ?? 1;
+    const xlmAmount = humanAmount * rate;
+    const formatted = xlmAmount.toLocaleString(undefined, {
+      minimumFractionDigits: 7,
+      maximumFractionDigits: 7,
+    });
+    return `${formatted} XLM`;
+  }
   function formatAmount(amount) {
     return (Number(amount) / 1e7).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 7 }) + ' XLM';
   }
@@ -436,10 +561,10 @@
 
   // ── Mock data (demo mode) ───────────────────────────────────────────────────
   const MOCK_DATA = [
-    { paid_at: BigInt(Math.floor(Date.now()/1000) - 86400), order_id: 'ORD-9921', merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON', amount: BigInt(1245000000), status: 'Completed'         },
-    { paid_at: BigInt(Math.floor(Date.now()/1000) - 172800), order_id: 'ORD-8832', merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON', amount: BigInt(120000000),  status: 'Completed'         },
-    { paid_at: BigInt(Math.floor(Date.now()/1000) - 259200), order_id: 'ORD-7712', merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON', amount: BigInt(159900000),  status: 'PartiallyRefunded' },
-    { paid_at: BigInt(Math.floor(Date.now()/1000) - 604800), order_id: 'ORD-6601', merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON', amount: BigInt(99900000),   status: 'FullyRefunded'     },
+    { paid_at: BigInt(Math.floor(Date.now()/1000) - 86400),  order_id: 'ORD-9921', merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON', amount: BigInt(1245000000), status: 'Completed',         merchant_verified: true  },
+    { paid_at: BigInt(Math.floor(Date.now()/1000) - 172800), order_id: 'ORD-8832', merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON', amount: BigInt(120000000),  status: 'Completed',         merchant_verified: true  },
+    { paid_at: BigInt(Math.floor(Date.now()/1000) - 259200), order_id: 'ORD-7712', merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON', amount: BigInt(159900000),  status: 'PartiallyRefunded', merchant_verified: false },
+    { paid_at: BigInt(Math.floor(Date.now()/1000) - 604800), order_id: 'ORD-6601', merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON', amount: BigInt(99900000),   status: 'FullyRefunded',     merchant_verified: false },
   ];
 
   // ── Soroban fetch ───────────────────────────────────────────────────────────
@@ -466,7 +591,36 @@
       throw new Error(result.error || 'Contract call failed');
     }
     const page = scValToNative(result.result.retval);
-    return page.payments || [];
+    const payments = page.payments || [];
+
+    // Enrich each payment with merchant verified status
+    const uniqueAddresses = [...new Set(payments.map(p => p.merchant_address))];
+    const verifiedMap = await fetchMerchantVerified(uniqueAddresses, { server, contract, nativeToScVal, scValToNative });
+    return payments.map(p => ({
+      ...p,
+      merchant_verified: verifiedMap[p.merchant_address] ?? false,
+    }));
+  }
+
+  // ── Batch-fetch merchant verified status ────────────────────────────────────
+  async function fetchMerchantVerified(addresses, { server, contract, nativeToScVal, scValToNative }) {
+    const verifiedMap = {};
+    await Promise.all(addresses.map(async (addr) => {
+      try {
+        const res = await server.simulateTransaction(
+          contract.call('get_merchant', nativeToScVal(addr, { type: 'address' }))
+        );
+        if (!res.error && res.result) {
+          const merchant = scValToNative(res.result.retval);
+          verifiedMap[addr] = merchant.verified === true;
+        } else {
+          verifiedMap[addr] = false;
+        }
+      } catch {
+        verifiedMap[addr] = false;
+      }
+    }));
+    return verifiedMap;
   }
 
   function buildFilterArg(nativeToScVal) {
@@ -482,12 +636,42 @@
     });
   }
 
+  // ── Skeleton rows ────────────────────────────────────────────────────────────
+  const SKELETON_ROW_COUNT = 5;
+  const SKELETON_WIDTHS = [
+    ['w-date', 'w-id', 'w-addr', 'w-amount', 'w-status'],
+    ['w-date', 'w-id', 'w-addr', 'w-amount', 'w-status'],
+    ['w-date', 'w-id', 'w-addr', 'w-amount', 'w-status'],
+    ['w-date', 'w-id', 'w-addr', 'w-amount', 'w-status'],
+    ['w-date', 'w-id', 'w-addr', 'w-amount', 'w-status'],
+  ];
+
+  function renderSkeletonRows() {
+    const body = document.getElementById('history-body');
+    body.innerHTML = '';
+    body.className = 'skeleton-body';
+    for (let i = 0; i < SKELETON_ROW_COUNT; i++) {
+      const tr = document.createElement('tr');
+      // aria-busy and aria-hidden keep skeleton rows out of AT reading order
+      tr.setAttribute('aria-busy', 'true');
+      tr.setAttribute('aria-hidden', 'true');
+      SKELETON_WIDTHS[i].forEach(cls => {
+        const td = document.createElement('td');
+        td.innerHTML = `<span class="skeleton-cell ${cls}"></span>`;
+        tr.appendChild(td);
+      });
+      body.appendChild(tr);
+    }
+  }
+
   // ── UI state helpers ────────────────────────────────────────────────────────
   function showLoading() {
-    document.getElementById('loading-state').style.display = 'block';
+    // Hide prose loading indicator — skeletons inside the table give visual feedback
+    document.getElementById('loading-state').style.display = 'none';
     document.getElementById('error-state').style.display   = 'none';
-    document.getElementById('history-table').style.display = 'none';
+    document.getElementById('history-table').style.display = '';
     document.getElementById('empty-state').style.display   = 'none';
+    renderSkeletonRows();
   }
   function showError(msg) {
     document.getElementById('loading-state').style.display = 'none';
@@ -495,11 +679,16 @@
     document.getElementById('error-msg').textContent       = msg;
     document.getElementById('history-table').style.display = 'none';
     document.getElementById('empty-state').style.display   = 'none';
+    // Clear skeleton rows so they are not present in the DOM while error shows
+    const body = document.getElementById('history-body');
+    body.innerHTML = '';
+    body.className = '';
   }
   function showTable() {
     document.getElementById('loading-state').style.display = 'none';
     document.getElementById('error-state').style.display   = 'none';
     document.getElementById('history-table').style.display = '';
+    // skeleton rows are cleared by renderRows()
   }
 
   // ── Render rows ─────────────────────────────────────────────────────────────
@@ -507,18 +696,25 @@
     const body  = document.getElementById('history-body');
     const empty = document.getElementById('empty-state');
     body.innerHTML = '';
+    body.className = ''; // clear skeleton-body class
     if (!payments.length) {
       empty.style.display = 'block';
       return;
     }
     empty.style.display = 'none';
+    const currencyMode = document.getElementById('currency-display-toggle')
+      ? document.getElementById('currency-display-toggle').value
+      : 'native';
     payments.forEach(p => {
+      const amountDisplay = currencyMode === 'xlm'
+        ? convertToXlm(p.amount, p.token)
+        : formatTokenAmount(p.amount, p.token);
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td data-label="Date">${formatDate(p.paid_at)}</td>
         <td data-label="Order ID"><code>${p.order_id}</code></td>
         <td data-label="Merchant"><code title="${p.merchant_address}">${p.merchant_address.slice(0,8)}…</code></td>
-        <td data-label="Amount" class="amount-cell">${formatAmount(p.amount)}</td>
+        <td data-label="Amount" class="amount-cell">${amountDisplay}</td>
         <td data-label="Status">${statusBadgeHtml(p.status)}</td>`;
       body.appendChild(tr);
     });
@@ -538,6 +734,15 @@
       renderRows([]);
       document.getElementById('empty-state').style.display = 'block';
       document.getElementById('empty-state').textContent   = 'Enter a merchant address to load payment history.';
+      return;
+    }
+
+    // Guards against invalid addresses arriving via URL params as well.
+    if (validateAddress(merchant, { label: 'Merchant address' })) {
+      showTable();
+      renderRows([]);
+      document.getElementById('empty-state').style.display = 'block';
+      document.getElementById('empty-state').textContent   = 'Enter a valid merchant address (starts with G, 56 characters) to load payment history.';
       return;
     }
 
@@ -563,8 +768,28 @@
     { id: 'token-selector',   key: 'token'            },
     { id: 'status-selector',  key: 'status'           },
   ];
+  // Validators for free-text filter inputs; other filters need no validation.
+  const filterValidators = {
+    'merchant-address': v => validateAddress(v, { label: 'Merchant address', required: false }),
+    'amount-min':       v => validateAmount(v, { label: 'Min amount', allowZero: true, required: false }),
+    'amount-max':       v => validateAmount(v, { label: 'Max amount', allowZero: true, required: false }),
+  };
+
+  function showFilterError(id, message) {
+    const errEl = document.getElementById(`${id}-err`);
+    errEl.textContent = message;
+    errEl.style.display = message ? 'block' : 'none';
+    document.getElementById(id).classList.toggle('input-error', !!message);
+  }
+
   inputBindings.forEach(({ id, key }) => {
     document.getElementById(id).addEventListener('change', e => {
+      const validator = filterValidators[id];
+      if (validator) {
+        const message = validator(e.target.value);
+        showFilterError(id, message);
+        if (message) return; // invalid values are never applied or sent to the contract
+      }
       filters[key] = e.target.value;
       updateUrl();
       renderActiveFilters();
@@ -576,6 +801,13 @@
   window.retryFetch   = retryFetch;
   window.addEventListener('popstate', initFromUrl);
   renderModeBanner();
+
+  // ── Currency display toggle ─────────────────────────────────────────────────
+  const currencyToggleEl = document.getElementById('currency-display-toggle');
+  if (currencyToggleEl) {
+    currencyToggleEl.addEventListener('change', () => updateResults());
+  }
+
   initFromUrl();
 </script>
 
