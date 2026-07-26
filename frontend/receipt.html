@@ -8,6 +8,13 @@
   <meta property="og:title" content="Payment Receipt – LumenFlow" />
   <meta property="og:description" content="Your LumenFlow payment receipt. View transaction details, amounts, and confirmation for completed payments." />
   <meta name="twitter:card" content="summary" />
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#6c47ff" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="LumenFlow" />
+  <link rel="apple-touch-icon" href="icons/icon.svg" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -209,10 +216,32 @@
     .state-box p  { color: #666; font-size: 0.9rem; }
 
     #loading, #not-found, #receipt-content { display: none; }
+
+    /* ── Skip link ───────────────────────────────────────────────────────── */
+    .skip-link {
+      position: absolute;
+      top: -100%;
+      left: 0;
+      background: #6c47ff;
+      color: #fff;
+      padding: 0.5rem 1rem;
+      font-weight: 700;
+      border-radius: 0 0 6px 0;
+      z-index: 9999;
+      text-decoration: none;
+    }
+    .skip-link:focus { top: 0; }
+
+    button:focus-visible, a:focus-visible {
+      outline: 2px solid #6c47ff;
+      outline-offset: 2px;
+    }
   </style>
 </head>
 <body>
+<a href="#receipt-main" class="skip-link">Skip to main content</a>
 
+<main id="receipt-main">
 <div class="card receipt">
   <!-- Loading -->
   <div id="loading" class="state-box">
@@ -234,6 +263,48 @@
         <li>Contact <a href="mailto:support@lumenflow.io">support@lumenflow.io</a> if the problem persists.</li>
       </ul>
     </div>
+  </div>
+
+  <!-- Payment link pre-fill (shown when opening a generated payment link before payment) -->
+  <div id="payment-prefill" style="display:none">
+    <div class="receipt-header">
+      <h1>Payment Request</h1>
+      <span id="prefill-expired-badge" class="badge" style="display:none;background:#fee2e2;color:#b91c1c">⏱ Link Expired</span>
+    </div>
+    <p style="font-size:0.875rem;color:#555;margin-bottom:1rem;">
+      A merchant has sent you a payment request. Review the details below before completing the payment.
+    </p>
+    <div class="field">
+      <label>Merchant Address</label>
+      <div class="value" id="prefill-merchant"></div>
+    </div>
+    <div class="field">
+      <label>Order ID</label>
+      <div class="value" id="prefill-order-id"></div>
+    </div>
+    <div class="field">
+      <label>Amount</label>
+      <div class="value amount" id="prefill-amount"></div>
+    </div>
+    <div class="field">
+      <label>Token / Asset</label>
+      <div class="value" id="prefill-token"></div>
+    </div>
+    <div id="prefill-memo-row" class="field" style="display:none">
+      <label>Memo</label>
+      <div class="value" id="prefill-memo"></div>
+    </div>
+    <div id="prefill-expiry-row" class="field">
+      <label>Link Expires</label>
+      <div class="value" id="prefill-expiry"></div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" id="prefill-pay-btn">Pay with Freighter</button>
+      <button class="btn btn-outline" onclick="copyLink()">🔗 Copy Link</button>
+    </div>
+    <p id="prefill-pay-note" style="font-size:0.78rem;color:#888;margin-top:0.75rem;display:none">
+      ⚠ This payment link has expired. Please ask the merchant for a new link.
+    </p>
   </div>
 
   <!-- Receipt content -->
@@ -301,6 +372,7 @@
     </div>
   </div>
 </div>
+</main>
 
 <script type="module">
   import { CONTRACT_ID, RPC_URL, formatAmount, formatDate, renderModeBanner, formatTokenAmount, convertToXlm, getTokenMetadata } from './lumenflow-shared.js';
@@ -315,7 +387,9 @@
     const path = window.location.pathname;
     const match = path.match(/\/receipt\/([^/?#]+)/);
     if (match) return decodeURIComponent(match[1]);
-    return new URLSearchParams(window.location.search).get('orderId');
+    const params = new URLSearchParams(window.location.search);
+    // Support both `orderId` (legacy) and `order_id` (generated payment links)
+    return params.get('orderId') || params.get('order_id');
   }
 
   function escapeHtml(str) {
@@ -558,10 +632,68 @@
   }
   window.copyLink = copyLink;
 
+  // ── Payment link pre-fill ──────────────────────────────────────────────────
+
+  /**
+   * Returns the payment-link params from the current URL, or null if this is
+   * not a generated payment link (i.e. the `merchant` param is absent).
+   */
+  function getPaymentLinkParams() {
+    const p = new URLSearchParams(window.location.search);
+    if (!p.get('merchant')) return null;
+    return {
+      merchant: p.get('merchant'),
+      token:    p.get('token') || '',
+      amount:   p.get('amount') || '0',
+      orderId:  p.get('order_id') || p.get('orderId') || '',
+      memo:     p.get('memo') || '',
+      expires:  parseInt(p.get('expires') || '0', 10),
+    };
+  }
+
+  function renderPaymentLinkPrefill(params) {
+    const expired = params.expires && Date.now() > params.expires;
+
+    document.getElementById('prefill-merchant').textContent  = params.merchant;
+    document.getElementById('prefill-order-id').textContent  = params.orderId;
+    document.getElementById('prefill-amount').textContent    = formatAmount(BigInt(params.amount)) + ' XLM';
+    document.getElementById('prefill-token').textContent     = params.token;
+
+    if (params.memo) {
+      document.getElementById('prefill-memo').textContent    = params.memo;
+      document.getElementById('prefill-memo-row').style.display = 'block';
+    }
+
+    if (params.expires) {
+      document.getElementById('prefill-expiry').textContent  =
+        new Date(params.expires).toLocaleString();
+    } else {
+      document.getElementById('prefill-expiry-row').style.display = 'none';
+    }
+
+    if (expired) {
+      document.getElementById('prefill-expired-badge').style.display = 'inline-flex';
+      document.getElementById('prefill-pay-btn').disabled = true;
+      document.getElementById('prefill-pay-note').style.display = 'block';
+    }
+
+    document.getElementById('payment-prefill').style.display = 'block';
+  }
+
   // ── Bootstrap ──────────────────────────────────────────────────────────────
 
   (async () => {
     renderModeBanner();
+
+    // Check if this URL was generated by the payment link generator.
+    // If `merchant` is in the query string, show the pre-fill form instead of
+    // trying to look up a receipt that may not exist yet.
+    const linkParams = getPaymentLinkParams();
+    if (linkParams) {
+      renderPaymentLinkPrefill(linkParams);
+      return;
+    }
+
     const orderId = getOrderId();
     if (validateOrderId(orderId)) {
       document.getElementById('missing-id').textContent = orderId || '(none)';
@@ -583,6 +715,105 @@
       renderReceipt(data);
     }
   })();
+</script>
+
+<script>
+  // ── Service Worker Registration ────────────────────────────────────────────
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker
+        .register('./sw.js', { scope: './' })
+        .then((registration) => {
+          console.log('[LumenFlow] Service worker registered:', registration.scope);
+
+          // Listen for SW updates and notify the user
+          registration.addEventListener('updatefound', () => {
+            const newWorker = registration.installing;
+            if (!newWorker) return;
+            newWorker.addEventListener('statechange', () => {
+              if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                console.log('[LumenFlow] New version available. Refresh to update.');
+              }
+            });
+          });
+        })
+        .catch((err) => {
+          console.warn('[LumenFlow] Service worker registration failed:', err);
+        });
+    });
+  }
+
+  // ── PWA Install Prompt ─────────────────────────────────────────────────────
+  let deferredInstallPrompt = null;
+
+  window.addEventListener('beforeinstallprompt', (event) => {
+    // Prevent the default mini-infobar on mobile Chrome
+    event.preventDefault();
+    deferredInstallPrompt = event;
+    showInstallBanner();
+  });
+
+  function showInstallBanner() {
+    if (document.getElementById('pwa-install-banner')) return;
+
+    const banner = document.createElement('div');
+    banner.id = 'pwa-install-banner';
+    banner.setAttribute('role', 'complementary');
+    banner.setAttribute('aria-label', 'Install LumenFlow app');
+    banner.style.cssText = [
+      'position:fixed', 'bottom:0', 'left:0', 'right:0',
+      'background:#6c47ff', 'color:#fff',
+      'padding:1rem 1.25rem',
+      'display:flex', 'align-items:center', 'justify-content:space-between',
+      'gap:0.75rem', 'flex-wrap:wrap',
+      'box-shadow:0 -2px 16px rgba(0,0,0,0.15)',
+      'z-index:9999',
+      'font-family:system-ui,-apple-system,sans-serif',
+      'font-size:0.9rem',
+    ].join(';');
+
+    banner.innerHTML = `
+      <span style="flex:1;min-width:0">
+        📱 <strong>Install LumenFlow</strong> — access payments offline, right from your home screen.
+      </span>
+      <div style="display:flex;gap:0.5rem;flex-shrink:0">
+        <button id="pwa-install-btn"
+          style="background:#fff;color:#6c47ff;border:none;border-radius:6px;padding:0.5rem 1rem;font-weight:700;font-size:0.85rem;cursor:pointer;min-height:40px"
+          aria-label="Install LumenFlow as an app">
+          Install app
+        </button>
+        <button id="pwa-dismiss-btn"
+          style="background:transparent;color:#fff;border:1.5px solid rgba(255,255,255,0.6);border-radius:6px;padding:0.5rem 0.75rem;font-size:0.85rem;cursor:pointer;min-height:40px"
+          aria-label="Dismiss install prompt">
+          Not now
+        </button>
+      </div>`;
+
+    document.body.appendChild(banner);
+
+    document.getElementById('pwa-install-btn').addEventListener('click', installApp);
+    document.getElementById('pwa-dismiss-btn').addEventListener('click', dismissBanner);
+  }
+
+  async function installApp() {
+    if (!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    const { outcome } = await deferredInstallPrompt.userChoice;
+    console.log('[LumenFlow] PWA install outcome:', outcome);
+    deferredInstallPrompt = null;
+    dismissBanner();
+  }
+
+  function dismissBanner() {
+    const banner = document.getElementById('pwa-install-banner');
+    if (banner) banner.remove();
+  }
+
+  window.addEventListener('appinstalled', () => {
+    console.log('[LumenFlow] App installed successfully.');
+    deferredInstallPrompt = null;
+    dismissBanner();
+  });
 </script>
 </body>
 </html>

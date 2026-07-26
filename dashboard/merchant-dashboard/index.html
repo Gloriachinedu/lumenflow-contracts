@@ -18,6 +18,8 @@
   </script>
   <link rel="stylesheet" href="../shared.css" />
   <link rel="stylesheet" href="styles.css" />
+  <!-- QR code library -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
 <body>
   <a href="#content" class="skip-link">Skip to content</a>
@@ -35,28 +37,144 @@
       <button id="exportCsv">Export CSV</button>
     </section>
 
-    <nav class="tabs" role="tablist" aria-label="Refund status tabs">
-      <button role="tab" aria-selected="true" data-status="pending" class="tab">Pending</button>
-      <button role="tab" aria-selected="false" data-status="approved" class="tab">Approved</button>
-      <button role="tab" aria-selected="false" data-status="rejected" class="tab">Rejected</button>
-      <button role="tab" aria-selected="false" data-status="completed" class="tab">Completed</button>
-    </nav>
+    <!-- ── Payment Link Generator ─────────────────────────────────────────── -->
+    <section class="payment-link-section" aria-labelledby="plg-heading">
+      <h2 id="plg-heading">Generate Payment Link</h2>
+      <p class="section-desc">Create a shareable link that pre-fills the payment form for your customers.</p>
 
-    <section id="content">
-      <div id="empty" class="empty">No refunds.</div>
-      <table id="refundsTable" role="table" aria-label="Refund requests table">
-        <thead>
-          <tr>
-            <th id="col-id" scope="col">ID</th>
-            <th id="col-initiator" scope="col">Initiator</th>
-            <th id="col-amount" scope="col">Amount</th>
-            <th id="col-status" scope="col">Status</th>
-            <th id="col-date" scope="col">Date</th>
-            <th id="col-actions" scope="col">Actions</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+      <form id="paymentLinkForm" class="plg-form" novalidate>
+        <div class="form-row">
+          <label for="plg-merchant" class="form-label">Merchant Address <span aria-hidden="true">*</span></label>
+          <input
+            type="text"
+            id="plg-merchant"
+            class="form-input"
+            placeholder="G…"
+            autocomplete="off"
+            aria-required="true"
+          />
+        </div>
+
+        <div class="form-row">
+          <label for="plg-token" class="form-label">Token Address <span aria-hidden="true">*</span></label>
+          <input
+            type="text"
+            id="plg-token"
+            class="form-input"
+            placeholder="C… or XLM"
+            autocomplete="off"
+            aria-required="true"
+          />
+        </div>
+
+        <div class="form-row">
+          <label for="plg-amount" class="form-label">Amount (stroops) <span aria-hidden="true">*</span></label>
+          <input
+            type="number"
+            id="plg-amount"
+            class="form-input"
+            placeholder="e.g. 10000000"
+            min="1"
+            aria-required="true"
+          />
+        </div>
+
+        <div class="form-row">
+          <label for="plg-order-id" class="form-label">Order ID <span aria-hidden="true">*</span></label>
+          <input
+            type="text"
+            id="plg-order-id"
+            class="form-input"
+            placeholder="ORDER_001"
+            autocomplete="off"
+            aria-required="true"
+          />
+        </div>
+
+        <div class="form-row">
+          <label for="plg-memo" class="form-label">Memo</label>
+          <input
+            type="text"
+            id="plg-memo"
+            class="form-input"
+            placeholder="Invoice #001 (optional)"
+            autocomplete="off"
+          />
+        </div>
+
+        <div class="form-row">
+          <label for="plg-ttl" class="form-label">Link Expiry (hours)</label>
+          <input
+            type="number"
+            id="plg-ttl"
+            class="form-input plg-ttl"
+            value="24"
+            min="1"
+            max="8760"
+          />
+          <span class="form-hint">Default: 24 hours. Max: 8760 (1 year).</span>
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" id="generateLinkBtn" class="btn-primary">
+            🔗 Generate Payment Link
+          </button>
+        </div>
+      </form>
+
+      <!-- Result area (hidden until a link is generated) -->
+      <div id="plg-result" class="plg-result" hidden>
+        <div class="plg-result-row">
+          <label for="plg-url-output" class="form-label">Generated URL</label>
+          <div class="plg-url-wrapper">
+            <textarea
+              id="plg-url-output"
+              class="plg-url-output"
+              readonly
+              rows="3"
+              aria-label="Generated payment URL"
+            ></textarea>
+            <button id="copyLinkBtn" class="btn-outline btn-copy" type="button" aria-label="Copy link to clipboard">
+              📋 Copy Link
+            </button>
+          </div>
+          <p id="plg-expiry-note" class="plg-expiry-note"></p>
+        </div>
+
+        <div class="plg-qr-wrapper">
+          <p class="form-label">QR Code</p>
+          <div id="plg-qr" class="plg-qr" aria-label="QR code for payment link" role="img"></div>
+          <p class="plg-qr-hint">Scan to open the payment form on any device.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Refund Management ──────────────────────────────────────────────── -->
+    <section id="refund-section" aria-labelledby="refund-heading">
+      <h2 id="refund-heading">Refund Management</h2>
+
+      <nav class="tabs" role="tablist" aria-label="Refund status tabs">
+        <button role="tab" aria-selected="true" data-status="pending" class="tab">Pending</button>
+        <button role="tab" aria-selected="false" data-status="approved" class="tab">Approved</button>
+        <button role="tab" aria-selected="false" data-status="rejected" class="tab">Rejected</button>
+        <button role="tab" aria-selected="false" data-status="completed" class="tab">Completed</button>
+      </nav>
+
+      <div id="content">
+        <div id="empty" class="empty">No refunds.</div>
+        <table id="refundsTable" role="table" aria-label="Refund requests table">
+          <thead>
+            <tr>
+              <th id="col-id" scope="col">ID</th>
+              <th id="col-customer" scope="col">Customer</th>
+              <th id="col-amount" scope="col">Amount</th>
+              <th id="col-status" scope="col">Status</th>
+              <th id="col-actions" scope="col">Actions</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </section>
   </main>
 

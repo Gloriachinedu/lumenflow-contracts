@@ -119,6 +119,7 @@ LumenFlow is a production-grade payment processing smart contract for the [Stell
 - Testing guidance available in `docs/testing-guide.md`
 - Multisig payment flow guide available in `docs/multisig-guide.md`
 - Secrets and secure local environment setup in [`docs/secrets-and-local-env.md`](docs/secrets-and-local-env.md)
+- Payment link generator guide in [`docs/payment-link-guide.md`](docs/payment-link-guide.md)
 
 ## Refund lifecycle overview
 
@@ -556,6 +557,25 @@ stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network 
   -- get_merchants --admin $ADMIN_ADDR --cursor null --limit 10
 ```
 
+### GDPR Data Deletion
+
+Merchants in the EU can exercise their right to erasure under GDPR Article 17. See [`PRIVACY.md`](PRIVACY.md) for the full policy and [`docs/merchant-onboarding.md#data-deletion`](docs/merchant-onboarding.md#data-deletion) for step-by-step instructions.
+
+```bash
+# Step 1 — merchant submits deletion request (only the merchant can call this)
+stellar contract invoke --id $CONTRACT_ID --source-account $MERCHANT_KEY --network $NETWORK \
+  -- request_merchant_data_deletion \
+  --merchant $MERCHANT_ADDR
+
+# Step 2 — admin confirms and executes the anonymisation within 30 days
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- confirm_merchant_data_deletion \
+  --admin $ADMIN_ADDR \
+  --merchant $MERCHANT_ADDR
+```
+
+On completion the `name`, `description`, and `contact_info` fields are replaced with `[deleted]` and a `lumenflow/merchant_data_deleted` event is emitted.
+
 ### Payment Processing
 
 For detailed information on the signature payload format and how to build it in various languages, see **[docs/signature-format.md](docs/signature-format.md)**.
@@ -772,6 +792,8 @@ For production monitoring — Horizon SSE streaming, alert thresholds, and examp
 | `lumenflow/multisig_executed` | Multisig payment executed |
 | `lumenflow/payment_request_paid` | Payment request completed |
 | `lumenflow/suspicious_activity` | Safety threshold exceeded |
+| `lumenflow/merchant_deletion_requested` | Merchant submitted a GDPR data-deletion request |
+| `lumenflow/merchant_data_deleted` | Merchant PII fields anonymised after admin confirmation |
 
 ---
 
@@ -784,6 +806,30 @@ The `frontend/` directory contains three standalone HTML pages that let you inte
 | Payment History | `frontend/history.html` | Browse and filter your payment records |
 | Payment Receipt | `frontend/receipt.html` | View a receipt for a specific order |
 | Multisig Payment | `frontend/multisig.html` | Initiate and sign multi-signature payments |
+
+### Progressive Web App (PWA)
+
+All frontend pages ship with a `manifest.json` and a service worker (`sw.js`) so the payment UI can be installed on mobile devices and used offline for receipt viewing.
+
+**Install on Android (Chrome):**
+1. Open `history.html` or `receipt.html` in Chrome on your Android device.
+2. Tap the browser menu (⋮) and select **"Add to Home screen"** (or wait for the automatic install banner).
+3. Confirm the installation — LumenFlow will appear as a home-screen app.
+
+**Install on iOS (Safari):**
+1. Open any page in Safari.
+2. Tap the **Share** button (□↑) and choose **"Add to Home Screen"**.
+3. Tap **Add** — the app icon will appear on your home screen.
+
+**Install on desktop (Chrome / Edge):**
+1. Open any page in the browser.
+2. Click the install icon (⊕) in the address bar, or open the browser menu and choose **"Install LumenFlow"**.
+
+**Offline use:**
+The service worker caches the app shell and mock receipt data on first load. Receipt pages work offline using cached data. When connectivity is restored the cache is updated automatically.
+
+**Lighthouse PWA score:**
+Run a Lighthouse audit from Chrome DevTools (Lighthouse → Mobile → PWA) against a locally served build to verify the score. The target is 90+.
 
 ### Open locally
 
