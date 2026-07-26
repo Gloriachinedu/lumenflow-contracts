@@ -1,10 +1,23 @@
-/* Minimal merchant refunds UI logic
-   - Tabs for statuses
-   - Approve / Reject with confirm modal
-   - Execute (calls wallet if connected)
-   - Wallet modal with Freighter / Albedo handlers
-   - Polling for updates (mocked fetch)
+/* Merchant Dashboard — LumenFlow
+   Handles:
+   - Payment Link Generator (generatePaymentLink, isLinkExpired, QR code, clipboard)
+   - Refund management tabs (approve / reject / execute)
+   - Wallet modal (Freighter / Albedo)
+   - Polling for refund updates (mocked fetch)
 */
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/** Base URL for the receipt page, relative to this dashboard's origin.
+ *  Adjust if receipt.html lives at a different path. */
+const RECEIPT_BASE_URL = (() => {
+  const { origin, pathname } = window.location;
+  // Derive the frontend root: strip dashboard/merchant-dashboard/ suffix
+  const root = pathname.replace(/\/dashboard\/merchant-dashboard\/?.*$/, '');
+  return `${origin}${root}/frontend/receipt.html`;
+})();
+
+// ── Shared state ──────────────────────────────────────────────────────────────
 
 const state = {
   status: 'pending',
@@ -12,9 +25,181 @@ const state = {
   wallet: null,
 };
 
-const accountEl = document.getElementById('account');
-const tableBody = document.querySelector('#refundsTable tbody');
-const emptyEl = document.getElementById('empty');
+// ── DOM refs ──────────────────────────────────────────────────────────────────
+
+const accountEl  = document.getElementById('account');
+const tableBody  = document.querySelector('#refundsTable tbody');
+const emptyEl    = document.getElementById('empty');
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  PAYMENT LINK GENERATOR
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Returns true when the `expires` timestamp encoded in a payment link URL has
+ * already passed.
+ *
+ * @param {string|URL} url - The full payment link URL.
+ * @returns {boolean}
+ */
+function isLinkExpired(url) {
+  try {
+    const params = new URLSearchParams(typeof url === 'string' ? new URL(url).search : url.search);
+    const expires = parseInt(params.get('expires'), 10);
+    if (!expires || isNaN(expires)) return false; // no expiry = never expires
+    return Date.now() > expires;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Builds a shareable payment URL that pre-fills receipt.html.
+ *
+ * Encoded parameters:
+ *   merchant    – merchant Stellar address
+ *   token       – token / asset address
+ *   amount      – amount in stroops
+ *   order_id    – unique order identifier
+ *   memo        – optional payment memo
+ *   expires     – Unix timestamp (ms) after which the link is considered expired
+ *
+ * @param {{merchant:string, token:string, amount:string|number, orderId:string, memo:string, ttlHours:number}} opts
+ * @returns {string} The generated URL.
+ */
+function generatePaymentLink({ merchant, token, amount, orderId, memo, ttlHours }) {
+  const ttl = Math.max(1, parseInt(ttlHours, 10) || 24);
+  const expires = Date.now() + ttl * 60 * 60 * 1000;
+
+  const params = new URLSearchParams();
+  params.set('merchant',  merchant.trim());
+  params.set('token',     token.trim());
+  params.set('amount',    String(amount).trim());
+  params.set('order_id',  orderId.trim());
+  if (memo && memo.trim()) params.set('memo', memo.trim());
+  params.set('expires',   String(expires));
+
+  return `${RECEIPT_BASE_URL}?${params.toString()}`;
+}
+
+// QR code instance — keep a reference so we can clear and re-render
+let qrInstance = null;
+
+/**
+ * Renders a QR code into #plg-qr using the qrcode.js library loaded from CDN.
+ * Falls back to a plain text notice if the library is unavailable.
+ *
+ * @param {string} url
+ */
+function renderQRCode(url) {
+  const container = document.getElementById('plg-qr');
+  container.innerHTML = ''; // clear previous
+
+  if (typeof QRCode === 'undefined') {
+    container.textContent = 'QR library not loaded. Please check your internet connection.';
+    return;
+  }
+
+  qrInstance = new QRCode(container, {
+    text:         url,
+    width:        192,
+    height:       192,
+    colorDark:    '#0b1726',
+    colorLight:   '#ffffff',
+    correctLevel: QRCode.CorrectLevel.M,
+  });
+}
+
+/**
+ * Validates the payment link form and, on success, generates the URL, renders
+ * the QR code, and shows the result area.
+ */
+function handleGenerateLink(e) {
+  e.preventDefault();
+
+  const merchant = document.getElementById('plg-merchant').value.trim();
+  const token    = document.getElementById('plg-token').value.trim();
+  const amount   = document.getElementById('plg-amount').value.trim();
+  const orderId  = document.getElementById('plg-order-id').value.trim();
+  const memo     = document.getElementById('plg-memo').value.trim();
+  const ttlHours = document.getElementById('plg-ttl').value.trim();
+
+  // Basic validation
+  const errors = [];
+  if (!merchant) errors.push('Merchant address is required.');
+  if (!token)    errors.push('Token address is required.');
+  if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) errors.push('A positive amount is required.');
+  if (!orderId)  errors.push('Order ID is required.');
+
+  if (errors.length) {
+    alert(errors.join('\n'));
+    return;
+  }
+
+  const url = generatePaymentLink({ merchant, token, amount, orderId, memo, ttlHours });
+
+  // Show the result panel
+  const resultEl = document.getElementById('plg-result');
+  resultEl.hidden = false;
+
+  // Populate the URL textarea
+  const outputEl = document.getElementById('plg-url-output');
+  outputEl.value = url;
+
+  // Expiry note
+  const ttl = Math.max(1, parseInt(ttlHours, 10) || 24);
+  const expiresAt = new Date(Date.now() + ttl * 60 * 60 * 1000);
+  document.getElementById('plg-expiry-note').textContent =
+    `⏱ Expires: ${expiresAt.toLocaleString()} (${ttl} hour${ttl !== 1 ? 's' : ''} from now)`;
+
+  // Render QR code
+  renderQRCode(url);
+
+  // Scroll result into view smoothly
+  resultEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+/**
+ * Copies the generated payment link to the user's clipboard.
+ */
+function handleCopyLink() {
+  const url = document.getElementById('plg-url-output').value;
+  if (!url) return;
+
+  const btn = document.getElementById('copyLinkBtn');
+
+  const onSuccess = () => {
+    btn.textContent = '✅ Copied!';
+    setTimeout(() => { btn.textContent = '📋 Copy Link'; }, 2000);
+  };
+
+  const onFailure = () => {
+    // Graceful degradation: select the textarea for manual copy
+    const ta = document.getElementById('plg-url-output');
+    ta.select();
+    ta.setSelectionRange(0, 99999);
+    try {
+      document.execCommand('copy');
+      onSuccess();
+    } catch {
+      prompt('Copy this link manually:', url);
+    }
+  };
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(onSuccess).catch(onFailure);
+  } else {
+    onFailure();
+  }
+}
+
+// Wire up payment link form events
+document.getElementById('paymentLinkForm').addEventListener('submit', handleGenerateLink);
+document.getElementById('copyLinkBtn').addEventListener('click', handleCopyLink);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  REFUND MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════════
 
 function setStatus(status) {
   state.status = status;
@@ -47,9 +232,9 @@ function render() {
     const actions = tr.querySelector('td:last-child');
     if (r.status === 'pending') {
       const approve = document.createElement('button'); approve.textContent = 'Approve';
-      const reject = document.createElement('button'); reject.textContent = 'Reject';
+      const reject  = document.createElement('button'); reject.textContent  = 'Reject';
       approve.addEventListener('click', () => confirmAction('approve', r.id));
-      reject.addEventListener('click', () => confirmAction('reject', r.id));
+      reject.addEventListener('click',  () => confirmAction('reject',  r.id));
       actions.appendChild(approve); actions.appendChild(reject);
     } else if (r.status === 'approved') {
       const execute = document.createElement('button'); execute.textContent = 'Execute';
@@ -62,13 +247,13 @@ function render() {
 
 function confirmAction(action, id) {
   const modal = document.getElementById('confirmModal');
-  const text = document.getElementById('confirmText');
+  const text  = document.getElementById('confirmText');
   text.textContent = `Confirm ${action} for refund ${id}?`;
   openModal(modal);
   document.getElementById('confirmYes').onclick = async () => {
     closeModal(modal);
     if (action === 'approve') updateStatus(id, 'approved');
-    if (action === 'reject') updateStatus(id, 'rejected');
+    if (action === 'reject')  updateStatus(id, 'rejected');
     if (action === 'execute') await executeRefund(id);
   };
 }
@@ -84,12 +269,11 @@ async function executeRefund(id) {
     alert('Please connect a wallet first');
     return;
   }
-  // Attempt to sign using wallet adapters (Freighter/Albedo)
   try {
     if (state.wallet.type === 'freighter' && window.freighter) {
-      await window.freighter.signTransaction({memo: `refund:${id}`});
+      await window.freighter.signTransaction({ memo: `refund:${id}` });
     } else if (state.wallet.type === 'albedo') {
-      await window.albedo.sign({memo: `refund:${id}`});
+      await window.albedo.sign({ memo: `refund:${id}` });
     } else {
       console.warn('No wallet adapter present, simulate execute');
     }
@@ -99,6 +283,8 @@ async function executeRefund(id) {
     alert('Failed to execute refund');
   }
 }
+
+// ── Modal helpers ─────────────────────────────────────────────────────────────
 
 function openModal(modal) {
   modal.style.display = 'block';
@@ -111,14 +297,13 @@ function closeModal(modal) {
   releaseFocusTrap();
 }
 
-// Simple focus trap implementation
-let lastFocused = null;
+let lastFocused  = null;
 let trapListener = null;
 function trapFocus(modal) {
   lastFocused = document.activeElement;
-  const focusable = modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+  const focusable = modal.querySelectorAll('button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])');
   const first = focusable[0];
-  const last = focusable[focusable.length - 1];
+  const last  = focusable[focusable.length - 1];
   first && first.focus();
   trapListener = (e) => {
     if (e.key === 'Tab') {
@@ -139,55 +324,75 @@ function releaseFocusTrap() {
   lastFocused && lastFocused.focus();
 }
 
-// Wallet connect handlers
+// ── Wallet connect handlers ───────────────────────────────────────────────────
+
 document.getElementById('connectWallet').addEventListener('click', () => openModal(document.getElementById('walletModal')));
 document.getElementById('walletClose').addEventListener('click', () => closeModal(document.getElementById('walletModal')));
+
 document.getElementById('freighter').addEventListener('click', async () => {
   closeModal(document.getElementById('walletModal'));
-  // Attempt Freighter connection
   if (window.freighter) {
     try {
       const resp = await window.freighter.getConnectedAccount();
-      state.wallet = {type: 'freighter', account: resp.publicKey};
+      state.wallet = { type: 'freighter', account: resp.publicKey };
       localStorage.setItem('wallet', JSON.stringify(state.wallet));
       accountEl.textContent = shorten(resp.publicKey);
+      // Pre-fill merchant address field if it's empty
+      const merchantInput = document.getElementById('plg-merchant');
+      if (!merchantInput.value) merchantInput.value = resp.publicKey;
     } catch (e) { alert('Freighter not available'); }
   } else { alert('Freighter not installed'); }
 });
+
 document.getElementById('albedo').addEventListener('click', async () => {
   closeModal(document.getElementById('walletModal'));
   if (window.albedo) {
     try {
       const resp = await window.albedo.publicKey();
-      state.wallet = {type: 'albedo', account: resp};
+      state.wallet = { type: 'albedo', account: resp };
       localStorage.setItem('wallet', JSON.stringify(state.wallet));
       accountEl.textContent = shorten(resp);
+      const merchantInput = document.getElementById('plg-merchant');
+      if (!merchantInput.value) merchantInput.value = resp;
     } catch (e) { alert('Albedo connect failed'); }
   } else { alert('Albedo not available'); }
 });
 
-function shorten(a) { return a ? a.slice(0,6)+'…'+a.slice(-4) : '—'; }
+function shorten(a) { return a ? a.slice(0, 6) + '…' + a.slice(-4) : '—'; }
 
-// Tabs
-document.querySelectorAll('.tabs .tab').forEach(btn => btn.addEventListener('click', () => setStatus(btn.dataset.status)));
+// ── Refund tabs ───────────────────────────────────────────────────────────────
 
-// Mock fetch — in real app call backend API or use streaming (EventSource)
+document.querySelectorAll('.tabs .tab').forEach(btn =>
+  btn.addEventListener('click', () => setStatus(btn.dataset.status))
+);
+
+// ── Mock fetch — replace with real API/EventSource in production ──────────────
+
 async function fetchRefunds() {
-  // placeholder: generate some items
-  const now = Date.now();
   state.refunds = [
-    {id: 'r1', customer: 'Alice', amount: '10 XLM', status: 'pending'},
-    {id: 'r2', customer: 'Bob', amount: '5 XLM', status: 'approved'},
+    { id: 'r1', customer: 'Alice', amount: '10 XLM', status: 'pending' },
+    { id: 'r2', customer: 'Bob',   amount: '5 XLM',  status: 'approved' },
   ];
   render();
 }
 
-// Poll every 10s
 fetchRefunds();
 setInterval(fetchRefunds, 10000);
 
-// Restore wallet state
+// ── Restore wallet from localStorage ─────────────────────────────────────────
+
 const saved = localStorage.getItem('wallet');
 if (saved) {
-  try { state.wallet = JSON.parse(saved); accountEl.textContent = shorten(state.wallet.account); } catch(e){}
+  try {
+    state.wallet = JSON.parse(saved);
+    accountEl.textContent = shorten(state.wallet.account);
+    // Pre-fill merchant field from saved wallet
+    const merchantInput = document.getElementById('plg-merchant');
+    if (!merchantInput.value && state.wallet.account) {
+      merchantInput.value = state.wallet.account;
+    }
+  } catch (e) { /* ignore */ }
 }
+
+// ── Expose helpers for testing / external use ─────────────────────────────────
+export { generatePaymentLink, isLinkExpired };
