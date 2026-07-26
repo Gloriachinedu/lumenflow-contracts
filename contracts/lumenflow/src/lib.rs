@@ -1018,6 +1018,44 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Retrieve a multisig payment record by ID.
+    pub fn get_multisig_payment(
+        env: Env,
+        payment_id: String,
+    ) -> Result<MultisigPayment, PaymentError> {
+        storage::get_multisig(&env, &payment_id).ok_or(PaymentError::MultisigNotFound)
+    }
+
+    /// Cancel a pending (not yet executed) multisig payment. Initiator or admin only.
+    pub fn cancel_multisig_payment(
+        env: Env,
+        caller: Address,
+        payment_id: String,
+    ) -> Result<(), PaymentError> {
+        caller.require_auth();
+        let ms = storage::get_multisig(&env, &payment_id)
+            .ok_or(PaymentError::MultisigNotFound)?;
+
+        if ms.executed {
+            return Err(PaymentError::MultisigAlreadyExecuted);
+        }
+
+        // Only admin or a listed signer may cancel
+        let is_admin = storage::get_admin(&env)
+            .map(|a| a == caller)
+            .unwrap_or(false);
+        let is_signer = ms.signers.contains(&caller);
+
+        if !is_admin && !is_signer {
+            return Err(PaymentError::Unauthorized);
+        }
+
+        storage::remove_multisig(&env, &payment_id);
+        env.events()
+            .publish(("lumenflow", "multisig_cancelled"), payment_id);
+        Ok(())
+    }
+
     // ── Subscriptions ─────────────────────────────────────────────────────────
 
     /// Create a recurring payment plan. Merchant only.

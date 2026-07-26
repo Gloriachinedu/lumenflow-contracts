@@ -238,6 +238,12 @@ pub fn set_multisig(env: &Env, ms: &MultisigPayment) {
         .set(&DataKey::Multisig(ms.payment_id.clone()), ms);
 }
 
+pub fn remove_multisig(env: &Env, payment_id: &String) {
+    env.storage()
+        .persistent()
+        .remove(&DataKey::Multisig(payment_id.clone()));
+}
+
 // ── Payment Request ───────────────────────────────────────────────────────────
 
 pub fn get_payment_request(env: &Env, request_id: &String) -> Option<PaymentRequest> {
