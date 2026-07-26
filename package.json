@@ -2,7 +2,11 @@
   "name": "lumenflow-contracts-ui-tests",
   "private": true,
   "scripts": {
-    "test:receipt": "playwright test tests/receipt.spec.js"
+    "test:receipt": "playwright test tests/receipt.spec.js",
+    "test:playwright": "playwright test tests/playwright/",
+    "test:e2e": "playwright test",
+    "lint:html": "htmlhint \"frontend/**/*.html\" --config .htmlhintrc",
+    "lint:js": "eslint \"frontend/**/*.js\" \"tests/**/*.js\""
   },
   "devDependencies": {
     "@playwright/test": "^1.48.2"

@@ -8,6 +8,13 @@
   <meta property="og:title" content="Multisig Payment – LumenFlow" />
   <meta property="og:description" content="Initiate and manage multi-signature payments on LumenFlow. Requires threshold approvals before funds are released." />
   <meta name="twitter:card" content="summary" />
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#6c47ff" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="LumenFlow" />
+  <link rel="apple-touch-icon" href="icons/icon.svg" />
   <style>
     /* Multisig-specific styles not in the shared design system */
 
@@ -17,13 +24,14 @@
       margin-bottom: 0.5rem;
       align-items: center;
     }
-    .signer-row input { flex: 1; }
+    .signer-row input { flex: 1; min-width: 0; }
 
     .threshold-row {
       display: flex;
       align-items: center;
       gap: 0.75rem;
       margin-top: 0.5rem;
+      flex-wrap: wrap;
     }
     .threshold-row input[type=number] { width: 80px; }
     .threshold-row .of-label { font-size: 0.85rem; color: #555; }
@@ -36,6 +44,8 @@
       justify-content: space-between;
       align-items: center;
       margin-bottom: 1rem;
+      flex-wrap: wrap;
+      gap: 0.5rem;
     }
     .progress-header h2 { border: none; padding: 0; margin: 0; }
 
@@ -62,11 +72,12 @@
       padding: 0.5rem 0;
       border-bottom: 1px solid #f0f0f0;
       font-size: 0.85rem;
+      flex-wrap: wrap;
     }
     .signer-status-list li:last-child { border-bottom: none; }
-    .sig-icon { font-size: 1rem; }
-    .sig-addr { flex: 1; word-break: break-all; color: #333; }
-    .sig-status { font-size: 0.75rem; font-weight: 600; }
+    .sig-icon { font-size: 1rem; flex-shrink: 0; }
+    .sig-addr { flex: 1; word-break: break-all; color: #333; min-width: 0; }
+    .sig-status { font-size: 0.75rem; font-weight: 600; flex-shrink: 0; }
     .sig-status.signed  { color: #1a9e5c; }
     .sig-status.pending { color: #888; }
 
@@ -79,6 +90,7 @@
       font-size: 0.78rem;
       font-weight: 600;
       cursor: pointer;
+      flex-shrink: 0;
     }
     .sign-btn:hover { background: #f0ecff; }
     .sign-btn:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -95,6 +107,7 @@
       display: flex;
       align-items: center;
       gap: 0.5rem;
+      flex-wrap: wrap;
     }
     #wallet-bar.demo  { background: #fff3cd; color: #856404; }
     #wallet-bar.live  { background: #d1f3e0; color: #1a5e37; }
@@ -111,12 +124,127 @@
       cursor: pointer;
     }
     #connect-wallet-btn:hover { opacity: 0.75; }
+
+    /* Demo security notice */
+    #demo-security-notice {
+      display: none; /* shown by JS when CONTRACT_ID is not set */
+      background: #fff3cd;
+      color: #856404;
+      border: 1.5px solid #ffe69c;
+      border-radius: 8px;
+      padding: 0.85rem 1.1rem;
+      margin-bottom: 1.25rem;
+      font-size: 0.88rem;
+      line-height: 1.55;
+    }
+    #demo-security-notice strong { display: block; margin-bottom: 0.35rem; font-size: 0.95rem; }
+    #demo-security-notice a { color: #856404; font-weight: 600; }
+
+    /* ── Mobile responsive (320 px – 480 px) ───────────────────────────────── */
+    @media (max-width: 480px) {
+      body {
+        padding: 1rem 0.75rem;
+        align-items: stretch;
+      }
+
+      .card {
+        padding: 1.25rem 1rem;
+        border-radius: 8px;
+      }
+
+      /* Full-width inputs and buttons on small screens */
+      .field input,
+      .field select,
+      .btn,
+      .btn-full {
+        width: 100%;
+      }
+
+      /* Signer rows: stack input and remove button on very narrow viewports */
+      .signer-row {
+        flex-wrap: wrap;
+      }
+      .signer-row input {
+        width: 100%;
+        flex: 1 1 calc(100% - 56px); /* leave room for the remove button */
+      }
+
+      /* Threshold row wraps naturally via flex-wrap: wrap above */
+      .threshold-row input[type=number] {
+        width: 70px;
+      }
+
+      /* Wallet bar: text takes full row, button below */
+      #wallet-bar {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      #connect-wallet-btn {
+        margin-left: 0;
+        width: 100%;
+        text-align: center;
+        padding: 0.5rem 1rem;
+      }
+
+      /* Signer status list: address takes full row, status+button on next row */
+      .signer-status-list li {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        grid-template-rows: auto auto;
+        gap: 0.3rem 0.5rem;
+        align-items: center;
+      }
+      .sig-icon  { grid-row: 1; grid-column: 1; }
+      .sig-addr  { grid-row: 1; grid-column: 2; }
+      .sig-status {
+        grid-row: 2;
+        grid-column: 2;
+      }
+      .sign-btn {
+        grid-row: 2;
+        grid-column: 2;
+        justify-self: start;
+        min-height: 36px;
+        padding: 0.4rem 0.9rem;
+      }
+
+      /* Progress fraction: always below heading on small screens */
+      .progress-header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      /* Demo security notice: make list readable on narrow screens */
+      #demo-security-notice ul {
+        margin-left: 1rem;
+      }
+    }
   </style>
 </head>
 <body>
+<a href="#multisig-main" class="skip-link">Skip to main content</a>
 
+<main id="multisig-main">
 <h1>Multisig Payment</h1>
 <p class="subtitle">Initiate a payment that requires multiple signers to approve.</p>
+
+<!--
+  ⚠ DEMO SECURITY NOTICE (shown by JS when CONTRACT_ID is not configured)
+  This banner is intentionally visible in demo/preview mode so developers are
+  aware of the integration requirements before deploying to production.
+-->
+<div id="demo-security-notice" role="note" aria-label="Demo mode security notice">
+  <strong>⚠ Demo Mode — Not for Production Use</strong>
+  Signing logic on this page is a <strong>placeholder only</strong>. No real transactions are
+  sent and no funds are moved.<br><br>
+  <strong>Before going live you must:</strong>
+  <ul style="margin:0.4rem 0 0.4rem 1.2rem; padding:0;">
+    <li>Configure <code>LUMENFLOW_CONTRACT_ID</code>, <code>LUMENFLOW_NETWORK</code>, and <code>LUMENFLOW_RPC_URL</code>.</li>
+    <li>Integrate a Stellar browser wallet (e.g. <a href="https://www.freighter.app/" target="_blank" rel="noopener">Freighter</a>) using the <code>walletAdapter</code> hooks in this file.</li>
+    <li><strong>Never hardcode or expose private keys in frontend code.</strong></li>
+  </ul>
+  See <a href="../docs/multisig-guide.md" target="_blank" rel="noopener">docs/multisig-guide.md</a> for production integration instructions.
+</div>
 
 <!-- Wallet / mode status bar -->
 <div id="wallet-bar" class="demo" role="status" aria-live="polite">
@@ -158,7 +286,7 @@
     <label>Signer Addresses</label>
     <div id="signers-list">
       <div class="signer-row">
-        <input type="text" placeholder="G… signer address" class="signer-input" aria-label="Signer address 1" aria-describedby="err-signers" oninput="updateThresholdLabel()" />
+        <input type="text" placeholder="G… signer address" class="signer-input" aria-label="Signer address 1" aria-describedby="err-signers" oninput="onSignerInput()" />
         <button type="button" class="btn-icon" onclick="removeSigner(this)" aria-label="Remove signer 1">✕</button>
       </div>
     </div>
@@ -178,7 +306,7 @@
 
   <div id="form-alert" class="alert" role="alert" aria-live="assertive" style="display:none"></div>
 
-  <button class="btn btn-primary btn-full" id="submit-btn" onclick="submitForm()">Initiate Payment</button>
+  <button class="btn btn-primary btn-full" id="submit-btn" onclick="submitForm()" disabled>Initiate Payment</button>
 </div>
 
 <!-- Progress panel (shown after initiation) -->
@@ -205,6 +333,7 @@
 
 <script type="module">
   import { CONTRACT_ID, RPC_URL, renderModeBanner } from './lumenflow-shared.js';
+  import { validateOrderId, validateAmount, validateAddress, isValidStellarKey } from './validation.js';
 
   // ── State ──────────────────────────────────────────────────────────────────
 
@@ -218,7 +347,7 @@
     const row = document.createElement('div');
     row.className = 'signer-row';
     row.innerHTML = `
-      <input type="text" placeholder="G… signer address" class="signer-input" aria-label="Signer address ${index}" oninput="updateThresholdLabel()" />
+      <input type="text" placeholder="G… signer address" class="signer-input" aria-label="Signer address ${index}" oninput="onSignerInput()" />
       <button type="button" class="btn-icon" onclick="removeSigner(this)" aria-label="Remove signer ${index}">✕</button>`;
     list.appendChild(row);
     updateThresholdLabel();
@@ -257,6 +386,7 @@
     const count = document.querySelectorAll('.signer-input').length;
     document.getElementById('signer-count').textContent = count;
     validateThreshold();
+    updateSubmitState();
   }
 
   function validateThreshold() {
@@ -280,16 +410,7 @@
   }
 
   // ── Form validation ────────────────────────────────────────────────────────
-
-  // Stellar StrKey addresses are 56 chars: a type prefix plus 55 base32 chars.
-  // G = account / public key, C = contract. This is a format + length check.
-  const STELLAR_KEY_BODY = /^[A-Z2-7]{55}$/;
-
-  function isValidStellarKey(value, prefixes) {
-    if (typeof value !== 'string' || value.length !== 56) return false;
-    if (!prefixes.includes(value[0])) return false;
-    return STELLAR_KEY_BODY.test(value.slice(1));
-  }
+  // Field-level rules live in the shared validation.js module.
 
   function setErr(id, message) {
     const el = document.getElementById(id);
@@ -309,39 +430,30 @@
     }
   }
 
-  function validateForm() {
-    let ok = true;
+  const FIELD_ERR_IDS = {
+    'payment-id':       'err-payment-id',
+    'merchant-address': 'err-merchant',
+    'token-address':    'err-token',
+    'amount':           'err-amount',
+  };
 
-    const paymentId = document.getElementById('payment-id').value.trim();
-    setErr('err-payment-id', paymentId ? '' : 'Payment ID is required.');
-    markInput('payment-id', !paymentId);
-    if (!paymentId) ok = false;
+  const FIELD_VALIDATORS = {
+    'payment-id':       v => validateOrderId(v, 'Payment ID'),
+    'merchant-address': v => validateAddress(v, { label: 'Merchant address' }),
+    'token-address':    v => validateAddress(v, { label: 'Token address', prefixes: ['C', 'G'] }),
+    'amount':           v => validateAmount(v, { integer: true }),
+  };
 
-    const merchant = document.getElementById('merchant-address').value.trim();
-    let merchantErr = '';
-    if (!merchant) merchantErr = 'Merchant address is required.';
-    else if (!isValidStellarKey(merchant, ['G'])) merchantErr = 'Enter a valid Stellar address (starts with G, 56 characters).';
-    setErr('err-merchant', merchantErr);
-    markInput('merchant-address', !!merchantErr);
-    if (merchantErr) ok = false;
+  function validateField(fieldId, show) {
+    const message = FIELD_VALIDATORS[fieldId](document.getElementById(fieldId).value);
+    if (show) {
+      setErr(FIELD_ERR_IDS[fieldId], message);
+      markInput(fieldId, !!message);
+    }
+    return !message;
+  }
 
-    const token = document.getElementById('token-address').value.trim();
-    let tokenErr = '';
-    if (!token) tokenErr = 'Token address is required.';
-    else if (!isValidStellarKey(token, ['C', 'G'])) tokenErr = 'Enter a valid token address (starts with C or G, 56 characters).';
-    setErr('err-token', tokenErr);
-    markInput('token-address', !!tokenErr);
-    if (tokenErr) ok = false;
-
-    const amountRaw = document.getElementById('amount').value.trim();
-    const amount = Number(amountRaw);
-    let amountErr = '';
-    if (!amountRaw) amountErr = 'Amount is required.';
-    else if (!Number.isInteger(amount) || amount < 1) amountErr = 'Amount must be a positive whole number of stroops.';
-    setErr('err-amount', amountErr);
-    markInput('amount', !!amountErr);
-    if (amountErr) ok = false;
-
+  function validateSigners(show) {
     const signerInputs = Array.from(document.querySelectorAll('.signer-input'));
     const signers = signerInputs.map(i => i.value.trim()).filter(Boolean);
     let signerErr = '';
@@ -352,10 +464,11 @@
       signerInputs.forEach(input => {
         const value = input.value.trim();
         const bad = value.length > 0 && !isValidStellarKey(value, ['G']);
+        if (bad) anyInvalid = true;
+        if (!show) return;
         input.classList.toggle('error', bad);
         if (bad) {
           input.setAttribute('aria-invalid', 'true');
-          anyInvalid = true;
         } else {
           input.removeAttribute('aria-invalid');
         }
@@ -363,12 +476,29 @@
       if (anyInvalid) signerErr = 'Each signer must be a valid Stellar address (starts with G, 56 characters).';
       else if (new Set(signers).size !== signers.length) signerErr = 'Signer addresses must be unique.';
     }
-    setErr('err-signers', signerErr);
-    if (signerErr) ok = false;
+    if (show) setErr('err-signers', signerErr);
+    return !signerErr;
+  }
 
+  // show=false checks validity without touching inline errors, so the submit
+  // button can be gated without flagging fields the user has not reached yet.
+  function validateForm(show = true) {
+    let ok = true;
+    Object.keys(FIELD_VALIDATORS).forEach(fieldId => {
+      if (!validateField(fieldId, show)) ok = false;
+    });
+    if (!validateSigners(show)) ok = false;
     if (!validateThreshold()) ok = false;
-
     return ok;
+  }
+
+  function updateSubmitState() {
+    document.getElementById('submit-btn').disabled = !validateForm(false);
+  }
+
+  function onSignerInput() {
+    updateThresholdLabel();
+    validateSigners(true);
   }
 
   // ── Contract interaction ───────────────────────────────────────────────────
@@ -476,7 +606,10 @@
 
   async function callInitiateMultisig({ paymentId, merchantAddress, tokenAddress, amount, signers, required }) {
     if (!CONTRACT_ID) {
-      // Demo mode: simulate success
+      // ⚠ DEMO MODE: The logic below is a placeholder. No real transaction is sent.
+      // In production, use a Stellar wallet (e.g. Freighter) to sign transactions.
+      // NEVER hardcode or expose private keys in frontend code.
+      // See docs/multisig-guide.md for production integration instructions.
       await new Promise(r => setTimeout(r, 600));
       return { success: true };
     }
@@ -514,6 +647,10 @@
 
   async function callSignMultisig(paymentId, signerAddress) {
     if (!CONTRACT_ID) {
+      // ⚠ DEMO MODE: The signing logic below is a placeholder. No real signature is produced.
+      // In production, use a Stellar wallet (e.g. Freighter) to sign transactions.
+      // NEVER hardcode or expose private keys in frontend code.
+      // See docs/multisig-guide.md for production integration instructions.
       await new Promise(r => setTimeout(r, 400));
       return { success: true };
     }
@@ -531,6 +668,9 @@
           'sign_multisig_payment',
           nativeToScVal(signerAddress, { type: 'address' }),
           nativeToScVal(paymentId,     { type: 'string'  }),
+          // ⚠ DEMO MODE: placeholder zero-bytes signature — replace with real wallet-signed bytes in production.
+          // In production, the wallet (e.g. Freighter) supplies the real ed25519 signature via signAndSubmit.
+          // NEVER derive or pass a real private key here.
           nativeToScVal(new Uint8Array(64)), // placeholder: real signature from wallet
         ))
         .setTimeout(30)
@@ -547,6 +687,10 @@
 
   async function callExecuteMultisig(paymentId) {
     if (!CONTRACT_ID) {
+      // ⚠ DEMO MODE: The execution logic below is a placeholder. No real transaction is sent.
+      // In production, use a Stellar wallet (e.g. Freighter) to sign transactions.
+      // NEVER hardcode or expose private keys in frontend code.
+      // See docs/multisig-guide.md for production integration instructions.
       await new Promise(r => setTimeout(r, 500));
       return { success: true };
     }
@@ -589,7 +733,8 @@
     const paymentId      = document.getElementById('payment-id').value.trim();
     const merchantAddress = document.getElementById('merchant-address').value.trim();
     const tokenAddress   = document.getElementById('token-address').value.trim();
-    const amount         = parseInt(document.getElementById('amount').value, 10);
+    // Number() matches validateAmount; parseInt would read '1e3' as 1.
+    const amount         = Number(document.getElementById('amount').value.trim());
     const signers        = getSignerValues();
     const required       = parseInt(document.getElementById('required-sigs').value, 10);
 
@@ -692,13 +837,45 @@
   window.removeSigner    = removeSigner;
   window.updateThresholdLabel = updateThresholdLabel;
   window.validateThreshold    = validateThreshold;
+  window.onSignerInput   = onSignerInput;
   window.submitForm      = submitForm;
   window.signPayment     = signPayment;
   window.executePayment  = executePayment;
+  window.connectWallet   = connectWallet;
 
-  document.getElementById('required-sigs').addEventListener('input', validateThreshold);
+  document.getElementById('required-sigs').addEventListener('input', () => {
+    validateThreshold();
+    updateSubmitState();
+  });
+
+  Object.keys(FIELD_VALIDATORS).forEach(fieldId => {
+    document.getElementById(fieldId).addEventListener('input', () => {
+      validateField(fieldId, true);
+      updateSubmitState();
+    });
+  });
+
+  // Show the demo security notice banner when no CONTRACT_ID is configured.
+  // This makes it explicit to developers that the page is in demo/placeholder mode.
+  if (!CONTRACT_ID) {
+    const notice = document.getElementById('demo-security-notice');
+    if (notice) notice.style.display = 'block';
+  }
+
   renderModeBanner();
   updateThresholdLabel();
 </script>
+
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker
+        .register('./sw.js', { scope: './' })
+        .catch((err) => console.warn('[PWA] Service worker registration failed:', err));
+    });
+  }
+</script>
+
+</main>
 </body>
 </html>

@@ -58,6 +58,84 @@ export function formatDate(timestamp) {
   return new Date(Number(timestamp) * 1000).toLocaleString();
 }
 
+// ── Token metadata ────────────────────────────────────────────────────────────
+
+/**
+ * Registry of known token contract IDs mapped to display metadata.
+ * Keys are Stellar contract/asset IDs; the 'native' key covers XLM.
+ * Add entries here as new tokens are supported by LumenFlow.
+ */
+export const TOKEN_METADATA = {
+  // Native XLM (stroop-based, 7 decimal places)
+  native: { symbol: 'XLM', decimals: 7, name: 'Stellar Lumens' },
+  // USDC on Stellar testnet (Circle)
+  CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC: { symbol: 'USDC', decimals: 6, name: 'USD Coin' },
+  // USDC on Stellar mainnet (Circle)
+  CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75: { symbol: 'USDC', decimals: 6, name: 'USD Coin' },
+  // Generic fallback is handled in getTokenMetadata()
+};
+
+/** Fallback metadata returned for unrecognised token IDs. */
+const FALLBACK_METADATA = { symbol: 'TOKEN', decimals: 7, name: 'Unknown Token' };
+
+/**
+ * Looks up token metadata from the TOKEN_METADATA registry.
+ * Returns a fallback object when the token is not found.
+ * @param {string} tokenId - Contract/asset ID or 'native'.
+ * @returns {{ symbol: string, decimals: number, name: string }}
+ */
+export function getTokenMetadata(tokenId) {
+  if (!tokenId) return FALLBACK_METADATA;
+  return TOKEN_METADATA[tokenId] || FALLBACK_METADATA;
+}
+
+/**
+ * Formats a raw integer amount (e.g. stroops) into a human-readable string
+ * using the correct decimal precision and symbol for the given token.
+ * Examples: '5.00 USDC', '5.0000000 XLM', '1.2345678 TOKEN'
+ * @param {bigint|number|string} amount - Raw integer amount.
+ * @param {string} tokenId - Contract/asset ID or 'native'.
+ * @returns {string}
+ */
+export function formatTokenAmount(amount, tokenId) {
+  const { symbol, decimals } = getTokenMetadata(tokenId);
+  const value = Number(amount) / Math.pow(10, decimals);
+  const formatted = value.toLocaleString(undefined, {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+  return `${formatted} ${symbol}`;
+}
+
+/**
+ * Hardcoded exchange rate table for demo purposes.
+ * Maps token symbol to its XLM equivalent rate (1 token = N XLM).
+ */
+const XLM_RATES = {
+  XLM:   1,
+  USDC:  8,     // 1 USDC ≈ 8 XLM (demo rate)
+  TOKEN: 1,     // unknown tokens default 1:1
+};
+
+/**
+ * Converts a raw token amount to an approximate XLM equivalent.
+ * Uses a hardcoded demo rate table — not suitable for production pricing.
+ * @param {bigint|number|string} amount - Raw integer amount in token's smallest unit.
+ * @param {string} tokenId - Contract/asset ID or 'native'.
+ * @returns {string} Formatted XLM string, e.g. '40.0000000 XLM'
+ */
+export function convertToXlm(amount, tokenId) {
+  const { symbol, decimals } = getTokenMetadata(tokenId);
+  const humanAmount = Number(amount) / Math.pow(10, decimals);
+  const rate = XLM_RATES[symbol] ?? 1;
+  const xlmAmount = humanAmount * rate;
+  const formatted = xlmAmount.toLocaleString(undefined, {
+    minimumFractionDigits: 7,
+    maximumFractionDigits: 7,
+  });
+  return `${formatted} XLM`;
+}
+
 // ── Mode banner ───────────────────────────────────────────────────────────────
 
 /**
