@@ -87,7 +87,7 @@ SOURCE_ACCOUNT=<secret-key> ./scripts/local_up.sh
 ## Issue and PR Conventions
 
 - **Branch names**: `feat/<slug>`, `fix/<slug>`, `docs/<slug>`, `ci/<slug>`, `test/<slug>`
-- **Commit messages**: follow [Conventional Commits](https://www.conventionalcommits.org/) — e.g. `feat: add X`, `fix: prevent Y`, `docs: update Z`
+- **Commit messages**: follow [Conventional Commits](https://www.conventionalcommits.org/) — see the [Commits](#commits) section below for the full type list, breaking-change syntax, and examples. The `commit-msg` hook validates messages locally.
 - **Linking issues**: add `Closes #N` in the PR description body to auto-close the issue on merge
 - **One concern per PR** — keep PRs focused; reviewers will ask you to split large ones
 - **Fill the PR template** — summary, what was tested, any blocked items
@@ -172,14 +172,95 @@ When adding a new translation, please follow the naming convention `README.[lang
 
 ### Commits
 
-Follow [Conventional Commits](https://www.conventionalcommits.org/):
+All commit messages **must** follow the [Conventional Commits](https://www.conventionalcommits.org/) specification.
+This is enforced by the `commit-msg` git hook installed via `scripts/install_hooks.sh`.
+The changelog is generated automatically from these messages on every release.
+
+#### Format
+
+```
+<type>[(scope)][!]: <subject>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+- **type** — what kind of change (required, lowercase)
+- **scope** — the area of the codebase affected (optional, lowercase, in parentheses)
+- **`!`** — marks a breaking change (optional, placed before the colon)
+- **subject** — short description in the imperative mood, no period at the end, ≤ 100 chars total on the header line
+
+#### Valid types
+
+| Type | Changelog section | Use for |
+|---|---|---|
+| `feat` | 🚀 Features | New features visible to users or callers |
+| `fix` | 🐛 Bug Fixes | Bug fixes |
+| `security` | 🔒 Security | Security patches, hardening changes |
+| `perf` | ⚡ Performance | Performance improvements |
+| `refactor` | _(omitted)_ | Code restructuring with no behaviour change |
+| `docs` | 📝 Documentation | Documentation only changes |
+| `test` | _(omitted)_ | Adding or updating tests |
+| `ci` | 🤖 CI | CI/CD pipeline changes |
+| `build` | 🔧 Build | Build system or toolchain changes |
+| `chore` | _(omitted)_ | Maintenance (version bumps, lock files) |
+| `style` | _(omitted)_ | Formatting, whitespace — no logic change |
+| `revert` | ⏪ Reverts | Reverts a prior commit |
+
+#### Examples
 
 ```
 feat: add subscription payment support
 fix: prevent double-refund on concurrent requests
+security: validate nonce before signature check
+perf(history): cache merchant payment index
 docs: update deploy instructions for testnet
 test: add edge cases for multisig threshold
+ci: pin conventional-changelog-cli to 5.0.0
+chore: bump soroban-sdk to 22.0.1
 ```
+
+With a scope:
+
+```
+feat(payments): add batch processing endpoint
+fix(refunds): reject duplicate refund_id on initiation
+```
+
+#### Breaking changes
+
+Append `!` to the type/scope and add a `BREAKING CHANGE:` footer:
+
+```
+feat(payments)!: extend signature payload with nonce field
+
+BREAKING CHANGE: the nonce (8-byte big-endian u64) is now required between
+`contract_address` and `order_id` in the signature payload. Existing signatures
+must be regenerated. See docs/signature-format.md for the updated layout.
+```
+
+Breaking changes appear in a dedicated **⚠ BREAKING CHANGES** section at the top of the changelog and are shown prominently in the GitHub Release notes.
+
+#### Multi-paragraph body
+
+Use a blank line to separate the subject from the body. Wrap body lines at 72 characters:
+
+```
+fix(storage): prevent TTL underflow on payment cleanup
+
+cleanup_expired_payments compared a u64 timestamp against a signed
+offset, which could wrap on very old entries. Changed the comparison
+to saturating subtraction.
+
+Closes #599
+```
+
+#### Automated validation
+
+The `commit-msg` hook (installed by `scripts/install_hooks.sh`) rejects any commit whose
+header does not match the pattern above **before** the commit is recorded locally.
+CI also lints commit messages on every pull request so non-conforming commits cannot merge.
 
 ### Pull Requests
 
