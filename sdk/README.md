@@ -35,3 +35,90 @@ function handleContractError(error: any) {
   });
 }
 ```
+
+## Wallet Adapters
+
+The SDK provides a `WalletAdapter` interface that decouples signing logic from the SDK core. This allows the SDK to work in browser environments (using wallet extensions like Freighter) as well as server-side or CLI environments (using raw keypairs).
+
+### Built-in Adapters
+
+#### FreighterAdapter
+
+For browser-based applications using the Freighter wallet extension:
+
+```typescript
+import { FreighterAdapter, WalletAdapter } from '@lumenflow/sdk';
+
+const adapter: WalletAdapter = new FreighterAdapter();
+
+if (adapter.isConnected()) {
+  const publicKey = await adapter.getPublicKey();
+  const signature = await adapter.signTransaction(payload);
+}
+```
+
+#### KeypairAdapter
+
+For CLI tools, server-side applications, or testing:
+
+```typescript
+import { KeypairAdapter, WalletAdapter } from '@lumenflow/sdk';
+
+// Generate a new random keypair
+const adapter: WalletAdapter = KeypairAdapter.generate();
+
+// Or create from an existing secret key
+const secretKey = Buffer.from('your-secret-key-hex', 'hex');
+const adapter: WalletAdapter = KeypairAdapter.fromSecretKey(secretKey);
+
+const publicKey = await adapter.getPublicKey();
+const signature = await adapter.signTransaction(payload);
+```
+
+### Implementing a Custom Adapter
+
+You can implement your own wallet adapter by implementing the `WalletAdapter` interface:
+
+```typescript
+import { WalletAdapter } from '@lumenflow/sdk';
+
+class CustomWalletAdapter implements WalletAdapter {
+  async getPublicKey(): Promise<string> {
+    // Return your wallet's public key as a hex string
+    return 'your-public-key-hex';
+  }
+
+  async signTransaction(payload: Buffer | Uint8Array): Promise<Buffer | Uint8Array> {
+    // Sign the payload using your wallet's signing mechanism
+    // Return the signature as a Buffer or Uint8Array
+    return Buffer.from('your-signature');
+  }
+
+  isConnected(): boolean {
+    // Return true if your wallet is connected/available
+    return true;
+  }
+}
+```
+
+### Payment Payload Signing
+
+The SDK also provides utilities for building and signing payment payloads:
+
+```typescript
+import { buildPaymentPayload, signPaymentPayload, KeypairAdapter } from '@lumenflow/sdk';
+
+// Build the exact payload that the LumenFlow contract verifies
+const payload = buildPaymentPayload('ORDER_001', 1000n);
+
+// Sign with a keypair adapter
+const adapter = KeypairAdapter.generate();
+const signature = await adapter.signTransaction(payload);
+
+// Or use the direct signing function
+const keypair = {
+  publicKey: Buffer.from('public-key'),
+  secretKey: Buffer.from('secret-key'),
+};
+const signature = signPaymentPayload('ORDER_001', 1000n, keypair);
+```
