@@ -1,0 +1,31 @@
+coverage:
+  # Overall project coverage must not drop below 80%
+  status:
+    project:
+      default:
+        target: 80%
+        threshold: 1%   # allow up to 1% drop before marking as failure
+        if_no_uploads: error
+        if_not_found: success
+    patch:
+      default:
+        target: 80%
+        threshold: 1%
+        if_no_uploads: error
+        if_not_found: success
+
+comment:
+  layout: "reach,diff,flags,files"
+  behavior: default
+  require_changes: false   # always post a comment on PRs
+  require_base: false
+  require_head: true
+
+# Ignore non-contract code from coverage calculation
+ignore:
+  - "cli/**"
+  - "scripts/**"
+  - "target/**"
+  - "**/*_test.rs"
+  - "**/test.rs"
+  - "**/test_snapshots/**"
