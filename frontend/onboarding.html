@@ -429,6 +429,7 @@
 
 </div>
 
+<script type="module" src="toast.js"></script>
 <script>
   // ── State ──────────────────────────────────────────────────────────────────
   const form = {
@@ -535,11 +536,12 @@
       try {
         const resp = await window.freighter.getConnectedAccount();
         setWallet(resp.publicKey, 'btn-freighter');
+        showToast('Freighter wallet connected.', 'success');
       } catch {
-        alert('Freighter connection failed. Make sure the extension is installed and unlocked.');
+        showToast('Freighter connection failed. Make sure the extension is installed and unlocked.', 'error');
       }
     } else {
-      alert('Freighter extension not found. Install it from https://www.freighter.app/');
+      showToast('Freighter extension not found. Install it from https://www.freighter.app/', 'error');
     }
   }
 
@@ -548,11 +550,12 @@
       try {
         const resp = await window.albedo.publicKey({});
         setWallet(resp.pubkey, 'btn-albedo');
+        showToast('Albedo wallet connected.', 'success');
       } catch {
-        alert('Albedo connection failed.');
+        showToast('Albedo connection failed.', 'error');
       }
     } else {
-      alert('Albedo not available. Visit https://albedo.link/');
+      showToast('Albedo not available. Visit https://albedo.link/', 'error');
     }
   }
 
