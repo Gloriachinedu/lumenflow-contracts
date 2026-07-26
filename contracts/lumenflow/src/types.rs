@@ -224,6 +224,33 @@ pub struct MerchantStats {
     pub total_refund_volume: i128,
 }
 
+// ── Escrow ────────────────────────────────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EscrowStatus {
+    /// Funds are locked and awaiting the unlock_at timestamp.
+    Locked,
+    /// Funds have been released to the merchant.
+    Released,
+    /// Funds have been returned to the payer (cancelled before unlock).
+    Cancelled,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowRecord {
+    pub order_id: String,
+    pub payer: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    /// Unix timestamp after which release_escrow can be called.
+    pub unlock_at: u64,
+    pub status: EscrowStatus,
+    pub created_at: u64,
+}
+
 // ── Dispute ───────────────────────────────────────────────────────────────────
 
 #[contracttype]

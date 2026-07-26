@@ -19,10 +19,11 @@ use helper::{
     validate_merchant_category, validate_tags, verify_signature,
 };
 use types::{
-    BatchPaymentItem, GlobalStats, Merchant, MerchantCategory, MerchantPage, MerchantStats,
-    MultisigPayment, PaymentFilter, PaymentOrder, PaymentPage, PaymentRequest, PaymentStatus,
-    PaymentSummary, RefundRecord, RefundStatus, SignatureEntry, SortField, SortOrder, StatusFilter,
-    Subscription, SubscriptionPlan, SubscriptionStatus, SuspiciousActivityReason,
+    BatchPaymentItem, EscrowRecord, EscrowStatus, GlobalStats, Merchant, MerchantCategory,
+    MerchantPage, MerchantStats, MultisigPayment, PaymentFilter, PaymentOrder, PaymentPage,
+    PaymentRequest, PaymentStatus, PaymentSummary, RefundRecord, RefundStatus, SignatureEntry,
+    SortField, SortOrder, StatusFilter, Subscription, SubscriptionPlan, SubscriptionStatus,
+    SuspiciousActivityReason,
 };
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -243,6 +244,33 @@ impl PaymentProcessingContract {
         require_admin(&env, &admin)?;
         require_positive(amount)?;
         storage::set_min_refund_amount(&env, amount);
+        Ok(())
+    }
+
+    /// Set the per-merchant payment rate limit (max payments per 300-ledger window). Admin only.
+    ///
+    /// The rolling-window counter resets every 300 ledgers (~25 minutes). Once a
+    /// merchant reaches the limit within a window all further `process_payment_with_signature`
+    /// and `batch_payment` calls for that merchant are rejected with
+    /// [`PaymentError::RateLimitExceeded`] until the next window begins.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator address.
+    /// * `limit` - Maximum number of payments accepted per merchant per window. Must be > 0.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    /// * [`PaymentError::InvalidInput`] — `limit` is zero.
+    pub fn set_rate_limit(env: Env, admin: Address, limit: u32) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        if limit == 0 {
+            return Err(PaymentError::InvalidInput);
+        }
+        storage::set_rate_limit_per_window(&env, limit);
+        env.events().publish(("lumenflow", "rate_limit_set"), limit);
         Ok(())
     }
 
@@ -490,8 +518,10 @@ impl PaymentProcessingContract {
     ///
     /// Transfers `amount` tokens from `payer` to `merchant_address` after verifying
     /// the merchant's ed25519 signature over the canonical payload
-    /// (`XDR(order_id) || amount_be_i128`). See the inline comment for the exact
-    /// byte layout.
+    /// (`network_id || contract_address_xdr || nonce_be_u64 || order_id_xdr || amount_be_i128`).
+    /// The `nonce` field must equal `current_merchant_nonce + 1`; on success the
+    /// merchant's nonce counter is incremented, permanently invalidating any
+    /// previously intercepted signature.
     ///
     /// # Arguments
     /// * `payer` - Address funding the payment. Must sign the call.
@@ -501,6 +531,7 @@ impl PaymentProcessingContract {
     /// * `amount` - Positive token amount (in the token's smallest unit).
     /// * `memo` - Optional free-text note; maximum 256 characters.
     /// * `tags` - Optional list of string tags; each tag ≤ 32 characters, max 10 tags.
+    /// * `nonce` - Must equal `get_merchant_nonce(merchant_address) + 1`. Prevents replay.
     /// * `signature` - 64-byte ed25519 signature produced by the merchant's private key.
     /// * `merchant_public_key` - 32-byte ed25519 public key corresponding to the signature.
     ///
@@ -515,6 +546,7 @@ impl PaymentProcessingContract {
     /// * [`PaymentError::PaymentAlreadyExists`] — a payment with `order_id` already exists.
     /// * [`PaymentError::MerchantNotFound`] — no merchant registered at `merchant_address`.
     /// * [`PaymentError::MerchantInactive`] — the merchant has been deactivated.
+    /// * [`PaymentError::InvalidNonce`] — `nonce` does not equal current merchant nonce + 1.
     /// * [`PaymentError::InvalidSignature`] — the ed25519 signature verification failed.
     pub fn process_payment_with_signature(
         env: Env,
@@ -525,6 +557,7 @@ impl PaymentProcessingContract {
         amount: i128,
         memo: String,
         tags: Option<Vec<String>>,
+        nonce: u64,
         signature: Bytes,
         merchant_public_key: Bytes,
     ) -> Result<(), PaymentError> {
@@ -548,19 +581,39 @@ impl PaymentProcessingContract {
             return Err(PaymentError::MerchantInactive);
         }
 
+        // Replay protection: nonce must be exactly current_merchant_nonce + 1
+        let expected_nonce = storage::get_merchant_nonce(&env, &merchant_address)
+            .saturating_add(1);
+        if nonce != expected_nonce {
+            return Err(PaymentError::InvalidNonce);
+        }
+
         // Reject disallowed tokens
         if !storage::is_token_allowed(&env, &token_address) {
             return Err(PaymentError::TokenNotAllowed);
         }
 
-        // Build payload: order_id bytes + amount bytes
+        // Build payload: network_id || contract_address || nonce || order_id || amount
         let mut payload = Bytes::new(&env);
         let network_id_bytes: Bytes = env.ledger().network_id().into();
         payload.append(&network_id_bytes);
         payload.append(&env.current_contract_address().to_xdr(&env));
+        payload.append(&Bytes::from_slice(&env, &nonce.to_be_bytes()));
         payload.append(&order_id.clone().to_xdr(&env));
         payload.append(&Bytes::from_slice(&env, &amount.to_be_bytes()));
         verify_signature(&env, &merchant_public_key, &payload, &signature)?;
+
+        // Advance merchant nonce before any external calls (checks-effects-interactions)
+        storage::increment_merchant_nonce(&env, &merchant_address);
+
+        // Rate-limit: reject if merchant has exceeded the window limit
+        let window_start = storage::current_window_start(&env);
+        let current_count = storage::get_rate_limit_counter(&env, &merchant_address, window_start);
+        let rate_limit = storage::get_rate_limit_per_window(&env);
+        if current_count >= rate_limit {
+            return Err(PaymentError::RateLimitExceeded);
+        }
+        storage::increment_rate_limit_counter(&env, &merchant_address, window_start);
 
         // Transfer tokens from payer to merchant (minus platform fee)
         let token_client = token::Client::new(&env, &token_address);
@@ -789,6 +842,21 @@ impl PaymentProcessingContract {
         storage::get_nonce(&env, &payer)
     }
 
+    /// Return the current nonce for `merchant_address`.
+    ///
+    /// The nonce is embedded in the signature payload to prevent signature replay
+    /// across different order IDs. The expected nonce for the next payment is
+    /// `get_merchant_nonce(...) + 1`. Starts at 0 for newly registered merchants.
+    ///
+    /// # Arguments
+    /// * `merchant_address` - The merchant address whose nonce is queried.
+    ///
+    /// # Returns
+    /// The current u64 nonce value.
+    pub fn get_merchant_nonce(env: Env, merchant_address: Address) -> u64 {
+        storage::get_merchant_nonce(&env, &merchant_address)
+    }
+
     /// Pay multiple merchants in one transaction. Maximum 10 items. Atomic.
     ///
     /// All items are validated and transferred atomically — if any item fails the
@@ -842,6 +910,15 @@ impl PaymentProcessingContract {
             if !merchant.active {
                 return Err(PaymentError::MerchantInactive);
             }
+
+            // Rate-limit check per merchant
+            let window_start = storage::current_window_start(&env);
+            let current_count = storage::get_rate_limit_counter(&env, &item.merchant_address, window_start);
+            let rate_limit = storage::get_rate_limit_per_window(&env);
+            if current_count >= rate_limit {
+                return Err(PaymentError::RateLimitExceeded);
+            }
+            storage::increment_rate_limit_counter(&env, &item.merchant_address, window_start);
 
             // Reject disallowed tokens
             if !storage::is_token_allowed(&env, &item.token_address) {
@@ -2467,5 +2544,202 @@ impl PaymentProcessingContract {
         subscription_id: String,
     ) -> Result<Subscription, PaymentError> {
         storage::get_subscription(&env, &subscription_id).ok_or(PaymentError::SubscriptionNotFound)
+    }
+
+    // ── Escrow ────────────────────────────────────────────────────────────────
+
+    /// Lock funds in a time-locked escrow.
+    ///
+    /// Transfers `amount` tokens from `payer` into the contract's own address
+    /// where they remain frozen until `unlock_at`. The payer may cancel before
+    /// `unlock_at`; the merchant may release after it.
+    ///
+    /// # Arguments
+    /// * `payer` - Address funding the escrow. Must sign the call.
+    /// * `merchant` - Registered, active merchant that will receive funds on release.
+    /// * `amount` - Positive token amount to lock.
+    /// * `token` - Allowed token contract address.
+    /// * `unlock_at` - Unix timestamp after which the escrow can be released.
+    /// * `order_id` - Unique, non-empty identifier for this escrow.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::InvalidAmount`] — `amount` is not positive.
+    /// * [`PaymentError::InvalidInput`] — `order_id` is empty or `unlock_at` is in the past.
+    /// * [`PaymentError::TokenNotAllowed`] — `token` is not on the allow-list.
+    /// * [`PaymentError::EscrowAlreadyExists`] — an escrow with `order_id` already exists.
+    /// * [`PaymentError::MerchantNotFound`] — no merchant registered at `merchant`.
+    /// * [`PaymentError::MerchantInactive`] — the merchant has been deactivated.
+    pub fn create_escrow(
+        env: Env,
+        payer: Address,
+        merchant: Address,
+        amount: i128,
+        token: Address,
+        unlock_at: u64,
+        order_id: String,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        payer.require_auth();
+        require_positive(amount)?;
+        require_valid_id(&order_id)?;
+
+        let now = env.ledger().timestamp();
+        if unlock_at <= now {
+            return Err(PaymentError::InvalidInput);
+        }
+
+        if !storage::is_token_allowed(&env, &token) {
+            return Err(PaymentError::TokenNotAllowed);
+        }
+
+        if storage::get_escrow(&env, &order_id).is_some() {
+            return Err(PaymentError::EscrowAlreadyExists);
+        }
+
+        let m = storage::get_merchant(&env, &merchant).ok_or(PaymentError::MerchantNotFound)?;
+        if !m.active {
+            return Err(PaymentError::MerchantInactive);
+        }
+
+        // Lock funds: transfer from payer into this contract
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&payer, &env.current_contract_address(), &amount);
+
+        let escrow = EscrowRecord {
+            order_id: order_id.clone(),
+            payer,
+            merchant,
+            token,
+            amount,
+            unlock_at,
+            status: EscrowStatus::Locked,
+            created_at: now,
+        };
+        storage::set_escrow(&env, &escrow);
+
+        env.events()
+            .publish(("lumenflow", "escrow_created"), (order_id, amount));
+        Ok(())
+    }
+
+    /// Release escrowed funds to the merchant after the unlock time.
+    ///
+    /// Can be called by anyone once `unlock_at` has passed; funds go to the merchant.
+    ///
+    /// # Arguments
+    /// * `order_id` - The escrow to release.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::EscrowNotFound`] — no escrow exists with `order_id`.
+    /// * [`PaymentError::EscrowAlreadyFinalised`] — escrow is not in `Locked` state.
+    /// * [`PaymentError::EscrowNotUnlocked`] — `unlock_at` timestamp has not yet passed.
+    pub fn release_escrow(env: Env, order_id: String) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+
+        let mut escrow =
+            storage::get_escrow(&env, &order_id).ok_or(PaymentError::EscrowNotFound)?;
+
+        if !matches!(escrow.status, EscrowStatus::Locked) {
+            return Err(PaymentError::EscrowAlreadyFinalised);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < escrow.unlock_at {
+            return Err(PaymentError::EscrowNotUnlocked);
+        }
+
+        // Effects before interaction
+        escrow.status = EscrowStatus::Released;
+        storage::set_escrow(&env, &escrow);
+
+        // Transfer funds from contract to merchant
+        let token_client = token::Client::new(&env, &escrow.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &escrow.merchant,
+            &escrow.amount,
+        );
+
+        env.events()
+            .publish(("lumenflow", "escrow_released"), (order_id, escrow.amount));
+        Ok(())
+    }
+
+    /// Cancel an escrow and return funds to the payer — only before the unlock time.
+    ///
+    /// Only the original payer may cancel. After `unlock_at` has passed the
+    /// escrow can no longer be cancelled; call `release_escrow` instead.
+    ///
+    /// # Arguments
+    /// * `payer` - Must be the payer who created the escrow. Must sign the call.
+    /// * `order_id` - The escrow to cancel.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::EscrowNotFound`] — no escrow exists with `order_id`.
+    /// * [`PaymentError::EscrowAlreadyFinalised`] — escrow is not in `Locked` state.
+    /// * [`PaymentError::EscrowUnauthorised`] — caller is not the escrow payer.
+    /// * [`PaymentError::EscrowLockExpired`] — `unlock_at` has already passed.
+    pub fn cancel_escrow_before_lock(
+        env: Env,
+        payer: Address,
+        order_id: String,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        payer.require_auth();
+
+        let mut escrow =
+            storage::get_escrow(&env, &order_id).ok_or(PaymentError::EscrowNotFound)?;
+
+        if !matches!(escrow.status, EscrowStatus::Locked) {
+            return Err(PaymentError::EscrowAlreadyFinalised);
+        }
+
+        if escrow.payer != payer {
+            return Err(PaymentError::EscrowUnauthorised);
+        }
+
+        let now = env.ledger().timestamp();
+        if now >= escrow.unlock_at {
+            return Err(PaymentError::EscrowLockExpired);
+        }
+
+        // Effects before interaction
+        escrow.status = EscrowStatus::Cancelled;
+        storage::set_escrow(&env, &escrow);
+
+        // Return funds to payer
+        let token_client = token::Client::new(&env, &escrow.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &escrow.payer,
+            &escrow.amount,
+        );
+
+        env.events()
+            .publish(("lumenflow", "escrow_cancelled"), (order_id, escrow.amount));
+        Ok(())
+    }
+
+    /// Retrieve an escrow record by order ID.
+    ///
+    /// # Arguments
+    /// * `order_id` - The unique escrow identifier.
+    ///
+    /// # Returns
+    /// The [`EscrowRecord`] on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::EscrowNotFound`] — no escrow exists with `order_id`.
+    pub fn get_escrow(env: Env, order_id: String) -> Result<EscrowRecord, PaymentError> {
+        storage::get_escrow(&env, &order_id).ok_or(PaymentError::EscrowNotFound)
     }
 }

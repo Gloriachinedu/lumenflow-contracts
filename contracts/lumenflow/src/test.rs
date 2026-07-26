@@ -466,6 +466,7 @@ fn test_invalid_signature_rejected() {
         &250,
         &str(&env, "tampered"),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -588,6 +589,7 @@ fn test_successful_payment_with_signature() {
         &1_000,
         &str(&env, "Test payment"),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -614,6 +616,7 @@ fn test_platform_fee_deducted() {
         &1_000,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -635,6 +638,7 @@ fn test_zero_fee_case() {
         &500,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -656,6 +660,7 @@ fn test_duplicate_order_id_fails() {
         &500,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -668,6 +673,7 @@ fn test_duplicate_order_id_fails() {
         &500,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -690,6 +696,7 @@ fn test_payment_inactive_merchant_fails() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -810,6 +817,8 @@ fn make_payment(
 ) {
     let pub_key = bytes(env, &[0u8; 32]);
     let sig = bytes(env, &[0u8; 64]);
+    // Fetch current merchant nonce and use next value (current + 1)
+    let nonce = client.get_merchant_nonce(merchant) + 1;
     client.process_payment_with_signature(
         payer,
         &str(env, order_id),
@@ -818,6 +827,7 @@ fn make_payment(
         &amount,
         &str(env, ""),
         &None,
+        &nonce,
         &sig,
         &pub_key,
     );
@@ -886,6 +896,7 @@ fn test_batch_payment_cross_call_duplicate_fails() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -1359,6 +1370,7 @@ fn test_payment_verified_vs_unverified_merchant() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -1376,6 +1388,7 @@ fn test_payment_verified_vs_unverified_merchant() {
         &200,
         &str(&env, ""),
         &None,
+                &2u64,
         &sig,
         &pub_key,
     );
@@ -1449,6 +1462,7 @@ fn make_payment_with_tags(
 ) {
     let pub_key = bytes(env, &[0u8; 32]);
     let sig = bytes(env, &[0u8; 64]);
+    let nonce = client.get_merchant_nonce(merchant) + 1;
     client.process_payment_with_signature(
         payer,
         &str(env, order_id),
@@ -1457,6 +1471,7 @@ fn make_payment_with_tags(
         &amount,
         &str(env, ""),
         &tags,
+        &nonce,
         &sig,
         &pub_key,
     );
@@ -1654,6 +1669,7 @@ fn test_pagination_limit() {
     for id_str in ids {
         let pub_key = bytes(&env, &[0u8; 32]);
         let sig = bytes(&env, &[0u8; 64]);
+        let nonce = client.get_merchant_nonce(&merchant) + 1;
         client.process_payment_with_signature(
             &payer,
             &str(&env, id_str),
@@ -1662,6 +1678,7 @@ fn test_pagination_limit() {
             &100,
             &str(&env, ""),
             &None,
+            &nonce,
             &sig,
             &pub_key,
         );
@@ -2503,6 +2520,7 @@ fn test_token_whitelist_enforced() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -2518,6 +2536,7 @@ fn test_token_whitelist_enforced() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -2541,6 +2560,7 @@ fn test_remove_token_from_whitelist() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -2744,6 +2764,7 @@ fn test_payment_amount_zero_fails() {
         &0,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -2763,6 +2784,7 @@ fn test_payment_amount_negative_fails() {
         &-1,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -2782,6 +2804,7 @@ fn test_payment_amount_i128_min_fails() {
         &i128::MIN,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -2804,6 +2827,7 @@ fn test_payment_amount_i128_max_accepted() {
         &i128::MAX,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -2939,6 +2963,7 @@ fn test_paused_blocks_process_payment() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &bytes(&env, &[0u8; 64]),
         &bytes(&env, &[0u8; 32]),
     );
@@ -2985,6 +3010,7 @@ fn test_unpause_restores_operations() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &bytes(&env, &[0u8; 64]),
         &bytes(&env, &[0u8; 32]),
     );
@@ -2999,6 +3025,7 @@ fn test_unpause_restores_operations() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &bytes(&env, &[0u8; 64]),
         &bytes(&env, &[0u8; 32]),
     );
@@ -3336,6 +3363,7 @@ fn test_order_id_64_chars_accepted() {
         &1_000,
         &str(&env, "Test payment"),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -3359,6 +3387,7 @@ fn test_order_id_65_chars_rejected() {
         &1_000,
         &str(&env, "Test payment"),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -3680,7 +3709,7 @@ fn test_event_no_spurious_events_on_failed_payment() {
     // First payment succeeds and emits the event.
     client.process_payment_with_signature(
         &payer, &str(&env, "DUP_EVT"), &merchant, &token, &100,
-        &str(&env, ""), &None, &sig, &pub_key,
+        &str(&env, ""), &None, &1u64, &sig, &pub_key,
     );
     use soroban_sdk::xdr::{ContractEventBody, ScVal, ScString, StringM};
     let needle = ScVal::String(ScString(StringM::try_from("payment_processed").unwrap()));
@@ -3696,7 +3725,7 @@ fn test_event_no_spurious_events_on_failed_payment() {
     // Duplicate order — must fail and must NOT add another payment_processed event.
     let _ = client.try_process_payment_with_signature(
         &payer, &str(&env, "DUP_EVT"), &merchant, &token, &100,
-        &str(&env, ""), &None, &sig, &pub_key,
+        &str(&env, ""), &None, &1u64, &sig, &pub_key,
     );
 
     let count_after = env.events().all().events().iter()
@@ -3788,6 +3817,7 @@ fn test_cleanup_large_set_completes_without_panic() {
         let order_id = soroban_sdk::String::from_str(&env, &format!("BULK_{:03}", i));
         let pub_key = Bytes::from_slice(&env, &[0u8; 32]);
         let sig = Bytes::from_slice(&env, &[0u8; 64]);
+        let nonce = client.get_merchant_nonce(&merchant) + 1;
         client.process_payment_with_signature(
             &payer,
             &order_id,
@@ -3796,6 +3826,7 @@ fn test_cleanup_large_set_completes_without_panic() {
             &(100 + i as i128),
             &str(&env, ""),
             &None,
+            &nonce,
             &sig,
             &pub_key,
         );
@@ -3998,6 +4029,7 @@ fn test_payment_with_disallowed_token_fails() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -4013,6 +4045,7 @@ fn test_payment_with_disallowed_token_fails() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -4074,7 +4107,7 @@ fn test_removed_token_is_rejected() {
 
     // First payment works
     client.process_payment_with_signature(
-        &payer, &str(&env, "WL_RM1"), &merchant, &token, &100, &str(&env, ""), &None, &sig, &pub_key,
+        &payer, &str(&env, "WL_RM1"), &merchant, &token, &100, &str(&env, ""), &None, &1u64, &sig, &pub_key,
     );
 
     // Admin removes the token
@@ -4082,7 +4115,7 @@ fn test_removed_token_is_rejected() {
 
     // Subsequent payment with the same token must fail
     let result = client.try_process_payment_with_signature(
-        &payer, &str(&env, "WL_RM2"), &merchant, &token, &100, &str(&env, ""), &None, &sig, &pub_key,
+        &payer, &str(&env, "WL_RM2"), &merchant, &token, &100, &str(&env, ""), &None, &1u64, &sig, &pub_key,
     );
     assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
 }
@@ -4604,6 +4637,7 @@ fn test_state_unchanged_after_invalid_amount_payment() {
         &0,
         &str(&env, "should fail"),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -4638,6 +4672,7 @@ fn test_state_unchanged_after_payment_to_unregistered_merchant() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -4675,6 +4710,7 @@ fn test_state_unchanged_after_payment_to_inactive_merchant() {
         &200,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -4703,6 +4739,7 @@ fn test_state_unchanged_after_duplicate_order_id() {
         &500,
         &str(&env, "original"),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -4718,6 +4755,7 @@ fn test_state_unchanged_after_duplicate_order_id() {
         &999,
         &str(&env, "duplicate"),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -4750,6 +4788,7 @@ fn test_state_unchanged_after_disallowed_token_payment() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -5178,6 +5217,7 @@ fn test_state_unchanged_after_payment_while_paused() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -5374,6 +5414,7 @@ fn test_global_stats_unchanged_after_failed_payment() {
         &0,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );

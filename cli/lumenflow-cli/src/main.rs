@@ -771,6 +771,7 @@ fn main() -> Result<()> {
                     "--amount", &row.amount.to_string(),
                     "--memo", &row.memo,
                     "--tags", "null",
+                    "--nonce", "1",
                     "--signature", signature,
                     "--merchant_public_key", merchant_public_key,
                 ]);
