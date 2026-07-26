@@ -4,6 +4,7 @@
 
 [![CI](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml/badge.svg)](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml)
 [![Coverage](https://codecov.io/gh/Gloriachinedu/lumenflow-contracts/branch/main/graph/badge.svg)](https://codecov.io/gh/Gloriachinedu/lumenflow-contracts)
+[![WASM Size](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FGloriachinedu%2Flumenflow-contracts%2Fmain%2Fwasm-size-history.json&query=%24.entries%5B-1%3A%5D%5B0%5D.size_kb&suffix=%20KB&label=WASM%20size&color=blue)](wasm-size-history.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Stellar](https://img.shields.io/badge/Stellar-Soroban-blueviolet)](https://soroban.stellar.org)
 [![Audited by](https://img.shields.io/badge/Audited%20By-TBD-lightgrey)](docs/audit/audit-report.md)
