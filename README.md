@@ -786,6 +786,30 @@ The `frontend/` directory contains three standalone HTML pages that let you inte
 | Payment Receipt | `frontend/receipt.html` | View a receipt for a specific order |
 | Multisig Payment | `frontend/multisig.html` | Initiate and sign multi-signature payments |
 
+### Progressive Web App (PWA)
+
+All frontend pages ship with a `manifest.json` and a service worker (`sw.js`) so the payment UI can be installed on mobile devices and used offline for receipt viewing.
+
+**Install on Android (Chrome):**
+1. Open `history.html` or `receipt.html` in Chrome on your Android device.
+2. Tap the browser menu (⋮) and select **"Add to Home screen"** (or wait for the automatic install banner).
+3. Confirm the installation — LumenFlow will appear as a home-screen app.
+
+**Install on iOS (Safari):**
+1. Open any page in Safari.
+2. Tap the **Share** button (□↑) and choose **"Add to Home Screen"**.
+3. Tap **Add** — the app icon will appear on your home screen.
+
+**Install on desktop (Chrome / Edge):**
+1. Open any page in the browser.
+2. Click the install icon (⊕) in the address bar, or open the browser menu and choose **"Install LumenFlow"**.
+
+**Offline use:**
+The service worker caches the app shell and mock receipt data on first load. Receipt pages work offline using cached data. When connectivity is restored the cache is updated automatically.
+
+**Lighthouse PWA score:**
+Run a Lighthouse audit from Chrome DevTools (Lighthouse → Mobile → PWA) against a locally served build to verify the score. The target is 90+.
+
 ### Open locally
 
 Simply open any file directly in a browser:

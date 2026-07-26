@@ -8,6 +8,13 @@
   <meta property="og:title" content="Multisig Payment – LumenFlow" />
   <meta property="og:description" content="Initiate and manage multi-signature payments on LumenFlow. Requires threshold approvals before funds are released." />
   <meta name="twitter:card" content="summary" />
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#6c47ff" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="LumenFlow" />
+  <link rel="apple-touch-icon" href="icons/icon.svg" />
   <style>
     /* Multisig-specific styles not in the shared design system */
 
@@ -215,7 +222,9 @@
   </style>
 </head>
 <body>
+<a href="#multisig-main" class="skip-link">Skip to main content</a>
 
+<main id="multisig-main">
 <h1>Multisig Payment</h1>
 <p class="subtitle">Initiate a payment that requires multiple signers to approve.</p>
 
@@ -856,5 +865,17 @@
   renderModeBanner();
   updateThresholdLabel();
 </script>
+
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker
+        .register('./sw.js', { scope: './' })
+        .catch((err) => console.warn('[PWA] Service worker registration failed:', err));
+    });
+  }
+</script>
+
+</main>
 </body>
 </html>

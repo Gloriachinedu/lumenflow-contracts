@@ -8,6 +8,13 @@
   <meta property="og:title" content="Payment History – LumenFlow" />
   <meta property="og:description" content="View and filter your complete LumenFlow payment history, sorted and paginated for easy browsing." />
   <meta name="twitter:card" content="summary" />
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#6c47ff" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="LumenFlow" />
+  <link rel="apple-touch-icon" href="icons/icon.svg" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -295,10 +302,27 @@
       color: #1a9e5c;
       font-weight: 600;
     }
+
+    /* ── Skip link ───────────────────────────────────────────────────────── */
+    .skip-link {
+      position: absolute;
+      top: -100%;
+      left: 0;
+      background: #6c47ff;
+      color: #fff;
+      padding: 0.5rem 1rem;
+      font-weight: 700;
+      border-radius: 0 0 6px 0;
+      z-index: 9999;
+      text-decoration: none;
+    }
+    .skip-link:focus { top: 0; }
   </style>
 </head>
 <body>
+<a href="#history-main" class="skip-link">Skip to main content</a>
 
+<main id="history-main">
 <div class="container">
   <header>
     <h1>Payment History</h1>
@@ -811,5 +835,6 @@
   initFromUrl();
 </script>
 
+</main>
 </body>
 </html>
