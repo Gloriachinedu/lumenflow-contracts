@@ -235,6 +235,34 @@
       color: #888;
     }
 
+    /* ── Skeleton loading rows ────────────────────────────────────────────────── */
+    .skeleton-body tr td {
+      padding: 1rem;
+      border-bottom: 1px solid #f9f9f9;
+    }
+
+    .skeleton-cell {
+      display: inline-block;
+      border-radius: 4px;
+      background: linear-gradient(90deg, #e8e8e8 25%, #f5f5f5 50%, #e8e8e8 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+      height: 14px;
+      vertical-align: middle;
+    }
+
+    @keyframes shimmer {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    /* Vary widths so columns look realistic */
+    .skeleton-cell.w-date   { width: 120px; }
+    .skeleton-cell.w-id     { width: 90px; }
+    .skeleton-cell.w-addr   { width: 110px; }
+    .skeleton-cell.w-amount { width: 80px; }
+    .skeleton-cell.w-status { width: 70px; }
+
     /* ── Accessibility ────────────────────────────────────────────────────────── */
     .sr-only {
       position: absolute;
@@ -247,9 +275,15 @@
       border: 0;
     }
 
-    button:focus-visible, input:focus-visible, select:focus-visible {
-      outline: 2px solid #6c47ff;
+    /* WCAG 2.1 AA focus ring: #6c47ff on white = 5.4:1 contrast ratio,
+       exceeds the 3:1 minimum for non-text focus indicators (SC 1.4.11). */
+    button:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    a:focus-visible {
+      outline: 3px solid #6c47ff;
       outline-offset: 2px;
+      border-radius: 3px;
     }
 
     /* ── Verified Badge ───────────────────────────────────────────────────────── */
@@ -339,9 +373,9 @@
     </div>
   </section>
 
-  <div class="results-card">
+  <div class="results-card" id="results-region" aria-live="polite" aria-atomic="false" aria-label="Payment history results">
     <!-- Loading state -->
-    <div id="loading-state" style="display:none;padding:3rem;text-align:center;color:#888;" role="status" aria-live="polite">
+    <div id="loading-state" style="display:none;padding:3rem;text-align:center;color:#888;" role="status" aria-live="polite" aria-label="Loading payments">
       ⏳ Loading payments…
     </div>
 
@@ -368,7 +402,7 @@
         <!-- Rows will be rendered here -->
       </tbody>
     </table>
-    <div id="empty-state" class="empty-state" style="display:none">
+    <div id="empty-state" class="empty-state" style="display:none" role="status" aria-label="No payments found matching your filters" aria-live="polite">
       No payments found matching your filters.
     </div>
   </div>
@@ -602,12 +636,42 @@
     });
   }
 
+  // ── Skeleton rows ────────────────────────────────────────────────────────────
+  const SKELETON_ROW_COUNT = 5;
+  const SKELETON_WIDTHS = [
+    ['w-date', 'w-id', 'w-addr', 'w-amount', 'w-status'],
+    ['w-date', 'w-id', 'w-addr', 'w-amount', 'w-status'],
+    ['w-date', 'w-id', 'w-addr', 'w-amount', 'w-status'],
+    ['w-date', 'w-id', 'w-addr', 'w-amount', 'w-status'],
+    ['w-date', 'w-id', 'w-addr', 'w-amount', 'w-status'],
+  ];
+
+  function renderSkeletonRows() {
+    const body = document.getElementById('history-body');
+    body.innerHTML = '';
+    body.className = 'skeleton-body';
+    for (let i = 0; i < SKELETON_ROW_COUNT; i++) {
+      const tr = document.createElement('tr');
+      // aria-busy and aria-hidden keep skeleton rows out of AT reading order
+      tr.setAttribute('aria-busy', 'true');
+      tr.setAttribute('aria-hidden', 'true');
+      SKELETON_WIDTHS[i].forEach(cls => {
+        const td = document.createElement('td');
+        td.innerHTML = `<span class="skeleton-cell ${cls}"></span>`;
+        tr.appendChild(td);
+      });
+      body.appendChild(tr);
+    }
+  }
+
   // ── UI state helpers ────────────────────────────────────────────────────────
   function showLoading() {
-    document.getElementById('loading-state').style.display = 'block';
+    // Hide prose loading indicator — skeletons inside the table give visual feedback
+    document.getElementById('loading-state').style.display = 'none';
     document.getElementById('error-state').style.display   = 'none';
-    document.getElementById('history-table').style.display = 'none';
+    document.getElementById('history-table').style.display = '';
     document.getElementById('empty-state').style.display   = 'none';
+    renderSkeletonRows();
   }
   function showError(msg) {
     document.getElementById('loading-state').style.display = 'none';
@@ -615,11 +679,16 @@
     document.getElementById('error-msg').textContent       = msg;
     document.getElementById('history-table').style.display = 'none';
     document.getElementById('empty-state').style.display   = 'none';
+    // Clear skeleton rows so they are not present in the DOM while error shows
+    const body = document.getElementById('history-body');
+    body.innerHTML = '';
+    body.className = '';
   }
   function showTable() {
     document.getElementById('loading-state').style.display = 'none';
     document.getElementById('error-state').style.display   = 'none';
     document.getElementById('history-table').style.display = '';
+    // skeleton rows are cleared by renderRows()
   }
 
   // ── Render rows ─────────────────────────────────────────────────────────────
@@ -627,6 +696,7 @@
     const body  = document.getElementById('history-body');
     const empty = document.getElementById('empty-state');
     body.innerHTML = '';
+    body.className = ''; // clear skeleton-body class
     if (!payments.length) {
       empty.style.display = 'block';
       return;
