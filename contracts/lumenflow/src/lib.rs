@@ -899,6 +899,10 @@ impl PaymentProcessingContract {
             require_positive(item.amount)?;
             require_valid_id(&item.order_id)?;
 
+            // Whitelist check: each item's token_address must be in the allowed list.
+            // If any item uses a disallowed token the entire batch is rejected atomically
+            // (no partial payments are made). One storage read per item; callers can
+            // reduce cost by grouping items that share the same token.
             if !storage::is_token_allowed(&env, &item.token_address) {
                 return Err(PaymentError::TokenNotAllowed);
             }
@@ -921,11 +925,6 @@ impl PaymentProcessingContract {
                 return Err(PaymentError::RateLimitExceeded);
             }
             storage::increment_rate_limit_counter(&env, &item.merchant_address, window_start);
-
-            // Reject disallowed tokens
-            if !storage::is_token_allowed(&env, &item.token_address) {
-                return Err(PaymentError::TokenNotAllowed);
-            }
 
             // Build payload: order_id bytes + amount bytes
             let mut payload = Bytes::new(&env);
