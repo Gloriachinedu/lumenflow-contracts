@@ -117,6 +117,7 @@ fn test_smoke_full_payment_refund_cycle() {
         &5_000,
         &str(&env, "E2E smoke payment"),
         &None,
+                &1u64,
         &zero_sig(&env),
         &zero_key(&env),
     );
@@ -178,6 +179,7 @@ fn test_smoke_refund_rejection_cycle() {
         &3_000,
         &str(&env, "rejection test"),
         &None,
+                &1u64,
         &zero_sig(&env),
         &zero_key(&env),
     );
@@ -220,6 +222,7 @@ fn test_smoke_partial_refund_cycle() {
         &payment_amount,
         &str(&env, "partial refund test"),
         &None,
+                &1u64,
         &zero_sig(&env),
         &zero_key(&env),
     );
@@ -330,6 +333,7 @@ fn test_smoke_stats_update_across_full_cycle() {
         &1_000,
         &str(&env, "stats test"),
         &None,
+                &1u64,
         &zero_sig(&env),
         &zero_key(&env),
     );
@@ -375,6 +379,7 @@ fn test_smoke_refund_exceeds_original_rejected() {
         &1_000,
         &str(&env, "exceed test"),
         &None,
+                &1u64,
         &zero_sig(&env),
         &zero_key(&env),
     );
