@@ -217,13 +217,13 @@
   <div class="field">
     <label>Merchant Address</label>
     <input type="text" id="merchant-address" placeholder="G…" />
-    <div class="err-msg" id="err-merchant">Merchant address is required.</div>
+    <div class="err-msg" id="err-merchant">Invalid Stellar address (must start with G and be 56 characters)</div>
   </div>
 
   <div class="field">
     <label>Token Address</label>
     <input type="text" id="token-address" placeholder="C… or G…" />
-    <div class="err-msg" id="err-token">Token address is required.</div>
+    <div class="err-msg" id="err-token">Invalid Stellar address (must start with G or C and be 56 characters)</div>
   </div>
 
   <div class="field">
@@ -240,6 +240,7 @@
       <div class="signer-row">
         <input type="text" placeholder="G… signer address" class="signer-input" />
         <button class="btn-icon" onclick="removeSigner(this)" title="Remove">✕</button>
+        <div class="err-msg signer-err" style="display:none">Invalid Stellar address</div>
       </div>
     </div>
     <button class="btn-add-signer" onclick="addSigner()">+ Add signer</button>
@@ -283,7 +284,9 @@
   </div>
 </div>
 
-<script>
+<script type="module">
+  import { isValidStellarAddress, isValidStellarContractId } from './lumenflow-shared.js';
+
   // ── State ──────────────────────────────────────────────────────────────────
 
   let state = null; // { paymentId, merchantAddress, tokenAddress, amount, signers, required, signatures: Set }
@@ -295,7 +298,8 @@
     row.className = 'signer-row';
     row.innerHTML = `
       <input type="text" placeholder="G… signer address" class="signer-input" oninput="updateThresholdLabel()" />
-      <button class="btn-icon" onclick="removeSigner(this)" title="Remove">✕</button>`;
+      <button class="btn-icon" onclick="removeSigner(this)" title="Remove">✕</button>
+      <div class="err-msg signer-err" style="display:none">Invalid Stellar address</div>`;
     document.getElementById('signers-list').appendChild(row);
     updateThresholdLabel();
   }
@@ -355,20 +359,37 @@
     if (!paymentId) ok = false;
 
     const merchant = document.getElementById('merchant-address').value.trim();
-    showErr('err-merchant', !merchant);
-    if (!merchant) ok = false;
+    const merchantValid = isValidStellarAddress(merchant);
+    showErr('err-merchant', !merchant || !merchantValid);
+    if (!merchant || !merchantValid) ok = false;
 
     const token = document.getElementById('token-address').value.trim();
-    showErr('err-token', !token);
-    if (!token) ok = false;
+    const tokenValid = isValidStellarAddress(token) || isValidStellarContractId(token);
+    showErr('err-token', !token || !tokenValid);
+    if (!token || !tokenValid) ok = false;
 
     const amount = parseInt(document.getElementById('amount').value, 10);
     showErr('err-amount', !amount || amount < 1);
     if (!amount || amount < 1) ok = false;
 
-    const signers = getSignerValues();
+    // Validate each signer input individually
+    const signerInputs = document.querySelectorAll('.signer-input');
+    let hasValidSigner = false;
+    signerInputs.forEach((input, index) => {
+      const value = input.value.trim();
+      const errEl = input.parentElement.querySelector('.signer-err');
+      
+      if (value && !isValidStellarAddress(value)) {
+        errEl.style.display = 'block';
+        ok = false;
+      } else {
+        errEl.style.display = 'none';
+        if (value) hasValidSigner = true;
+      }
+    });
+
     const sigErr = document.getElementById('err-signers');
-    if (signers.length === 0) {
+    if (!hasValidSigner) {
       sigErr.style.display = 'block';
       ok = false;
     } else {

@@ -7,5 +7,8 @@ export { buildPaymentPayload, signPaymentPayload, Keypair } from './signPaymentP
 // Wallet adapters
 export { WalletAdapter, FreighterAdapter, KeypairAdapter, Keypair as AdapterKeypair } from './adapter';
 
+// Address validation
+export { isValidStellarAddress, isValidStellarContractId } from './adapter';
+
 // Legacy wallet helpers (for backward compatibility)
 export { connectFreighter, connectAlbedo, disconnectWallet, saveWallet, loadWallet, createFreighterAdapter } from './wallet';

@@ -139,3 +139,37 @@ const keypair = {
 };
 const signature = signPaymentPayload('ORDER_001', 1000n, keypair);
 ```
+
+## Address Validation
+
+For frontend applications, the SDK provides utilities to validate Stellar addresses:
+
+```typescript
+import { isValidStellarAddress, isValidStellarContractId } from '@lumenflow/sdk';
+
+// Validate a Stellar public key (G-address)
+const isValid = isValidStellarAddress('GD6WUVRX7XJ6E5Q5K2L2K3K4K5K6K7K8K9K0K1K2K3K4K5K6K7K8K9K0K1K2');
+console.log(isValid); // true
+
+// Validate a Stellar contract ID (C-address)
+const isContractValid = isValidStellarContractId('CD6WUVRX7XJ6E5Q5K2L2K3K4K5K6K7K8K9K0K1K2K3K4K5K6K7K8K9K0K1K2');
+console.log(isContractValid); // true
+```
+
+### Validation Rules
+
+- **Stellar Public Keys (G-address)**: Must start with 'G', be exactly 56 characters, and use valid base32 encoding
+- **Stellar Contract IDs (C-address)**: Must start with 'C', be exactly 56 characters, and use valid base32 encoding
+
+**Note**: The validation functions perform lightweight format checking. For production use with full checksum validation, consider using `@stellar/stellar-sdk`'s `StrKey` utilities:
+
+```typescript
+import { StrKey } from '@stellar/stellar-sdk';
+
+try {
+  StrKey.decodeEd25519PublicKey(address);
+  // Valid address
+} catch {
+  // Invalid address
+}
+```
