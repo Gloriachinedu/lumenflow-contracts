@@ -173,3 +173,65 @@ try {
   // Invalid address
 }
 ```
+
+## Retry Configuration
+
+The SDK provides automatic retry logic for transient HTTP errors (429, 503, 504, network failures) when using the `Client` class.
+
+### Default Retry Configuration
+
+```typescript
+import { DEFAULT_RETRY_CONFIG } from '@lumenflow/sdk';
+
+console.log(DEFAULT_RETRY_CONFIG);
+// {
+//   maxAttempts: 5,
+//   initialDelayMs: 100,
+//   maxDelayMs: 10000,
+//   backoffMultiplier: 2,
+//   jitterFactor: 0.1,
+//   retryableStatusCodes: [429, 503, 504],
+// }
+```
+
+### Using the Client with Custom Retry Config
+
+```typescript
+import { Client, ClientConfig } from '@lumenflow/sdk';
+
+const config: ClientConfig = {
+  rpcUrl: 'https://soroban-testnet.stellar.org',
+  contractId: 'your-contract-id',
+  retryConfig: {
+    maxAttempts: 10,           // Increase max attempts
+    initialDelayMs: 200,       // Start with longer delay
+    maxDelayMs: 30000,          // Allow longer max delay
+  },
+};
+
+const client = new Client(config);
+```
+
+### Retry Behavior
+
+- **Transient errors** (429, 503, 504, network failures) are automatically retried with exponential backoff and jitter
+- **Business logic errors** (`LumenFlowError`) are not retried and propagate immediately
+- **Non-retryable HTTP errors** (400, 401, 403, etc.) are not retried
+
+### Manual Retry
+
+You can also use the `withRetry` utility directly:
+
+```typescript
+import { withRetry, RetryConfig } from '@lumenflow/sdk';
+
+const config: Partial<RetryConfig> = {
+  maxAttempts: 3,
+  initialDelayMs: 100,
+};
+
+await withRetry(async () => {
+  // Your async operation here
+  await someApiCall();
+}, config);
+```

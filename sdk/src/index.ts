@@ -10,5 +10,11 @@ export { WalletAdapter, FreighterAdapter, KeypairAdapter, Keypair as AdapterKeyp
 // Address validation
 export { isValidStellarAddress, isValidStellarContractId } from './adapter';
 
+// Retry utilities
+export { withRetry, RetryConfig, DEFAULT_RETRY_CONFIG } from './retry';
+
+// Client
+export { Client, ClientConfig } from './client';
+
 // Legacy wallet helpers (for backward compatibility)
 export { connectFreighter, connectAlbedo, disconnectWallet, saveWallet, loadWallet, createFreighterAdapter } from './wallet';
