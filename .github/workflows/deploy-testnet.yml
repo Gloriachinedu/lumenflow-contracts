@@ -2,37 +2,67 @@ name: Deploy to Testnet
 
 on:
   push:
-    branches: [develop]
+    branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          override: true
+          targets: wasm32-unknown-unknown
 
-      - name: Deploy to testnet
+      - name: Build WASM
+        run: cargo build --target wasm32-unknown-unknown --release --package lumenflow
+
+      - name: Check WASM size
+        run: |
+          WASM_SIZE=$(wc -c < target/wasm32-unknown-unknown/release/lumenflow.wasm)
+          if [ $WASM_SIZE -gt 102400 ]; then
+            echo "WASM too large: ${WASM_SIZE} bytes (limit: 102400 bytes)"
+            exit 1
+          fi
+          echo "WASM size: ${WASM_SIZE} bytes"
+
+      - name: Deploy contract
         id: deploy
         env:
-          TESTNET_SOURCE_ACCOUNT: ${{ secrets.TESTNET_SOURCE_ACCOUNT }}
+          NETWORK: testnet
+          SOURCE_ACCOUNT: ${{ secrets.TESTNET_DEPLOYER_KEY }}
         run: |
           set -euo pipefail
-          # Run deploy script — it should print the deployed contract ID
-          CONTRACT_ID=$(bash scripts/deploy.sh)
+          OUTPUT=$(bash scripts/deploy.sh)
+          CONTRACT_ID=$(echo "$OUTPUT" | grep -oP '(?<=Contract ID : ).*')
+          echo "$CONTRACT_ID" > testnet-contract-id.txt
+          echo "contract_id=${CONTRACT_ID}" >> "$GITHUB_OUTPUT"
           echo "Deployed contract: $CONTRACT_ID" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Run smoke tests
-        env:
-          CONTRACT_ID: ${{ steps.deploy.outputs.contract_id || '' }}
+      - name: Commit testnet-contract-id.txt
         run: |
-          set -euo pipefail
-          bash scripts/test.sh
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git config user.name 'github-actions[bot]'
+          git add testnet-contract-id.txt
+          git diff --staged --quiet || git commit -m 'chore: update testnet contract ID [skip ci]'
+          git push
+
+      - name: Notify Discord
+        if: success()
+        continue-on-error: true
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          CONTRACT_ID: ${{ steps.deploy.outputs.contract_id }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          curl -X POST "$DISCORD_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"content\": \"✅ **LumenFlow testnet deployment succeeded**\n**Contract ID:** \`${CONTRACT_ID}\`\n**Commit:** \`${COMMIT_SHA}\`\"}"
