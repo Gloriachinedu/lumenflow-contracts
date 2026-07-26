@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://horizon.stellar.org; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none';" />
   <title>Payment History – LumenFlow</title>
   <link rel="manifest" href="manifest.json" />
   <meta name="theme-color" content="#6c47ff" />
@@ -270,8 +271,20 @@
   <button class="btn btn-outline" id="next-btn" onclick="nextPage()" disabled aria-label="Go to next page">Next →</button>
 </nav>
 
+<script type="module">
+  import { formatNumber } from './lumenflow-shared.js';
+  window.LF = window.LF || {};
+  window.LF.formatNumber = formatNumber;
+</script>
 <script>
-  // ── Mock data (replace with contract call) ─────────────────────────────────
+  // ── Format helpers ─────────────────────────────────────────────────────────
+  function fmtAmount(amount) {
+    const n = Number(amount);
+    const fmtFn = window.LF && window.LF.formatNumber
+      ? (v, opts) => window.LF.formatNumber(v, opts)
+      : (v, opts) => new Intl.NumberFormat(undefined, opts).format(v);
+    return fmtFn(n, { minimumFractionDigits: 2, maximumFractionDigits: 7 }) + ' XLM';
+  }
   const MOCK_PAYMENTS = [
     { order_id: 'ORDER_001', merchant_address: 'GDUT...XZ1A', amount: 1000, status: 'Completed',          paid_at: '2026-06-01' },
     { order_id: 'ORDER_002', merchant_address: 'GCMR...Y9KP', amount: 4500, status: 'PartiallyRefunded',  paid_at: '2026-06-05' },
@@ -374,7 +387,7 @@
         <tr>
           <td><span class="order-id">${p.order_id}</span></td>
           <td>${p.merchant_address}</td>
-          <td class="amount">${p.amount.toLocaleString()} XLM</td>
+          <td class="amount">${fmtAmount(p.amount)}</td>
           <td>${statusBadge(p.status)}</td>
           <td>${p.paid_at}</td>
         </tr>`).join('');
@@ -389,7 +402,7 @@
         <div class="payment-card">
           <div class="card-header">
             <span class="card-order-id">${p.order_id}</span>
-            <span class="card-amount">${p.amount.toLocaleString()} XLM</span>
+            <span class="card-amount">${fmtAmount(p.amount)}</span>
           </div>
           <div class="card-row">
             <span class="card-label">Merchant</span>

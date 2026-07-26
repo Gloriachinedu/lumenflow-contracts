@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://horizon.stellar.org; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none';" />
   <title>Merchant Onboarding – LumenFlow</title>
   <meta name="description" content="Register your business on LumenFlow in a few simple steps." />
   <link rel="stylesheet" href="styles.css" />
@@ -388,6 +389,13 @@
 
 </div>
 
+<script type="module">
+  import { showLoadingOverlay, hideLoadingOverlay } from './lumenflow-shared.js';
+  // Expose overlay helpers to the plain script below
+  window.LF = window.LF || {};
+  window.LF.showLoadingOverlay = showLoadingOverlay;
+  window.LF.hideLoadingOverlay = hideLoadingOverlay;
+</script>
 <script>
   // ── State ──────────────────────────────────────────────────────────────────
   const form = {
@@ -527,14 +535,25 @@
     status.className = 'tx-status pending';
     status.textContent = '⏳ Transaction pending — waiting for network confirmation…';
 
-    // Demo: simulate a 2-second network delay
-    await new Promise(r => setTimeout(r, 2000));
+    // Show blocking overlay while transaction is in-flight
+    if (window.LF && window.LF.showLoadingOverlay) {
+      window.LF.showLoadingOverlay('Waiting for transaction confirmation…');
+    }
 
-    status.className = 'tx-status success';
-    status.textContent = '✅ Registration confirmed! Your merchant profile is live.';
-    btn.textContent = '✅ Registered';
+    try {
+      // Demo: simulate a 2-second network delay
+      await new Promise(r => setTimeout(r, 2000));
 
-    setTimeout(() => goToStep(5), 1000);
+      status.className = 'tx-status success';
+      status.textContent = '✅ Registration confirmed! Your merchant profile is live.';
+      btn.textContent = '✅ Registered';
+
+      setTimeout(() => goToStep(5), 1000);
+    } finally {
+      if (window.LF && window.LF.hideLoadingOverlay) {
+        window.LF.hideLoadingOverlay();
+      }
+    }
   }
 </script>
 </body>

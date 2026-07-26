@@ -74,4 +74,61 @@ docker compose up -d stellar # start the local Stellar quickstart node
 
 `docker compose config` resolves and type-checks `docker-compose.yml`. The
 committed compose file contains no secrets; it only sets the public `NETWORK`
-value for the local quickstart node, so it is safe to commit as-is..
+value for the local quickstart node, so it is safe to commit as-is.
+
+## Frontend Content Security Policy (CSP)
+
+All frontend HTML pages include a `Content-Security-Policy` meta tag to protect
+against XSS attacks, wallet-key exfiltration, and Soroban RPC hijacking.
+
+### Policy structure
+
+```html
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'self';
+  script-src  'self' https://cdn.jsdelivr.net;
+  style-src   'self' 'unsafe-inline';
+  connect-src 'self'
+              https://soroban-testnet.stellar.org
+              https://horizon-testnet.stellar.org
+              https://horizon.stellar.org;
+  img-src     'self' data:;
+  font-src    'self';
+  object-src  'none';
+  frame-ancestors 'none';
+" />
+```
+
+### Directive rationale
+
+| Directive       | Value                                   | Why                                                                           |
+| --------------- | --------------------------------------- | ----------------------------------------------------------------------------- |
+| `default-src`   | `'self'`                                | Block all unlisted resource origins by default.                               |
+| `script-src`    | `'self' https://cdn.jsdelivr.net`       | Allows the Stellar SDK loaded via jsDelivr CDN. No `unsafe-inline`.          |
+| `style-src`     | `'self' 'unsafe-inline'`               | Inline styles used by shared utilities (overlays, banners). No external CSS. |
+| `connect-src`   | `'self'` + Stellar RPC/Horizon URLs     | Restricts XHR/fetch to the configured Soroban RPC and Horizon endpoints.     |
+| `img-src`       | `'self' data:`                          | Allows inline SVG data URIs used for icons.                                   |
+| `font-src`      | `'self'`                                | System fonts only; no external font loading.                                  |
+| `object-src`    | `'none'`                                | Blocks Flash/plugins entirely.                                                |
+| `frame-ancestors` | `'none'`                              | Prevents clickjacking by disallowing framing.                                 |
+
+### Adapting the policy for production
+
+If you deploy to mainnet or a custom RPC endpoint, update `connect-src` to include
+your production URLs. For example:
+
+```
+connect-src 'self' https://soroban-mainnet.stellar.org https://horizon.stellar.org https://your-rpc.example.com;
+```
+
+Never add `unsafe-eval` or `unsafe-inline` to `script-src` — doing so would
+defeat the XSS protection the policy provides.
+
+### CI linting
+
+The policy is validated in CI using the `htmlhint` linter (configured in
+`.htmlhintrc`). Run locally with:
+
+```bash
+cd frontend && npx htmlhint "*.html"
+```
