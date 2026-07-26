@@ -377,6 +377,7 @@
 <script type="module">
   import { CONTRACT_ID, RPC_URL, formatAmount, formatDate, renderModeBanner, formatTokenAmount, convertToXlm, getTokenMetadata } from './lumenflow-shared.js';
   import { validateOrderId } from './validation.js';
+  import { showToast } from './toast.js';
 
   // ── Routing ────────────────────────────────────────────────────────────────
   // Supports both:
@@ -624,7 +625,7 @@
   function copyLink() {
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(window.location.href)
-        .then(() => alert('Link copied!'))
+        .then(() => showToast('Link copied!', 'success'))
         .catch(() => prompt('Copy this link:', window.location.href));
       return;
     }
