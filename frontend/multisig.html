@@ -15,6 +15,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="LumenFlow" />
   <link rel="apple-touch-icon" href="icons/icon.svg" />
+  <link rel="stylesheet" href="styles.css" />
   <style>
     /* Multisig-specific styles not in the shared design system */
 
@@ -875,6 +876,9 @@
   renderModeBanner();
   initCopyButtons(document.body);
   updateThresholdLabel();
+
+  // Dark mode
+  import('./dark-mode.js').then(m => m.initDarkMode());
 </script>
 
 <script>
