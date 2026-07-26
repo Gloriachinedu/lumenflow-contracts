@@ -26,6 +26,20 @@ pub struct Merchant {
     pub verified: bool,
     pub registered_at: u64,
     pub total_received: i128,
+    /// Number of merchants that registered using this merchant's referral address.
+    pub referral_count: u32,
+}
+
+/// Summary entry returned by `get_referral_stats`. Contains the referring
+/// merchant's address, how many merchants they have referred, and the
+/// configured referral reward in basis points.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReferralStats {
+    pub referrer: Address,
+    pub referral_count: u32,
+    /// Referral reward in basis points (e.g. 50 = 0.5 % fee reduction).
+    pub reward_bps: u32,
 }
 
 // ── Payment ───────────────────────────────────────────────────────────────────
@@ -253,13 +267,29 @@ pub struct EscrowRecord {
 
 // ── Dispute ───────────────────────────────────────────────────────────────────
 
+/// Lifecycle states of a dispute.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DisputeStatus {
+    /// Dispute has been opened and is awaiting admin resolution.
+    Open,
+    /// Admin has resolved the dispute (with or without a forced refund).
+    Resolved,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DisputeRecord {
+    /// Unique identifier for this dispute.
+    pub dispute_id: String,
+    /// The refund record being disputed (must be in `Rejected` state).
     pub refund_id: String,
     pub order_id: String,
     pub initiator: Address,
     pub reason: String,
+    pub status: DisputeStatus,
+    /// Optional resolution notes written by the admin when resolving.
+    pub resolution: Option<String>,
     pub created_at: u64,
 }
 

@@ -8,6 +8,13 @@
   <meta property="og:title" content="Payment History – LumenFlow" />
   <meta property="og:description" content="View and filter your complete LumenFlow payment history, sorted and paginated for easy browsing." />
   <meta name="twitter:card" content="summary" />
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#6c47ff" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="LumenFlow" />
+  <link rel="apple-touch-icon" href="icons/icon.svg" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -235,6 +242,34 @@
       color: #888;
     }
 
+    /* ── Skeleton loading rows ────────────────────────────────────────────────── */
+    .skeleton-body tr td {
+      padding: 1rem;
+      border-bottom: 1px solid #f9f9f9;
+    }
+
+    .skeleton-cell {
+      display: inline-block;
+      border-radius: 4px;
+      background: linear-gradient(90deg, #e8e8e8 25%, #f5f5f5 50%, #e8e8e8 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+      height: 14px;
+      vertical-align: middle;
+    }
+
+    @keyframes shimmer {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    /* Vary widths so columns look realistic */
+    .skeleton-cell.w-date   { width: 120px; }
+    .skeleton-cell.w-id     { width: 90px; }
+    .skeleton-cell.w-addr   { width: 110px; }
+    .skeleton-cell.w-amount { width: 80px; }
+    .skeleton-cell.w-status { width: 70px; }
+
     /* ── Accessibility ────────────────────────────────────────────────────────── */
     .sr-only {
       position: absolute;
@@ -247,9 +282,15 @@
       border: 0;
     }
 
-    button:focus-visible, input:focus-visible, select:focus-visible {
-      outline: 2px solid #6c47ff;
+    /* WCAG 2.1 AA focus ring: #6c47ff on white = 5.4:1 contrast ratio,
+       exceeds the 3:1 minimum for non-text focus indicators (SC 1.4.11). */
+    button:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    a:focus-visible {
+      outline: 3px solid #6c47ff;
       outline-offset: 2px;
+      border-radius: 3px;
     }
 
     /* ── Verified Badge ───────────────────────────────────────────────────────── */
@@ -261,10 +302,27 @@
       color: #1a9e5c;
       font-weight: 600;
     }
+
+    /* ── Skip link ───────────────────────────────────────────────────────── */
+    .skip-link {
+      position: absolute;
+      top: -100%;
+      left: 0;
+      background: #6c47ff;
+      color: #fff;
+      padding: 0.5rem 1rem;
+      font-weight: 700;
+      border-radius: 0 0 6px 0;
+      z-index: 9999;
+      text-decoration: none;
+    }
+    .skip-link:focus { top: 0; }
   </style>
 </head>
 <body>
+<a href="#history-main" class="skip-link">Skip to main content</a>
 
+<main id="history-main">
 <div class="container">
   <header>
     <h1>Payment History</h1>
@@ -339,9 +397,9 @@
     </div>
   </section>
 
-  <div class="results-card">
+  <div class="results-card" id="results-region" aria-live="polite" aria-atomic="false" aria-label="Payment history results">
     <!-- Loading state -->
-    <div id="loading-state" style="display:none;padding:3rem;text-align:center;color:#888;" role="status" aria-live="polite">
+    <div id="loading-state" style="display:none;padding:3rem;text-align:center;color:#888;" role="status" aria-live="polite" aria-label="Loading payments">
       ⏳ Loading payments…
     </div>
 
@@ -368,38 +426,30 @@
         <!-- Rows will be rendered here -->
       </tbody>
     </table>
-    <div id="empty-state" class="empty-state" style="display:none">
-      No payments found matching your filters.
+    <div id="empty-state" class="empty-state" style="display:none" role="status" aria-label="No payments found matching your filters" aria-live="polite">
+      <svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+        <circle cx="60" cy="60" r="54" fill="#f0ecff"/>
+        <rect x="30" y="42" width="60" height="42" rx="7" fill="#e0d9ff"/>
+        <rect x="38" y="52" width="28" height="5" rx="2.5" fill="#b8a9f5"/>
+        <rect x="38" y="62" width="44" height="5" rx="2.5" fill="#c5bafc"/>
+        <rect x="38" y="72" width="20" height="5" rx="2.5" fill="#d8d1fe"/>
+        <circle cx="84" cy="36" r="14" fill="#fff" stroke="#b8a9f5" stroke-width="2.5"/>
+        <line x1="80" y1="36" x2="88" y2="36" stroke="#b8a9f5" stroke-width="2.5" stroke-linecap="round"/>
+        <line x1="84" y1="32" x2="84" y2="40" stroke="#b8a9f5" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      <p style="margin-top:1rem;font-weight:600;color:#1a1a2e;font-size:1rem">No payments yet</p>
+      <p style="margin-top:0.4rem;color:#888;font-size:0.85rem">Payments will appear here once transactions are made.</p>
     </div>
   </div>
 </div>
 
 <script type="module">
   import { validateAddress, validateAmount } from './validation.js';
-
-  // ── Config ──────────────────────────────────────────────────────────────────
-  const CONTRACT_ID = window.LUMENFLOW_CONTRACT_ID || '';
-  const RPC_URL     = window.LUMENFLOW_RPC_URL     || 'https://soroban-testnet.stellar.org';
-  const NETWORK     = window.LUMENFLOW_NETWORK     || 'testnet';
-  const DEMO_MODE   = !CONTRACT_ID;
-
-  function renderModeBanner() {
-    const banner = document.createElement('div');
-    banner.id = 'lf-mode-banner';
-    banner.setAttribute('role', 'status');
-    banner.style.cssText = [
-      'position:sticky', 'top:0', 'z-index:1000',
-      'padding:0.4rem 1rem', 'font-size:0.8rem', 'font-weight:600',
-      'text-align:center',
-      DEMO_MODE
-        ? 'background:#fff3cd;color:#856404;'
-        : 'background:#d1f3e0;color:#1a5e37;',
-    ].join(';');
-    banner.textContent = DEMO_MODE
-      ? '⚠ Demo mode – displaying mock data. Set LUMENFLOW_CONTRACT_ID to connect to a live contract.'
-      : `✔ Live mode – connected to contract ${CONTRACT_ID.slice(0, 8)}… on ${NETWORK}.`;
-    document.body.prepend(banner);
-  }
+  import {
+    DEMO_MODE, CONTRACT_ID, NETWORK,
+    renderModeBanner, copyButtonHtml, initCopyButtons,
+    formatTokenAmount, convertToXlm, getTokenMetadata,
+  } from './lumenflow-shared.js';
 
   // ── State Management ────────────────────────────────────────────────────────
 
@@ -488,38 +538,6 @@
     return `<span class="status-badge ${entry.cls}">${entry.label}</span>`;
   }
 
-  // ── Formatting ──────────────────────────────────────────────────────────────
-  const TOKEN_METADATA = {
-    native: { symbol: 'XLM', decimals: 7, name: 'Stellar Lumens' },
-    CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC: { symbol: 'USDC', decimals: 6, name: 'USD Coin' },
-    CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75: { symbol: 'USDC', decimals: 6, name: 'USD Coin' },
-  };
-  const FALLBACK_METADATA = { symbol: 'TOKEN', decimals: 7, name: 'Unknown Token' };
-  function getTokenMetadata(tokenId) {
-    if (!tokenId) return FALLBACK_METADATA;
-    return TOKEN_METADATA[tokenId] || FALLBACK_METADATA;
-  }
-  const XLM_RATES = { XLM: 1, USDC: 8, TOKEN: 1 };
-  function formatTokenAmount(amount, tokenId) {
-    const { symbol, decimals } = getTokenMetadata(tokenId);
-    const value = Number(amount) / Math.pow(10, decimals);
-    const formatted = value.toLocaleString(undefined, {
-      minimumFractionDigits: decimals,
-      maximumFractionDigits: decimals,
-    });
-    return `${formatted} ${symbol}`;
-  }
-  function convertToXlm(amount, tokenId) {
-    const { symbol, decimals } = getTokenMetadata(tokenId);
-    const humanAmount = Number(amount) / Math.pow(10, decimals);
-    const rate = XLM_RATES[symbol] ?? 1;
-    const xlmAmount = humanAmount * rate;
-    const formatted = xlmAmount.toLocaleString(undefined, {
-      minimumFractionDigits: 7,
-      maximumFractionDigits: 7,
-    });
-    return `${formatted} XLM`;
-  }
   function formatAmount(amount) {
     return (Number(amount) / 1e7).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 7 }) + ' XLM';
   }
@@ -602,12 +620,42 @@
     });
   }
 
+  // ── Skeleton rows ────────────────────────────────────────────────────────────
+  const SKELETON_ROW_COUNT = 5;
+  const SKELETON_WIDTHS = [
+    ['w-date', 'w-id', 'w-addr', 'w-amount', 'w-status'],
+    ['w-date', 'w-id', 'w-addr', 'w-amount', 'w-status'],
+    ['w-date', 'w-id', 'w-addr', 'w-amount', 'w-status'],
+    ['w-date', 'w-id', 'w-addr', 'w-amount', 'w-status'],
+    ['w-date', 'w-id', 'w-addr', 'w-amount', 'w-status'],
+  ];
+
+  function renderSkeletonRows() {
+    const body = document.getElementById('history-body');
+    body.innerHTML = '';
+    body.className = 'skeleton-body';
+    for (let i = 0; i < SKELETON_ROW_COUNT; i++) {
+      const tr = document.createElement('tr');
+      // aria-busy and aria-hidden keep skeleton rows out of AT reading order
+      tr.setAttribute('aria-busy', 'true');
+      tr.setAttribute('aria-hidden', 'true');
+      SKELETON_WIDTHS[i].forEach(cls => {
+        const td = document.createElement('td');
+        td.innerHTML = `<span class="skeleton-cell ${cls}"></span>`;
+        tr.appendChild(td);
+      });
+      body.appendChild(tr);
+    }
+  }
+
   // ── UI state helpers ────────────────────────────────────────────────────────
   function showLoading() {
-    document.getElementById('loading-state').style.display = 'block';
+    // Hide prose loading indicator — skeletons inside the table give visual feedback
+    document.getElementById('loading-state').style.display = 'none';
     document.getElementById('error-state').style.display   = 'none';
-    document.getElementById('history-table').style.display = 'none';
+    document.getElementById('history-table').style.display = '';
     document.getElementById('empty-state').style.display   = 'none';
+    renderSkeletonRows();
   }
   function showError(msg) {
     document.getElementById('loading-state').style.display = 'none';
@@ -615,11 +663,16 @@
     document.getElementById('error-msg').textContent       = msg;
     document.getElementById('history-table').style.display = 'none';
     document.getElementById('empty-state').style.display   = 'none';
+    // Clear skeleton rows so they are not present in the DOM while error shows
+    const body = document.getElementById('history-body');
+    body.innerHTML = '';
+    body.className = '';
   }
   function showTable() {
     document.getElementById('loading-state').style.display = 'none';
     document.getElementById('error-state').style.display   = 'none';
     document.getElementById('history-table').style.display = '';
+    // skeleton rows are cleared by renderRows()
   }
 
   // ── Render rows ─────────────────────────────────────────────────────────────
@@ -627,6 +680,7 @@
     const body  = document.getElementById('history-body');
     const empty = document.getElementById('empty-state');
     body.innerHTML = '';
+    body.className = ''; // clear skeleton-body class
     if (!payments.length) {
       empty.style.display = 'block';
       return;
@@ -642,8 +696,8 @@
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td data-label="Date">${formatDate(p.paid_at)}</td>
-        <td data-label="Order ID"><code>${p.order_id}</code></td>
-        <td data-label="Merchant"><code title="${p.merchant_address}">${p.merchant_address.slice(0,8)}…</code></td>
+        <td data-label="Order ID"><code>${p.order_id}</code>${copyButtonHtml(p.order_id, 'Copy order ID')}</td>
+        <td data-label="Merchant"><code title="${p.merchant_address}">${p.merchant_address.slice(0,8)}…</code>${copyButtonHtml(p.merchant_address, 'Copy address')}</td>
         <td data-label="Amount" class="amount-cell">${amountDisplay}</td>
         <td data-label="Status">${statusBadgeHtml(p.status)}</td>`;
       body.appendChild(tr);
@@ -731,6 +785,7 @@
   window.retryFetch   = retryFetch;
   window.addEventListener('popstate', initFromUrl);
   renderModeBanner();
+  initCopyButtons(document.body);
 
   // ── Currency display toggle ─────────────────────────────────────────────────
   const currencyToggleEl = document.getElementById('currency-display-toggle');
@@ -741,5 +796,6 @@
   initFromUrl();
 </script>
 
+</main>
 </body>
 </html>

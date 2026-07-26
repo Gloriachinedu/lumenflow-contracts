@@ -457,6 +457,17 @@ export class LumenFlowClient {
     return await this.call("get_refund", [refundId]);
   }
 
+  /**
+   * List all refunds for a given order.
+   * Caller must be the payer, merchant, or admin.
+   */
+  async getRefundsForOrder(caller: string, orderId: string): Promise<RefundRecord[]> {
+    return await this.call("get_refunds_for_order", [
+      new Address(caller),
+      orderId,
+    ]);
+  }
+
   async disputeRefund(
     payer: string,
     refundId: string,

@@ -38,6 +38,23 @@ pub const REFUND_TTL_LEDGERS: u32 = 6_307_200;    // 1 year
 pub const MULTISIG_TTL_LEDGERS: u32 = 6_307_200;  // 1 year
 pub const SUBSCRIPTION_TTL_LEDGERS: u32 = 12_614_400; // 2 years
 
+// ── Compile-time TTL bound assertions ─────────────────────────────────────────
+// Soroban Mainnet maximum persistent entry TTL (3,110,400 ledgers ≈ 6 months).
+// Our values intentionally exceed the single-call max because extend_ttl is
+// called on every write; the host caps each individual extension at max_entry_ttl.
+// These assertions guard against values so large they would be meaningless or
+// would indicate a copy-paste error (upper bound: 5 × max ≈ 30 months, comfortably
+// above our 2-year maximum but well below any clearly erroneous value).
+pub const SOROBAN_MAX_ENTRY_TTL: u32 = 3_110_400;
+
+const _: () = {
+    assert!(MERCHANT_TTL_LEDGERS     <= SOROBAN_MAX_ENTRY_TTL * 5, "MERCHANT_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)");
+    assert!(PAYMENT_TTL_LEDGERS      <= SOROBAN_MAX_ENTRY_TTL * 5, "PAYMENT_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)");
+    assert!(REFUND_TTL_LEDGERS       <= SOROBAN_MAX_ENTRY_TTL * 5, "REFUND_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)");
+    assert!(MULTISIG_TTL_LEDGERS     <= SOROBAN_MAX_ENTRY_TTL * 5, "MULTISIG_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)");
+    assert!(SUBSCRIPTION_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5, "SUBSCRIPTION_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)");
+};
+
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
 #[contracttype]
@@ -352,14 +369,17 @@ pub fn add_order_refund_id(env: &Env, order_id: &String, refund_id: &String) {
 
 // ── Dispute ───────────────────────────────────────────────────────────────────
 
-pub fn get_dispute(env: &Env, refund_id: &String) -> Option<DisputeRecord> {
-    env.storage().persistent().get(&DataKey::Dispute(refund_id.clone()))
+pub fn get_dispute(env: &Env, dispute_id: &String) -> Option<DisputeRecord> {
+    env.storage().persistent().get(&DataKey::Dispute(dispute_id.clone()))
 }
 
 pub fn set_dispute(env: &Env, dispute: &DisputeRecord) {
+    let key = DataKey::Dispute(dispute.dispute_id.clone());
+    env.storage().persistent().set(&key, dispute);
+    // Extend TTL to 1 year so dispute records outlive the refund window.
     env.storage()
         .persistent()
-        .set(&DataKey::Dispute(dispute.refund_id.clone()), dispute);
+        .extend_ttl(&key, REFUND_TTL_LEDGERS, REFUND_TTL_LEDGERS);
 }
 
 // ── Multisig ──────────────────────────────────────────────────────────────────
@@ -378,6 +398,12 @@ pub fn set_multisig(env: &Env, ms: &MultisigPayment) {
     env.storage()
         .persistent()
         .extend_ttl(&key, MULTISIG_TTL_LEDGERS, MULTISIG_TTL_LEDGERS);
+}
+
+pub fn remove_multisig(env: &Env, payment_id: &String) {
+    env.storage()
+        .persistent()
+        .remove(&DataKey::Multisig(payment_id.clone()));
 }
 
 // ── Payment Request ───────────────────────────────────────────────────────────
@@ -554,6 +580,11 @@ pub fn set_subscription_reserve(env: &Env, subscriber: &Address, token: &Address
 /// TTL for escrow records — 1 year; escrows are expected to resolve well within this window.
 pub const ESCROW_TTL_LEDGERS: u32 = 6_307_200;
 
+const _ESCROW_TTL_CHECK: () = assert!(
+    ESCROW_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
+    "ESCROW_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
+);
+
 pub fn get_escrow(env: &Env, order_id: &String) -> Option<EscrowRecord> {
     env.storage()
         .persistent()
@@ -626,4 +657,50 @@ pub fn set_stored_version(env: &Env, version: &String) {
     env.storage()
         .instance()
         .set(&DataKey::StoredVersion, version);
+}
+
+// ── GDPR Data Deletion Requests ───────────────────────────────────────────────
+
+/// Returns the Unix timestamp (seconds) at which the merchant submitted their
+/// data-deletion request, or `None` if no pending request exists.
+pub fn get_deletion_request(env: &Env, merchant: &Address) -> Option<u64> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::DeletionRequest(merchant.clone()))
+}
+
+/// Records a pending data-deletion request for the given merchant address.
+pub fn set_deletion_request(env: &Env, merchant: &Address, requested_at: u64) {
+    let key = DataKey::DeletionRequest(merchant.clone());
+    env.storage().persistent().set(&key, &requested_at);
+    // Keep for up to 1 year so the admin can process it well within the 30-day window.
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, REFUND_TTL_LEDGERS, REFUND_TTL_LEDGERS);
+}
+
+/// Removes the pending data-deletion request once it has been processed.
+pub fn remove_deletion_request(env: &Env, merchant: &Address) {
+    env.storage()
+        .persistent()
+        .remove(&DataKey::DeletionRequest(merchant.clone()));
+}
+
+// ── Referral fee ──────────────────────────────────────────────────────────────
+
+/// Global referral reward in basis points (e.g. 50 = 0.5 % fee reduction).
+/// Returns 0 if not configured by admin.
+pub fn get_referral_fee_bps(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::ReferralFeeBps)
+        .unwrap_or(0u32)
+}
+
+/// Persist the global referral fee reward (basis points). Admin only — caller
+/// is responsible for authorization before invoking this function.
+pub fn set_referral_fee_bps(env: &Env, fee_bps: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::ReferralFeeBps, &fee_bps);
 }
