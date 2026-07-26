@@ -127,3 +127,103 @@ Configure these thresholds in your alerting tool (PagerDuty, Grafana, etc.) by f
 - [Stellar Horizon Events API](https://developers.stellar.org/docs/data/horizon/api-reference/resources/events)
 - [Soroban Events](https://developers.stellar.org/docs/learn/encyclopedia/contract-development/events)
 - [LumenFlow Events Reference](events-reference.md)
+
+---
+
+## Event Replay — Data Recovery (`scripts/replay-events.sh`)
+
+If off-chain data is lost, `scripts/replay-events.sh` rebuilds the full payment and refund history by replaying every `lumenflow/*` event recorded on Horizon. All replayed records are stored in a local SQLite database and exported to a CSV file.
+
+### Dependencies
+
+| Tool | Install |
+|---|---|
+| `curl` | pre-installed on most systems |
+| `jq` | `apt-get install jq` / `brew install jq` |
+| `sqlite3` | `apt-get install sqlite3` / `brew install sqlite3` |
+
+### Quick start
+
+```bash
+# Full replay on testnet
+LUMENFLOW_CONTRACT_ID=CABC... ./scripts/replay-events.sh
+
+# Replay only July 2026 for a specific merchant
+./scripts/replay-events.sh \
+  --contract CABC... \
+  --date-start 2026-07-01T00:00:00Z \
+  --date-end   2026-07-31T23:59:59Z \
+  --merchant   GABC...
+
+# Mainnet replay, custom database and CSV paths
+./scripts/replay-events.sh \
+  --contract CABC... \
+  --network mainnet \
+  --db /data/lumenflow.db \
+  --output /data/lumenflow-replay.csv
+```
+
+### Options
+
+| Flag | Description | Default |
+|---|---|---|
+| `-c`, `--contract` | Contract ID (or `LUMENFLOW_CONTRACT_ID` env var) | — |
+| `-n`, `--network` | `testnet` or `mainnet` | `testnet` |
+| `-H`, `--horizon` | Override Horizon base URL | auto from `--network` |
+| `-d`, `--db` | SQLite database path | `replay.db` |
+| `-o`, `--output` | CSV output path | `replay-events.csv` |
+| `--date-start` | Only include events at or after this ISO-8601 datetime | — |
+| `--date-end` | Only include events at or before this ISO-8601 datetime | — |
+| `--merchant` | Filter records for a specific merchant address | — |
+| `-v`, `--verbose` | Print each event as it is processed | off |
+| `-h`, `--help` | Show usage | — |
+
+### What the script does
+
+1. **Fetches** all `lumenflow/*` events from Horizon using cursor-based pagination (200 events per page).
+2. **Stores** every raw event in the `raw_events` table of the SQLite database.
+3. **Reconstructs** domain records from the following events:
+
+   | Event | Reconstructed record |
+   |---|---|
+   | `payment_processed` | `payments` row (payer, merchant, token, amount, memo, paid_at) |
+   | `refund_initiated` | `refunds` row (refund_id, order_id, amount, reason, status=Pending) |
+   | `refund_approved` | Updates `refunds.status` → Approved |
+   | `refund_rejected` | Updates `refunds.status` → Rejected |
+   | `refund_executed` | Updates `refunds.status` → Completed; increments `payments.refunded_amount`; marks payment as PartiallyRefunded or FullyRefunded |
+
+4. **Validates** the replayed state:
+   - No payment has `refunded_amount > amount`
+   - All refund statuses are valid enum values
+   - No refund references an unknown order ID
+
+5. **Exports** a CSV (`replay-events.csv`) joining payments and their associated refunds, filtered by the requested date range and merchant.
+
+### CSV columns
+
+```
+order_id, payer, merchant, token, amount, refunded_amount, payment_status,
+memo, paid_at, payment_ledger, payment_tx_hash,
+refund_id, refund_amount, refund_reason, refund_status,
+refund_initiated_at, refund_resolved_at
+```
+
+### SQLite schema
+
+```sql
+payments  (order_id PK, payer, merchant, token, amount, memo, status,
+           refunded_amount, paid_at, ledger, tx_hash)
+refunds   (refund_id PK, order_id, initiator, merchant, amount, reason,
+           status, initiated_at, resolved_at, ledger, tx_hash)
+raw_events (event_id PK, paging_token, ledger, ledger_closed_at,
+            event_type, value_json)
+replay_meta (key PK, value)
+```
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Replay completed and validation passed |
+| `1` | Validation found one or more inconsistencies |
+| `>1` | Script error (missing dependency, bad argument, Horizon unreachable) |
