@@ -11,11 +11,9 @@
  *   window.showToast('Message', 'success');
  */
 
-// ── Constants ──────────────────────────────────────────────────────────────────
 const TOAST_DURATION_MS = 5000;
 const CONTAINER_ID      = 'lf-toast-container';
 
-// ── Styles injected once ───────────────────────────────────────────────────────
 const TOAST_CSS = `
 #lf-toast-container {
   position: fixed;
@@ -28,7 +26,6 @@ const TOAST_CSS = `
   max-width: min(360px, calc(100vw - 2rem));
   pointer-events: none;
 }
-
 .lf-toast {
   pointer-events: all;
   display: flex;
@@ -45,24 +42,14 @@ const TOAST_CSS = `
   animation: lf-toast-in 0.25s ease forwards;
   min-width: 240px;
 }
-
 .lf-toast.lf-toast-exit {
   animation: lf-toast-out 0.3s ease forwards;
 }
-
 .lf-toast-success { background: #1a9e5c; }
 .lf-toast-error   { background: #d9382a; }
 .lf-toast-info    { background: #2563eb; }
-
-.lf-toast-icon {
-  flex-shrink: 0;
-  font-style: normal;
-  font-size: 1rem;
-  line-height: 1.4;
-}
-
-.lf-toast-body { flex: 1; }
-
+.lf-toast-icon    { flex-shrink: 0; font-style: normal; font-size: 1rem; line-height: 1.4; }
+.lf-toast-body    { flex: 1; }
 .lf-toast-close {
   flex-shrink: 0;
   background: transparent;
@@ -73,7 +60,6 @@ const TOAST_CSS = `
   line-height: 1;
   padding: 0 0.2rem;
   align-self: flex-start;
-  margin-top: -0.05rem;
   transition: color 0.1s;
 }
 .lf-toast-close:hover { color: #fff; }
@@ -82,93 +68,57 @@ const TOAST_CSS = `
   outline-offset: 2px;
   border-radius: 3px;
 }
-
-@keyframes lf-toast-in {
-  from { opacity: 0; transform: translateX(110%); }
-  to   { opacity: 1; transform: translateX(0);    }
-}
-
-@keyframes lf-toast-out {
-  from { opacity: 1; transform: translateX(0);    max-height: 200px; margin-bottom: 0; }
-  to   { opacity: 0; transform: translateX(110%); max-height: 0;     margin-bottom: -0.6rem; }
-}
+@keyframes lf-toast-in  { from { opacity:0; transform:translateX(110%); } to { opacity:1; transform:translateX(0); } }
+@keyframes lf-toast-out { from { opacity:1; transform:translateX(0); max-height:200px; } to { opacity:0; transform:translateX(110%); max-height:0; } }
 `;
 
-// ── Internal helpers ───────────────────────────────────────────────────────────
-
 function ensureContainer() {
-  let container = document.getElementById(CONTAINER_ID);
-  if (container) return container;
-
-  // Inject styles once
+  let c = document.getElementById(CONTAINER_ID);
+  if (c) return c;
   if (!document.getElementById('lf-toast-styles')) {
-    const style = document.createElement('style');
-    style.id = 'lf-toast-styles';
-    style.textContent = TOAST_CSS;
-    document.head.appendChild(style);
+    const s = document.createElement('style');
+    s.id = 'lf-toast-styles';
+    s.textContent = TOAST_CSS;
+    document.head.appendChild(s);
   }
-
-  container = document.createElement('div');
-  container.id = CONTAINER_ID;
-  container.setAttribute('aria-label', 'Notifications');
-  document.body.appendChild(container);
-  return container;
+  c = document.createElement('div');
+  c.id = CONTAINER_ID;
+  c.setAttribute('aria-label', 'Notifications');
+  document.body.appendChild(c);
+  return c;
 }
 
-function removeToast(toastEl) {
-  toastEl.classList.add('lf-toast-exit');
-  toastEl.addEventListener('animationend', () => {
-    if (toastEl.parentNode) toastEl.parentNode.removeChild(toastEl);
-  }, { once: true });
+function removeToast(el) {
+  el.classList.add('lf-toast-exit');
+  el.addEventListener('animationend', () => { if (el.parentNode) el.parentNode.removeChild(el); }, { once: true });
 }
 
 function escapeHtml(str) {
-  return String(str ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+  return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
-// ── Public API ─────────────────────────────────────────────────────────────────
-
 /**
- * Shows a toast notification that slides in from the top-right corner.
- *
- * @param {string} message  - Text to display.
- * @param {'success'|'error'|'info'} [type='info'] - Visual style and colour.
- * @param {number} [duration=5000] - Auto-dismiss delay in ms. Pass 0 to keep open.
+ * Shows a non-blocking toast notification.
+ * @param {string} message
+ * @param {'success'|'error'|'info'} [type='info']
+ * @param {number} [duration=5000] ms before auto-dismiss; 0 = never
  */
 export function showToast(message, type = 'info', duration = TOAST_DURATION_MS) {
   const container = ensureContainer();
-
   const icons = { success: '✔', error: '✕', info: 'ℹ' };
-  const icon  = icons[type] ?? icons.info;
-
   const toast = document.createElement('div');
   toast.className = `lf-toast lf-toast-${type}`;
-  // role="alert" + aria-live="assertive" ensures screen readers announce each toast
   toast.setAttribute('role', 'alert');
   toast.setAttribute('aria-live', 'assertive');
   toast.setAttribute('aria-atomic', 'true');
-
   toast.innerHTML = `
-    <em class="lf-toast-icon" aria-hidden="true">${icon}</em>
+    <em class="lf-toast-icon" aria-hidden="true">${icons[type] ?? icons.info}</em>
     <span class="lf-toast-body">${escapeHtml(message)}</span>
     <button class="lf-toast-close" aria-label="Dismiss notification" type="button">✕</button>
   `;
-
   toast.querySelector('.lf-toast-close').addEventListener('click', () => removeToast(toast));
-
   container.appendChild(toast);
-
-  if (duration > 0) {
-    setTimeout(() => removeToast(toast), duration);
-  }
+  if (duration > 0) setTimeout(() => removeToast(toast), duration);
 }
 
-// Expose on window so non-module scripts can call window.showToast(...)
-if (typeof window !== 'undefined') {
-  window.showToast = showToast;
-}
+if (typeof window !== 'undefined') window.showToast = showToast;

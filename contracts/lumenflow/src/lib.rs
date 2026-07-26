@@ -286,6 +286,9 @@ impl PaymentProcessingContract {
     /// * `description` - Free-text description of the merchant's business.
     /// * `contact_info` - Contact details (email, URL, etc.).
     /// * `category` - Business category from [`MerchantCategory`].
+    /// * `referral_id` - Optional address of the referring merchant. When provided,
+    ///   the referrer's `referral_count` is incremented and a
+    ///   `lumenflow/merchant_referred` event is emitted.
     ///
     /// # Returns
     /// `Ok(())` on success.
@@ -293,6 +296,8 @@ impl PaymentProcessingContract {
     /// # Errors
     /// * [`PaymentError::MerchantAlreadyRegistered`] — the address is already registered.
     /// * [`PaymentError::InvalidInput`] — `name` is empty.
+    /// * [`PaymentError::InvalidReferral`] — `referral_id` is the same as `merchant_address`
+    ///   (self-referral) or does not belong to a registered merchant.
     pub fn register_merchant(
         env: Env,
         merchant_address: Address,
@@ -300,6 +305,7 @@ impl PaymentProcessingContract {
         description: String,
         contact_info: String,
         category: MerchantCategory,
+        referral_id: Option<Address>,
     ) -> Result<(), PaymentError> {
         require_not_paused(&env)?;
         merchant_address.require_auth();
@@ -308,6 +314,16 @@ impl PaymentProcessingContract {
 
         if storage::get_merchant(&env, &merchant_address).is_some() {
             return Err(PaymentError::MerchantAlreadyRegistered);
+        }
+
+        // Validate referral_id before any writes so we never commit a partial state.
+        if let Some(ref ref_addr) = referral_id {
+            if *ref_addr == merchant_address {
+                return Err(PaymentError::InvalidReferral);
+            }
+            if storage::get_merchant(&env, ref_addr).is_none() {
+                return Err(PaymentError::InvalidReferral);
+            }
         }
 
         let merchant = Merchant {
@@ -320,6 +336,7 @@ impl PaymentProcessingContract {
             verified: false,
             registered_at: env.ledger().timestamp(),
             total_received: 0,
+            referral_count: 0,
         };
 
         storage::set_merchant(&env, &merchant);
@@ -328,6 +345,18 @@ impl PaymentProcessingContract {
         let mut stats = storage::get_global_stats(&env);
         stats.active_merchants += 1;
         storage::set_global_stats(&env, &stats);
+
+        // Update referrer's count and emit event (referral already validated above).
+        if let Some(ref_addr) = referral_id {
+            let mut referrer = storage::get_merchant(&env, &ref_addr)
+                .ok_or(PaymentError::InvalidReferral)?;
+            referrer.referral_count += 1;
+            storage::set_merchant(&env, &referrer);
+            env.events().publish(
+                ("lumenflow", "merchant_referred"),
+                (merchant_address.clone(), ref_addr),
+            );
+        }
 
         env.events()
             .publish(("lumenflow", "merchant_registered"), merchant_address);
