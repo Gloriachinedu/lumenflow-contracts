@@ -420,6 +420,11 @@
   // ── Init ───────────────────────────────────────────────────────────────────
   sortAndRender();
 </script>
+<script type="module">
+  import { initFilterKeyboard } from './filter-keyboard.js';
+  // .toolbar contains the filter search input and status select
+  initFilterKeyboard('.toolbar');
+</script>
 <script>
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {

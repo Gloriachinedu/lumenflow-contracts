@@ -450,6 +450,7 @@
     renderModeBanner, copyButtonHtml, initCopyButtons,
     formatTokenAmount, convertToXlm, getTokenMetadata,
   } from './lumenflow-shared.js';
+  import { initFilterKeyboard } from './filter-keyboard.js';
 
   // ── State Management ────────────────────────────────────────────────────────
 
@@ -786,6 +787,7 @@
   window.addEventListener('popstate', initFromUrl);
   renderModeBanner();
   initCopyButtons(document.body);
+  initFilterKeyboard('.filter-panel');
 
   // ── Currency display toggle ─────────────────────────────────────────────────
   const currencyToggleEl = document.getElementById('currency-display-toggle');
