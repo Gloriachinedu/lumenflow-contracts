@@ -1,0 +1,12 @@
+# Copy this file to terraform.tfvars and fill in your values.
+# Never commit terraform.tfvars – it is listed in .gitignore.
+
+aws_region              = "us-east-1"
+project                 = "lumenflow"
+environment             = "dev"
+ci_runner_instance_type = "t3.medium"
+ci_runner_subnet_id     = "subnet-xxxxxxxxxxxxxxxxx"
+vpc_id                  = "vpc-xxxxxxxxxxxxxxxxx"
+ec2_key_name            = "my-ec2-keypair"
+alert_email             = "ops@example.com"
+slack_webhook_url       = "https://hooks.slack.com/services/XXX/YYY/ZZZ"
