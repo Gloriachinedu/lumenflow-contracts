@@ -2,6 +2,23 @@
 
 The LumenFlow TypeScript SDK provides a convenient wrapper around the LumenFlow smart contract.
 
+## Installation
+
+```bash
+npm install @lumenflow/sdk
+```
+
+## Development
+
+To build the SDK from source:
+
+```bash
+cd sdk
+npm install
+npm run build
+npm test
+```
+
 ## Error Handling
 
 The SDK maps numeric contract error codes to human-readable English messages and provides a typed `LumenFlowError` object.
