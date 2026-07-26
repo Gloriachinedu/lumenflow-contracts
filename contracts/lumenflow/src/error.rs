@@ -89,6 +89,11 @@ pub enum PaymentError {
     /// The provided tags exceed length or count limits. Remediation: Ensure tags are within the allowed limits (e.g., max 5 tags, max 20 chars per tag).
     InvalidTags = 53,
 
+    // Referral
+    /// The referral address is invalid: either it does not belong to a registered merchant or
+    /// the caller attempted to refer themselves. Remediation: Provide a valid, distinct referrer address.
+    InvalidReferral = 80,
+
     // Subscriptions
     /// A subscription plan with the given ID already exists. Remediation: Use a unique plan ID.
     SubscriptionPlanAlreadyExists = 60,

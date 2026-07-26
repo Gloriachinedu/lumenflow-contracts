@@ -193,6 +193,7 @@ fn test_register_merchant_success() {
         &str(&env, "A great store"),
         &str(&env, "contact@store.com"),
         &MerchantCategory::Retail,
+        &None,
     );
     let m = client.get_merchant(&merchant);
     assert_eq!(m.name, str(&env, "My Store"));
@@ -209,6 +210,7 @@ fn test_register_merchant_duplicate_fails() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Other,
+        &None,
     );
     let result = client.try_register_merchant(
         &merchant,
@@ -216,6 +218,7 @@ fn test_register_merchant_duplicate_fails() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Other,
+        &None,
     );
     assert_eq!(result, Err(Ok(PaymentError::MerchantAlreadyRegistered)));
 }
@@ -247,6 +250,7 @@ fn test_get_merchants_single_page() {
             &str(&env, ""),
             &str(&env, ""),
             &MerchantCategory::Retail,
+            &None,
         );
         addresses.push_back(merchant);
     }
@@ -273,6 +277,7 @@ fn test_get_merchants_multi_page() {
             &str(&env, ""),
             &str(&env, ""),
             &MerchantCategory::Retail,
+            &None,
         );
         addresses.push_back(merchant);
     }
@@ -323,6 +328,7 @@ fn test_deactivate_merchant() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Retail,
+        &None,
     );
     client.deactivate_merchant(&admin, &merchant);
     let m = client.get_merchant(&merchant);
@@ -341,6 +347,7 @@ fn test_reactivate_merchant_success() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Retail,
+        &None,
     );
     client.deactivate_merchant(&admin, &merchant);
     let m = client.get_merchant(&merchant);
@@ -374,6 +381,7 @@ fn test_reactivate_merchant_already_active() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Retail,
+        &None,
     );
     let m = client.get_merchant(&merchant);
     assert!(m.active);
@@ -395,6 +403,7 @@ fn test_reactivate_merchant_unauthorized() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Retail,
+        &None,
     );
     client.deactivate_merchant(&admin, &merchant);
 
@@ -446,6 +455,7 @@ fn setup_payment_env() -> (
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Retail,
+        &None,
     );
     mint(&env, &token, &token_admin, &payer, 10_000);
 
@@ -1326,6 +1336,7 @@ fn test_verify_merchant() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Retail,
+        &None,
     );
     // Newly registered merchant is unverified
     assert!(!client.get_merchant(&merchant).verified);
@@ -1350,6 +1361,7 @@ fn test_verify_merchant_unauthorized_fails() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Retail,
+        &None,
     );
     let result = client.try_verify_merchant(&non_admin, &merchant);
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
@@ -2245,7 +2257,7 @@ fn test_get_multisig_payment_by_authorized_parties() {
         &1_000,
         &signers,
         &2,
-           &None,
+        &None,
     );
 
     let by_merchant = client.get_multisig_payment(&merchant, &str(&env, "MS_Q1"));
@@ -2275,7 +2287,7 @@ fn test_get_multisig_payment_unauthorized_fails() {
         &600,
         &signers,
         &1,
-           &None,
+        &None,
     );
 
     let result = client.try_get_multisig_payment(&stranger, &str(&env, "MS_Q2"));
@@ -2493,6 +2505,7 @@ fn test_is_registered() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Other,
+        &None,
     );
 
     assert!(client.is_registered(&merchant));
@@ -2587,7 +2600,7 @@ fn test_e2e_multisig_payment_in_history_and_global_stats() {
         &2_000,
         &signers,
         &2,
-           &None,
+        &None,
     );
 
     // Sign — threshold met after both signers
@@ -2722,6 +2735,7 @@ fn test_merchant_stats_isolated_per_merchant() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Retail,
+        &None,
     );
     mint(&env, &token, &admin, &merchant2, 10_000);
 
@@ -2947,6 +2961,7 @@ fn test_paused_blocks_register_merchant() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Retail,
+        &None,
     );
     assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
 }
@@ -3188,7 +3203,7 @@ fn test_cancel_multisig_by_initiator() {
         &1_000,
         &signers,
         &2,
-           &None,
+        &None,
     );
 
     // Initiator can cancel
@@ -3218,7 +3233,7 @@ fn test_cancel_multisig_by_admin() {
         &1_000,
         &signers,
         &2,
-           &None,
+        &None,
     );
 
     // Admin can cancel
@@ -3248,7 +3263,7 @@ fn test_cancel_multisig_double_cancel_fails() {
         &1_000,
         &signers,
         &2,
-           &None,
+        &None,
     );
 
     // First cancel succeeds
@@ -3276,7 +3291,7 @@ fn test_cancel_multisig_unauthorized_fails() {
         &1_000,
         &signers,
         &2,
-           &None,
+        &None,
     );
 
     // Stranger cannot cancel
@@ -3302,7 +3317,7 @@ fn test_cancel_multisig_already_executed_fails() {
         &1_000,
         &signers,
         &2,
-           &None,
+        &None,
     );
 
     client.sign_multisig_payment(&signer1, &str(&env, "CANCEL_005"), &bytes(&env, &[1u8; 64]));
@@ -3331,7 +3346,7 @@ fn test_execute_cancelled_multisig_fails() {
         &1_000,
         &signers,
         &2,
-           &None,
+        &None,
     );
 
     client.cancel_multisig_payment(&payer, &str(&env, "CANCEL_006"));
@@ -3452,7 +3467,7 @@ fn test_multisig_payment_id_64_chars_accepted() {
         &1_000,
         &signers,
         &2,
-           &None,
+        &None,
     );
 }
 
@@ -3477,7 +3492,7 @@ fn test_multisig_payment_id_65_chars_rejected() {
         &1_000,
         &signers,
         &2,
-           &None,
+        &None,
     );
     assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
 }
@@ -3591,6 +3606,7 @@ fn test_event_merchant_registered() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Retail,
+        &None,
     );
 
     let events = env.events().all();
@@ -4531,6 +4547,7 @@ fn test_deactivate_merchant_unauthorized() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Retail,
+        &None,
     );
     let result = client.try_deactivate_merchant(&non_admin, &merchant);
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
@@ -6063,4 +6080,168 @@ fn test_subscription_functions_reject_when_paused() {
 
     let result = client.try_renew_subscription_allowance(&subscriber, &token);
     assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
+}
+
+// ── Referral program tests (#639) ─────────────────────────────────────────────
+
+#[test]
+fn test_referral_registration_success() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    // Register the referrer merchant (no referral_id)
+    let referrer = Address::generate(&env);
+    client.register_merchant(
+        &referrer,
+        &str(&env, "Referrer Store"),
+        &str(&env, "The original merchant"),
+        &str(&env, "referrer@store.com"),
+        &MerchantCategory::Retail,
+        &None,
+    );
+
+    // Verify referrer starts with referral_count == 0
+    let referrer_before = client.get_merchant(&referrer);
+    assert_eq!(referrer_before.referral_count, 0);
+
+    // Register a new merchant with the referrer's address as referral_id
+    let new_merchant = Address::generate(&env);
+    client.register_merchant(
+        &new_merchant,
+        &str(&env, "New Store"),
+        &str(&env, "Referred merchant"),
+        &str(&env, "new@store.com"),
+        &MerchantCategory::Digital,
+        &Some(referrer.clone()),
+    );
+
+    // Referrer's referral_count should now be 1
+    let referrer_after = client.get_merchant(&referrer);
+    assert_eq!(referrer_after.referral_count, 1);
+
+    // New merchant should be registered and active
+    let nm = client.get_merchant(&new_merchant);
+    assert_eq!(nm.name, str(&env, "New Store"));
+    assert!(nm.active);
+}
+
+#[test]
+fn test_self_referral_rejected() {
+    let (env, client) = setup();
+
+    // Attempt to register with own address as referral_id
+    let merchant = Address::generate(&env);
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "My Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Other,
+        &Some(merchant.clone()),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidReferral)));
+}
+
+#[test]
+fn test_invalid_referral_id_rejected() {
+    let (env, client) = setup();
+
+    // Try to register with a non-existent merchant as referral_id
+    let merchant = Address::generate(&env);
+    let nonexistent = Address::generate(&env);
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "My Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Other,
+        &Some(nonexistent),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidReferral)));
+}
+
+#[test]
+fn test_referral_count_increments_for_multiple_referrals() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    // Register a referrer
+    let referrer = Address::generate(&env);
+    client.register_merchant(
+        &referrer,
+        &str(&env, "Top Referrer"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Services,
+        &None,
+    );
+
+    // Register three merchants that all use the same referrer
+    for i in 0u32..3 {
+        let m = Address::generate(&env);
+        client.register_merchant(
+            &m,
+            &str(&env, &alloc::format!("Referred {i}")),
+            &str(&env, ""),
+            &str(&env, ""),
+            &MerchantCategory::Other,
+            &Some(referrer.clone()),
+        );
+    }
+
+    let referrer_data = client.get_merchant(&referrer);
+    assert_eq!(referrer_data.referral_count, 3);
+}
+
+#[test]
+fn test_get_referral_stats_returns_leaderboard() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    // Set referral fee to 50 bps
+    client.set_referral_fee_bps(&admin, &50);
+
+    let referrer = Address::generate(&env);
+    client.register_merchant(
+        &referrer,
+        &str(&env, "Leaderboard Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Food,
+        &None,
+    );
+
+    // Register two merchants under the referrer
+    for i in 0u32..2 {
+        let m = Address::generate(&env);
+        client.register_merchant(
+            &m,
+            &str(&env, &alloc::format!("Referred {i}")),
+            &str(&env, ""),
+            &str(&env, ""),
+            &MerchantCategory::Other,
+            &Some(referrer.clone()),
+        );
+    }
+
+    let stats = client.get_referral_stats(&admin);
+    assert_eq!(stats.len(), 1);
+    let entry = stats.get(0).unwrap();
+    assert_eq!(entry.referrer, referrer);
+    assert_eq!(entry.referral_count, 2);
+    assert_eq!(entry.reward_bps, 50);
+}
+
+#[test]
+fn test_set_referral_fee_bps_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let non_admin = Address::generate(&env);
+    let result = client.try_set_referral_fee_bps(&non_admin, &100);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
