@@ -236,11 +236,24 @@
     .status-fullyrefunded      { background: #fce8e8; color: #c0392b; }
     .status-unknown            { background: #f0f0f0; color: #666; }
 
+    /* ── Empty state ─────────────────────────────────────────────────────────── */
     .empty-state {
       padding: 4rem 2rem;
       text-align: center;
       color: #888;
     }
+    .empty-state .empty-svg { margin-bottom: 1.25rem; }
+    .empty-state .empty-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: #444;
+      margin-bottom: 0.4rem;
+    }
+    .empty-state .empty-sub { font-size: 0.875rem; color: #888; }
+
+    /* ── Copy button ──────────────────────────────────────────────────────────── */
+    .lf-copy-btn:hover { background: #f0ecff !important; color: #6c47ff !important; border-color: #6c47ff !important; }
+    .lf-copyable { display: inline-flex; align-items: center; }
 
     /* ── Skeleton loading rows ────────────────────────────────────────────────── */
     .skeleton-body tr td {
@@ -426,38 +439,34 @@
         <!-- Rows will be rendered here -->
       </tbody>
     </table>
-    <div id="empty-state" class="empty-state" style="display:none" role="status" aria-label="No payments found matching your filters" aria-live="polite">
-      No payments found matching your filters.
+    <div id="empty-state" class="empty-state" style="display:none" role="status" aria-label="No payments found" aria-live="polite">
+      <div class="empty-svg">
+        <svg aria-hidden="true" width="80" height="80" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="40" cy="40" r="38" fill="#f0ecff" stroke="#e0d8ff" stroke-width="2"/>
+          <rect x="20" y="28" width="40" height="30" rx="4" fill="#fff" stroke="#c4b5fd" stroke-width="2"/>
+          <rect x="26" y="36" width="20" height="3" rx="1.5" fill="#ddd6fe"/>
+          <rect x="26" y="43" width="28" height="3" rx="1.5" fill="#ede9fe"/>
+          <rect x="26" y="50" width="14" height="3" rx="1.5" fill="#ede9fe"/>
+          <circle cx="56" cy="28" r="8" fill="#fff3cd" stroke="#f0c429" stroke-width="1.5"/>
+          <text x="56" y="32" text-anchor="middle" font-size="10" fill="#856404">?</text>
+        </svg>
+      </div>
+      <div class="empty-title">No payments yet</div>
+      <div class="empty-sub" id="empty-sub-text">No payments found matching your filters.</div>
     </div>
   </div>
 </div>
 
 <script type="module">
   import { validateAddress, validateAmount } from './validation.js';
+  import { renderModeBanner, copyableHtml, attachCopyButtons } from './lumenflow-shared.js';
+  import { showErrorToast } from './errorMessages.js';
 
   // ── Config ──────────────────────────────────────────────────────────────────
-  const CONTRACT_ID = window.LUMENFLOW_CONTRACT_ID || '';
+  const CONTRACT_ID = window.LUMENFLOW_CONTRACT_ID || window.sessionStorage.getItem('LUMENFLOW_CONTRACT_ID') || '';
   const RPC_URL     = window.LUMENFLOW_RPC_URL     || 'https://soroban-testnet.stellar.org';
   const NETWORK     = window.LUMENFLOW_NETWORK     || 'testnet';
   const DEMO_MODE   = !CONTRACT_ID;
-
-  function renderModeBanner() {
-    const banner = document.createElement('div');
-    banner.id = 'lf-mode-banner';
-    banner.setAttribute('role', 'status');
-    banner.style.cssText = [
-      'position:sticky', 'top:0', 'z-index:1000',
-      'padding:0.4rem 1rem', 'font-size:0.8rem', 'font-weight:600',
-      'text-align:center',
-      DEMO_MODE
-        ? 'background:#fff3cd;color:#856404;'
-        : 'background:#d1f3e0;color:#1a5e37;',
-    ].join(';');
-    banner.textContent = DEMO_MODE
-      ? '⚠ Demo mode – displaying mock data. Set LUMENFLOW_CONTRACT_ID to connect to a live contract.'
-      : `✔ Live mode – connected to contract ${CONTRACT_ID.slice(0, 8)}… on ${NETWORK}.`;
-    document.body.prepend(banner);
-  }
 
   // ── State Management ────────────────────────────────────────────────────────
 
@@ -736,12 +745,13 @@
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td data-label="Date">${formatDate(p.paid_at)}</td>
-        <td data-label="Order ID"><code>${p.order_id}</code></td>
-        <td data-label="Merchant"><code title="${p.merchant_address}">${p.merchant_address.slice(0,8)}…</code></td>
+        <td data-label="Order ID">${copyableHtml(p.order_id, 0, 'order')}</td>
+        <td data-label="Merchant">${copyableHtml(p.merchant_address, 8, 'address')}</td>
         <td data-label="Amount" class="amount-cell">${amountDisplay}</td>
         <td data-label="Status">${statusBadgeHtml(p.status)}</td>`;
       body.appendChild(tr);
     });
+    attachCopyButtons(body);
   }
 
   // ── Main update ─────────────────────────────────────────────────────────────
@@ -756,8 +766,9 @@
     if (!merchant) {
       showTable();
       renderRows([]);
-      document.getElementById('empty-state').style.display = 'block';
-      document.getElementById('empty-state').textContent   = 'Enter a merchant address to load payment history.';
+      const emptyEl = document.getElementById('empty-state');
+      emptyEl.style.display = 'block';
+      document.getElementById('empty-sub-text').textContent = 'Enter a merchant address to load payment history.';
       return;
     }
 
@@ -765,8 +776,9 @@
     if (validateAddress(merchant, { label: 'Merchant address' })) {
       showTable();
       renderRows([]);
-      document.getElementById('empty-state').style.display = 'block';
-      document.getElementById('empty-state').textContent   = 'Enter a valid merchant address (starts with G, 56 characters) to load payment history.';
+      const emptyEl = document.getElementById('empty-state');
+      emptyEl.style.display = 'block';
+      document.getElementById('empty-sub-text').textContent = 'Enter a valid merchant address (starts with G, 56 characters) to load payment history.';
       return;
     }
 
@@ -775,8 +787,12 @@
       const payments = await fetchFromContract(merchant);
       showTable();
       renderRows(payments);
+      if (!payments.length) {
+        document.getElementById('empty-sub-text').textContent = 'No payments found matching your filters.';
+      }
     } catch (e) {
       showError(e.message || 'Failed to fetch payment history from contract.');
+      showErrorToast(e);
     }
   }
 

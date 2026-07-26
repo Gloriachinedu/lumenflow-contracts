@@ -236,6 +236,9 @@
       outline: 2px solid #6c47ff;
       outline-offset: 2px;
     }
+
+    /* ── Copy button ─────────────────────────────────────────────────────────── */
+    .lf-copy-btn:hover { background: #f0ecff !important; color: #6c47ff !important; border-color: #6c47ff !important; }
   </style>
 </head>
 <body>
@@ -375,8 +378,9 @@
 </main>
 
 <script type="module">
-  import { CONTRACT_ID, RPC_URL, formatAmount, formatDate, renderModeBanner, formatTokenAmount, convertToXlm, getTokenMetadata } from './lumenflow-shared.js';
+  import { CONTRACT_ID, RPC_URL, formatAmount, formatDate, renderModeBanner, formatTokenAmount, convertToXlm, getTokenMetadata, makeCopyButton } from './lumenflow-shared.js';
   import { validateOrderId } from './validation.js';
+  import { showErrorToast } from './errorMessages.js';
 
   // ── Routing ────────────────────────────────────────────────────────────────
   // Supports both:
@@ -542,8 +546,15 @@
   // ── Render ─────────────────────────────────────────────────────────────────
 
   function renderReceipt({ payment, merchant, refunds }) {
-    document.getElementById('field-order-id').textContent    = payment.order_id;
-    document.getElementById('field-merchant-name').textContent = merchant.name || payment.merchant_address;
+    const orderIdEl = document.getElementById('field-order-id');
+    orderIdEl.textContent = payment.order_id;
+    orderIdEl.appendChild(makeCopyButton(payment.order_id, 'Copy order ID'));
+
+    const merchantNameEl = document.getElementById('field-merchant-name');
+    merchantNameEl.textContent = merchant.name || payment.merchant_address;
+    // Always add a copy button for the raw address, regardless of display name
+    merchantNameEl.appendChild(makeCopyButton(payment.merchant_address, 'Copy merchant address'));
+
     document.getElementById('field-date').textContent        = formatDate(payment.paid_at);
     document.getElementById('field-token').textContent       = payment.token;
 
@@ -655,7 +666,9 @@
     const expired = params.expires && Date.now() > params.expires;
 
     document.getElementById('prefill-merchant').textContent  = params.merchant;
+    document.getElementById('prefill-merchant').appendChild(makeCopyButton(params.merchant, 'Copy merchant address'));
     document.getElementById('prefill-order-id').textContent  = params.orderId;
+    if (params.orderId) document.getElementById('prefill-order-id').appendChild(makeCopyButton(params.orderId, 'Copy order ID'));
     document.getElementById('prefill-amount').textContent    = formatAmount(BigInt(params.amount)) + ' XLM';
     document.getElementById('prefill-token').textContent     = params.token;
 
@@ -704,7 +717,10 @@
     document.title = `Receipt ${orderId} – LumenFlow`;
     document.getElementById('loading').style.display = 'block';
 
-    const data = await fetchPayment(orderId);
+    const data = await fetchPayment(orderId).catch(e => {
+      showErrorToast(e);
+      return null;
+    });
 
     document.getElementById('loading').style.display = 'none';
 

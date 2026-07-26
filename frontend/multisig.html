@@ -76,7 +76,8 @@
     }
     .signer-status-list li:last-child { border-bottom: none; }
     .sig-icon { font-size: 1rem; flex-shrink: 0; }
-    .sig-addr { flex: 1; word-break: break-all; color: #333; min-width: 0; }
+    .sig-addr { flex: 1; word-break: break-all; color: #333; min-width: 0; display: inline-flex; align-items: center; gap: 0.25rem; }
+    .lf-copy-btn:hover { background: #f0ecff !important; color: #6c47ff !important; border-color: #6c47ff !important; }
     .sig-status { font-size: 0.75rem; font-weight: 600; flex-shrink: 0; }
     .sig-status.signed  { color: #1a9e5c; }
     .sig-status.pending { color: #888; }
@@ -332,8 +333,9 @@
 </div>
 
 <script type="module">
-  import { CONTRACT_ID, RPC_URL, renderModeBanner } from './lumenflow-shared.js';
+  import { CONTRACT_ID, RPC_URL, renderModeBanner, makeCopyButton } from './lumenflow-shared.js';
   import { validateOrderId, validateAmount, validateAddress, isValidStellarKey } from './validation.js';
+  import { showErrorToast } from './errorMessages.js';
 
   // ── State ──────────────────────────────────────────────────────────────────
 
@@ -745,6 +747,7 @@
       alert.textContent = result.error || 'Failed to initiate payment.';
       alert.className   = 'alert alert-error';
       alert.style.display = 'block';
+      showErrorToast(result.error || 'Failed to initiate payment.');
       btn.disabled = false;
       btn.textContent = 'Initiate Payment';
       return;
@@ -776,13 +779,17 @@
     signers.forEach(addr => {
       const isSigned = signatures.has(addr);
       const li = document.createElement('li');
+      const truncated = addr.length > 12 ? addr.slice(0, 8) + '…' + addr.slice(-4) : addr;
       li.innerHTML = `
         <span class="sig-icon">${isSigned ? '✅' : '⬜'}</span>
-        <span class="sig-addr">${addr}</span>
+        <span class="sig-addr" title="${addr}">${truncated}</span>
         <span class="sig-status ${isSigned ? 'signed' : 'pending'}">${isSigned ? 'Signed' : 'Pending'}</span>
         <button class="sign-btn" onclick="signPayment('${addr}')" ${isSigned ? 'disabled' : ''}>
           ${isSigned ? 'Signed' : 'Sign'}
         </button>`;
+      // Append copy button for the full address
+      const copyBtn = makeCopyButton(addr, 'Copy signer address');
+      li.querySelector('.sig-addr').appendChild(copyBtn);
       list.appendChild(li);
     });
 
@@ -803,6 +810,7 @@
     } else {
       if (btn) { btn.disabled = false; btn.textContent = 'Sign'; }
       showExecuteAlert(result.error || 'Signing failed.', false);
+      showErrorToast(result.error || 'Signing failed.');
     }
   }
 
@@ -820,6 +828,7 @@
       btn.disabled = false;
       btn.textContent = 'Execute Payment';
       showExecuteAlert(result.error || 'Execution failed.', false);
+      showErrorToast(result.error || 'Execution failed.');
     }
   }
 
