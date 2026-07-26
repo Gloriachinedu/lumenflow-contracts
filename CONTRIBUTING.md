@@ -188,6 +188,18 @@ test: add edge cases for multisig threshold
 - Link the related issue with `Closes #N`.
 - All CI checks must pass before merge.
 
+### Architecture Decision Records (ADRs)
+
+Any PR that introduces a **significant architectural change** must include an ADR. This includes changes to:
+
+- Storage key design or storage tier usage
+- Authentication or signature verification approach
+- Pagination or query patterns
+- New admin controls or circuit-breaker mechanisms
+- Any decision that would be hard to reverse or that future maintainers need to understand
+
+ADRs live in [`docs/adr/`](docs/adr/). Use the [ADR template](docs/adr/ADR-000-template.md) to create a new one, appending the next sequential number (e.g. `ADR-006-my-decision.md`). Add the new ADR to the index table in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
 ## Team Structure
 
 To ensure high-quality reviews and maintainability, the project is organized into specialized teams:
