@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Fraud &amp; Suspicious Activity — LumenFlow</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <a href="#content" class="skip-link">Skip to main content</a>
+
+  <header class="site-header">
+    <div class="header-left">
+      <a href="../merchant-dashboard/index.html" class="back-link" aria-label="Back to merchant dashboard">← Dashboard</a>
+      <div>
+        <h1 class="page-title">Fraud &amp; Suspicious Activity</h1>
+        <p class="page-subtitle">Monitor large payments, refund patterns, and flagged activity</p>
+      </div>
+    </div>
+    <div id="lastScanBadge" class="last-scan-badge">Last scan: —</div>
+  </header>
+
+  <!-- Demo mode banner -->
+  <div id="demoBanner" class="demo-banner" role="status" aria-live="polite">
+    <span>⚠️ <strong>Demo mode</strong> — displaying mock data. Set
+      <code>LUMENFLOW_CONTRACT_ID</code> and <code>LUMENFLOW_NETWORK</code> to switch to live mode.</span>
+    <button id="dismissBanner" class="btn-dismiss" aria-label="Dismiss demo banner">✕</button>
+  </div>
+
+  <main id="content">
+
+    <!-- Metrics row -->
+    <section class="metrics-grid" aria-label="Fraud analytics summary">
+      <div class="metric-card" role="region" aria-labelledby="metric-flagged-label">
+        <div id="metricFlagged" class="metric-value">—</div>
+        <div id="metric-flagged-label" class="metric-label">Flagged Payments</div>
+      </div>
+      <div class="metric-card" role="region" aria-labelledby="metric-high-label">
+        <div id="metricHighValue" class="metric-value">—</div>
+        <div id="metric-high-label" class="metric-label">High-Value Alerts</div>
+      </div>
+      <div class="metric-card" role="region" aria-labelledby="metric-refund-label">
+        <div id="metricRefundRate" class="metric-value">—</div>
+        <div id="metric-refund-label" class="metric-label">Refund Rate (%)</div>
+      </div>
+      <div class="metric-card" role="region" aria-labelledby="metric-scan-label">
+        <div id="metricLastScan" class="metric-value scan-time">—</div>
+        <div id="metric-scan-label" class="metric-label">Last Scan</div>
+      </div>
+    </section>
+
+    <!-- Threshold configuration panel -->
+    <section class="threshold-panel card" aria-labelledby="thresholdTitle">
+      <h2 id="thresholdTitle" class="panel-title">Threshold Configuration</h2>
+      <form id="thresholdForm" class="threshold-form" novalidate>
+        <div class="field-group">
+          <label for="largePaymentThreshold" class="field-label">Large Payment Threshold (stroops)</label>
+          <input
+            id="largePaymentThreshold"
+            type="number"
+            class="field-input"
+            value="100000"
+            min="1"
+            step="1"
+            aria-describedby="thresholdHelp"
+          />
+          <small id="thresholdHelp" class="field-hint">Payments above this amount are flagged for review.</small>
+        </div>
+        <div class="field-group">
+          <label for="refundRateAlert" class="field-label">Refund Rate Alert (%)</label>
+          <input
+            id="refundRateAlert"
+            type="number"
+            class="field-input"
+            value="30"
+            min="0"
+            max="100"
+            step="1"
+            aria-describedby="refundRateHelp"
+          />
+          <small id="refundRateHelp" class="field-hint">Alert when a merchant's refund rate exceeds this percentage.</small>
+        </div>
+        <button type="submit" class="btn-primary">Save Thresholds</button>
+        <span id="thresholdSaved" class="save-feedback" role="status" aria-live="polite"></span>
+      </form>
+    </section>
+
+    <!-- Alerts table -->
+    <section class="card" aria-labelledby="alertsTitle">
+      <h2 id="alertsTitle" class="panel-title">Active Alerts</h2>
+      <div id="alertsEmpty" class="empty-state" style="display:none">No alerts detected with current thresholds.</div>
+      <div class="table-wrapper">
+        <table id="alertsTable" class="alert-table" role="table" aria-label="Suspicious activity alerts">
+          <thead>
+            <tr>
+              <th scope="col">Time</th>
+              <th scope="col">Order ID</th>
+              <th scope="col">Type</th>
+              <th scope="col">Amount (stroops)</th>
+              <th scope="col">Risk Level</th>
+              <th scope="col">Action</th>
+            </tr>
+          </thead>
+          <tbody id="alertsTableBody">
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Event log -->
+    <section class="card" aria-labelledby="eventLogTitle">
+      <h2 id="eventLogTitle" class="panel-title">
+        Suspicious Activity Event Log
+        <span class="panel-subtitle">Recent <code>lumenflow/suspicious_activity</code> contract events</span>
+      </h2>
+      <ol id="eventLog" class="event-log" reversed aria-live="polite" aria-relevant="additions">
+        <!-- populated by app.js -->
+      </ol>
+      <div id="eventLogEmpty" class="empty-state" style="display:none">No suspicious activity events recorded.</div>
+    </section>
+
+  </main>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>
