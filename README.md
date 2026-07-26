@@ -4,12 +4,55 @@
 
 [![CI](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml/badge.svg)](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml)
 [![Coverage](https://codecov.io/gh/Gloriachinedu/lumenflow-contracts/branch/main/graph/badge.svg)](https://codecov.io/gh/Gloriachinedu/lumenflow-contracts)
+[![WASM Size](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FGloriachinedu%2Flumenflow-contracts%2Fmain%2Fwasm-size-history.json&query=%24.entries%5B-1%3A%5D%5B0%5D.size_kb&suffix=%20KB&label=WASM%20size&color=blue)](wasm-size-history.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Stellar](https://img.shields.io/badge/Stellar-Soroban-blueviolet)](https://soroban.stellar.org)
 [![Audited by](https://img.shields.io/badge/Audited%20By-TBD-lightgrey)](docs/audit/audit-report.md)
 [![Discord](https://img.shields.io/discord/123456789012345678?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/lumenflow)
 
 [English](README.md) | [Español](README.es.md) | [Português](README.pt.md)
+
+---
+
+## Quick Start
+
+Spin up a local Stellar node, deploy the contract, and seed it with test data in one command:
+
+```bash
+# Set the deployer key and seed keys, then start everything
+export SOURCE_ACCOUNT=<your-local-secret-key>
+export ADMIN_KEY=<admin-secret>   ADMIN_ADDRESS=<admin-address>
+export MERCHANT1_KEY=<m1-secret>  MERCHANT1_ADDRESS=<m1-address>
+export MERCHANT2_KEY=<m2-secret>  MERCHANT2_ADDRESS=<m2-address>
+export MERCHANT3_KEY=<m3-secret>  MERCHANT3_ADDRESS=<m3-address>
+export PAYER_KEY=<payer-secret>   PAYER_ADDRESS=<payer-address>
+export TOKEN_ADDRESS=<sac-token-address>
+
+docker compose up
+```
+
+The `setup` service waits for the Stellar node to pass its health check, then
+builds and deploys the contract, writes the `CONTRACT_ID` to a shared volume at
+`/shared/contract-id.txt`, and seeds 3 merchants, 5 payments, and 2 refunds.
+
+Generate local keys with:
+
+```bash
+stellar keys generate --network local alice
+stellar keys address alice
+```
+
+Fund them via the local Friendbot:
+
+```bash
+curl "http://localhost:8000/friendbot?addr=<address>"
+```
+
+Tear everything down (including the shared volume) with:
+
+```bash
+docker compose down -v
+```
 
 ---
 
