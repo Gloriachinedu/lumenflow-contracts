@@ -1,12 +1,23 @@
-# Copy this file to terraform.tfvars and fill in your values.
-# Never commit terraform.tfvars – it is listed in .gitignore.
+# infra/terraform/terraform.tfvars.example
+# Copy to terraform.tfvars and fill in values.
+# DO NOT commit terraform.tfvars to source control.
 
-aws_region              = "us-east-1"
-project                 = "lumenflow"
-environment             = "dev"
-ci_runner_instance_type = "t3.medium"
-ci_runner_subnet_id     = "subnet-xxxxxxxxxxxxxxxxx"
-vpc_id                  = "vpc-xxxxxxxxxxxxxxxxx"
-ec2_key_name            = "my-ec2-keypair"
-alert_email             = "ops@example.com"
-slack_webhook_url       = "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+aws_region  = "us-east-1"
+environment = "dev"
+
+# Networking (required only if enable_self_hosted_runner = true)
+vpc_id    = "vpc-0123456789abcdef0"
+subnet_id = "subnet-0123456789abcdef0"
+
+# Self-hosted runner (opt-in)
+enable_self_hosted_runner = false
+ci_runner_instance_type   = "t3.medium"
+# ci_runner_ami           = "ami-0c7217cdde317cfec"  # Ubuntu 22.04 LTS us-east-1
+
+# GitHub runner token — obtain from:
+#   Settings > Actions > Runners > New self-hosted runner
+github_runner_token = ""
+github_repo         = "Gloriachinedu/lumenflow-contracts"
+
+# Alerting
+alert_email = ""

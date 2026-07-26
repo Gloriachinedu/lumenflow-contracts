@@ -1,71 +1,47 @@
-# LumenFlow Infrastructure – Terraform
+# LumenFlow — Terraform Infrastructure
 
-Terraform configuration for all LumenFlow cloud resources: artifact storage, CI runner, and monitoring.
-
----
-
-## Directory layout
-
-```
-infra/terraform/
-├── main.tf                    # Root module – wires together all child modules
-├── variables.tf               # Input variable definitions
-├── outputs.tf                 # Root outputs
-├── terraform.tfvars.example   # Copy → terraform.tfvars, fill in values
-├── .gitignore                 # Excludes state, plan files, and tfvars
-└── modules/
-    ├── s3/                    # Artifact S3 bucket
-    ├── ci-runner/             # Self-hosted GitHub Actions runner (EC2)
-    └── monitoring/            # CloudWatch dashboard + SNS alerts
-```
-
----
-
-## What gets provisioned
-
-| Resource | Module | Purpose |
-|---|---|---|
-| S3 bucket (`lumenflow-<env>-artifacts`) | `s3` | Stores CI/CD build artifacts; nightly builds expire after 7 days |
-| EC2 instance | `ci-runner` | Ubuntu 22.04 self-hosted runner pre-installed with Rust and the Actions runner agent |
-| CloudWatch Log Group | `monitoring` | Application log retention (30 days) |
-| CloudWatch Dashboard | `monitoring` | CPU, S3 object count, recent log widget |
-| SNS Topic + subscriptions | `monitoring` | Email (and optional Slack) alerts |
+Terraform configuration for all LumenFlow cloud resources:
+- **S3 bucket** — artifact storage for WASM builds, nightly CLI binaries, and PR preview archives  
+- **DynamoDB table** — Terraform state locking  
+- **EC2 instance** (optional) — self-hosted GitHub Actions runner  
+- **IAM roles & policies** — least-privilege access for CI runner  
+- **CloudWatch** — log group and high-error-rate alarm  
+- **SNS topic** — alert delivery (email; extend to Slack / PagerDuty as needed)
 
 ---
 
 ## Prerequisites
 
-| Tool | Version |
-|---|---|
-| [Terraform](https://developer.hashicorp.com/terraform/install) | ≥ 1.6 |
-| AWS CLI | ≥ 2 |
-| AWS credentials | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` or an IAM role |
+| Tool | Version | Install |
+|------|---------|---------|
+| Terraform | ≥ 1.6.0 | https://developer.hashicorp.com/terraform/install |
+| AWS CLI | ≥ 2 | https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html |
+| AWS credentials | — | `aws configure` or environment variables |
 
 ---
 
-## Bootstrap (first-time only)
+## One-time bootstrap (remote state bucket)
 
-The S3 remote backend and DynamoDB lock table must exist before running `terraform init`.
-Create them once:
+Before running `terraform init` for the first time, create the S3 bucket and DynamoDB table for Terraform state:
 
 ```bash
-# Create state bucket
+# Create the state bucket (versioning enabled)
 aws s3api create-bucket \
-  --bucket lumenflow-terraform-state \
+  --bucket lumenflow-tfstate \
   --region us-east-1
 
 aws s3api put-bucket-versioning \
-  --bucket lumenflow-terraform-state \
+  --bucket lumenflow-tfstate \
   --versioning-configuration Status=Enabled
 
 aws s3api put-bucket-encryption \
-  --bucket lumenflow-terraform-state \
+  --bucket lumenflow-tfstate \
   --server-side-encryption-configuration \
-    '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+  '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
 
-# Create DynamoDB lock table
+# Create the DynamoDB lock table
 aws dynamodb create-table \
-  --table-name lumenflow-terraform-locks \
+  --table-name lumenflow-tfstate-lock \
   --attribute-definitions AttributeName=LockID,AttributeType=S \
   --key-schema AttributeName=LockID,KeyType=HASH \
   --billing-mode PAY_PER_REQUEST \
@@ -76,9 +52,10 @@ aws dynamodb create-table \
 
 ## Usage
 
-### 1. Configure variables
+### 1. Configure
 
 ```bash
+cd infra/terraform
 cp terraform.tfvars.example terraform.tfvars
 # Edit terraform.tfvars with your values
 ```
@@ -89,7 +66,7 @@ cp terraform.tfvars.example terraform.tfvars
 terraform init
 ```
 
-### 3. Plan
+### 3. Preview changes
 
 ```bash
 terraform plan
@@ -101,42 +78,68 @@ terraform plan
 terraform apply
 ```
 
-### 5. Destroy
+Terraform prints a summary of changes and prompts for confirmation before making any changes.
+
+### 5. Destroy all resources
 
 ```bash
 terraform destroy
 ```
 
-`terraform destroy` tears down **all** resources provisioned by this configuration, including the artifact bucket (which has `force_destroy = true` in non-prod environments). **In `prod`, the bucket has `force_destroy = false`** — empty it first.
+> ⚠️  This permanently deletes all managed resources, including the artifact S3 bucket and its contents. Confirm you have backups before running.
 
 ---
 
-## CI integration
+## Variables
 
-`.github/workflows/terraform.yml` runs `terraform fmt`, `terraform validate`, and `terraform plan` on every PR that touches `infra/terraform/`. The plan output is posted as a PR comment.
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `aws_region` | AWS region | `us-east-1` |
+| `environment` | `dev` / `staging` / `prod` | `dev` |
+| `vpc_id` | VPC for CI runner SG | `""` |
+| `subnet_id` | Subnet for CI runner | `""` |
+| `enable_self_hosted_runner` | Provision EC2 runner | `false` |
+| `ci_runner_instance_type` | Runner EC2 type | `t3.medium` |
+| `ci_runner_ami` | Runner AMI | Ubuntu 22.04 us-east-1 |
+| `github_runner_token` | Runner registration token | `""` (sensitive) |
+| `github_repo` | owner/repo for runner | `Gloriachinedu/lumenflow-contracts` |
+| `alert_email` | SNS alert recipient | `""` |
 
-### Required repository secrets
+---
+
+## Outputs
+
+| Output | Description |
+|--------|-------------|
+| `artifacts_bucket_name` | S3 bucket name for artifacts |
+| `artifacts_bucket_arn` | S3 bucket ARN |
+| `tfstate_lock_table_name` | DynamoDB lock table name |
+| `ci_runner_instance_id` | EC2 runner instance ID |
+| `ci_runner_role_arn` | IAM role ARN for runner |
+| `alerts_topic_arn` | SNS topic ARN |
+| `cloudwatch_log_group` | CloudWatch log group name |
+
+---
+
+## CI Integration
+
+A `terraform plan` validation step runs automatically on every pull request that modifies files under `infra/terraform/**`. See `.github/workflows/ci.yml` for the workflow definition.
+
+To give GitHub Actions permission to run `terraform plan`, add the following repository secrets:
 
 | Secret | Description |
-|---|---|
-| `AWS_ACCESS_KEY_ID` | IAM access key with permissions to plan/apply |
+|--------|-------------|
+| `AWS_ACCESS_KEY_ID` | IAM user or role access key |
 | `AWS_SECRET_ACCESS_KEY` | Corresponding secret key |
-| `TF_CI_RUNNER_SUBNET_ID` | Subnet for the EC2 runner instance |
-| `TF_VPC_ID` | VPC for the runner security group |
-| `TF_ALERT_EMAIL` | Email for CloudWatch alarm notifications |
-| `TF_SLACK_WEBHOOK_URL` | (Optional) Slack webhook for alerts |
+| `AWS_REGION` | Target region (e.g. `us-east-1`) |
+
+Use a dedicated IAM user with a policy scoped to the resources in this module. Never use root credentials.
 
 ---
 
-## State management
+## Security Notes
 
-Remote state is stored in S3 (`lumenflow-terraform-state`) with DynamoDB locking (`lumenflow-terraform-locks`). State is encrypted at rest. Never commit `.tfstate` files.
-
----
-
-## Security notes
-
-- The CI runner EC2 instance has **no inbound rules** – it communicates outbound only.
-- Access for SSH/debugging is via **AWS Systems Manager Session Manager** (SSM) — no public SSH port needed.
-- S3 bucket public access is fully blocked.
-- All resources are tagged with `Project`, `Environment`, and `ManagedBy=terraform`.
+- `terraform.tfvars` is listed in `.gitignore` — never commit it.  
+- State is encrypted at rest in S3 (`AES256`) and in transit via HTTPS.  
+- The CI runner IAM role follows least privilege — it only has read/write access to the artifact bucket.  
+- Public access is blocked on the artifact bucket; use pre-signed URLs or CloudFront for distribution.

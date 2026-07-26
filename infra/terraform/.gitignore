@@ -1,24 +1,14 @@
-# Local .terraform directories
-**/.terraform/*
-
-# Terraform state files – never commit these
+# Terraform local state and overrides
 *.tfstate
 *.tfstate.*
-*.tfstate.backup
-
-# Sensitive variable files
-*.tfvars
-!*.tfvars.example
-
-# Crash log files
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
 crash.log
 crash.*.log
-
-# Override files
 override.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
-
-# Generated plan files
-*.tfplan
+.terraformrc
+terraform.rc
