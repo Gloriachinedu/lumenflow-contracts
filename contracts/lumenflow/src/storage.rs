@@ -49,6 +49,7 @@ pub enum DataKey {
     FeeRecipient,
     RefundWindow,
     Nonce(Address),
+    ReferralFeeBps,
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -430,4 +431,23 @@ pub fn get_fee_recipient(env: &Env) -> Option<Address> {
 
 pub fn set_fee_recipient(env: &Env, recipient: &Address) {
     env.storage().instance().set(&DataKey::FeeRecipient, recipient);
+}
+
+// ── Referral fee ──────────────────────────────────────────────────────────────
+
+/// Global referral reward in basis points (e.g. 50 = 0.5 % fee reduction).
+/// Returns 0 if not configured by admin.
+pub fn get_referral_fee_bps(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::ReferralFeeBps)
+        .unwrap_or(0u32)
+}
+
+/// Persist the global referral fee reward (basis points). Admin only — caller
+/// is responsible for authorization before invoking this function.
+pub fn set_referral_fee_bps(env: &Env, fee_bps: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::ReferralFeeBps, &fee_bps);
 }

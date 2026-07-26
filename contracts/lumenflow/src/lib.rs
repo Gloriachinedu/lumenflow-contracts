@@ -21,7 +21,7 @@ use helper::{
 use types::{
     BatchPaymentItem, GlobalStats, Merchant, MerchantCategory, MerchantPage, MerchantStats,
     MultisigPayment, PaymentFilter, PaymentOrder, PaymentPage, PaymentRequest, PaymentStatus,
-    PaymentSummary, RefundRecord, RefundStatus, SortField, SortOrder, StatusFilter,
+    PaymentSummary, ReferralStats, RefundRecord, RefundStatus, SortField, SortOrder, StatusFilter,
     SuspiciousActivityReason,
 };
 
@@ -227,6 +227,49 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Configure the global referral reward in basis points (admin only).
+    ///
+    /// The reward is applied as a fee reduction for referring merchants. For
+    /// example, 50 bps = 0.5 % fee reduction. A value of 0 disables the reward.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    pub fn set_referral_fee_bps(
+        env: Env,
+        admin: Address,
+        fee_bps: u32,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_referral_fee_bps(&env, fee_bps);
+        Ok(())
+    }
+
+    /// Return a leaderboard of all merchants who have at least one referral (admin only).
+    ///
+    /// Each entry contains the referrer's address, their referral count, and the
+    /// currently configured referral reward in basis points.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    pub fn get_referral_stats(env: Env, admin: Address) -> Result<Vec<ReferralStats>, PaymentError> {
+        require_admin(&env, &admin)?;
+        let merchant_list = storage::get_merchant_list(&env);
+        let reward_bps = storage::get_referral_fee_bps(&env);
+        let mut result: Vec<ReferralStats> = Vec::new(&env);
+        for addr in merchant_list.iter() {
+            if let Some(m) = storage::get_merchant(&env, &addr) {
+                if m.referral_count > 0 {
+                    result.push_back(ReferralStats {
+                        referrer: addr,
+                        referral_count: m.referral_count,
+                        reward_bps,
+                    });
+                }
+            }
+        }
+        Ok(result)
+    }
+
     /// Add a token to the payment whitelist. Admin only.
     pub fn add_allowed_token(env: Env, admin: Address, token: Address) -> Result<(), PaymentError> {
         require_admin(&env, &admin)?;
@@ -251,6 +294,9 @@ impl PaymentProcessingContract {
     /// * `description` - Free-text description of the merchant's business.
     /// * `contact_info` - Contact details (email, URL, etc.).
     /// * `category` - Business category from [`MerchantCategory`].
+    /// * `referral_id` - Optional address of the referring merchant. When provided,
+    ///   the referrer's `referral_count` is incremented and a
+    ///   `lumenflow/merchant_referred` event is emitted.
     ///
     /// # Returns
     /// `Ok(())` on success.
@@ -258,6 +304,8 @@ impl PaymentProcessingContract {
     /// # Errors
     /// * [`PaymentError::MerchantAlreadyRegistered`] — the address is already registered.
     /// * [`PaymentError::InvalidInput`] — `name` is empty.
+    /// * [`PaymentError::InvalidReferral`] — `referral_id` is the same as `merchant_address`
+    ///   (self-referral) or does not belong to a registered merchant.
     pub fn register_merchant(
         env: Env,
         merchant_address: Address,
@@ -265,6 +313,7 @@ impl PaymentProcessingContract {
         description: String,
         contact_info: String,
         category: MerchantCategory,
+        referral_id: Option<Address>,
     ) -> Result<(), PaymentError> {
         require_not_paused(&env)?;
         merchant_address.require_auth();
@@ -273,6 +322,16 @@ impl PaymentProcessingContract {
 
         if storage::get_merchant(&env, &merchant_address).is_some() {
             return Err(PaymentError::MerchantAlreadyRegistered);
+        }
+
+        // Validate referral_id before any writes so we never commit a partial state.
+        if let Some(ref ref_addr) = referral_id {
+            if *ref_addr == merchant_address {
+                return Err(PaymentError::InvalidReferral);
+            }
+            if storage::get_merchant(&env, ref_addr).is_none() {
+                return Err(PaymentError::InvalidReferral);
+            }
         }
 
         let merchant = Merchant {
@@ -285,6 +344,7 @@ impl PaymentProcessingContract {
             verified: false,
             registered_at: env.ledger().timestamp(),
             total_received: 0,
+            referral_count: 0,
         };
 
         storage::set_merchant(&env, &merchant);
@@ -293,6 +353,18 @@ impl PaymentProcessingContract {
         let mut stats = storage::get_global_stats(&env);
         stats.active_merchants += 1;
         storage::set_global_stats(&env, &stats);
+
+        // Update referrer's count and emit event (referral already validated above).
+        if let Some(ref_addr) = referral_id {
+            let mut referrer = storage::get_merchant(&env, &ref_addr)
+                .ok_or(PaymentError::InvalidReferral)?;
+            referrer.referral_count += 1;
+            storage::set_merchant(&env, &referrer);
+            env.events().publish(
+                ("lumenflow", "merchant_referred"),
+                (merchant_address.clone(), ref_addr),
+            );
+        }
 
         env.events()
             .publish(("lumenflow", "merchant_registered"), merchant_address);

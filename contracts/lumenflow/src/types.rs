@@ -26,6 +26,20 @@ pub struct Merchant {
     pub verified: bool,
     pub registered_at: u64,
     pub total_received: i128,
+    /// Number of merchants that registered using this merchant's referral address.
+    pub referral_count: u32,
+}
+
+/// Summary entry returned by `get_referral_stats`. Contains the referring
+/// merchant's address, how many merchants they have referred, and the
+/// configured referral reward in basis points.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReferralStats {
+    pub referrer: Address,
+    pub referral_count: u32,
+    /// Referral reward in basis points (e.g. 50 = 0.5 % fee reduction).
+    pub reward_bps: u32,
 }
 
 // ── Payment ───────────────────────────────────────────────────────────────────
