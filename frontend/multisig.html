@@ -224,6 +224,11 @@
 <body>
 <a href="#multisig-main" class="skip-link">Skip to main content</a>
 
+<nav class="lf-nav" aria-label="LumenFlow navigation">
+  <span class="lf-nav__brand">⚡ LumenFlow</span>
+  <div id="wallet-status-container"></div>
+</nav>
+
 <main id="multisig-main">
 <h1>Multisig Payment</h1>
 <p class="subtitle">Initiate a payment that requires multiple signers to approve.</p>
@@ -334,6 +339,7 @@
 <script type="module">
   import { CONTRACT_ID, RPC_URL, renderModeBanner, copyButtonHtml, initCopyButtons, formatAmount } from './lumenflow-shared.js';
   import { validateOrderId, validateAmount, validateAddress, isValidStellarKey } from './validation.js';
+  import { initWalletStatus } from './wallet-status.js';
 
   // ── State ──────────────────────────────────────────────────────────────────
 
@@ -875,6 +881,7 @@
   renderModeBanner();
   initCopyButtons(document.body);
   updateThresholdLabel();
+  initWalletStatus(document.getElementById('wallet-status-container'));
 </script>
 
 <script>

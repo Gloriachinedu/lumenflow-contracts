@@ -322,6 +322,11 @@
 <body>
 <a href="#history-main" class="skip-link">Skip to main content</a>
 
+<nav class="lf-nav" aria-label="LumenFlow navigation">
+  <span class="lf-nav__brand">⚡ LumenFlow</span>
+  <div id="wallet-status-container"></div>
+</nav>
+
 <main id="history-main">
 <div class="container">
   <header>
@@ -450,6 +455,7 @@
     renderModeBanner, copyButtonHtml, initCopyButtons,
     formatTokenAmount, convertToXlm, getTokenMetadata,
   } from './lumenflow-shared.js';
+  import { initWalletStatus } from './wallet-status.js';
 
   // ── State Management ────────────────────────────────────────────────────────
 
@@ -786,6 +792,7 @@
   window.addEventListener('popstate', initFromUrl);
   renderModeBanner();
   initCopyButtons(document.body);
+  initWalletStatus(document.getElementById('wallet-status-container'));
 
   // ── Currency display toggle ─────────────────────────────────────────────────
   const currencyToggleEl = document.getElementById('currency-display-toggle');

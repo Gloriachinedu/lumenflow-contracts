@@ -223,6 +223,11 @@
 <body>
 <a href="#payment-history-main" class="skip-link">Skip to main content</a>
 
+<nav class="lf-nav" aria-label="LumenFlow navigation">
+  <span class="lf-nav__brand">⚡ LumenFlow</span>
+  <div id="wallet-status-container"></div>
+</nav>
+
 <main id="payment-history-main">
 
 <h1>Payment History</h1>
@@ -419,6 +424,10 @@
 
   // ── Init ───────────────────────────────────────────────────────────────────
   sortAndRender();
+</script>
+<script type="module">
+  import { initWalletStatus } from './wallet-status.js';
+  initWalletStatus(document.getElementById('wallet-status-container'));
 </script>
 <script>
   if ('serviceWorker' in navigator) {
