@@ -28,6 +28,8 @@ use types::{
 
 // ── Contract ──────────────────────────────────────────────────────────────────
 
+const MAX_REFUNDS_PER_PAYMENT: usize = 10;
+
 #[contract]
 pub struct PaymentProcessingContract;
 
@@ -1313,7 +1315,7 @@ impl PaymentProcessingContract {
     /// * [`PaymentError::RefundWindowExpired`] — more than 30 days have passed since payment.
     /// * [`PaymentError::RefundExceedsOriginal`] — cumulative refund would exceed the
     ///   original payment amount.
-    /// * [`PaymentError::TooManyRefunds`] — the per-order refund limit has been reached.
+    /// * [`PaymentError::RefundLimitExceeded`] — the per-order refund limit has been reached.
     pub fn initiate_refund(
         env: Env,
         caller: Address,
@@ -1333,6 +1335,11 @@ impl PaymentProcessingContract {
         }
 
         let payment = storage::get_payment(&env, &order_id).ok_or(PaymentError::PaymentNotFound)?;
+
+        let existing_refund_ids = storage::get_order_refund_ids(&env, &order_id);
+        if existing_refund_ids.len() as usize >= MAX_REFUNDS_PER_PAYMENT {
+            return Err(PaymentError::RefundLimitExceeded);
+        }
 
         // Only payer or merchant may initiate
         if caller != payment.payer && caller != payment.merchant_address {
