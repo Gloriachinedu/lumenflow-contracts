@@ -4,6 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Payment History – LumenFlow</title>
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#6c47ff" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="LumenFlow" />
+  <link rel="apple-touch-icon" href="icons/icon.svg" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -172,34 +179,79 @@
       .table-wrap { display: none; }
       .cards-list { display: block; }
     }
+
+    /* ── Skip link ───────────────────────────────────────────────────────── */
+    .skip-link {
+      position: absolute;
+      top: -100%;
+      left: 0;
+      background: #6c47ff;
+      color: #fff;
+      padding: 0.5rem 1rem;
+      font-weight: 700;
+      border-radius: 0 0 6px 0;
+      z-index: 9999;
+      text-decoration: none;
+    }
+    .skip-link:focus { top: 0; }
+
+    /* ── Accessibility: visible toolbar labels ───────────────────────────── */
+    .toolbar-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #666;
+      white-space: nowrap;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px; height: 1px;
+      padding: 0; margin: -1px;
+      overflow: hidden;
+      clip: rect(0,0,0,0);
+      border: 0;
+    }
+
+    button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible {
+      outline: 2px solid #6c47ff;
+      outline-offset: 2px;
+    }
   </style>
 </head>
 <body>
+<a href="#payment-history-main" class="skip-link">Skip to main content</a>
+
+<main id="payment-history-main">
 
 <h1>Payment History</h1>
 <p class="subtitle">View and filter your past transactions.</p>
 
-<div class="toolbar">
-  <input type="text" id="search" placeholder="Search order ID…" oninput="applyFilters()" />
-  <select id="status-filter" onchange="applyFilters()">
+<div class="toolbar" role="search" aria-label="Filter payments">
+  <label for="search" class="sr-only">Search by order ID or merchant</label>
+  <input type="search" id="search" placeholder="Search order ID…" oninput="applyFilters()" aria-label="Search by order ID or merchant" />
+  <label for="status-filter" class="sr-only">Filter by status</label>
+  <select id="status-filter" onchange="applyFilters()" aria-label="Filter by payment status">
     <option value="">All statuses</option>
     <option value="Completed">Completed</option>
     <option value="PartiallyRefunded">Partially Refunded</option>
     <option value="FullyRefunded">Fully Refunded</option>
   </select>
-  <button class="btn btn-outline" onclick="resetFilters()">Reset</button>
+  <button class="btn btn-outline" onclick="resetFilters()">Reset filters</button>
 </div>
 
 <!-- Desktop table -->
 <div class="table-wrap">
-  <table id="history-table">
+  <table id="history-table" aria-label="Payment history">
+    <caption class="sr-only">Payment history records, sortable by column</caption>
     <thead>
       <tr>
-        <th onclick="sortBy('order_id')">Order ID <span class="sort-icon">↕</span></th>
-        <th onclick="sortBy('merchant_address')">Merchant <span class="sort-icon">↕</span></th>
-        <th onclick="sortBy('amount')">Amount <span class="sort-icon">↕</span></th>
-        <th onclick="sortBy('status')">Status <span class="sort-icon">↕</span></th>
-        <th onclick="sortBy('paid_at')">Date <span class="sort-icon">↕</span></th>
+        <th scope="col" onclick="sortBy('order_id')">Order ID <span class="sort-icon" aria-hidden="true">↕</span></th>
+        <th scope="col" onclick="sortBy('merchant_address')">Merchant <span class="sort-icon" aria-hidden="true">↕</span></th>
+        <th scope="col" onclick="sortBy('amount')">Amount <span class="sort-icon" aria-hidden="true">↕</span></th>
+        <th scope="col" onclick="sortBy('status')">Status <span class="sort-icon" aria-hidden="true">↕</span></th>
+        <th scope="col" onclick="sortBy('paid_at')">Date <span class="sort-icon" aria-hidden="true">↕</span></th>
       </tr>
     </thead>
     <tbody id="table-body">
@@ -212,11 +264,11 @@
 <div class="cards-list" id="cards-list"></div>
 
 <!-- Pagination -->
-<div class="pagination">
-  <button class="btn btn-outline" id="prev-btn" onclick="prevPage()" disabled>← Prev</button>
-  <span class="page-info" id="page-info"></span>
-  <button class="btn btn-outline" id="next-btn" onclick="nextPage()" disabled>Next →</button>
-</div>
+<nav class="pagination" aria-label="Payment history pagination">
+  <button class="btn btn-outline" id="prev-btn" onclick="prevPage()" disabled aria-label="Go to previous page">← Prev</button>
+  <span class="page-info" id="page-info" aria-live="polite" aria-atomic="true"></span>
+  <button class="btn btn-outline" id="next-btn" onclick="nextPage()" disabled aria-label="Go to next page">Next →</button>
+</nav>
 
 <script>
   // ── Mock data (replace with contract call) ─────────────────────────────────
@@ -367,6 +419,15 @@
 
   // ── Init ───────────────────────────────────────────────────────────────────
   sortAndRender();
+</script>
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker
+        .register('./sw.js', { scope: './' })
+        .catch((err) => console.warn('[PWA] Service worker registration failed:', err));
+    });
+  }
 </script>
 </body>
 </html>

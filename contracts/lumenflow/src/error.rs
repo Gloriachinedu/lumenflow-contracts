@@ -52,6 +52,8 @@ pub enum PaymentError {
     /// The refund has already been executed. Remediation: No action needed; the refund is complete.
     RefundAlreadyCompleted = 35,
     RefundBelowMinimum = 36,
+    /// The number of refunds for this payment has reached the maximum allowed (10). Remediation: No further refunds can be initiated for this payment.
+    RefundLimitExceeded = 37,
 
     // Multisig
     /// The multi-signature payment request was not found. Remediation: Verify the payment ID.
@@ -64,12 +66,18 @@ pub enum PaymentError {
     InsufficientSignatures = 43,
     /// The multi-signature payment has already been cancelled. Remediation: No action needed.
     MultisigAlreadyCancelled = 44,
+    /// The multi-signature payment has been cancelled. Remediation: No action needed.
+    MultisigCancelled = 45,
+    /// The multi-signature payment has expired. Remediation: Create a new multisig payment.
+    MultisigExpired = 46,
 
     // Contract state
     /// The contract is currently paused. Remediation: An admin must unpause the contract.
     ContractPaused = 70,
     /// The payment history limit for this account has been exceeded. Remediation: Archive old payments.
     PaymentHistoryLimitExceeded = 71,
+    /// The on-chain stored version does not match the binary version. Remediation: Call set_contract_version after upgrading.
+    VersionMismatch = 80,
 
     // General
     /// The provided input parameters are invalid. Remediation: Check the input values and format.
@@ -101,4 +109,22 @@ pub enum PaymentError {
     SubscriptionMaxCyclesReached = 65,
     /// The required interval between subscription charges has not elapsed. Remediation: Wait for the next billing cycle.
     SubscriptionIntervalNotElapsed = 66,
+
+    // Rate limiting
+    /// The merchant has exceeded the payment rate limit for the current ledger window. Remediation: Wait for the next rate-limit window (~25 minutes) before submitting more payments.
+    RateLimitExceeded = 90,
+
+    // Escrow
+    /// The requested escrow record was not found. Remediation: Verify the order ID.
+    EscrowNotFound = 100,
+    /// An escrow record with the given order ID already exists. Remediation: Use a unique order ID.
+    EscrowAlreadyExists = 101,
+    /// The escrow unlock time has not yet been reached. Remediation: Wait until the unlock_at timestamp before releasing.
+    EscrowNotUnlocked = 102,
+    /// The escrow has already been released or cancelled. Remediation: No action needed; the escrow is finalised.
+    EscrowAlreadyFinalised = 103,
+    /// The cancel_escrow_before_lock caller is not the payer of the escrow. Remediation: Only the original payer can cancel an escrow.
+    EscrowUnauthorised = 104,
+    /// The escrow unlock time has already passed; it can no longer be cancelled. Remediation: Call release_escrow instead.
+    EscrowLockExpired = 105,
 }

@@ -41,3 +41,11 @@ stateDiagram-v2
 - `approve_refund` or `reject_refund` called when refund is not `Pending` returns `RefundAlreadyCompleted`
 - `execute_refund` called when refund is not `Approved` returns `RefundNotApproved`
 - Executing a refund updates the related payment status and records the refund as `Completed`
+
+## Per-payment refund limit
+
+A maximum of **10 refunds** may be initiated against any single payment order. Once this limit is reached, any further call to `initiate_refund` for that `order_id` returns `PaymentError::RefundLimitExceeded` (error code 37).
+
+This limit applies regardless of the status of the individual refund records (Pending, Approved, Rejected, or Completed). Partial refunds each count toward the limit independently.
+
+**Remediation:** No further refunds can be initiated for the payment. If additional funds need to be returned, coordinate off-chain with the payer.

@@ -22,6 +22,43 @@ Please report security issues by emailing **security@lumenflow.dev** with:
 - For encrypted reports, use OpenPGP. Request our public key or fingerprint by emailing **security@lumenflow.dev** before submitting sensitive information.
 - If you cannot use PGP, contact us and we will provide an alternative secure channel.
 
+## Security Incident Reporting Checklist
+
+Before submitting a security report, work through the following steps to ensure your report contains all the information needed for triage.
+
+### Step-by-step checklist
+
+1. **Identify and document the issue** — Confirm that the behaviour you observed is a genuine security vulnerability (not a usage error or known limitation). Write a concise title and technical description.
+
+2. **Do NOT disclose publicly** — Do not open a GitHub issue, post on social media, share in Discord, or discuss the details in any public channel before a fix has been released. Public disclosure before a patch is available puts users at risk.
+
+3. **Gather reproduction steps** — Record the exact steps (or a proof-of-concept script) that reliably trigger the vulnerability. Include contract function names, input values, and the observed vs. expected behaviour.
+
+4. **Assess severity** — Estimate the severity using the following scale:
+   - **Critical** — Remote exploit, loss of funds, or complete auth bypass with no preconditions
+   - **High** — Significant impact requiring attacker privileges or specific conditions
+   - **Medium** — Limited impact or difficult to exploit in practice
+   - **Low** — Minimal impact; informational or requires chaining with other issues
+
+5. **Prepare your contact info and disclosure preferences** — Decide whether you want to be credited publicly (name / handle) or acknowledged anonymously, and include your preferred contact method in the report.
+
+6. **Send your report to security@lumenflow.dev** — Use the **Report Format** template in the Response Timeline section below. Include all information gathered in the steps above.
+
+7. **Use PGP encryption for sensitive details** — If your report contains exploit code, private keys, or other sensitive material, encrypt the email using our OpenPGP public key. Request the key or fingerprint by emailing **security@lumenflow.dev** first. If you cannot use PGP, contact us and we will arrange an alternative secure channel.
+
+8. **Await acknowledgement within 48 hours** — We will confirm receipt of every valid report within 48 hours. If you do not receive a response within that window, send a follow-up email referencing your original report.
+
+### Confidential reporting
+
+All reports sent to **security@lumenflow.dev** are treated as strictly confidential. Details are shared only with security team members and maintainers who need them to resolve the issue. PGP-encrypted submissions are strongly encouraged for reports that include proof-of-concept exploit code or sensitive reproduction data. Alternative secure channels (e.g., Signal) are available on request.
+
+### What NOT to do
+
+- ❌ Do **not** open a public GitHub issue describing the vulnerability.
+- ❌ Do **not** post details on social media, Discord, forums, or any other public platform before a fix is released.
+- ❌ Do **not** share exploit code or reproduction steps with anyone outside the security team prior to disclosure.
+- ❌ Do **not** attempt to exploit the vulnerability on production or testnet deployments beyond what is necessary to confirm it exists.
+
 ## Response Timeline
 
 We will acknowledge receipt of valid reports within **48 hours**.
