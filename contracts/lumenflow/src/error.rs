@@ -122,4 +122,14 @@ pub enum PaymentError {
     EscrowUnauthorised = 104,
     /// The escrow unlock time has already passed; it can no longer be cancelled. Remediation: Call release_escrow instead.
     EscrowLockExpired = 105,
+
+    // Disputes
+    /// The requested dispute was not found. Remediation: Verify the dispute ID.
+    DisputeNotFound = 110,
+    /// A dispute with the given ID already exists. Remediation: Use a unique dispute ID.
+    DisputeAlreadyExists = 111,
+    /// A dispute can only be raised on a rejected refund. Remediation: Ensure the refund status is Rejected before raising a dispute.
+    DisputeRefundNotRejected = 112,
+    /// The dispute has already been resolved. Remediation: No further action needed.
+    DisputeAlreadyResolved = 113,
 }

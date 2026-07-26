@@ -253,13 +253,29 @@ pub struct EscrowRecord {
 
 // ── Dispute ───────────────────────────────────────────────────────────────────
 
+/// Lifecycle states of a dispute.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DisputeStatus {
+    /// Dispute has been opened and is awaiting admin resolution.
+    Open,
+    /// Admin has resolved the dispute (with or without a forced refund).
+    Resolved,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DisputeRecord {
+    /// Unique identifier for this dispute.
+    pub dispute_id: String,
+    /// The refund record being disputed (must be in `Rejected` state).
     pub refund_id: String,
     pub order_id: String,
     pub initiator: Address,
     pub reason: String,
+    pub status: DisputeStatus,
+    /// Optional resolution notes written by the admin when resolving.
+    pub resolution: Option<String>,
     pub created_at: u64,
 }
 

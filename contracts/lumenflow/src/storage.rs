@@ -352,14 +352,17 @@ pub fn add_order_refund_id(env: &Env, order_id: &String, refund_id: &String) {
 
 // ── Dispute ───────────────────────────────────────────────────────────────────
 
-pub fn get_dispute(env: &Env, refund_id: &String) -> Option<DisputeRecord> {
-    env.storage().persistent().get(&DataKey::Dispute(refund_id.clone()))
+pub fn get_dispute(env: &Env, dispute_id: &String) -> Option<DisputeRecord> {
+    env.storage().persistent().get(&DataKey::Dispute(dispute_id.clone()))
 }
 
 pub fn set_dispute(env: &Env, dispute: &DisputeRecord) {
+    let key = DataKey::Dispute(dispute.dispute_id.clone());
+    env.storage().persistent().set(&key, dispute);
+    // Extend TTL to 1 year so dispute records outlive the refund window.
     env.storage()
         .persistent()
-        .set(&DataKey::Dispute(dispute.refund_id.clone()), dispute);
+        .extend_ttl(&key, REFUND_TTL_LEDGERS, REFUND_TTL_LEDGERS);
 }
 
 // ── Multisig ──────────────────────────────────────────────────────────────────
