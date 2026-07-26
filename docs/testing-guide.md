@@ -60,3 +60,45 @@ assert!(suspicious_event.is_some());
 - When working with `String` and `Vec`, use the Soroban SDK helpers such as `String::from_str(&env, "...")` and `Vec::new(&env)`.
 - Remember that ledger time advances are local to the test environment and do not persist across separate `Env` instances.
 - Prefer explicit `try_*` calls when asserting contract errors.
+
+## Dependency Security Audits
+
+Dependency audits run automatically in CI for every push and pull request.
+
+### Rust (`cargo audit`)
+
+Scans all Rust workspace crates against the [RustSec Advisory Database](https://rustsec.org/).
+
+```bash
+# Install once
+cargo install cargo-audit --locked
+
+# Run locally (uses audit.toml configuration)
+cargo audit --config audit.toml
+```
+
+Configuration is in `audit.toml` at the workspace root. Advisories with severity **high** or **critical** fail CI. To temporarily ignore a false-positive, add its ID to the `ignore` list:
+
+```toml
+[advisories]
+ignore = ["RUSTSEC-2020-0001"]
+```
+
+### npm (`npm audit`)
+
+Scans the `sdk/` package dependencies against the npm advisory database.
+
+```bash
+cd sdk
+
+# Install dependencies first
+npm ci
+
+# Run audit — exits non-zero on critical vulnerabilities
+npm audit --audit-level=critical
+
+# Full report (all severities)
+npm audit
+```
+
+Only **critical** vulnerabilities fail CI. To investigate a specific advisory, use `npm audit --json` for machine-readable output.
