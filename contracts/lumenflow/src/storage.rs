@@ -49,6 +49,10 @@ pub enum DataKey {
     FeeRecipient,
     RefundWindow,
     Nonce(Address),
+    /// Stores the timestamp (Unix seconds) at which a data-deletion request was
+    /// submitted for the given merchant address.  The admin must confirm within
+    /// 30 days for the anonymisation to take effect.
+    DeletionRequest(Address),
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -430,4 +434,31 @@ pub fn get_fee_recipient(env: &Env) -> Option<Address> {
 
 pub fn set_fee_recipient(env: &Env, recipient: &Address) {
     env.storage().instance().set(&DataKey::FeeRecipient, recipient);
+}
+
+// ── GDPR Data Deletion Requests ───────────────────────────────────────────────
+
+/// Returns the Unix timestamp (seconds) at which the merchant submitted their
+/// data-deletion request, or `None` if no pending request exists.
+pub fn get_deletion_request(env: &Env, merchant: &Address) -> Option<u64> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::DeletionRequest(merchant.clone()))
+}
+
+/// Records a pending data-deletion request for the given merchant address.
+pub fn set_deletion_request(env: &Env, merchant: &Address, requested_at: u64) {
+    let key = DataKey::DeletionRequest(merchant.clone());
+    env.storage().persistent().set(&key, &requested_at);
+    // Keep for up to 1 year so the admin can process it well within the 30-day window.
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, REFUND_TTL_LEDGERS, REFUND_TTL_LEDGERS);
+}
+
+/// Removes the pending data-deletion request once it has been processed.
+pub fn remove_deletion_request(env: &Env, merchant: &Address) {
+    env.storage()
+        .persistent()
+        .remove(&DataKey::DeletionRequest(merchant.clone()));
 }

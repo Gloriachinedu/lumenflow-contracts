@@ -32,6 +32,7 @@ LumenFlow is a production-grade payment processing smart contract for the [Stell
 - Testing guidance available in `docs/testing-guide.md`
 - Multisig payment flow guide available in `docs/multisig-guide.md`
 - Secrets and secure local environment setup in [`docs/secrets-and-local-env.md`](docs/secrets-and-local-env.md)
+- GDPR / privacy policy in [`PRIVACY.md`](PRIVACY.md)
 
 ## Refund lifecycle overview
 
@@ -469,6 +470,25 @@ stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network 
   -- get_merchants --admin $ADMIN_ADDR --cursor null --limit 10
 ```
 
+### GDPR Data Deletion
+
+Merchants in the EU can exercise their right to erasure under GDPR Article 17. See [`PRIVACY.md`](PRIVACY.md) for the full policy and [`docs/merchant-onboarding.md#data-deletion`](docs/merchant-onboarding.md#data-deletion) for step-by-step instructions.
+
+```bash
+# Step 1 — merchant submits deletion request (only the merchant can call this)
+stellar contract invoke --id $CONTRACT_ID --source-account $MERCHANT_KEY --network $NETWORK \
+  -- request_merchant_data_deletion \
+  --merchant $MERCHANT_ADDR
+
+# Step 2 — admin confirms and executes the anonymisation within 30 days
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- confirm_merchant_data_deletion \
+  --admin $ADMIN_ADDR \
+  --merchant $MERCHANT_ADDR
+```
+
+On completion the `name`, `description`, and `contact_info` fields are replaced with `[deleted]` and a `lumenflow/merchant_data_deleted` event is emitted.
+
 ### Payment Processing
 
 For detailed information on the signature payload format and how to build it in various languages, see **[docs/signature-format.md](docs/signature-format.md)**.
@@ -683,6 +703,8 @@ For production monitoring — Horizon SSE streaming, alert thresholds, and examp
 | `lumenflow/multisig_executed` | Multisig payment executed |
 | `lumenflow/payment_request_paid` | Payment request completed |
 | `lumenflow/suspicious_activity` | Safety threshold exceeded |
+| `lumenflow/merchant_deletion_requested` | Merchant submitted a GDPR data-deletion request |
+| `lumenflow/merchant_data_deleted` | Merchant PII fields anonymised after admin confirmation |
 
 ---
 

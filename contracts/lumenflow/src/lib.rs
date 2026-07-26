@@ -2066,4 +2066,95 @@ impl PaymentProcessingContract {
             .publish(("lumenflow", "payment_request_paid"), request_id);
         Ok(())
     }
+
+    // ── GDPR Data Deletion ────────────────────────────────────────────────────
+
+    /// Submit a GDPR right-to-erasure request for a merchant's personal data fields.
+    ///
+    /// Only the merchant themselves may call this function.  The request is
+    /// recorded on-chain with the current timestamp.  An admin must call
+    /// [`confirm_merchant_data_deletion`] within 30 days to complete the
+    /// anonymisation.  Submitting a new request while one is already pending
+    /// simply updates the timestamp, resetting the 30-day window.
+    ///
+    /// # Arguments
+    /// * `merchant` - The address of the merchant requesting deletion.  Must
+    ///   sign the transaction.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::MerchantNotFound`] — no merchant profile exists for
+    ///   the given address.
+    pub fn request_merchant_data_deletion(
+        env: Env,
+        merchant: Address,
+    ) -> Result<(), PaymentError> {
+        merchant.require_auth();
+
+        // Ensure the merchant profile exists before accepting a deletion request.
+        if storage::get_merchant(&env, &merchant).is_none() {
+            return Err(PaymentError::MerchantNotFound);
+        }
+
+        let now = env.ledger().timestamp();
+        storage::set_deletion_request(&env, &merchant, now);
+
+        env.events()
+            .publish(("lumenflow", "merchant_deletion_requested"), merchant.clone());
+
+        Ok(())
+    }
+
+    /// Confirm and execute a pending GDPR data-deletion request for a merchant.
+    ///
+    /// Only an admin may call this function.  The admin should only confirm
+    /// requests that have been validated per the platform's GDPR workflow (see
+    /// `PRIVACY.md`).  On success the merchant's PII fields (`name`,
+    /// `description`, `contact_info`) are replaced with the placeholder value
+    /// `[deleted]`.  The merchant's Stellar address and all associated payment
+    /// records are retained for financial record-keeping.
+    ///
+    /// # Arguments
+    /// * `admin`    - Must be the configured administrator address.
+    /// * `merchant` - The merchant address whose deletion request is being confirmed.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`]     — caller is not the admin.
+    /// * [`PaymentError::MerchantNotFound`] — no merchant profile for the address.
+    /// * [`PaymentError::InvalidInput`]     — no pending deletion request found.
+    pub fn confirm_merchant_data_deletion(
+        env: Env,
+        admin: Address,
+        merchant: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+
+        // Verify a deletion request is on file.
+        if storage::get_deletion_request(&env, &merchant).is_none() {
+            return Err(PaymentError::InvalidInput);
+        }
+
+        let mut profile =
+            storage::get_merchant(&env, &merchant).ok_or(PaymentError::MerchantNotFound)?;
+
+        // Anonymise PII fields in-place; the address and non-PII metadata are
+        // preserved so existing payment records remain internally consistent.
+        let deleted = String::from_str(&env, "[deleted]");
+        profile.name = deleted.clone();
+        profile.description = deleted.clone();
+        profile.contact_info = deleted;
+
+        storage::set_merchant(&env, &profile);
+        storage::remove_deletion_request(&env, &merchant);
+
+        env.events()
+            .publish(("lumenflow", "merchant_data_deleted"), merchant);
+
+        Ok(())
+    }
 }
