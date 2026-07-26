@@ -1,11 +1,8 @@
-###############################################################################
-# PR Preview Deployments – closes #585
-#
-# Deploys frontend/ to a unique Netlify preview URL on every PR that touches
-# frontend/ files.  The URL is posted as a PR comment.
-# The preview is torn down when the PR is closed or merged.
-###############################################################################
 name: PR Preview Deployment
+
+# Deploy a unique preview of the frontend/ directory for every pull request.
+# Preview URL is posted as a PR comment.  The preview is cleaned up when the
+# PR is closed or merged.
 
 on:
   pull_request:
@@ -14,142 +11,170 @@ on:
       - "frontend/**"
 
 permissions:
-  contents: read
-  pull-requests: write  # post / update PR comments
+  contents: write
+  pull-requests: write
+  deployments: write
 
 jobs:
   deploy-preview:
-    name: Deploy preview to Netlify
+    name: Deploy Preview
     runs-on: ubuntu-latest
     if: github.event.action != 'closed'
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      - name: Install Netlify CLI
-        run: npm install -g netlify-cli@17.x --prefer-offline
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Inject a testnet contract config into each HTML page so the preview
+      # points at the dedicated preview contract (not production).
+      - name: Inject preview config into frontend
+        run: |
+          PREVIEW_CONTRACT="${{ secrets.PREVIEW_CONTRACT_ID }}"
+          PREVIEW_NETWORK="testnet"
+          PREVIEW_RPC="https://soroban-testnet.stellar.org"
+
+          for f in frontend/*.html; do
+            # Replace the LUMENFLOW_CONTRACT_ID placeholder if present
+            sed -i \
+              "s|LUMENFLOW_CONTRACT_ID.*=.*['\"].*['\"]|LUMENFLOW_CONTRACT_ID = '${PREVIEW_CONTRACT}'|g; \
+               s|LUMENFLOW_NETWORK.*=.*['\"].*['\"]|LUMENFLOW_NETWORK = '${PREVIEW_NETWORK}'|g; \
+               s|LUMENFLOW_RPC_URL.*=.*['\"].*['\"]|LUMENFLOW_RPC_URL = '${PREVIEW_RPC}'|g" \
+              "$f" || true
+          done
+          echo "Config injected for PR #${{ github.event.pull_request.number }}"
 
       - name: Deploy to Netlify (preview)
-        id: netlify
+        id: deploy
+        uses: nwtgck/actions-netlify@v3.0
+        with:
+          publish-dir: frontend
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          deploy-message: "PR #${{ github.event.pull_request.number }} — ${{ github.event.pull_request.title }}"
+          enable-pull-request-comment: false   # we post our own richer comment below
+          enable-commit-comment: false
+          overwrites-pull-request-comment: false
+          alias: pr-${{ github.event.pull_request.number }}
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-          NETLIFY_SITE_ID:    ${{ secrets.NETLIFY_SITE_ID }}
-        run: |
-          OUTPUT=$(netlify deploy \
-            --dir frontend \
-            --alias "pr-${{ github.event.pull_request.number }}" \
-            --message "PR #${{ github.event.pull_request.number }} – ${{ github.event.pull_request.title }}" \
-            --json 2>&1)
-
-          echo "$OUTPUT"
-
-          DEPLOY_URL=$(echo "$OUTPUT" | jq -r '.deploy_url // .url')
-          echo "deploy_url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        timeout-minutes: 10
 
       - name: Post preview URL as PR comment
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const deployUrl = '${{ steps.netlify.outputs.deploy_url }}';
-            const prNumber  = context.issue.number;
+            const previewUrl = '${{ steps.deploy.outputs.deploy-url }}';
+            const prNumber   = context.issue.number;
+            const sha        = context.sha.substring(0, 8);
 
-            // Find and update an existing bot comment, or create a new one
+            // Find and update an existing preview comment if one exists
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo:  context.repo.repo,
               issue_number: prNumber,
             });
 
-            const marker    = '<!-- lumenflow-preview-bot -->';
-            const existing  = comments.find(c => c.body.includes(marker));
+            const marker = '<!-- lumenflow-preview-comment -->';
+            const existing = comments.find(c => c.body.includes(marker));
 
             const body = `${marker}
-            ## 🔍 Frontend Preview Deployment
+            ## 🔍 Frontend Preview
 
             | | |
             |---|---|
-            | **Preview URL** | [${deployUrl}](${deployUrl}) |
-            | **Network**     | Testnet |
-            | **Contract ID** | \`${{ secrets.PREVIEW_CONTRACT_ID || 'demo-mode' }}\` |
-            | **Commit**      | ${{ github.event.pull_request.head.sha }} |
-            | **Status**      | ✅ Live |
+            | **Preview URL** | [${previewUrl}](${previewUrl}) |
+            | **Commit** | \`${sha}\` |
+            | **Network** | testnet |
+            | **Contract** | \`${{ secrets.PREVIEW_CONTRACT_ID || 'not configured' }}\` |
 
-            > Preview uses a dedicated testnet contract ID and is publicly accessible.
-            > It will be automatically removed when this PR is closed or merged.`;
+            > Preview is publicly accessible. It will be automatically removed when this PR is closed or merged.
+            `;
 
             if (existing) {
               await github.rest.issues.updateComment({
-                owner:      context.repo.owner,
-                repo:       context.repo.repo,
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
                 comment_id: existing.id,
                 body,
               });
             } else {
               await github.rest.issues.createComment({
-                owner:       context.repo.owner,
-                repo:        context.repo.repo,
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
                 issue_number: prNumber,
                 body,
               });
             }
 
-  teardown-preview:
-    name: Tear down preview
+  cleanup-preview:
+    name: Clean Up Preview
     runs-on: ubuntu-latest
     if: github.event.action == 'closed'
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Netlify CLI
-        run: npm install -g netlify-cli@17.x --prefer-offline
-
-      - name: Delete Netlify deploy alias
-        env:
-          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-          NETLIFY_SITE_ID:    ${{ secrets.NETLIFY_SITE_ID }}
+      - name: Delete Netlify preview deployment
         run: |
-          ALIAS="pr-${{ github.event.pull_request.number }}"
-          # List all deploys, find the one matching the alias, and lock/delete it
-          DEPLOY_ID=$(netlify api listSiteDeploys \
-            --data '{"site_id":"'"$NETLIFY_SITE_ID"'"}' \
-            | jq -r --arg alias "$ALIAS" \
-              '.[] | select(.deploy_ssl_url | contains($alias)) | .id' \
-            | head -1)
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          SITE_ID="${{ secrets.NETLIFY_SITE_ID }}"
+          AUTH_TOKEN="${{ secrets.NETLIFY_AUTH_TOKEN }}"
 
-          if [ -n "$DEPLOY_ID" ]; then
-            netlify api deleteDeploy --data '{"deploy_id":"'"$DEPLOY_ID"'"}'
-            echo "Deleted deploy $DEPLOY_ID for alias $ALIAS"
-          else
-            echo "No deploy found for alias $ALIAS – nothing to delete."
+          if [ -z "$SITE_ID" ] || [ -z "$AUTH_TOKEN" ]; then
+            echo "Netlify secrets not configured — skipping cleanup"
+            exit 0
           fi
 
-      - name: Update PR comment to reflect teardown
+          # List all deploys and find the one for this PR alias
+          DEPLOYS=$(curl -s \
+            -H "Authorization: Bearer $AUTH_TOKEN" \
+            "https://api.netlify.com/api/v1/sites/$SITE_ID/deploys?per_page=100")
+
+          DEPLOY_ID=$(echo "$DEPLOYS" | \
+            python3 -c "
+            import sys, json
+            deploys = json.load(sys.stdin)
+            alias = 'pr-${PR_NUMBER}'
+            for d in deploys:
+              if d.get('branch') == alias or alias in str(d.get('deploy_url','')):
+                print(d['id'])
+                break
+            " 2>/dev/null || true)
+
+          if [ -n "$DEPLOY_ID" ]; then
+            curl -s -X DELETE \
+              -H "Authorization: Bearer $AUTH_TOKEN" \
+              "https://api.netlify.com/api/v1/deploys/$DEPLOY_ID"
+            echo "Deleted preview deploy $DEPLOY_ID for PR #$PR_NUMBER"
+          else
+            echo "No matching preview deploy found for PR #$PR_NUMBER"
+          fi
+
+      - name: Update PR comment to reflect cleanup
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const prNumber = context.issue.number;
-
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo:  context.repo.repo,
               issue_number: prNumber,
             });
 
-            const marker   = '<!-- lumenflow-preview-bot -->';
+            const marker = '<!-- lumenflow-preview-comment -->';
             const existing = comments.find(c => c.body.includes(marker));
-
             if (existing) {
               await github.rest.issues.updateComment({
-                owner:      context.repo.owner,
-                repo:       context.repo.repo,
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
                 comment_id: existing.id,
-                body: `${marker}
-            ## 🔍 Frontend Preview Deployment
-
-            | | |
-            |---|---|
-            | **Status** | 🗑️ Removed (PR closed/merged) |
-            | **Commit** | ${{ github.event.pull_request.head.sha }} |`,
+                body: `${marker}\n## 🔍 Frontend Preview\n\nThis preview has been removed because the PR was closed.`,
               });
             }

@@ -11,3 +11,70 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+
+  setup:
+    image: ubuntu:22.04
+    depends_on:
+      stellar:
+        condition: service_healthy
+    volumes:
+      # Mount the workspace so the setup script can build and deploy the contract
+      - .:/workspace
+      # Shared volume: CONTRACT_ID is written to /shared/contract-id.txt
+      - shared-data:/shared
+    working_dir: /workspace
+    environment:
+      # Required: the Stellar secret key used to build and deploy the contract.
+      # Set SOURCE_ACCOUNT in your shell or a local .env file before running
+      # `docker compose up`.
+      - SOURCE_ACCOUNT=${SOURCE_ACCOUNT}
+      # Stellar node coordinates (resolved via Docker's internal DNS)
+      - STELLAR_URL=http://stellar:8000
+      - RPC_URL=http://stellar:8000/soroban/rpc
+      - NETWORK=local
+      - NETWORK_PASSPHRASE=Standalone Network ; February 2017
+      # Set SEED=0 to skip test-data creation
+      - SEED=${SEED:-1}
+      # ── Seed / test keys (generate with: stellar keys generate --network local <name>) ──
+      # Fund each address via: curl "http://localhost:8000/friendbot?addr=<address>"
+      - ADMIN_KEY=${ADMIN_KEY:-}
+      - ADMIN_ADDRESS=${ADMIN_ADDRESS:-}
+      - MERCHANT1_KEY=${MERCHANT1_KEY:-}
+      - MERCHANT1_ADDRESS=${MERCHANT1_ADDRESS:-}
+      - MERCHANT2_KEY=${MERCHANT2_KEY:-}
+      - MERCHANT2_ADDRESS=${MERCHANT2_ADDRESS:-}
+      - MERCHANT3_KEY=${MERCHANT3_KEY:-}
+      - MERCHANT3_ADDRESS=${MERCHANT3_ADDRESS:-}
+      - PAYER_KEY=${PAYER_KEY:-}
+      - PAYER_ADDRESS=${PAYER_ADDRESS:-}
+      - TOKEN_ADDRESS=${TOKEN_ADDRESS:-}
+    # Install prerequisites (curl, Rust, Stellar CLI) then run the setup script.
+    # The install step is intentionally fast-pathed: if the tools are already
+    # present the commands are no-ops.
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -euo pipefail
+        echo "==> Installing prerequisites..."
+        apt-get update -qq
+        apt-get install -y --no-install-recommends curl ca-certificates build-essential pkg-config \
+          libssl-dev > /dev/null
+
+        # Install Rust if not present
+        if ! command -v cargo > /dev/null 2>&1; then
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain stable --profile minimal
+          source "$HOME/.cargo/env"
+        fi
+        source "$HOME/.cargo/env" 2>/dev/null || true
+        rustup target add wasm32-unknown-unknown
+
+        # Install Stellar CLI if not present
+        if ! command -v stellar > /dev/null 2>&1; then
+          cargo install stellar-cli --locked
+        fi
+
+        exec bash /workspace/scripts/docker-setup.sh
+
+volumes:
+  shared-data:
