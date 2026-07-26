@@ -136,81 +136,356 @@ export function convertToXlm(amount, tokenId) {
   return `${formatted} XLM`;
 }
 
-// ── Mode banner ───────────────────────────────────────────────────────────────
+// ── Copy-to-clipboard ────────────────────────────────────────────────────────
+
+/**
+ * Copies `text` to the clipboard using navigator.clipboard with a textarea
+ * fallback for older browsers.
+ *
+ * @param {string} text - The full untruncated value to copy.
+ * @returns {Promise<boolean>} Resolves true on success, false on failure.
+ */
+export async function copyToClipboard(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+    // Fallback for non-HTTPS or older browsers
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Returns an HTML string for a copy-icon button.
+ * Attach a click handler that calls `copyToClipboard(fullValue)`.
+ *
+ * @param {string} fullValue   - The complete string to copy (stored in data-copy).
+ * @param {string} [ariaLabel] - Accessible label, e.g. "Copy address".
+ * @returns {string} HTML string.
+ */
+export function copyButtonHtml(fullValue, ariaLabel = 'Copy') {
+  const escaped = fullValue.replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+  return `<button
+    class="lf-copy-btn"
+    type="button"
+    data-copy="${escaped}"
+    aria-label="${ariaLabel}"
+    title="${ariaLabel}"
+  ><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>`;
+}
+
+/**
+ * Injects copy-button CSS once and wires up click delegation on a root element.
+ * Shows a brief "Copied!" tooltip on success.
+ *
+ * Call once per page: `initCopyButtons(document.body)`.
+ *
+ * @param {Element} [root=document.body]
+ */
+export function initCopyButtons(root = document.body) {
+  // Styles
+  if (!document.getElementById('lf-copy-styles')) {
+    const style = document.createElement('style');
+    style.id = 'lf-copy-styles';
+    style.textContent = `
+      .lf-copy-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: none;
+        border: 1px solid transparent;
+        border-radius: 5px;
+        padding: 2px 4px;
+        cursor: pointer;
+        color: #6c47ff;
+        vertical-align: middle;
+        margin-left: 4px;
+        min-height: unset;
+        min-width: unset;
+        transition: background 0.15s, border-color 0.15s, color 0.15s;
+        position: relative;
+      }
+      .lf-copy-btn:hover {
+        background: #f0ecff;
+        border-color: #6c47ff;
+      }
+      .lf-copy-btn:focus-visible {
+        outline: 3px solid #6c47ff;
+        outline-offset: 2px;
+      }
+      .lf-copy-btn--success {
+        color: #1a9e5c !important;
+        border-color: #1a9e5c !important;
+        background: #e6f9f0 !important;
+      }
+      .lf-copy-tooltip {
+        position: absolute;
+        bottom: calc(100% + 6px);
+        left: 50%;
+        transform: translateX(-50%);
+        background: #1a1a2e;
+        color: #fff;
+        font-size: 0.7rem;
+        font-weight: 600;
+        padding: 3px 7px;
+        border-radius: 5px;
+        white-space: nowrap;
+        pointer-events: none;
+        z-index: 9999;
+        animation: lf-tooltip-in 0.15s ease forwards;
+      }
+      .lf-copy-tooltip::after {
+        content: '';
+        position: absolute;
+        top: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+        border: 4px solid transparent;
+        border-top-color: #1a1a2e;
+      }
+      @keyframes lf-tooltip-in {
+        from { opacity: 0; transform: translateX(-50%) translateY(3px); }
+        to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  // Click delegation
+  root.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.lf-copy-btn');
+    if (!btn) return;
+    const text = btn.dataset.copy;
+    if (!text) return;
+
+    const ok = await copyToClipboard(text);
+    if (ok) {
+      btn.classList.add('lf-copy-btn--success');
+      // Tooltip
+      const tip = document.createElement('span');
+      tip.className = 'lf-copy-tooltip';
+      tip.textContent = 'Copied!';
+      tip.setAttribute('role', 'tooltip');
+      btn.appendChild(tip);
+      setTimeout(() => {
+        btn.classList.remove('lf-copy-btn--success');
+        tip.remove();
+      }, 1800);
+    }
+  });
+}
+
+// ── Mode banner / toggle ──────────────────────────────────────────────────────
+
+/**
+ * CSS for the mode toggle banner.  Injected once per page load.
+ */
+function ensureModeBannerStyles() {
+  if (document.getElementById('lf-mode-banner-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'lf-mode-banner-styles';
+  style.textContent = `
+    #lf-mode-banner {
+      position: sticky;
+      top: 0;
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      padding: 0.45rem 1rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      transition: background 0.25s, color 0.25s;
+    }
+    #lf-mode-banner.lf-mode--demo {
+      background: #fff3cd;
+      color: #856404;
+      border-bottom: 1px solid #fde08b;
+    }
+    #lf-mode-banner.lf-mode--live {
+      background: #d1f3e0;
+      color: #1a5e37;
+      border-bottom: 1px solid #a8e6c3;
+    }
+    #lf-mode-banner .lf-mode-label { flex: 1; text-align: center; }
+
+    /* Toggle pill */
+    .lf-mode-toggle {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      cursor: pointer;
+      user-select: none;
+      flex-shrink: 0;
+    }
+    .lf-mode-toggle input {
+      position: absolute;
+      opacity: 0;
+      width: 0;
+      height: 0;
+      min-height: unset;
+      min-width: unset;
+    }
+    .lf-mode-toggle__track {
+      width: 40px;
+      height: 22px;
+      background: #d6a800;
+      border-radius: 999px;
+      transition: background 0.2s;
+      position: relative;
+      flex-shrink: 0;
+    }
+    .lf-mode-toggle input:checked + .lf-mode-toggle__track {
+      background: #1a9e5c;
+    }
+    .lf-mode-toggle__thumb {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 16px;
+      height: 16px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 0.2s;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+    }
+    .lf-mode-toggle input:checked ~ .lf-mode-toggle__track .lf-mode-toggle__thumb,
+    .lf-mode-toggle input:checked + .lf-mode-toggle__track .lf-mode-toggle__thumb {
+      transform: translateX(18px);
+    }
+    .lf-mode-toggle__text {
+      margin-left: 0.45rem;
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .lf-mode-toggle:focus-within .lf-mode-toggle__track {
+      outline: 3px solid #6c47ff;
+      outline-offset: 2px;
+    }
+    /* Badge pill beside contract info */
+    .lf-mode-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .lf-mode-badge--demo { background: #fde08b; color: #7a5500; }
+    .lf-mode-badge--live { background: #a8e6c3; color: #0e5e35; }
+    .lf-mode-badge__dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      display: inline-block;
+    }
+    .lf-mode-badge--live .lf-mode-badge__dot {
+      animation: lf-pulse 1.4s infinite;
+    }
+    @keyframes lf-pulse {
+      0%,100% { opacity: 1; }
+      50%      { opacity: 0.35; }
+    }
+  `;
+  document.head.appendChild(style);
+}
 
 /**
  * Injects a sticky demo/live mode banner at the top of <body>.
- * Includes a toggle button that lets the user switch between demo and live mode
- * by setting/clearing the LUMENFLOW_CONTRACT_ID in sessionStorage.
+ * Includes a toggle switch so users can switch between demo and live mode
+ * at runtime (live mode requires LUMENFLOW_CONTRACT_ID to be set).
+ *
+ * Emits a custom 'lf:modechange' event on window when the mode changes.
+ *
  * Call once per page after DOMContentLoaded.
  */
 export function renderModeBanner() {
+  ensureModeBannerStyles();
+
+  const isLive = !DEMO_MODE;
+  const canGoLive = Boolean(window.LUMENFLOW_CONTRACT_ID);
+
   const banner = document.createElement('div');
   banner.id = 'lf-mode-banner';
   banner.setAttribute('role', 'status');
-  banner.setAttribute('aria-label', DEMO_MODE ? 'Demo mode active' : 'Live mode active');
-  banner.style.cssText = [
-    'position:sticky', 'top:0', 'z-index:1000',
-    'padding:0.4rem 1rem', 'font-size:0.8rem', 'font-weight:600',
-    'display:flex', 'align-items:center', 'justify-content:center', 'gap:0.75rem',
-    'flex-wrap:wrap',
-    DEMO_MODE
-      ? 'background:#fff3cd;color:#856404;'
-      : 'background:#d1f3e0;color:#1a5e37;',
-  ].join(';');
+  banner.setAttribute('aria-live', 'polite');
+  banner.classList.add(isLive ? 'lf-mode--live' : 'lf-mode--demo');
 
-  const modeIndicator = document.createElement('span');
-  modeIndicator.id = 'lf-mode-indicator';
-  modeIndicator.setAttribute('aria-live', 'polite');
-  modeIndicator.textContent = DEMO_MODE
-    ? '⚠ Demo mode – displaying mock data.'
-    : `✔ Live mode – connected to contract ${CONTRACT_ID.slice(0, 8)}… on ${NETWORK}.`;
+  // Build badge
+  const badgeCls  = isLive ? 'lf-mode-badge--live'  : 'lf-mode-badge--demo';
+  const badgeText = isLive ? 'Live'                  : 'Demo';
 
-  // Toggle button
-  const toggleBtn = document.createElement('button');
-  toggleBtn.id = 'lf-mode-toggle';
-  toggleBtn.setAttribute('aria-label', DEMO_MODE ? 'Switch to live mode' : 'Switch to demo mode');
-  toggleBtn.style.cssText = [
-    'border:1.5px solid currentColor',
-    'background:transparent',
-    'color:inherit',
-    'font-size:0.75rem',
-    'font-weight:700',
-    'padding:0.15rem 0.6rem',
-    'border-radius:4px',
-    'cursor:pointer',
-    'white-space:nowrap',
-  ].join(';');
-  toggleBtn.textContent = DEMO_MODE ? 'Switch to Live' : 'Switch to Demo';
+  // Build descriptive text
+  const labelText = isLive
+    ? `Connected to contract <code>${CONTRACT_ID.slice(0, 8)}…</code> on <strong>${NETWORK}</strong>.`
+    : 'Displaying mock data. Set <code>LUMENFLOW_CONTRACT_ID</code> to connect to a live contract.';
 
-  toggleBtn.addEventListener('click', () => {
-    if (DEMO_MODE) {
-      // Prompt for contract ID to switch to live mode
-      const id = window.prompt(
-        'Enter your contract ID to switch to live mode:\n(e.g. CABC…XYZ)',
-        window.sessionStorage.getItem('LUMENFLOW_CONTRACT_ID') || '',
-      );
-      if (id && id.trim()) {
-        window.sessionStorage.setItem('LUMENFLOW_CONTRACT_ID', id.trim());
-        window.location.reload();
-      }
-    } else {
-      // Clear stored contract ID to return to demo mode
-      window.sessionStorage.removeItem('LUMENFLOW_CONTRACT_ID');
-      window.location.reload();
-    }
-  });
+  banner.innerHTML = `
+    <span class="lf-mode-badge ${badgeCls}" aria-hidden="true">
+      <span class="lf-mode-badge__dot"></span>${badgeText}
+    </span>
+    <span class="lf-mode-label">${labelText}</span>
+    <label class="lf-mode-toggle" title="${canGoLive ? 'Switch between demo and live mode' : 'Set LUMENFLOW_CONTRACT_ID to enable live mode'}">
+      <input
+        type="checkbox"
+        id="lf-mode-checkbox"
+        role="switch"
+        aria-label="Live mode"
+        aria-checked="${isLive}"
+        ${isLive ? 'checked' : ''}
+        ${canGoLive ? '' : 'disabled'}
+      />
+      <span class="lf-mode-toggle__track">
+        <span class="lf-mode-toggle__thumb"></span>
+      </span>
+      <span class="lf-mode-toggle__text" aria-hidden="true">${isLive ? 'Live' : 'Demo'}</span>
+    </label>
+  `;
 
-  // Apply sessionStorage overrides on load (allows toggle to persist across page
-  // navigations without a server rebuild step)
-  const stored = window.sessionStorage.getItem('LUMENFLOW_CONTRACT_ID');
-  if (stored && !window.LUMENFLOW_CONTRACT_ID) {
-    window.LUMENFLOW_CONTRACT_ID = stored;
-  }
-
-  banner.appendChild(modeIndicator);
-  banner.appendChild(toggleBtn);
   document.body.prepend(banner);
+
+  // Toggle handler – switches visual state and emits event.
+  // Actual data reload is the responsibility of each page's 'lf:modechange' listener.
+  const checkbox = banner.querySelector('#lf-mode-checkbox');
+  checkbox.addEventListener('change', () => {
+    const nowLive = checkbox.checked;
+    checkbox.setAttribute('aria-checked', String(nowLive));
+
+    banner.classList.toggle('lf-mode--live', nowLive);
+    banner.classList.toggle('lf-mode--demo', !nowLive);
+
+    const badge    = banner.querySelector('.lf-mode-badge');
+    const labelEl  = banner.querySelector('.lf-mode-label');
+    const textEl   = banner.querySelector('.lf-mode-toggle__text');
+
+    badge.className = `lf-mode-badge ${nowLive ? 'lf-mode-badge--live' : 'lf-mode-badge--demo'}`;
+    badge.innerHTML = `<span class="lf-mode-badge__dot"></span>${nowLive ? 'Live' : 'Demo'}`;
+    textEl.textContent = nowLive ? 'Live' : 'Demo';
+    labelEl.innerHTML = nowLive
+      ? `Connected to contract <code>${CONTRACT_ID.slice(0, 8)}…</code> on <strong>${NETWORK}</strong>.`
+      : 'Displaying mock data. Set <code>LUMENFLOW_CONTRACT_ID</code> to connect to a live contract.';
+
+    window.dispatchEvent(new CustomEvent('lf:modechange', { detail: { live: nowLive } }));
+  });
 }
 
 // ── Copy to clipboard ─────────────────────────────────────────────────────────

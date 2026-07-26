@@ -333,7 +333,7 @@
 </div>
 
 <script type="module">
-  import { DEMO_MODE, CONTRACT_ID, NETWORK, formatAmount, formatDate, renderModeBanner, copyableHtml, attachCopyButtons } from './lumenflow-shared.js';
+  import { DEMO_MODE, CONTRACT_ID, NETWORK, formatAmount, formatDate, renderModeBanner, copyButtonHtml, initCopyButtons } from './lumenflow-shared.js';
   import { validateAddress } from './validation.js';
   import { showErrorToast } from './errorMessages.js';
 
@@ -363,24 +363,25 @@
   function buildPaymentsTable(payments) {
     if (!payments.length) {
       return `<div class="state-box">
-        <div>
-          <svg aria-hidden="true" width="72" height="72" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-bottom:1rem">
-            <circle cx="36" cy="36" r="34" fill="#f0ecff" stroke="#e0d8ff" stroke-width="2"/>
-            <rect x="18" y="24" width="36" height="28" rx="4" fill="#fff" stroke="#c4b5fd" stroke-width="2"/>
-            <rect x="24" y="32" width="18" height="3" rx="1.5" fill="#ddd6fe"/>
-            <rect x="24" y="39" width="24" height="3" rx="1.5" fill="#ede9fe"/>
-            <rect x="24" y="46" width="12" height="3" rx="1.5" fill="#ede9fe"/>
-          </svg>
-        </div>
-        <div class="state-title">No payments yet</div>
-        <div class="state-sub">Your first payment will appear here.</div>
-        <a class="btn-cta" href="receipt.html">Make your first payment</a>
+        <svg width="110" height="110" viewBox="0 0 110 110" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+          <circle cx="55" cy="55" r="50" fill="#f0ecff"/>
+          <rect x="25" y="38" width="60" height="40" rx="7" fill="#e0d9ff"/>
+          <rect x="33" y="48" width="25" height="5" rx="2.5" fill="#b8a9f5"/>
+          <rect x="33" y="58" width="42" height="5" rx="2.5" fill="#c5bafc"/>
+          <rect x="33" y="68" width="18" height="5" rx="2.5" fill="#d8d1fe"/>
+          <circle cx="79" cy="31" r="13" fill="#fff" stroke="#b8a9f5" stroke-width="2.5"/>
+          <line x1="75" y1="31" x2="83" y2="31" stroke="#b8a9f5" stroke-width="2.5" stroke-linecap="round"/>
+          <line x1="79" y1="27" x2="79" y2="35" stroke="#b8a9f5" stroke-width="2.5" stroke-linecap="round"/>
+        </svg>
+        <p style="margin-top:0.75rem;font-weight:700;font-size:1rem;color:#1a1a2e">No payments yet</p>
+        <p style="color:#888;font-size:0.85rem;margin-top:0.3rem">Payments will show up here once your first transaction is made.</p>
+        <a href="receipt.html" class="btn btn-primary" style="display:inline-block;margin-top:1rem;text-decoration:none;padding:0.5rem 1.2rem;border-radius:8px;font-size:0.875rem">Make your first payment</a>
       </div>`;
     }
     const rows = payments.map(p => {
       const receiptHref = `receipt.html?order_id=${encodeURIComponent(p.order_id)}`;
       return `<tr>
-        <td class="order-id">${copyableHtml(p.order_id, 0, 'order')}</td>
+        <td class="order-id"><code>${p.order_id}</code>${copyButtonHtml(p.order_id, 'Copy order ID')}</td>
         <td>${formatDate(p.paid_at)}</td>
         <td class="amount">${formatAmount(p.amount)} XLM</td>
         <td><span class="${badgeClass(p.status)}">${p.status}</span></td>
@@ -399,20 +400,19 @@
   function buildRefundsTable(refunds) {
     if (!refunds.length) {
       return `<div class="state-box">
-        <div>
-          <svg aria-hidden="true" width="72" height="72" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-bottom:1rem">
-            <circle cx="36" cy="36" r="34" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="2"/>
-            <circle cx="36" cy="36" r="14" fill="#dcfce7" stroke="#86efac" stroke-width="2"/>
-            <polyline points="29,36 34,41 43,31" stroke="#16a34a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-          </svg>
-        </div>
-        <div class="state-title">No refunds on record</div>
-        <div class="state-sub">All payments are settled — nothing to refund.</div>
+        <svg width="80" height="80" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+          <circle cx="40" cy="40" r="36" fill="#e6f9f0"/>
+          <path d="M26 40a14 14 0 0 1 14-14" stroke="#1a9e5c" stroke-width="3" stroke-linecap="round"/>
+          <path d="M40 26l-4-4 4-4" stroke="#1a9e5c" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="40" cy="40" r="6" fill="#a8e6c3"/>
+          <path d="M37 40l2 2 4-4" stroke="#1a9e5c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <p style="margin-top:0.75rem;font-weight:600;color:#1a1a2e">No refunds on record</p>
       </div>`;
     }
     const rows = refunds.map(r => `<tr>
-      <td class="refund-id">${copyableHtml(r.refund_id, 0, 'order')}</td>
-      <td class="order-id">${copyableHtml(r.order_id, 0, 'order')}</td>
+      <td class="refund-id"><code>${r.refund_id}</code>${copyButtonHtml(r.refund_id, 'Copy refund ID')}</td>
+      <td class="order-id"><code>${r.order_id}</code>${copyButtonHtml(r.order_id, 'Copy order ID')}</td>
       <td class="amount">${formatAmount(r.amount)} XLM</td>
       <td><span class="${badgeClass(r.status)}">${r.status}</span></td>
       <td>${r.reason}</td>
@@ -497,6 +497,7 @@
 
   // Auto-load in demo mode
   if (DEMO_MODE) loadDashboard();
+  initCopyButtons(document.body);
 </script>
 </body>
 </html>

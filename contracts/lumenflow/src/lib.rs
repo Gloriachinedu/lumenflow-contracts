@@ -286,6 +286,9 @@ impl PaymentProcessingContract {
     /// * `description` - Free-text description of the merchant's business.
     /// * `contact_info` - Contact details (email, URL, etc.).
     /// * `category` - Business category from [`MerchantCategory`].
+    /// * `referral_id` - Optional address of the referring merchant. When provided,
+    ///   the referrer's `referral_count` is incremented and a
+    ///   `lumenflow/merchant_referred` event is emitted.
     ///
     /// # Returns
     /// `Ok(())` on success.
@@ -293,6 +296,8 @@ impl PaymentProcessingContract {
     /// # Errors
     /// * [`PaymentError::MerchantAlreadyRegistered`] — the address is already registered.
     /// * [`PaymentError::InvalidInput`] — `name` is empty.
+    /// * [`PaymentError::InvalidReferral`] — `referral_id` is the same as `merchant_address`
+    ///   (self-referral) or does not belong to a registered merchant.
     pub fn register_merchant(
         env: Env,
         merchant_address: Address,
@@ -300,6 +305,7 @@ impl PaymentProcessingContract {
         description: String,
         contact_info: String,
         category: MerchantCategory,
+        referral_id: Option<Address>,
     ) -> Result<(), PaymentError> {
         require_not_paused(&env)?;
         merchant_address.require_auth();
@@ -308,6 +314,16 @@ impl PaymentProcessingContract {
 
         if storage::get_merchant(&env, &merchant_address).is_some() {
             return Err(PaymentError::MerchantAlreadyRegistered);
+        }
+
+        // Validate referral_id before any writes so we never commit a partial state.
+        if let Some(ref ref_addr) = referral_id {
+            if *ref_addr == merchant_address {
+                return Err(PaymentError::InvalidReferral);
+            }
+            if storage::get_merchant(&env, ref_addr).is_none() {
+                return Err(PaymentError::InvalidReferral);
+            }
         }
 
         let merchant = Merchant {
@@ -320,6 +336,7 @@ impl PaymentProcessingContract {
             verified: false,
             registered_at: env.ledger().timestamp(),
             total_received: 0,
+            referral_count: 0,
         };
 
         storage::set_merchant(&env, &merchant);
@@ -328,6 +345,18 @@ impl PaymentProcessingContract {
         let mut stats = storage::get_global_stats(&env);
         stats.active_merchants += 1;
         storage::set_global_stats(&env, &stats);
+
+        // Update referrer's count and emit event (referral already validated above).
+        if let Some(ref_addr) = referral_id {
+            let mut referrer = storage::get_merchant(&env, &ref_addr)
+                .ok_or(PaymentError::InvalidReferral)?;
+            referrer.referral_count += 1;
+            storage::set_merchant(&env, &referrer);
+            env.events().publish(
+                ("lumenflow", "merchant_referred"),
+                (merchant_address.clone(), ref_addr),
+            );
+        }
 
         env.events()
             .publish(("lumenflow", "merchant_registered"), merchant_address);
@@ -1547,6 +1576,194 @@ impl PaymentProcessingContract {
     /// * [`PaymentError::RefundNotFound`] — no refund exists with `refund_id`.
     pub fn get_refund(env: Env, refund_id: String) -> Result<RefundRecord, PaymentError> {
         storage::get_refund(&env, &refund_id).ok_or(PaymentError::RefundNotFound)
+    }
+
+    // ── Dispute resolution ────────────────────────────────────────────────────
+
+    /// Raise a dispute against a rejected refund (payer only).
+    ///
+    /// Creates a [`DisputeRecord`] in `Open` state linked to the rejected refund.
+    /// The dispute can be resolved by an admin via [`resolve_dispute`].
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the payer of the original payment. Must sign the call.
+    /// * `dispute_id` - Unique, non-empty identifier for this dispute (max 64 chars).
+    /// * `refund_id` - The refund that was rejected and is being disputed.
+    /// * `reason` - Human-readable reason for the dispute; maximum 256 characters.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::InvalidInput`] — `dispute_id` empty/too long or `reason` > 256 chars.
+    /// * [`PaymentError::DisputeAlreadyExists`] — a dispute with `dispute_id` already exists.
+    /// * [`PaymentError::RefundNotFound`] — no refund exists with `refund_id`.
+    /// * [`PaymentError::DisputeRefundNotRejected`] — the refund is not in `Rejected` state.
+    /// * [`PaymentError::PaymentNotFound`] — the associated payment no longer exists.
+    /// * [`PaymentError::Unauthorized`] — `caller` is not the payer of the original payment.
+    pub fn raise_dispute(
+        env: Env,
+        caller: Address,
+        dispute_id: String,
+        refund_id: String,
+        reason: String,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        caller.require_auth();
+        require_valid_id(&dispute_id)?;
+
+        if reason.len() > 256 {
+            return Err(PaymentError::InvalidInput);
+        }
+
+        if storage::get_dispute(&env, &dispute_id).is_some() {
+            return Err(PaymentError::DisputeAlreadyExists);
+        }
+
+        let refund = storage::get_refund(&env, &refund_id).ok_or(PaymentError::RefundNotFound)?;
+
+        // Dispute can only be raised on a rejected refund
+        if !matches!(refund.status, RefundStatus::Rejected) {
+            return Err(PaymentError::DisputeRefundNotRejected);
+        }
+
+        let payment =
+            storage::get_payment(&env, &refund.order_id).ok_or(PaymentError::PaymentNotFound)?;
+
+        // Only the payer of the original payment can raise a dispute
+        if caller != payment.payer {
+            return Err(PaymentError::Unauthorized);
+        }
+
+        let now = env.ledger().timestamp();
+        let dispute = types::DisputeRecord {
+            dispute_id: dispute_id.clone(),
+            refund_id: refund_id.clone(),
+            order_id: refund.order_id.clone(),
+            initiator: caller,
+            reason,
+            status: types::DisputeStatus::Open,
+            resolution: None,
+            created_at: now,
+        };
+        storage::set_dispute(&env, &dispute);
+
+        env.events().publish(
+            ("lumenflow", "dispute_raised"),
+            (dispute_id, refund_id, refund.order_id),
+        );
+        Ok(())
+    }
+
+    /// Resolve a dispute (admin only).
+    ///
+    /// Marks the dispute resolved. If `force_refund` is `true`, immediately
+    /// transfers the refund amount from the merchant to the payer, bypassing
+    /// merchant approval.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator. Must sign the call.
+    /// * `dispute_id` - The dispute to resolve.
+    /// * `resolution` - Admin's resolution notes (1–256 characters, required).
+    /// * `force_refund` - If `true`, execute the refund immediately.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    /// * [`PaymentError::DisputeNotFound`] — no dispute exists with `dispute_id`.
+    /// * [`PaymentError::DisputeAlreadyResolved`] — the dispute is already resolved.
+    /// * [`PaymentError::RefundNotFound`] — the referenced refund no longer exists (force_refund only).
+    /// * [`PaymentError::PaymentNotFound`] — the referenced payment no longer exists (force_refund only).
+    pub fn resolve_dispute(
+        env: Env,
+        admin: Address,
+        dispute_id: String,
+        resolution: String,
+        force_refund: bool,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        require_admin(&env, &admin)?;
+
+        if resolution.len() == 0 || resolution.len() > 256 {
+            return Err(PaymentError::InvalidInput);
+        }
+
+        let mut dispute =
+            storage::get_dispute(&env, &dispute_id).ok_or(PaymentError::DisputeNotFound)?;
+
+        if matches!(dispute.status, types::DisputeStatus::Resolved) {
+            return Err(PaymentError::DisputeAlreadyResolved);
+        }
+
+        // Effects: update dispute state before any external calls
+        dispute.status = types::DisputeStatus::Resolved;
+        dispute.resolution = Some(resolution.clone());
+        storage::set_dispute(&env, &dispute);
+
+        if force_refund {
+            let refund = storage::get_refund(&env, &dispute.refund_id)
+                .ok_or(PaymentError::RefundNotFound)?;
+            let mut payment = storage::get_payment(&env, &refund.order_id)
+                .ok_or(PaymentError::PaymentNotFound)?;
+
+            let refund_amount = refund.amount;
+
+            // Update payment state before external call (checks-effects-interactions)
+            payment.refunded_amount += refund_amount;
+            payment.status = if payment.refunded_amount >= payment.amount {
+                PaymentStatus::FullyRefunded
+            } else {
+                PaymentStatus::PartiallyRefunded
+            };
+            storage::set_payment(&env, &payment);
+
+            // Transition refund to Completed
+            let mut r = refund;
+            r.status = RefundStatus::Completed;
+            storage::set_refund(&env, &r);
+
+            // Update global stats
+            let mut stats = storage::get_global_stats(&env);
+            stats.total_refunds += 1;
+            stats.total_refund_volume = stats.total_refund_volume.saturating_add(refund_amount);
+            storage::set_global_stats(&env, &stats);
+
+            // Update merchant stats
+            let mut merchant_stats = storage::get_merchant_stats(&env, &payment.merchant_address);
+            merchant_stats.total_refunds += 1;
+            merchant_stats.total_refund_volume =
+                merchant_stats.total_refund_volume.saturating_add(refund_amount);
+            storage::set_merchant_stats(&env, &payment.merchant_address, &merchant_stats);
+
+            // Interaction: forced token transfer from merchant to payer
+            let token_client = token::Client::new(&env, &payment.token);
+            token_client.transfer(&payment.merchant_address, &payment.payer, &refund_amount);
+        }
+
+        env.events().publish(
+            ("lumenflow", "dispute_resolved"),
+            (dispute_id, resolution, force_refund),
+        );
+        Ok(())
+    }
+
+    /// Get a dispute record by ID.
+    ///
+    /// # Arguments
+    /// * `dispute_id` - The dispute identifier to look up.
+    ///
+    /// # Returns
+    /// The [`DisputeRecord`] on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::DisputeNotFound`] — no dispute exists with `dispute_id`.
+    pub fn get_dispute(
+        env: Env,
+        dispute_id: String,
+    ) -> Result<types::DisputeRecord, PaymentError> {
+        storage::get_dispute(&env, &dispute_id).ok_or(PaymentError::DisputeNotFound)
     }
 
     // ── Multi-signature payments ──────────────────────────────────────────────

@@ -369,14 +369,17 @@ pub fn add_order_refund_id(env: &Env, order_id: &String, refund_id: &String) {
 
 // ── Dispute ───────────────────────────────────────────────────────────────────
 
-pub fn get_dispute(env: &Env, refund_id: &String) -> Option<DisputeRecord> {
-    env.storage().persistent().get(&DataKey::Dispute(refund_id.clone()))
+pub fn get_dispute(env: &Env, dispute_id: &String) -> Option<DisputeRecord> {
+    env.storage().persistent().get(&DataKey::Dispute(dispute_id.clone()))
 }
 
 pub fn set_dispute(env: &Env, dispute: &DisputeRecord) {
+    let key = DataKey::Dispute(dispute.dispute_id.clone());
+    env.storage().persistent().set(&key, dispute);
+    // Extend TTL to 1 year so dispute records outlive the refund window.
     env.storage()
         .persistent()
-        .set(&DataKey::Dispute(dispute.refund_id.clone()), dispute);
+        .extend_ttl(&key, REFUND_TTL_LEDGERS, REFUND_TTL_LEDGERS);
 }
 
 // ── Multisig ──────────────────────────────────────────────────────────────────
@@ -395,6 +398,12 @@ pub fn set_multisig(env: &Env, ms: &MultisigPayment) {
     env.storage()
         .persistent()
         .extend_ttl(&key, MULTISIG_TTL_LEDGERS, MULTISIG_TTL_LEDGERS);
+}
+
+pub fn remove_multisig(env: &Env, payment_id: &String) {
+    env.storage()
+        .persistent()
+        .remove(&DataKey::Multisig(payment_id.clone()));
 }
 
 // ── Payment Request ───────────────────────────────────────────────────────────
@@ -675,4 +684,23 @@ pub fn remove_deletion_request(env: &Env, merchant: &Address) {
     env.storage()
         .persistent()
         .remove(&DataKey::DeletionRequest(merchant.clone()));
+}
+
+// ── Referral fee ──────────────────────────────────────────────────────────────
+
+/// Global referral reward in basis points (e.g. 50 = 0.5 % fee reduction).
+/// Returns 0 if not configured by admin.
+pub fn get_referral_fee_bps(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::ReferralFeeBps)
+        .unwrap_or(0u32)
+}
+
+/// Persist the global referral fee reward (basis points). Admin only — caller
+/// is responsible for authorization before invoking this function.
+pub fn set_referral_fee_bps(env: &Env, fee_bps: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::ReferralFeeBps, &fee_bps);
 }

@@ -439,34 +439,30 @@
         <!-- Rows will be rendered here -->
       </tbody>
     </table>
-    <div id="empty-state" class="empty-state" style="display:none" role="status" aria-label="No payments found" aria-live="polite">
-      <div class="empty-svg">
-        <svg aria-hidden="true" width="80" height="80" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <circle cx="40" cy="40" r="38" fill="#f0ecff" stroke="#e0d8ff" stroke-width="2"/>
-          <rect x="20" y="28" width="40" height="30" rx="4" fill="#fff" stroke="#c4b5fd" stroke-width="2"/>
-          <rect x="26" y="36" width="20" height="3" rx="1.5" fill="#ddd6fe"/>
-          <rect x="26" y="43" width="28" height="3" rx="1.5" fill="#ede9fe"/>
-          <rect x="26" y="50" width="14" height="3" rx="1.5" fill="#ede9fe"/>
-          <circle cx="56" cy="28" r="8" fill="#fff3cd" stroke="#f0c429" stroke-width="1.5"/>
-          <text x="56" y="32" text-anchor="middle" font-size="10" fill="#856404">?</text>
-        </svg>
-      </div>
-      <div class="empty-title">No payments yet</div>
-      <div class="empty-sub" id="empty-sub-text">No payments found matching your filters.</div>
+    <div id="empty-state" class="empty-state" style="display:none" role="status" aria-label="No payments found matching your filters" aria-live="polite">
+      <svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+        <circle cx="60" cy="60" r="54" fill="#f0ecff"/>
+        <rect x="30" y="42" width="60" height="42" rx="7" fill="#e0d9ff"/>
+        <rect x="38" y="52" width="28" height="5" rx="2.5" fill="#b8a9f5"/>
+        <rect x="38" y="62" width="44" height="5" rx="2.5" fill="#c5bafc"/>
+        <rect x="38" y="72" width="20" height="5" rx="2.5" fill="#d8d1fe"/>
+        <circle cx="84" cy="36" r="14" fill="#fff" stroke="#b8a9f5" stroke-width="2.5"/>
+        <line x1="80" y1="36" x2="88" y2="36" stroke="#b8a9f5" stroke-width="2.5" stroke-linecap="round"/>
+        <line x1="84" y1="32" x2="84" y2="40" stroke="#b8a9f5" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      <p style="margin-top:1rem;font-weight:600;color:#1a1a2e;font-size:1rem">No payments yet</p>
+      <p style="margin-top:0.4rem;color:#888;font-size:0.85rem">Payments will appear here once transactions are made.</p>
     </div>
   </div>
 </div>
 
 <script type="module">
   import { validateAddress, validateAmount } from './validation.js';
-  import { renderModeBanner, copyableHtml, attachCopyButtons } from './lumenflow-shared.js';
-  import { showErrorToast } from './errorMessages.js';
-
-  // ── Config ──────────────────────────────────────────────────────────────────
-  const CONTRACT_ID = window.LUMENFLOW_CONTRACT_ID || window.sessionStorage.getItem('LUMENFLOW_CONTRACT_ID') || '';
-  const RPC_URL     = window.LUMENFLOW_RPC_URL     || 'https://soroban-testnet.stellar.org';
-  const NETWORK     = window.LUMENFLOW_NETWORK     || 'testnet';
-  const DEMO_MODE   = !CONTRACT_ID;
+  import {
+    DEMO_MODE, CONTRACT_ID, NETWORK,
+    renderModeBanner, copyButtonHtml, initCopyButtons,
+    formatTokenAmount, convertToXlm, getTokenMetadata,
+  } from './lumenflow-shared.js';
 
   // ── State Management ────────────────────────────────────────────────────────
 
@@ -555,38 +551,6 @@
     return `<span class="status-badge ${entry.cls}">${entry.label}</span>`;
   }
 
-  // ── Formatting ──────────────────────────────────────────────────────────────
-  const TOKEN_METADATA = {
-    native: { symbol: 'XLM', decimals: 7, name: 'Stellar Lumens' },
-    CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC: { symbol: 'USDC', decimals: 6, name: 'USD Coin' },
-    CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75: { symbol: 'USDC', decimals: 6, name: 'USD Coin' },
-  };
-  const FALLBACK_METADATA = { symbol: 'TOKEN', decimals: 7, name: 'Unknown Token' };
-  function getTokenMetadata(tokenId) {
-    if (!tokenId) return FALLBACK_METADATA;
-    return TOKEN_METADATA[tokenId] || FALLBACK_METADATA;
-  }
-  const XLM_RATES = { XLM: 1, USDC: 8, TOKEN: 1 };
-  function formatTokenAmount(amount, tokenId) {
-    const { symbol, decimals } = getTokenMetadata(tokenId);
-    const value = Number(amount) / Math.pow(10, decimals);
-    const formatted = value.toLocaleString(undefined, {
-      minimumFractionDigits: decimals,
-      maximumFractionDigits: decimals,
-    });
-    return `${formatted} ${symbol}`;
-  }
-  function convertToXlm(amount, tokenId) {
-    const { symbol, decimals } = getTokenMetadata(tokenId);
-    const humanAmount = Number(amount) / Math.pow(10, decimals);
-    const rate = XLM_RATES[symbol] ?? 1;
-    const xlmAmount = humanAmount * rate;
-    const formatted = xlmAmount.toLocaleString(undefined, {
-      minimumFractionDigits: 7,
-      maximumFractionDigits: 7,
-    });
-    return `${formatted} XLM`;
-  }
   function formatAmount(amount) {
     return (Number(amount) / 1e7).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 7 }) + ' XLM';
   }
@@ -745,8 +709,8 @@
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td data-label="Date">${formatDate(p.paid_at)}</td>
-        <td data-label="Order ID">${copyableHtml(p.order_id, 0, 'order')}</td>
-        <td data-label="Merchant">${copyableHtml(p.merchant_address, 8, 'address')}</td>
+        <td data-label="Order ID"><code>${p.order_id}</code>${copyButtonHtml(p.order_id, 'Copy order ID')}</td>
+        <td data-label="Merchant"><code title="${p.merchant_address}">${p.merchant_address.slice(0,8)}…</code>${copyButtonHtml(p.merchant_address, 'Copy address')}</td>
         <td data-label="Amount" class="amount-cell">${amountDisplay}</td>
         <td data-label="Status">${statusBadgeHtml(p.status)}</td>`;
       body.appendChild(tr);
@@ -841,6 +805,7 @@
   window.retryFetch   = retryFetch;
   window.addEventListener('popstate', initFromUrl);
   renderModeBanner();
+  initCopyButtons(document.body);
 
   // ── Currency display toggle ─────────────────────────────────────────────────
   const currencyToggleEl = document.getElementById('currency-display-toggle');

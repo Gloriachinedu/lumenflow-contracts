@@ -333,7 +333,7 @@
 </div>
 
 <script type="module">
-  import { CONTRACT_ID, RPC_URL, renderModeBanner, makeCopyButton } from './lumenflow-shared.js';
+  import { CONTRACT_ID, RPC_URL, renderModeBanner, copyButtonHtml, initCopyButtons, formatAmount } from './lumenflow-shared.js';
   import { validateOrderId, validateAmount, validateAddress, isValidStellarKey } from './validation.js';
   import { showErrorToast } from './errorMessages.js';
 
@@ -763,9 +763,19 @@
   // ── Progress ───────────────────────────────────────────────────────────────
 
   function renderProgress() {
-    const { signers, required, signatures } = state;
+    const { paymentId, signers, required, signatures } = state;
     const signed = signatures.size;
     const pct    = Math.round((signed / signers.length) * 100);
+
+    // Show Payment ID with copy button
+    let idDisplay = document.getElementById('progress-payment-id');
+    if (!idDisplay) {
+      idDisplay = document.createElement('p');
+      idDisplay.id = 'progress-payment-id';
+      idDisplay.style.cssText = 'font-size:0.82rem;color:#555;margin-bottom:0.75rem;';
+      document.getElementById('progress-panel').querySelector('.progress-header').after(idDisplay);
+    }
+    idDisplay.innerHTML = `Payment ID: <code>${paymentId}</code>${copyButtonHtml(paymentId, 'Copy payment ID')}`;
 
     document.getElementById('progress-bar').style.width = pct + '%';
     document.getElementById('progress-fraction').textContent = `${signed} / ${signers.length} signed`;
@@ -782,7 +792,7 @@
       const truncated = addr.length > 12 ? addr.slice(0, 8) + '…' + addr.slice(-4) : addr;
       li.innerHTML = `
         <span class="sig-icon">${isSigned ? '✅' : '⬜'}</span>
-        <span class="sig-addr" title="${addr}">${truncated}</span>
+        <span class="sig-addr"><code title="${addr}">${addr.slice(0,8)}…</code>${copyButtonHtml(addr, 'Copy signer address')}</span>
         <span class="sig-status ${isSigned ? 'signed' : 'pending'}">${isSigned ? 'Signed' : 'Pending'}</span>
         <button class="sign-btn" onclick="signPayment('${addr}')" ${isSigned ? 'disabled' : ''}>
           ${isSigned ? 'Signed' : 'Sign'}
@@ -799,7 +809,7 @@
 
   async function signPayment(signerAddress) {
     const btn = [...document.querySelectorAll('.sign-btn')]
-      .find(b => b.closest('li').querySelector('.sig-addr').textContent === signerAddress);
+      .find(b => b.onclick && b.onclick.toString().includes(signerAddress));
     if (btn) { btn.disabled = true; btn.textContent = 'Signing…'; }
 
     const result = await callSignMultisig(state.paymentId, signerAddress);
@@ -872,6 +882,7 @@
   }
 
   renderModeBanner();
+  initCopyButtons(document.body);
   updateThresholdLabel();
 </script>
 
