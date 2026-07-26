@@ -128,102 +128,221 @@ Configure these thresholds in your alerting tool (PagerDuty, Grafana, etc.) by f
 - [Soroban Events](https://developers.stellar.org/docs/learn/encyclopedia/contract-development/events)
 - [LumenFlow Events Reference](events-reference.md)
 
+
 ---
 
-## Event Replay — Data Recovery (`scripts/replay-events.sh`)
+## Event Replay — Data Recovery
 
-If off-chain data is lost, `scripts/replay-events.sh` rebuilds the full payment and refund history by replaying every `lumenflow/*` event recorded on Horizon. All replayed records are stored in a local SQLite database and exported to a CSV file.
+If off-chain data is lost or corrupted, the `scripts/replay-events.sh` tool reconstructs the full payment and refund history by re-reading every `lumenflow/*` event from Horizon.
 
 ### Dependencies
 
 | Tool | Install |
-|---|---|
-| `curl` | pre-installed on most systems |
-| `jq` | `apt-get install jq` / `brew install jq` |
-| `sqlite3` | `apt-get install sqlite3` / `brew install sqlite3` |
+|------|---------|
+| `curl` | OS package manager |
+| `jq` ≥ 1.6 | https://stedolan.github.io/jq/download/ |
+| `sqlite3` | OS package manager |
+| `python3` | https://www.python.org/downloads/ |
+| `stellar` CLI | Optional — only for `VALIDATE=1` |
 
 ### Quick start
 
 ```bash
-# Full replay on testnet
-LUMENFLOW_CONTRACT_ID=CABC... ./scripts/replay-events.sh
-
-# Replay only July 2026 for a specific merchant
-./scripts/replay-events.sh \
-  --contract CABC... \
-  --date-start 2026-07-01T00:00:00Z \
-  --date-end   2026-07-31T23:59:59Z \
-  --merchant   GABC...
-
-# Mainnet replay, custom database and CSV paths
-./scripts/replay-events.sh \
-  --contract CABC... \
-  --network mainnet \
-  --db /data/lumenflow.db \
-  --output /data/lumenflow-replay.csv
+# Replay all events for a testnet contract
+CONTRACT_ID=<your-contract-id> ./scripts/replay-events.sh
 ```
 
-### Options
+On completion the script writes:
+- A **SQLite database** (`replay-db-<timestamp>.sqlite`) containing `payments`, `refunds`, and `events` tables.
+- A **CSV file** (`replay-output-<timestamp>.csv`) with all replayed records.
 
-| Flag | Description | Default |
-|---|---|---|
-| `-c`, `--contract` | Contract ID (or `LUMENFLOW_CONTRACT_ID` env var) | — |
-| `-n`, `--network` | `testnet` or `mainnet` | `testnet` |
-| `-H`, `--horizon` | Override Horizon base URL | auto from `--network` |
-| `-d`, `--db` | SQLite database path | `replay.db` |
-| `-o`, `--output` | CSV output path | `replay-events.csv` |
-| `--date-start` | Only include events at or after this ISO-8601 datetime | — |
-| `--date-end` | Only include events at or before this ISO-8601 datetime | — |
-| `--merchant` | Filter records for a specific merchant address | — |
-| `-v`, `--verbose` | Print each event as it is processed | off |
-| `-h`, `--help` | Show usage | — |
+### Environment variables
 
-### What the script does
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `CONTRACT_ID` | ✅ | — | Deployed LumenFlow contract ID |
+| `HORIZON_URL` | — | `https://horizon-testnet.stellar.org` | Horizon endpoint |
+| `OUTPUT_CSV` | — | `replay-output-<ts>.csv` | CSV output path |
+| `DB_FILE` | — | `replay-db-<ts>.sqlite` | SQLite database path |
+| `DATE_FROM` | — | — | ISO-8601 lower bound (e.g. `2024-01-01`) |
+| `DATE_TO` | — | — | ISO-8601 upper bound (e.g. `2024-12-31`) |
+| `MERCHANT_FILTER` | — | — | Restrict output to one merchant address |
+| `PAGE_LIMIT` | — | `200` | Horizon events per page |
+| `VALIDATE` | — | `0` | Set `1` to cross-check replayed count against on-chain stats |
+| `NETWORK` | — | `testnet` | Stellar network for validation |
 
-1. **Fetches** all `lumenflow/*` events from Horizon using cursor-based pagination (200 events per page).
-2. **Stores** every raw event in the `raw_events` table of the SQLite database.
-3. **Reconstructs** domain records from the following events:
+### Filtering by date range
 
-   | Event | Reconstructed record |
-   |---|---|
-   | `payment_processed` | `payments` row (payer, merchant, token, amount, memo, paid_at) |
-   | `refund_initiated` | `refunds` row (refund_id, order_id, amount, reason, status=Pending) |
-   | `refund_approved` | Updates `refunds.status` → Approved |
-   | `refund_rejected` | Updates `refunds.status` → Rejected |
-   | `refund_executed` | Updates `refunds.status` → Completed; increments `payments.refunded_amount`; marks payment as PartiallyRefunded or FullyRefunded |
-
-4. **Validates** the replayed state:
-   - No payment has `refunded_amount > amount`
-   - All refund statuses are valid enum values
-   - No refund references an unknown order ID
-
-5. **Exports** a CSV (`replay-events.csv`) joining payments and their associated refunds, filtered by the requested date range and merchant.
-
-### CSV columns
-
-```
-order_id, payer, merchant, token, amount, refunded_amount, payment_status,
-memo, paid_at, payment_ledger, payment_tx_hash,
-refund_id, refund_amount, refund_reason, refund_status,
-refund_initiated_at, refund_resolved_at
+```bash
+CONTRACT_ID=<id> \
+DATE_FROM=2024-06-01 \
+DATE_TO=2024-06-30 \
+./scripts/replay-events.sh
 ```
 
-### SQLite schema
+### Filtering by merchant
+
+```bash
+CONTRACT_ID=<id> \
+MERCHANT_FILTER=GABCDEF... \
+./scripts/replay-events.sh
+```
+
+### Validating replayed state
+
+Set `VALIDATE=1` to compare the replayed payment count against the value returned by `get_global_payment_stats`. Requires the `stellar` CLI and `ADMIN_ADDRESS` to be set:
+
+```bash
+CONTRACT_ID=<id> \
+ADMIN_ADDRESS=<admin-public-key> \
+VALIDATE=1 \
+NETWORK=testnet \
+./scripts/replay-events.sh
+```
+
+The script exits with code `3` if the counts do not match.
+
+### CSV output schema
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `record_type` | string | `payment` or `refund` |
+| `order_id` | string | Payment order ID |
+| `refund_id` | string | Refund ID (refund rows only) |
+| `payer` | string | Payer address (payment rows) |
+| `merchant` | string | Merchant address (payment rows) |
+| `token` | string | SAC token address |
+| `amount` | integer | Amount in stroops |
+| `refunded_total` | integer | Total refunded so far (payment rows) |
+| `status` | string | `Completed`, `PartiallyRefunded`, `FullyRefunded`, `Pending`, `Approved`, `Rejected`, `Executed` |
+| `memo` | string | Payment memo / refund reason |
+| `timestamp` | ISO-8601 | Event time (payment processed / refund initiated) |
+| `resolved_at` | ISO-8601 | Refund resolution time (refund rows only) |
+
+### Querying the replay database
+
+After the script runs you can query the SQLite database directly:
 
 ```sql
-payments  (order_id PK, payer, merchant, token, amount, memo, status,
-           refunded_amount, paid_at, ledger, tx_hash)
-refunds   (refund_id PK, order_id, initiator, merchant, amount, reason,
-           status, initiated_at, resolved_at, ledger, tx_hash)
-raw_events (event_id PK, paging_token, ledger, ledger_closed_at,
-            event_type, value_json)
-replay_meta (key PK, value)
+-- Top merchants by payment volume
+SELECT merchant, COUNT(*) AS payments, SUM(amount) AS volume_stroops
+FROM payments
+GROUP BY merchant
+ORDER BY volume_stroops DESC
+LIMIT 10;
+
+-- All pending refunds
+SELECT refund_id, order_id, amount, initiated_at
+FROM refunds WHERE status = 'Pending';
+
+-- Payments partially or fully refunded
+SELECT order_id, amount, refunded_total, status
+FROM payments
+WHERE status IN ('PartiallyRefunded', 'FullyRefunded');
 ```
 
-### Exit codes
 
-| Code | Meaning |
-|---|---|
-| `0` | Replay completed and validation passed |
-| `1` | Validation found one or more inconsistencies |
-| `>1` | Script error (missing dependency, bad argument, Horizon unreachable) |
+---
+
+## Grafana Dashboard & Prometheus Exporter
+
+Real-time monitoring of contract health is provided via a Prometheus exporter
+(`monitoring/lumenflow_exporter.py`) and a pre-built Grafana dashboard
+(`monitoring/grafana-dashboard.json`).
+
+### Architecture
+
+```
+Horizon SSE  →  lumenflow_exporter.py  →  Prometheus  →  Grafana
+```
+
+The exporter polls `GET /contracts/{id}/events` on Horizon, maps each
+`lumenflow/*` event to a Prometheus metric, and persists a cursor so it
+resumes after a restart without gaps.
+
+### Metrics exposed
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `lumenflow_payments_total` | Counter | Total `payment_processed` events |
+| `lumenflow_refunds_total` | Counter | Total `refund_executed` events |
+| `lumenflow_refunds_initiated_total` | Counter | Total `refund_initiated` events |
+| `lumenflow_errors_total` | Counter | `suspicious_activity` events |
+| `lumenflow_merchants_registered_total` | Counter | `merchant_registered` events |
+| `lumenflow_multisig_executed_total` | Counter | `multisig_executed` events |
+| `lumenflow_payment_amount` | Histogram | Payment amount distribution (stroops) |
+| `lumenflow_active_merchants` | Gauge | Running count of active merchants |
+| `lumenflow_contract_paused` | Gauge | `1` = paused, `0` = active |
+| `lumenflow_last_scrape_timestamp_seconds` | Gauge | Unix timestamp of last successful scrape |
+| `lumenflow_scrape_errors_total` | Counter | Horizon fetch errors |
+
+### Running the exporter
+
+```bash
+pip install prometheus_client requests
+
+CONTRACT_ID=<your-contract-id> \
+HORIZON_URL=https://horizon-testnet.stellar.org \
+SCRAPE_INTERVAL=30 \
+EXPORTER_PORT=9101 \
+python3 monitoring/lumenflow_exporter.py
+```
+
+Metrics are available at `http://localhost:9101/metrics`.
+
+#### Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CONTRACT_ID` | — (required) | LumenFlow contract address |
+| `HORIZON_URL` | `https://horizon-testnet.stellar.org` | Horizon base URL |
+| `SCRAPE_INTERVAL` | `30` | Seconds between polls |
+| `EXPORTER_PORT` | `9101` | Port to expose `/metrics` on |
+| `CURSOR_FILE` | `.lumenflow_cursor` | File to persist the last paging token |
+
+#### Prometheus scrape config
+
+Add to `prometheus.yml`:
+
+```yaml
+scrape_configs:
+  - job_name: lumenflow
+    scrape_interval: 30s
+    static_configs:
+      - targets: ["localhost:9101"]
+```
+
+### Importing the Grafana dashboard
+
+1. Open Grafana → **Dashboards → Import**.
+2. Upload `monitoring/grafana-dashboard.json`.
+3. Select your Prometheus data source when prompted.
+4. Click **Import**.
+
+The dashboard opens with the following panels:
+
+| Panel | Description |
+|-------|-------------|
+| Total Payments | All-time counter |
+| Total Refunds | All-time counter |
+| Contract Status | Active / PAUSED indicator |
+| Active Merchants | Current registered merchant count |
+| Error Rate (5m) | Rolling error percentage |
+| Payments per hour | Time-series throughput |
+| Refunds per hour | Time-series throughput |
+| Average Payment Amount | Rolling mean in stroops |
+| Error Rate over time | Error events time-series |
+
+### Alerts
+
+Three alert rules are embedded in the dashboard JSON:
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| High Error Rate | Error rate > 5% for 5 min | Critical |
+| Payment Volume Drop 50% | Volume this hour < 50% of last hour | Warning |
+| Contract Paused | `lumenflow_contract_paused == 1` for 1 min | Critical |
+
+To enable alerts, configure a **Contact point** (Slack, PagerDuty, email, etc.)
+in Grafana under **Alerting → Contact points**, then link it to a
+**Notification policy**.
