@@ -8,6 +8,13 @@
   <meta property="og:title" content="Payment Receipt – LumenFlow" />
   <meta property="og:description" content="Your LumenFlow payment receipt. View transaction details, amounts, and confirmation for completed payments." />
   <meta name="twitter:card" content="summary" />
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#6c47ff" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="LumenFlow" />
+  <link rel="apple-touch-icon" href="icons/icon.svg" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -123,10 +130,32 @@
     .state-box p  { color: #666; font-size: 0.9rem; }
 
     #loading, #not-found, #receipt-content { display: none; }
+
+    /* ── Skip link ───────────────────────────────────────────────────────── */
+    .skip-link {
+      position: absolute;
+      top: -100%;
+      left: 0;
+      background: #6c47ff;
+      color: #fff;
+      padding: 0.5rem 1rem;
+      font-weight: 700;
+      border-radius: 0 0 6px 0;
+      z-index: 9999;
+      text-decoration: none;
+    }
+    .skip-link:focus { top: 0; }
+
+    button:focus-visible, a:focus-visible {
+      outline: 2px solid #6c47ff;
+      outline-offset: 2px;
+    }
   </style>
 </head>
 <body>
+<a href="#receipt-main" class="skip-link">Skip to main content</a>
 
+<main id="receipt-main">
 <div class="card receipt">
   <!-- Loading -->
   <div id="loading" class="state-box">
@@ -202,11 +231,12 @@
     </div>
 
     <div class="actions">
-      <button class="btn btn-outline" onclick="window.print()">🖨 Print</button>
-      <button class="btn btn-primary" onclick="copyLink()">🔗 Copy Link</button>
+      <button class="btn btn-outline" onclick="window.print()" aria-label="Print this receipt">🖨 Print</button>
+      <button class="btn btn-primary" onclick="copyLink()" aria-label="Copy link to this receipt">🔗 Copy Link</button>
     </div>
   </div>
 </div>
+</main>
 
 <script type="module">
   import { CONTRACT_ID, RPC_URL, formatAmount, formatDate, renderModeBanner } from './lumenflow-shared.js';
@@ -366,6 +396,105 @@
       renderReceipt(data);
     }
   })();
+</script>
+
+<script>
+  // ── Service Worker Registration ────────────────────────────────────────────
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker
+        .register('./sw.js', { scope: './' })
+        .then((registration) => {
+          console.log('[LumenFlow] Service worker registered:', registration.scope);
+
+          // Listen for SW updates and notify the user
+          registration.addEventListener('updatefound', () => {
+            const newWorker = registration.installing;
+            if (!newWorker) return;
+            newWorker.addEventListener('statechange', () => {
+              if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                console.log('[LumenFlow] New version available. Refresh to update.');
+              }
+            });
+          });
+        })
+        .catch((err) => {
+          console.warn('[LumenFlow] Service worker registration failed:', err);
+        });
+    });
+  }
+
+  // ── PWA Install Prompt ─────────────────────────────────────────────────────
+  let deferredInstallPrompt = null;
+
+  window.addEventListener('beforeinstallprompt', (event) => {
+    // Prevent the default mini-infobar on mobile Chrome
+    event.preventDefault();
+    deferredInstallPrompt = event;
+    showInstallBanner();
+  });
+
+  function showInstallBanner() {
+    if (document.getElementById('pwa-install-banner')) return;
+
+    const banner = document.createElement('div');
+    banner.id = 'pwa-install-banner';
+    banner.setAttribute('role', 'complementary');
+    banner.setAttribute('aria-label', 'Install LumenFlow app');
+    banner.style.cssText = [
+      'position:fixed', 'bottom:0', 'left:0', 'right:0',
+      'background:#6c47ff', 'color:#fff',
+      'padding:1rem 1.25rem',
+      'display:flex', 'align-items:center', 'justify-content:space-between',
+      'gap:0.75rem', 'flex-wrap:wrap',
+      'box-shadow:0 -2px 16px rgba(0,0,0,0.15)',
+      'z-index:9999',
+      'font-family:system-ui,-apple-system,sans-serif',
+      'font-size:0.9rem',
+    ].join(';');
+
+    banner.innerHTML = `
+      <span style="flex:1;min-width:0">
+        📱 <strong>Install LumenFlow</strong> — access payments offline, right from your home screen.
+      </span>
+      <div style="display:flex;gap:0.5rem;flex-shrink:0">
+        <button id="pwa-install-btn"
+          style="background:#fff;color:#6c47ff;border:none;border-radius:6px;padding:0.5rem 1rem;font-weight:700;font-size:0.85rem;cursor:pointer;min-height:40px"
+          aria-label="Install LumenFlow as an app">
+          Install app
+        </button>
+        <button id="pwa-dismiss-btn"
+          style="background:transparent;color:#fff;border:1.5px solid rgba(255,255,255,0.6);border-radius:6px;padding:0.5rem 0.75rem;font-size:0.85rem;cursor:pointer;min-height:40px"
+          aria-label="Dismiss install prompt">
+          Not now
+        </button>
+      </div>`;
+
+    document.body.appendChild(banner);
+
+    document.getElementById('pwa-install-btn').addEventListener('click', installApp);
+    document.getElementById('pwa-dismiss-btn').addEventListener('click', dismissBanner);
+  }
+
+  async function installApp() {
+    if (!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    const { outcome } = await deferredInstallPrompt.userChoice;
+    console.log('[LumenFlow] PWA install outcome:', outcome);
+    deferredInstallPrompt = null;
+    dismissBanner();
+  }
+
+  function dismissBanner() {
+    const banner = document.getElementById('pwa-install-banner');
+    if (banner) banner.remove();
+  }
+
+  window.addEventListener('appinstalled', () => {
+    console.log('[LumenFlow] App installed successfully.');
+    deferredInstallPrompt = null;
+    dismissBanner();
+  });
 </script>
 </body>
 </html>
