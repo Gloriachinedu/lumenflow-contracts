@@ -2,8 +2,8 @@ use soroban_sdk::{contracttype, Address, Env, String, Vec};
 
 use crate::error::PaymentError;
 use crate::types::{
-    DisputeRecord, GlobalStats, Merchant, MerchantStats, MultisigPayment, PaymentOrder,
-    PaymentRequest, RefundRecord, Subscription, SubscriptionPlan,
+    DisputeRecord, EscrowRecord, GlobalStats, Merchant, MerchantStats, MultisigPayment,
+    PaymentOrder, PaymentRequest, RefundRecord, Subscription, SubscriptionPlan,
 };
 
 // ── TTL / limit constants ─────────────────────────────────────────────────────
@@ -37,6 +37,23 @@ pub const PAYMENT_TTL_LEDGERS: u32 = 12_614_400;  // 2 years
 pub const REFUND_TTL_LEDGERS: u32 = 6_307_200;    // 1 year
 pub const MULTISIG_TTL_LEDGERS: u32 = 6_307_200;  // 1 year
 pub const SUBSCRIPTION_TTL_LEDGERS: u32 = 12_614_400; // 2 years
+
+// ── Compile-time TTL bound assertions ─────────────────────────────────────────
+// Soroban Mainnet maximum persistent entry TTL (3,110,400 ledgers ≈ 6 months).
+// Our values intentionally exceed the single-call max because extend_ttl is
+// called on every write; the host caps each individual extension at max_entry_ttl.
+// These assertions guard against values so large they would be meaningless or
+// would indicate a copy-paste error (upper bound: 5 × max ≈ 30 months, comfortably
+// above our 2-year maximum but well below any clearly erroneous value).
+pub const SOROBAN_MAX_ENTRY_TTL: u32 = 3_110_400;
+
+const _: () = {
+    assert!(MERCHANT_TTL_LEDGERS     <= SOROBAN_MAX_ENTRY_TTL * 5, "MERCHANT_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)");
+    assert!(PAYMENT_TTL_LEDGERS      <= SOROBAN_MAX_ENTRY_TTL * 5, "PAYMENT_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)");
+    assert!(REFUND_TTL_LEDGERS       <= SOROBAN_MAX_ENTRY_TTL * 5, "REFUND_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)");
+    assert!(MULTISIG_TTL_LEDGERS     <= SOROBAN_MAX_ENTRY_TTL * 5, "MULTISIG_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)");
+    assert!(SUBSCRIPTION_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5, "SUBSCRIPTION_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)");
+};
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -78,22 +95,17 @@ pub enum DataKey {
     /// Replaced verbose `RefundWindow` — short code `RW`.
     RW,
     Nonce(Address),
-    /// Replaced verbose `StoredVersion` — short code `SV`.
-    SV,
-    /// Replaced verbose `SubscriptionPlan` — short code `SP`.
-    SP(String),
-    /// `Subscription` kept compact as `Sub` to avoid collision with `SP`.
-    Sub(String),
-    /// Replaced verbose `SubscriptionReserve` — short code `SR`.
-    SR(Address, Address),
-    /// Replaced verbose `PauseReason` — short code `PR`.
-    PR,
-    /// Replaced verbose `UnpauseLockUntil` — short code `ULU`.
-    ULU,
-    /// Replaced verbose `PauseGuardians` — short code `PG`.
-    PG,
-    /// Replaced verbose `EarlyUnpauseApprovals` — short code `EPA`.
-    EPA,
+    MerchantNonce(Address),
+    StoredVersion,
+    SubscriptionPlan(String),
+    Subscription(String),
+    SubscriptionReserve(Address, Address),
+    /// Global rate-limit cap (max payments per merchant per window).
+    RateLimitPerWindow,
+    /// Rolling-window counter for a merchant: (merchant, window_start_ledger) → count.
+    RateLimitCounter(Address, u32),
+    /// Time-locked escrow record keyed by order_id.
+    Escrow(String),
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -370,14 +382,17 @@ pub fn add_order_refund_id(env: &Env, order_id: &String, refund_id: &String) {
 
 // ── Dispute ───────────────────────────────────────────────────────────────────
 
-pub fn get_dispute(env: &Env, refund_id: &String) -> Option<DisputeRecord> {
-    env.storage().persistent().get(&DataKey::Dispute(refund_id.clone()))
+pub fn get_dispute(env: &Env, dispute_id: &String) -> Option<DisputeRecord> {
+    env.storage().persistent().get(&DataKey::Dispute(dispute_id.clone()))
 }
 
 pub fn set_dispute(env: &Env, dispute: &DisputeRecord) {
+    let key = DataKey::Dispute(dispute.dispute_id.clone());
+    env.storage().persistent().set(&key, dispute);
+    // Extend TTL to 1 year so dispute records outlive the refund window.
     env.storage()
         .persistent()
-        .set(&DataKey::Dispute(dispute.refund_id.clone()), dispute);
+        .extend_ttl(&key, REFUND_TTL_LEDGERS, REFUND_TTL_LEDGERS);
 }
 
 // ── Multisig ──────────────────────────────────────────────────────────────────
@@ -396,6 +411,12 @@ pub fn set_multisig(env: &Env, ms: &MultisigPayment) {
     env.storage()
         .persistent()
         .extend_ttl(&key, MULTISIG_TTL_LEDGERS, MULTISIG_TTL_LEDGERS);
+}
+
+pub fn remove_multisig(env: &Env, payment_id: &String) {
+    env.storage()
+        .persistent()
+        .remove(&DataKey::Multisig(payment_id.clone()));
 }
 
 // ── Payment Request ───────────────────────────────────────────────────────────
@@ -440,6 +461,35 @@ pub fn increment_nonce(env: &Env, payer: &Address) {
         .set(&key, &current.saturating_add(1));
     // Extend TTL alongside payment records so the nonce stays live as long
     // as the account is making payments (2-year window, same as payments).
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, PAYMENT_TTL_LEDGERS, PAYMENT_TTL_LEDGERS);
+}
+
+// ── Merchant Nonce (replay protection per merchant) ───────────────────────────
+
+/// Return the current nonce for `merchant`. Starts at 0.
+///
+/// Callers should pass `nonce = get_merchant_nonce(...) + 1` when constructing
+/// a payment so that the contract can verify the signature includes a fresh,
+/// never-reused value.
+pub fn get_merchant_nonce(env: &Env, merchant: &Address) -> u64 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::MerchantNonce(merchant.clone()))
+        .unwrap_or(0u64)
+}
+
+/// Increment the stored nonce for `merchant` by 1.
+///
+/// Must be called after successful signature verification but before any
+/// external token transfers (checks-effects-interactions pattern).
+pub fn increment_merchant_nonce(env: &Env, merchant: &Address) {
+    let current = get_merchant_nonce(env, merchant);
+    let key = DataKey::MerchantNonce(merchant.clone());
+    env.storage()
+        .persistent()
+        .set(&key, &current.saturating_add(1));
     env.storage()
         .persistent()
         .extend_ttl(&key, PAYMENT_TTL_LEDGERS, PAYMENT_TTL_LEDGERS);
@@ -536,6 +586,76 @@ pub fn set_subscription_reserve(env: &Env, subscriber: &Address, token: &Address
             .persistent()
             .extend_ttl(&key, SUBSCRIPTION_TTL_LEDGERS, SUBSCRIPTION_TTL_LEDGERS);
     }
+}
+
+// ── Escrow ────────────────────────────────────────────────────────────────────
+
+/// TTL for escrow records — 1 year; escrows are expected to resolve well within this window.
+pub const ESCROW_TTL_LEDGERS: u32 = 6_307_200;
+
+const _ESCROW_TTL_CHECK: () = assert!(
+    ESCROW_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
+    "ESCROW_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
+);
+
+pub fn get_escrow(env: &Env, order_id: &String) -> Option<EscrowRecord> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Escrow(order_id.clone()))
+}
+
+pub fn set_escrow(env: &Env, escrow: &EscrowRecord) {
+    let key = DataKey::Escrow(escrow.order_id.clone());
+    env.storage().persistent().set(&key, escrow);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, ESCROW_TTL_LEDGERS, ESCROW_TTL_LEDGERS);
+}
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+
+/// Default max payments per merchant per rate-limit window (300 ledgers).
+pub const DEFAULT_RATE_LIMIT_PER_WINDOW: u32 = 100;
+/// Window size in ledgers (300 ledgers ≈ 25 minutes at 5 s/ledger).
+pub const RATE_LIMIT_WINDOW_LEDGERS: u32 = 300;
+/// TTL for rate-limit counters — kept alive for 2 windows so a counter is not
+/// silently dropped mid-window.
+pub const RATE_LIMIT_TTL_LEDGERS: u32 = 600;
+
+pub fn get_rate_limit_per_window(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::RateLimitPerWindow)
+        .unwrap_or(DEFAULT_RATE_LIMIT_PER_WINDOW)
+}
+
+pub fn set_rate_limit_per_window(env: &Env, limit: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::RateLimitPerWindow, &limit);
+}
+
+/// Returns the ledger number of the start of the current window.
+pub fn current_window_start(env: &Env) -> u32 {
+    let seq = env.ledger().sequence();
+    (seq / RATE_LIMIT_WINDOW_LEDGERS) * RATE_LIMIT_WINDOW_LEDGERS
+}
+
+pub fn get_rate_limit_counter(env: &Env, merchant: &Address, window_start: u32) -> u32 {
+    env.storage()
+        .temporary()
+        .get(&DataKey::RateLimitCounter(merchant.clone(), window_start))
+        .unwrap_or(0u32)
+}
+
+pub fn increment_rate_limit_counter(env: &Env, merchant: &Address, window_start: u32) {
+    let count = get_rate_limit_counter(env, merchant, window_start) + 1;
+    let key = DataKey::RateLimitCounter(merchant.clone(), window_start);
+    env.storage().temporary().set(&key, &count);
+    // Extend TTL so the counter outlives its window by a safe margin.
+    env.storage()
+        .temporary()
+        .extend_ttl(&key, RATE_LIMIT_TTL_LEDGERS, RATE_LIMIT_TTL_LEDGERS);
 }
 
 // ── Contract version ──────────────────────────────────────────────────────────
@@ -700,4 +820,50 @@ pub fn migrate_storage_keys(env: &Env) {
             store.remove(&old_key);
         }
     }
+}
+
+// ── GDPR Data Deletion Requests ───────────────────────────────────────────────
+
+/// Returns the Unix timestamp (seconds) at which the merchant submitted their
+/// data-deletion request, or `None` if no pending request exists.
+pub fn get_deletion_request(env: &Env, merchant: &Address) -> Option<u64> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::DeletionRequest(merchant.clone()))
+}
+
+/// Records a pending data-deletion request for the given merchant address.
+pub fn set_deletion_request(env: &Env, merchant: &Address, requested_at: u64) {
+    let key = DataKey::DeletionRequest(merchant.clone());
+    env.storage().persistent().set(&key, &requested_at);
+    // Keep for up to 1 year so the admin can process it well within the 30-day window.
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, REFUND_TTL_LEDGERS, REFUND_TTL_LEDGERS);
+}
+
+/// Removes the pending data-deletion request once it has been processed.
+pub fn remove_deletion_request(env: &Env, merchant: &Address) {
+    env.storage()
+        .persistent()
+        .remove(&DataKey::DeletionRequest(merchant.clone()));
+}
+
+// ── Referral fee ──────────────────────────────────────────────────────────────
+
+/// Global referral reward in basis points (e.g. 50 = 0.5 % fee reduction).
+/// Returns 0 if not configured by admin.
+pub fn get_referral_fee_bps(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::ReferralFeeBps)
+        .unwrap_or(0u32)
+}
+
+/// Persist the global referral fee reward (basis points). Admin only — caller
+/// is responsible for authorization before invoking this function.
+pub fn set_referral_fee_bps(env: &Env, fee_bps: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::ReferralFeeBps, &fee_bps);
 }

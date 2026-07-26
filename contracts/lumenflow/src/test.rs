@@ -193,6 +193,7 @@ fn test_register_merchant_success() {
         &str(&env, "A great store"),
         &str(&env, "contact@store.com"),
         &MerchantCategory::Retail,
+        &None,
     );
     let m = client.get_merchant(&merchant);
     assert_eq!(m.name, str(&env, "My Store"));
@@ -209,6 +210,7 @@ fn test_register_merchant_duplicate_fails() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Other,
+        &None,
     );
     let result = client.try_register_merchant(
         &merchant,
@@ -216,6 +218,7 @@ fn test_register_merchant_duplicate_fails() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Other,
+        &None,
     );
     assert_eq!(result, Err(Ok(PaymentError::MerchantAlreadyRegistered)));
 }
@@ -247,6 +250,7 @@ fn test_get_merchants_single_page() {
             &str(&env, ""),
             &str(&env, ""),
             &MerchantCategory::Retail,
+            &None,
         );
         addresses.push_back(merchant);
     }
@@ -273,6 +277,7 @@ fn test_get_merchants_multi_page() {
             &str(&env, ""),
             &str(&env, ""),
             &MerchantCategory::Retail,
+            &None,
         );
         addresses.push_back(merchant);
     }
@@ -323,6 +328,7 @@ fn test_deactivate_merchant() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Retail,
+        &None,
     );
     client.deactivate_merchant(&admin, &merchant);
     let m = client.get_merchant(&merchant);
@@ -341,6 +347,7 @@ fn test_reactivate_merchant_success() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Retail,
+        &None,
     );
     client.deactivate_merchant(&admin, &merchant);
     let m = client.get_merchant(&merchant);
@@ -374,6 +381,7 @@ fn test_reactivate_merchant_already_active() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Retail,
+        &None,
     );
     let m = client.get_merchant(&merchant);
     assert!(m.active);
@@ -395,6 +403,7 @@ fn test_reactivate_merchant_unauthorized() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Retail,
+        &None,
     );
     client.deactivate_merchant(&admin, &merchant);
 
@@ -446,6 +455,7 @@ fn setup_payment_env() -> (
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Retail,
+        &None,
     );
     mint(&env, &token, &token_admin, &payer, 10_000);
 
@@ -466,6 +476,7 @@ fn test_invalid_signature_rejected() {
         &250,
         &str(&env, "tampered"),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -588,6 +599,7 @@ fn test_successful_payment_with_signature() {
         &1_000,
         &str(&env, "Test payment"),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -614,6 +626,7 @@ fn test_platform_fee_deducted() {
         &1_000,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -635,6 +648,7 @@ fn test_zero_fee_case() {
         &500,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -656,6 +670,7 @@ fn test_duplicate_order_id_fails() {
         &500,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -668,6 +683,7 @@ fn test_duplicate_order_id_fails() {
         &500,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -690,6 +706,7 @@ fn test_payment_inactive_merchant_fails() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -810,6 +827,8 @@ fn make_payment(
 ) {
     let pub_key = bytes(env, &[0u8; 32]);
     let sig = bytes(env, &[0u8; 64]);
+    // Fetch current merchant nonce and use next value (current + 1)
+    let nonce = client.get_merchant_nonce(merchant) + 1;
     client.process_payment_with_signature(
         payer,
         &str(env, order_id),
@@ -818,6 +837,7 @@ fn make_payment(
         &amount,
         &str(env, ""),
         &None,
+        &nonce,
         &sig,
         &pub_key,
     );
@@ -886,6 +906,7 @@ fn test_batch_payment_cross_call_duplicate_fails() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -1315,6 +1336,7 @@ fn test_verify_merchant() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Retail,
+        &None,
     );
     // Newly registered merchant is unverified
     assert!(!client.get_merchant(&merchant).verified);
@@ -1339,6 +1361,7 @@ fn test_verify_merchant_unauthorized_fails() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Retail,
+        &None,
     );
     let result = client.try_verify_merchant(&non_admin, &merchant);
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
@@ -1359,6 +1382,7 @@ fn test_payment_verified_vs_unverified_merchant() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -1376,6 +1400,7 @@ fn test_payment_verified_vs_unverified_merchant() {
         &200,
         &str(&env, ""),
         &None,
+                &2u64,
         &sig,
         &pub_key,
     );
@@ -1449,6 +1474,7 @@ fn make_payment_with_tags(
 ) {
     let pub_key = bytes(env, &[0u8; 32]);
     let sig = bytes(env, &[0u8; 64]);
+    let nonce = client.get_merchant_nonce(merchant) + 1;
     client.process_payment_with_signature(
         payer,
         &str(env, order_id),
@@ -1457,6 +1483,7 @@ fn make_payment_with_tags(
         &amount,
         &str(env, ""),
         &tags,
+        &nonce,
         &sig,
         &pub_key,
     );
@@ -1654,6 +1681,7 @@ fn test_pagination_limit() {
     for id_str in ids {
         let pub_key = bytes(&env, &[0u8; 32]);
         let sig = bytes(&env, &[0u8; 64]);
+        let nonce = client.get_merchant_nonce(&merchant) + 1;
         client.process_payment_with_signature(
             &payer,
             &str(&env, id_str),
@@ -1662,6 +1690,7 @@ fn test_pagination_limit() {
             &100,
             &str(&env, ""),
             &None,
+            &nonce,
             &sig,
             &pub_key,
         );
@@ -2228,7 +2257,7 @@ fn test_get_multisig_payment_by_authorized_parties() {
         &1_000,
         &signers,
         &2,
-           &None,
+        &None,
     );
 
     let by_merchant = client.get_multisig_payment(&merchant, &str(&env, "MS_Q1"));
@@ -2258,7 +2287,7 @@ fn test_get_multisig_payment_unauthorized_fails() {
         &600,
         &signers,
         &1,
-           &None,
+        &None,
     );
 
     let result = client.try_get_multisig_payment(&stranger, &str(&env, "MS_Q2"));
@@ -2476,6 +2505,7 @@ fn test_is_registered() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Other,
+        &None,
     );
 
     assert!(client.is_registered(&merchant));
@@ -2503,6 +2533,7 @@ fn test_token_whitelist_enforced() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -2518,6 +2549,7 @@ fn test_token_whitelist_enforced() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -2541,6 +2573,7 @@ fn test_remove_token_from_whitelist() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -2567,7 +2600,7 @@ fn test_e2e_multisig_payment_in_history_and_global_stats() {
         &2_000,
         &signers,
         &2,
-           &None,
+        &None,
     );
 
     // Sign — threshold met after both signers
@@ -2702,6 +2735,7 @@ fn test_merchant_stats_isolated_per_merchant() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Retail,
+        &None,
     );
     mint(&env, &token, &admin, &merchant2, 10_000);
 
@@ -2744,6 +2778,7 @@ fn test_payment_amount_zero_fails() {
         &0,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -2763,6 +2798,7 @@ fn test_payment_amount_negative_fails() {
         &-1,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -2782,6 +2818,7 @@ fn test_payment_amount_i128_min_fails() {
         &i128::MIN,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -2804,6 +2841,7 @@ fn test_payment_amount_i128_max_accepted() {
         &i128::MAX,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -2923,6 +2961,7 @@ fn test_paused_blocks_register_merchant() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Retail,
+        &None,
     );
     assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
 }
@@ -2939,6 +2978,7 @@ fn test_paused_blocks_process_payment() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &bytes(&env, &[0u8; 64]),
         &bytes(&env, &[0u8; 32]),
     );
@@ -2985,6 +3025,7 @@ fn test_unpause_restores_operations() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &bytes(&env, &[0u8; 64]),
         &bytes(&env, &[0u8; 32]),
     );
@@ -2999,6 +3040,7 @@ fn test_unpause_restores_operations() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &bytes(&env, &[0u8; 64]),
         &bytes(&env, &[0u8; 32]),
     );
@@ -3161,7 +3203,7 @@ fn test_cancel_multisig_by_initiator() {
         &1_000,
         &signers,
         &2,
-           &None,
+        &None,
     );
 
     // Initiator can cancel
@@ -3191,7 +3233,7 @@ fn test_cancel_multisig_by_admin() {
         &1_000,
         &signers,
         &2,
-           &None,
+        &None,
     );
 
     // Admin can cancel
@@ -3221,7 +3263,7 @@ fn test_cancel_multisig_double_cancel_fails() {
         &1_000,
         &signers,
         &2,
-           &None,
+        &None,
     );
 
     // First cancel succeeds
@@ -3249,7 +3291,7 @@ fn test_cancel_multisig_unauthorized_fails() {
         &1_000,
         &signers,
         &2,
-           &None,
+        &None,
     );
 
     // Stranger cannot cancel
@@ -3275,7 +3317,7 @@ fn test_cancel_multisig_already_executed_fails() {
         &1_000,
         &signers,
         &2,
-           &None,
+        &None,
     );
 
     client.sign_multisig_payment(&signer1, &str(&env, "CANCEL_005"), &bytes(&env, &[1u8; 64]));
@@ -3304,7 +3346,7 @@ fn test_execute_cancelled_multisig_fails() {
         &1_000,
         &signers,
         &2,
-           &None,
+        &None,
     );
 
     client.cancel_multisig_payment(&payer, &str(&env, "CANCEL_006"));
@@ -3336,6 +3378,7 @@ fn test_order_id_64_chars_accepted() {
         &1_000,
         &str(&env, "Test payment"),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -3359,6 +3402,7 @@ fn test_order_id_65_chars_rejected() {
         &1_000,
         &str(&env, "Test payment"),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -3423,7 +3467,7 @@ fn test_multisig_payment_id_64_chars_accepted() {
         &1_000,
         &signers,
         &2,
-           &None,
+        &None,
     );
 }
 
@@ -3448,7 +3492,7 @@ fn test_multisig_payment_id_65_chars_rejected() {
         &1_000,
         &signers,
         &2,
-           &None,
+        &None,
     );
     assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
 }
@@ -3562,6 +3606,7 @@ fn test_event_merchant_registered() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Retail,
+        &None,
     );
 
     let events = env.events().all();
@@ -3680,7 +3725,7 @@ fn test_event_no_spurious_events_on_failed_payment() {
     // First payment succeeds and emits the event.
     client.process_payment_with_signature(
         &payer, &str(&env, "DUP_EVT"), &merchant, &token, &100,
-        &str(&env, ""), &None, &sig, &pub_key,
+        &str(&env, ""), &None, &1u64, &sig, &pub_key,
     );
     use soroban_sdk::xdr::{ContractEventBody, ScVal, ScString, StringM};
     let needle = ScVal::String(ScString(StringM::try_from("payment_processed").unwrap()));
@@ -3696,7 +3741,7 @@ fn test_event_no_spurious_events_on_failed_payment() {
     // Duplicate order — must fail and must NOT add another payment_processed event.
     let _ = client.try_process_payment_with_signature(
         &payer, &str(&env, "DUP_EVT"), &merchant, &token, &100,
-        &str(&env, ""), &None, &sig, &pub_key,
+        &str(&env, ""), &None, &1u64, &sig, &pub_key,
     );
 
     let count_after = env.events().all().events().iter()
@@ -3788,6 +3833,7 @@ fn test_cleanup_large_set_completes_without_panic() {
         let order_id = soroban_sdk::String::from_str(&env, &format!("BULK_{:03}", i));
         let pub_key = Bytes::from_slice(&env, &[0u8; 32]);
         let sig = Bytes::from_slice(&env, &[0u8; 64]);
+        let nonce = client.get_merchant_nonce(&merchant) + 1;
         client.process_payment_with_signature(
             &payer,
             &order_id,
@@ -3796,6 +3842,7 @@ fn test_cleanup_large_set_completes_without_panic() {
             &(100 + i as i128),
             &str(&env, ""),
             &None,
+            &nonce,
             &sig,
             &pub_key,
         );
@@ -3998,6 +4045,7 @@ fn test_payment_with_disallowed_token_fails() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -4013,6 +4061,7 @@ fn test_payment_with_disallowed_token_fails() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -4074,7 +4123,7 @@ fn test_removed_token_is_rejected() {
 
     // First payment works
     client.process_payment_with_signature(
-        &payer, &str(&env, "WL_RM1"), &merchant, &token, &100, &str(&env, ""), &None, &sig, &pub_key,
+        &payer, &str(&env, "WL_RM1"), &merchant, &token, &100, &str(&env, ""), &None, &1u64, &sig, &pub_key,
     );
 
     // Admin removes the token
@@ -4082,7 +4131,7 @@ fn test_removed_token_is_rejected() {
 
     // Subsequent payment with the same token must fail
     let result = client.try_process_payment_with_signature(
-        &payer, &str(&env, "WL_RM2"), &merchant, &token, &100, &str(&env, ""), &None, &sig, &pub_key,
+        &payer, &str(&env, "WL_RM2"), &merchant, &token, &100, &str(&env, ""), &None, &1u64, &sig, &pub_key,
     );
     assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
 }
@@ -4498,6 +4547,7 @@ fn test_deactivate_merchant_unauthorized() {
         &str(&env, ""),
         &str(&env, ""),
         &MerchantCategory::Retail,
+        &None,
     );
     let result = client.try_deactivate_merchant(&non_admin, &merchant);
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
@@ -4604,6 +4654,7 @@ fn test_state_unchanged_after_invalid_amount_payment() {
         &0,
         &str(&env, "should fail"),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -4638,6 +4689,7 @@ fn test_state_unchanged_after_payment_to_unregistered_merchant() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -4675,6 +4727,7 @@ fn test_state_unchanged_after_payment_to_inactive_merchant() {
         &200,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -4703,6 +4756,7 @@ fn test_state_unchanged_after_duplicate_order_id() {
         &500,
         &str(&env, "original"),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -4718,6 +4772,7 @@ fn test_state_unchanged_after_duplicate_order_id() {
         &999,
         &str(&env, "duplicate"),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -4750,6 +4805,7 @@ fn test_state_unchanged_after_disallowed_token_payment() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -5178,6 +5234,7 @@ fn test_state_unchanged_after_payment_while_paused() {
         &100,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -5374,6 +5431,7 @@ fn test_global_stats_unchanged_after_failed_payment() {
         &0,
         &str(&env, ""),
         &None,
+                &1u64,
         &sig,
         &pub_key,
     );
@@ -6022,4 +6080,168 @@ fn test_subscription_functions_reject_when_paused() {
 
     let result = client.try_renew_subscription_allowance(&subscriber, &token);
     assert_eq!(result, Err(Ok(PaymentError::ContractPaused)));
+}
+
+// ── Referral program tests (#639) ─────────────────────────────────────────────
+
+#[test]
+fn test_referral_registration_success() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    // Register the referrer merchant (no referral_id)
+    let referrer = Address::generate(&env);
+    client.register_merchant(
+        &referrer,
+        &str(&env, "Referrer Store"),
+        &str(&env, "The original merchant"),
+        &str(&env, "referrer@store.com"),
+        &MerchantCategory::Retail,
+        &None,
+    );
+
+    // Verify referrer starts with referral_count == 0
+    let referrer_before = client.get_merchant(&referrer);
+    assert_eq!(referrer_before.referral_count, 0);
+
+    // Register a new merchant with the referrer's address as referral_id
+    let new_merchant = Address::generate(&env);
+    client.register_merchant(
+        &new_merchant,
+        &str(&env, "New Store"),
+        &str(&env, "Referred merchant"),
+        &str(&env, "new@store.com"),
+        &MerchantCategory::Digital,
+        &Some(referrer.clone()),
+    );
+
+    // Referrer's referral_count should now be 1
+    let referrer_after = client.get_merchant(&referrer);
+    assert_eq!(referrer_after.referral_count, 1);
+
+    // New merchant should be registered and active
+    let nm = client.get_merchant(&new_merchant);
+    assert_eq!(nm.name, str(&env, "New Store"));
+    assert!(nm.active);
+}
+
+#[test]
+fn test_self_referral_rejected() {
+    let (env, client) = setup();
+
+    // Attempt to register with own address as referral_id
+    let merchant = Address::generate(&env);
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "My Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Other,
+        &Some(merchant.clone()),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidReferral)));
+}
+
+#[test]
+fn test_invalid_referral_id_rejected() {
+    let (env, client) = setup();
+
+    // Try to register with a non-existent merchant as referral_id
+    let merchant = Address::generate(&env);
+    let nonexistent = Address::generate(&env);
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "My Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Other,
+        &Some(nonexistent),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidReferral)));
+}
+
+#[test]
+fn test_referral_count_increments_for_multiple_referrals() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    // Register a referrer
+    let referrer = Address::generate(&env);
+    client.register_merchant(
+        &referrer,
+        &str(&env, "Top Referrer"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Services,
+        &None,
+    );
+
+    // Register three merchants that all use the same referrer
+    for i in 0u32..3 {
+        let m = Address::generate(&env);
+        client.register_merchant(
+            &m,
+            &str(&env, &alloc::format!("Referred {i}")),
+            &str(&env, ""),
+            &str(&env, ""),
+            &MerchantCategory::Other,
+            &Some(referrer.clone()),
+        );
+    }
+
+    let referrer_data = client.get_merchant(&referrer);
+    assert_eq!(referrer_data.referral_count, 3);
+}
+
+#[test]
+fn test_get_referral_stats_returns_leaderboard() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    // Set referral fee to 50 bps
+    client.set_referral_fee_bps(&admin, &50);
+
+    let referrer = Address::generate(&env);
+    client.register_merchant(
+        &referrer,
+        &str(&env, "Leaderboard Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Food,
+        &None,
+    );
+
+    // Register two merchants under the referrer
+    for i in 0u32..2 {
+        let m = Address::generate(&env);
+        client.register_merchant(
+            &m,
+            &str(&env, &alloc::format!("Referred {i}")),
+            &str(&env, ""),
+            &str(&env, ""),
+            &MerchantCategory::Other,
+            &Some(referrer.clone()),
+        );
+    }
+
+    let stats = client.get_referral_stats(&admin);
+    assert_eq!(stats.len(), 1);
+    let entry = stats.get(0).unwrap();
+    assert_eq!(entry.referrer, referrer);
+    assert_eq!(entry.referral_count, 2);
+    assert_eq!(entry.reward_bps, 50);
+}
+
+#[test]
+fn test_set_referral_fee_bps_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let non_admin = Address::generate(&env);
+    let result = client.try_set_referral_fee_bps(&non_admin, &100);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }

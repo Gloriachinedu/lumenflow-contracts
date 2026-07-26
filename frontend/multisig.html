@@ -8,6 +8,13 @@
   <meta property="og:title" content="Multisig Payment – LumenFlow" />
   <meta property="og:description" content="Initiate and manage multi-signature payments on LumenFlow. Requires threshold approvals before funds are released." />
   <meta name="twitter:card" content="summary" />
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#6c47ff" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="LumenFlow" />
+  <link rel="apple-touch-icon" href="icons/icon.svg" />
   <style>
     /* Multisig-specific styles not in the shared design system */
 
@@ -17,13 +24,14 @@
       margin-bottom: 0.5rem;
       align-items: center;
     }
-    .signer-row input { flex: 1; }
+    .signer-row input { flex: 1; min-width: 0; }
 
     .threshold-row {
       display: flex;
       align-items: center;
       gap: 0.75rem;
       margin-top: 0.5rem;
+      flex-wrap: wrap;
     }
     .threshold-row input[type=number] { width: 80px; }
     .threshold-row .of-label { font-size: 0.85rem; color: #555; }
@@ -36,6 +44,8 @@
       justify-content: space-between;
       align-items: center;
       margin-bottom: 1rem;
+      flex-wrap: wrap;
+      gap: 0.5rem;
     }
     .progress-header h2 { border: none; padding: 0; margin: 0; }
 
@@ -62,11 +72,12 @@
       padding: 0.5rem 0;
       border-bottom: 1px solid #f0f0f0;
       font-size: 0.85rem;
+      flex-wrap: wrap;
     }
     .signer-status-list li:last-child { border-bottom: none; }
-    .sig-icon { font-size: 1rem; }
-    .sig-addr { flex: 1; word-break: break-all; color: #333; }
-    .sig-status { font-size: 0.75rem; font-weight: 600; }
+    .sig-icon { font-size: 1rem; flex-shrink: 0; }
+    .sig-addr { flex: 1; word-break: break-all; color: #333; min-width: 0; }
+    .sig-status { font-size: 0.75rem; font-weight: 600; flex-shrink: 0; }
     .sig-status.signed  { color: #1a9e5c; }
     .sig-status.pending { color: #888; }
 
@@ -79,6 +90,7 @@
       font-size: 0.78rem;
       font-weight: 600;
       cursor: pointer;
+      flex-shrink: 0;
     }
     .sign-btn:hover { background: #f0ecff; }
     .sign-btn:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -95,6 +107,7 @@
       display: flex;
       align-items: center;
       gap: 0.5rem;
+      flex-wrap: wrap;
     }
     #wallet-bar.demo  { background: #fff3cd; color: #856404; }
     #wallet-bar.live  { background: #d1f3e0; color: #1a5e37; }
@@ -126,10 +139,92 @@
     }
     #demo-security-notice strong { display: block; margin-bottom: 0.35rem; font-size: 0.95rem; }
     #demo-security-notice a { color: #856404; font-weight: 600; }
+
+    /* ── Mobile responsive (320 px – 480 px) ───────────────────────────────── */
+    @media (max-width: 480px) {
+      body {
+        padding: 1rem 0.75rem;
+        align-items: stretch;
+      }
+
+      .card {
+        padding: 1.25rem 1rem;
+        border-radius: 8px;
+      }
+
+      /* Full-width inputs and buttons on small screens */
+      .field input,
+      .field select,
+      .btn,
+      .btn-full {
+        width: 100%;
+      }
+
+      /* Signer rows: stack input and remove button on very narrow viewports */
+      .signer-row {
+        flex-wrap: wrap;
+      }
+      .signer-row input {
+        width: 100%;
+        flex: 1 1 calc(100% - 56px); /* leave room for the remove button */
+      }
+
+      /* Threshold row wraps naturally via flex-wrap: wrap above */
+      .threshold-row input[type=number] {
+        width: 70px;
+      }
+
+      /* Wallet bar: text takes full row, button below */
+      #wallet-bar {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      #connect-wallet-btn {
+        margin-left: 0;
+        width: 100%;
+        text-align: center;
+        padding: 0.5rem 1rem;
+      }
+
+      /* Signer status list: address takes full row, status+button on next row */
+      .signer-status-list li {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        grid-template-rows: auto auto;
+        gap: 0.3rem 0.5rem;
+        align-items: center;
+      }
+      .sig-icon  { grid-row: 1; grid-column: 1; }
+      .sig-addr  { grid-row: 1; grid-column: 2; }
+      .sig-status {
+        grid-row: 2;
+        grid-column: 2;
+      }
+      .sign-btn {
+        grid-row: 2;
+        grid-column: 2;
+        justify-self: start;
+        min-height: 36px;
+        padding: 0.4rem 0.9rem;
+      }
+
+      /* Progress fraction: always below heading on small screens */
+      .progress-header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      /* Demo security notice: make list readable on narrow screens */
+      #demo-security-notice ul {
+        margin-left: 1rem;
+      }
+    }
   </style>
 </head>
 <body>
+<a href="#multisig-main" class="skip-link">Skip to main content</a>
 
+<main id="multisig-main">
 <h1>Multisig Payment</h1>
 <p class="subtitle">Initiate a payment that requires multiple signers to approve.</p>
 
@@ -237,7 +332,7 @@
 </div>
 
 <script type="module">
-  import { CONTRACT_ID, RPC_URL, renderModeBanner } from './lumenflow-shared.js';
+  import { CONTRACT_ID, RPC_URL, renderModeBanner, copyButtonHtml, initCopyButtons, formatAmount } from './lumenflow-shared.js';
   import { validateOrderId, validateAmount, validateAddress, isValidStellarKey } from './validation.js';
 
   // ── State ──────────────────────────────────────────────────────────────────
@@ -665,9 +760,19 @@
   // ── Progress ───────────────────────────────────────────────────────────────
 
   function renderProgress() {
-    const { signers, required, signatures } = state;
+    const { paymentId, signers, required, signatures } = state;
     const signed = signatures.size;
     const pct    = Math.round((signed / signers.length) * 100);
+
+    // Show Payment ID with copy button
+    let idDisplay = document.getElementById('progress-payment-id');
+    if (!idDisplay) {
+      idDisplay = document.createElement('p');
+      idDisplay.id = 'progress-payment-id';
+      idDisplay.style.cssText = 'font-size:0.82rem;color:#555;margin-bottom:0.75rem;';
+      document.getElementById('progress-panel').querySelector('.progress-header').after(idDisplay);
+    }
+    idDisplay.innerHTML = `Payment ID: <code>${paymentId}</code>${copyButtonHtml(paymentId, 'Copy payment ID')}`;
 
     document.getElementById('progress-bar').style.width = pct + '%';
     document.getElementById('progress-fraction').textContent = `${signed} / ${signers.length} signed`;
@@ -683,7 +788,7 @@
       const li = document.createElement('li');
       li.innerHTML = `
         <span class="sig-icon">${isSigned ? '✅' : '⬜'}</span>
-        <span class="sig-addr">${addr}</span>
+        <span class="sig-addr"><code title="${addr}">${addr.slice(0,8)}…</code>${copyButtonHtml(addr, 'Copy signer address')}</span>
         <span class="sig-status ${isSigned ? 'signed' : 'pending'}">${isSigned ? 'Signed' : 'Pending'}</span>
         <button class="sign-btn" onclick="signPayment('${addr}')" ${isSigned ? 'disabled' : ''}>
           ${isSigned ? 'Signed' : 'Sign'}
@@ -697,7 +802,7 @@
 
   async function signPayment(signerAddress) {
     const btn = [...document.querySelectorAll('.sign-btn')]
-      .find(b => b.closest('li').querySelector('.sig-addr').textContent === signerAddress);
+      .find(b => b.onclick && b.onclick.toString().includes(signerAddress));
     if (btn) { btn.disabled = true; btn.textContent = 'Signing…'; }
 
     const result = await callSignMultisig(state.paymentId, signerAddress);
@@ -768,7 +873,20 @@
   }
 
   renderModeBanner();
+  initCopyButtons(document.body);
   updateThresholdLabel();
 </script>
+
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker
+        .register('./sw.js', { scope: './' })
+        .catch((err) => console.warn('[PWA] Service worker registration failed:', err));
+    });
+  }
+</script>
+
+</main>
 </body>
 </html>

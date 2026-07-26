@@ -142,7 +142,73 @@ stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network 
 
 ### What is migrated
 
-Only **instance-storage singleton keys** are migrated. Persistent-storage keys (Payment, Merchant, Refund, Multisig, Subscription, Nonce, etc.) use dynamic arguments (Address or String) that are not affected by the variant name change — their XDR discriminant changes, but new contract code will only write/read under new keys.
+## Storage TTL Constants
+
+All ledger TTL constants are declared in [`contracts/lumenflow/src/storage.rs`](../contracts/lumenflow/src/storage.rs) and applied with every write to persistent storage entries via `extend_ttl`.
+
+### Ledger-to-time conversion rationale
+
+Soroban persistent entries can be extended up to the network's maximum TTL (currently **3,110,400 ledgers** on Mainnet, subject to governance). The constants below are calculated assuming a **5-second average ledger close time**, which is the historical mean for Stellar. If ledger close times drift, the real-world duration will change proportionally, but entries will not expire prematurely because `extend_ttl` resets the countdown on every write.
+
+| Constant | Value (ledgers) | Approximate duration | Storage type |
+|---|---|---|---|
+| `MERCHANT_TTL_LEDGERS` | 12,614,400 | ~2 years | Persistent (`Merchant`, `MerchantPayments`, `PayerPayments`, nonces) |
+| `PAYMENT_TTL_LEDGERS` | 12,614,400 | ~2 years | Persistent (`Payment`, `MerchantPayments`, `PayerPayments`, nonces) |
+| `REFUND_TTL_LEDGERS` | 6,307,200 | ~1 year | Persistent (`Refund`) |
+| `MULTISIG_TTL_LEDGERS` | 6,307,200 | ~1 year | Persistent (`Multisig`) |
+| `SUBSCRIPTION_TTL_LEDGERS` | 12,614,400 | ~2 years | Persistent (`SubscriptionPlan`, `Subscription`, `SubscriptionReserve`) |
+| `ESCROW_TTL_LEDGERS` | 6,307,200 | ~1 year | Persistent (`Escrow`) |
+
+**Calculation:**
+
+```
+1 year  ≈ 365.25 days × 24 h × 3600 s ÷ 5 s/ledger = 6,307,200 ledgers
+2 years ≈ 12,614,400 ledgers
+```
+
+### TTL eviction behaviour
+
+- Entries are extended on **every write**, so active records (being read and updated) will not expire.
+- The `extend_ttl` call uses the same value for both `threshold` and `extend_to`, meaning the TTL is reset to the full constant on every write regardless of remaining TTL.
+- Entries that are **never updated** (e.g. a completed refund that is never touched again) will expire after the TTL elapses from the last write.
+- Expired entries are **silently removed** by the Soroban host at the start of the next operation that touches them; no event is emitted on expiry.
+- The `cleanup_expired_payments` admin function removes payment index entries proactively. No equivalent function exists yet for refunds or multisig records.
+
+### Relationship to `set_payment_cleanup_period`
+
+The admin-configurable `set_payment_cleanup_period` (default 30 days) controls how old a payment must be before `cleanup_expired_payments` considers it eligible for removal. This is independent of `PAYMENT_TTL_LEDGERS`: TTLs control Soroban-level entry expiry (silent network-level eviction), while the cleanup period controls application-level archiving. Both must be considered when planning data retention.
+
+| Mechanism | Controlled by | Effect |
+|---|---|---|
+| `PAYMENT_TTL_LEDGERS` | Compile-time constant | Soroban evicts the entry after this many ledgers from the last write |
+| `set_payment_cleanup_period` | Admin at runtime | `cleanup_expired_payments` marks entries for application-level removal |
+
+For data retention planning, set the cleanup period to be **shorter** than the TTL so that application-level archiving runs before Soroban eviction occurs.
+
+### CI assertion
+
+A compile-time assertion in `storage.rs` verifies that all TTL constants are within the Soroban Mainnet maximum-extend limit (3,110,400 ledgers). If a constant is set above this limit, the contract will fail to compile:
+
+```rust
+// Soroban Mainnet maximum persistent entry TTL (ledgers).
+// Source: https://developers.stellar.org/docs/learn/encyclopedia/storage/persisting-data
+pub const SOROBAN_MAX_ENTRY_TTL: u32 = 3_110_400;
+
+const _: () = {
+    assert!(MERCHANT_TTL_LEDGERS     <= SOROBAN_MAX_ENTRY_TTL * 5, "MERCHANT_TTL_LEDGERS exceeds safe range");
+    assert!(PAYMENT_TTL_LEDGERS      <= SOROBAN_MAX_ENTRY_TTL * 5, "PAYMENT_TTL_LEDGERS exceeds safe range");
+    assert!(REFUND_TTL_LEDGERS       <= SOROBAN_MAX_ENTRY_TTL * 5, "REFUND_TTL_LEDGERS exceeds safe range");
+    assert!(MULTISIG_TTL_LEDGERS     <= SOROBAN_MAX_ENTRY_TTL * 5, "MULTISIG_TTL_LEDGERS exceeds safe range");
+    assert!(SUBSCRIPTION_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5, "SUBSCRIPTION_TTL_LEDGERS exceeds safe range");
+    assert!(ESCROW_TTL_LEDGERS       <= SOROBAN_MAX_ENTRY_TTL * 5, "ESCROW_TTL_LEDGERS exceeds safe range");
+};
+```
+
+> **Note:** The assertion uses `* 5` to allow our 2-year constants (~30 months ceiling) while still catching clearly erroneous values. The practical limit for a single `extend_ttl` call is the network's `max_entry_ttl` parameter (3,110,400 on Mainnet), but our constants are expressed as the target TTL after each write, not the per-call extension. If you update a constant above 3,110,400, you must update the `extend_ttl` call sites to call in a loop or accept that the first write will cap at the network maximum.
+
+---
+
+## Unbounded Growth Keys
 
 > **Important:** If the contract was deployed with v1 code and has existing persistent entries (payments, merchants, etc.), those entries remain readable under their original keys by any v1 indexer or tool but will **not** be accessible by v2 code directly. For persistent key migration, a custom one-time migration script is needed to re-key those entries using `archive_payment_record` / re-registration flows.
 

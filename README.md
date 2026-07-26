@@ -14,6 +14,48 @@
 
 ---
 
+## Quick Start
+
+Spin up a local Stellar node, deploy the contract, and seed it with test data in one command:
+
+```bash
+# Set the deployer key and seed keys, then start everything
+export SOURCE_ACCOUNT=<your-local-secret-key>
+export ADMIN_KEY=<admin-secret>   ADMIN_ADDRESS=<admin-address>
+export MERCHANT1_KEY=<m1-secret>  MERCHANT1_ADDRESS=<m1-address>
+export MERCHANT2_KEY=<m2-secret>  MERCHANT2_ADDRESS=<m2-address>
+export MERCHANT3_KEY=<m3-secret>  MERCHANT3_ADDRESS=<m3-address>
+export PAYER_KEY=<payer-secret>   PAYER_ADDRESS=<payer-address>
+export TOKEN_ADDRESS=<sac-token-address>
+
+docker compose up
+```
+
+The `setup` service waits for the Stellar node to pass its health check, then
+builds and deploys the contract, writes the `CONTRACT_ID` to a shared volume at
+`/shared/contract-id.txt`, and seeds 3 merchants, 5 payments, and 2 refunds.
+
+Generate local keys with:
+
+```bash
+stellar keys generate --network local alice
+stellar keys address alice
+```
+
+Fund them via the local Friendbot:
+
+```bash
+curl "http://localhost:8000/friendbot?addr=<address>"
+```
+
+Tear everything down (including the shared volume) with:
+
+```bash
+docker compose down -v
+```
+
+---
+
 ## Install
 
 Pre-built CLI binaries are published with every [GitHub Release](https://github.com/Gloriachinedu/lumenflow-contracts/releases).
@@ -77,6 +119,7 @@ LumenFlow is a production-grade payment processing smart contract for the [Stell
 - Testing guidance available in `docs/testing-guide.md`
 - Multisig payment flow guide available in `docs/multisig-guide.md`
 - Secrets and secure local environment setup in [`docs/secrets-and-local-env.md`](docs/secrets-and-local-env.md)
+- Payment link generator guide in [`docs/payment-link-guide.md`](docs/payment-link-guide.md)
 
 ## Refund lifecycle overview
 
@@ -358,6 +401,8 @@ NETWORK=testnet \
 ./scripts/smoke_test.sh
 ```
 
+By default the script automatically generates a throwaway ed25519 keypair, derives the canonical signature payload (see [docs/signature-format.md](docs/signature-format.md)), signs it, and passes the real signature to `process_payment_with_signature`. No manual key management is required for a standard run.
+
 ### Required environment variables
 
 - `CONTRACT_ID` — deployed contract ID
@@ -370,10 +415,40 @@ NETWORK=testnet \
 - `PAYER_ADDRESS` — payer public address
 - `NETWORK` — target network (`testnet` by default)
 
-Optional values supported by the smoke script:
+### Signature mode
 
-- `SMOKE_SIG` — explicit signature bytes for `process_payment_with_signature`
-- `SMOKE_PUBKEY` — explicit merchant public key used inside the test
+The smoke test exercises **real ed25519 signature verification** by default. `scripts/generate_smoke_keypair.sh` handles key generation and signing:
+
+1. Queries `get_merchant_nonce(merchant_address)` from the chain.
+2. Constructs the canonical payload:
+   `network_id (32 B) || contract_address XDR || nonce u64 BE (8 B) || order_id ScVal XDR || amount i128 BE (16 B)`
+3. Generates a fresh throwaway ed25519 keypair using Node.js built-ins.
+4. Signs the payload and exports `SMOKE_SIG`, `SMOKE_PUBKEY`, and `SMOKE_NONCE`.
+
+For the full payload specification see **[docs/signature-format.md](docs/signature-format.md)**.
+
+You may supply your own pre-computed values by setting all three variables before calling the script:
+
+```bash
+export SMOKE_SIG=<128-hex-char signature>
+export SMOKE_PUBKEY=<64-hex-char public key>
+export SMOKE_NONCE=<nonce u64>
+./scripts/smoke_test.sh
+```
+
+Or run the helper manually:
+
+```bash
+eval "$(./scripts/generate_smoke_keypair.sh \
+  --contract-id  "$CONTRACT_ID" \
+  --merchant     "$MERCHANT_ADDRESS" \
+  --order-id     "SMOKE_$(date +%s)" \
+  --amount       1 \
+  --network      testnet)"
+./scripts/smoke_test.sh
+```
+
+> ⚠️ **Zeroed values are only valid for local/test builds.** The testnet WASM is compiled with `--release` and does **not** include the `#[cfg(test)]` bypass in `verify_signature`. Passing all-zero signatures against a live deployment will fail with `InvalidSignature`.
 
 ### Expected success criteria
 
@@ -381,7 +456,7 @@ The smoke test passes when each step succeeds without returning a non-zero exit 
 
 1. `set_admin`
 2. `register_merchant`
-3. `process_payment_with_signature`
+3. `process_payment_with_signature` (with a genuine ed25519 signature)
 4. `get_merchant`
 
 On success, the script prints:
@@ -401,6 +476,8 @@ To run the smoke test from GitHub Actions, set these repository secrets:
 - `TESTNET_ADMIN_ADDRESS`
 - `TESTNET_MERCHANT_ADDRESS`
 - `TESTNET_PAYER_ADDRESS`
+
+The CI workflows (`testnet-smoke.yml` and `smoke_test.yml`) automatically run `generate_smoke_keypair.sh` before the smoke test step — no additional secrets are needed for signature generation.
 
 ---
 
@@ -513,6 +590,25 @@ stellar contract invoke --id $CONTRACT_ID --source-account $CALLER_KEY --network
 stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
   -- get_merchants --admin $ADMIN_ADDR --cursor null --limit 10
 ```
+
+### GDPR Data Deletion
+
+Merchants in the EU can exercise their right to erasure under GDPR Article 17. See [`PRIVACY.md`](PRIVACY.md) for the full policy and [`docs/merchant-onboarding.md#data-deletion`](docs/merchant-onboarding.md#data-deletion) for step-by-step instructions.
+
+```bash
+# Step 1 — merchant submits deletion request (only the merchant can call this)
+stellar contract invoke --id $CONTRACT_ID --source-account $MERCHANT_KEY --network $NETWORK \
+  -- request_merchant_data_deletion \
+  --merchant $MERCHANT_ADDR
+
+# Step 2 — admin confirms and executes the anonymisation within 30 days
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- confirm_merchant_data_deletion \
+  --admin $ADMIN_ADDR \
+  --merchant $MERCHANT_ADDR
+```
+
+On completion the `name`, `description`, and `contact_info` fields are replaced with `[deleted]` and a `lumenflow/merchant_data_deleted` event is emitted.
 
 ### Payment Processing
 
@@ -730,6 +826,8 @@ For production monitoring — Horizon SSE streaming, alert thresholds, and examp
 | `lumenflow/multisig_executed` | Multisig payment executed |
 | `lumenflow/payment_request_paid` | Payment request completed |
 | `lumenflow/suspicious_activity` | Safety threshold exceeded |
+| `lumenflow/merchant_deletion_requested` | Merchant submitted a GDPR data-deletion request |
+| `lumenflow/merchant_data_deleted` | Merchant PII fields anonymised after admin confirmation |
 
 ---
 
@@ -742,6 +840,30 @@ The `frontend/` directory contains three standalone HTML pages that let you inte
 | Payment History | `frontend/history.html` | Browse and filter your payment records |
 | Payment Receipt | `frontend/receipt.html` | View a receipt for a specific order |
 | Multisig Payment | `frontend/multisig.html` | Initiate and sign multi-signature payments |
+
+### Progressive Web App (PWA)
+
+All frontend pages ship with a `manifest.json` and a service worker (`sw.js`) so the payment UI can be installed on mobile devices and used offline for receipt viewing.
+
+**Install on Android (Chrome):**
+1. Open `history.html` or `receipt.html` in Chrome on your Android device.
+2. Tap the browser menu (⋮) and select **"Add to Home screen"** (or wait for the automatic install banner).
+3. Confirm the installation — LumenFlow will appear as a home-screen app.
+
+**Install on iOS (Safari):**
+1. Open any page in Safari.
+2. Tap the **Share** button (□↑) and choose **"Add to Home Screen"**.
+3. Tap **Add** — the app icon will appear on your home screen.
+
+**Install on desktop (Chrome / Edge):**
+1. Open any page in the browser.
+2. Click the install icon (⊕) in the address bar, or open the browser menu and choose **"Install LumenFlow"**.
+
+**Offline use:**
+The service worker caches the app shell and mock receipt data on first load. Receipt pages work offline using cached data. When connectivity is restored the cache is updated automatically.
+
+**Lighthouse PWA score:**
+Run a Lighthouse audit from Chrome DevTools (Lighthouse → Mobile → PWA) against a locally served build to verify the score. The target is 90+.
 
 ### Open locally
 

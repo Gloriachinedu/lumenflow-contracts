@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   deploy:
@@ -45,7 +45,8 @@ jobs:
       - name: Deploy contract to testnet
         id: deploy
         env:
-          TESTNET_SOURCE_ACCOUNT: ${{ secrets.TESTNET_SOURCE_ACCOUNT }}
+          NETWORK: testnet
+          SOURCE_ACCOUNT: ${{ secrets.TESTNET_DEPLOYER_KEY }}
         run: |
           set -euo pipefail
           chmod +x scripts/deploy.sh

@@ -249,7 +249,11 @@ function renderReceipt({ payment, merchant, refunds }) {
 
 function copyLink() {
   navigator.clipboard.writeText(window.location.href)
-    .then(() => alert('Link copied!'))
+    .then(() => {
+      if (typeof window.showToast === 'function') {
+        window.showToast('Link copied!', 'success');
+      }
+    })
     .catch(() => prompt('Copy this link:', window.location.href));
 }
 
