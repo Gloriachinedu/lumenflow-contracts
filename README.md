@@ -401,6 +401,8 @@ NETWORK=testnet \
 ./scripts/smoke_test.sh
 ```
 
+By default the script automatically generates a throwaway ed25519 keypair, derives the canonical signature payload (see [docs/signature-format.md](docs/signature-format.md)), signs it, and passes the real signature to `process_payment_with_signature`. No manual key management is required for a standard run.
+
 ### Required environment variables
 
 - `CONTRACT_ID` — deployed contract ID
@@ -413,10 +415,40 @@ NETWORK=testnet \
 - `PAYER_ADDRESS` — payer public address
 - `NETWORK` — target network (`testnet` by default)
 
-Optional values supported by the smoke script:
+### Signature mode
 
-- `SMOKE_SIG` — explicit signature bytes for `process_payment_with_signature`
-- `SMOKE_PUBKEY` — explicit merchant public key used inside the test
+The smoke test exercises **real ed25519 signature verification** by default. `scripts/generate_smoke_keypair.sh` handles key generation and signing:
+
+1. Queries `get_merchant_nonce(merchant_address)` from the chain.
+2. Constructs the canonical payload:
+   `network_id (32 B) || contract_address XDR || nonce u64 BE (8 B) || order_id ScVal XDR || amount i128 BE (16 B)`
+3. Generates a fresh throwaway ed25519 keypair using Node.js built-ins.
+4. Signs the payload and exports `SMOKE_SIG`, `SMOKE_PUBKEY`, and `SMOKE_NONCE`.
+
+For the full payload specification see **[docs/signature-format.md](docs/signature-format.md)**.
+
+You may supply your own pre-computed values by setting all three variables before calling the script:
+
+```bash
+export SMOKE_SIG=<128-hex-char signature>
+export SMOKE_PUBKEY=<64-hex-char public key>
+export SMOKE_NONCE=<nonce u64>
+./scripts/smoke_test.sh
+```
+
+Or run the helper manually:
+
+```bash
+eval "$(./scripts/generate_smoke_keypair.sh \
+  --contract-id  "$CONTRACT_ID" \
+  --merchant     "$MERCHANT_ADDRESS" \
+  --order-id     "SMOKE_$(date +%s)" \
+  --amount       1 \
+  --network      testnet)"
+./scripts/smoke_test.sh
+```
+
+> ⚠️ **Zeroed values are only valid for local/test builds.** The testnet WASM is compiled with `--release` and does **not** include the `#[cfg(test)]` bypass in `verify_signature`. Passing all-zero signatures against a live deployment will fail with `InvalidSignature`.
 
 ### Expected success criteria
 
@@ -424,7 +456,7 @@ The smoke test passes when each step succeeds without returning a non-zero exit 
 
 1. `set_admin`
 2. `register_merchant`
-3. `process_payment_with_signature`
+3. `process_payment_with_signature` (with a genuine ed25519 signature)
 4. `get_merchant`
 
 On success, the script prints:
@@ -444,6 +476,8 @@ To run the smoke test from GitHub Actions, set these repository secrets:
 - `TESTNET_ADMIN_ADDRESS`
 - `TESTNET_MERCHANT_ADDRESS`
 - `TESTNET_PAYER_ADDRESS`
+
+The CI workflows (`testnet-smoke.yml` and `smoke_test.yml`) automatically run `generate_smoke_keypair.sh` before the smoke test step — no additional secrets are needed for signature generation.
 
 ---
 
