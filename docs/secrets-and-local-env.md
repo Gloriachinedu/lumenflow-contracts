@@ -1,7 +1,107 @@
 # Secrets and local environment setup
 
 This guide explains how to configure LumenFlow locally without committing secrets,
-and how to validate the Docker Compose stack.
+how to validate the Docker Compose stack, and the automated secrets scanning
+policy that protects the repository from accidental key commits.
+
+## Secrets scanning policy (Issue #627)
+
+LumenFlow uses [gitleaks](https://github.com/gitleaks/gitleaks) to automatically
+detect and block accidental commits of secrets such as Stellar secret keys,
+private key PEM blocks, API tokens, and seed phrases.
+
+### What is scanned
+
+The `.gitleaks.toml` file at the repository root defines the following custom rules:
+
+| Rule ID | Description | Severity |
+|---------|-------------|----------|
+| `stellar-secret-key` | Stellar secret keys starting with `S` (56 chars) | CRITICAL |
+| `stellar-secret-key-env` | Stellar keys assigned to `SOURCE_ACCOUNT`, `ADMIN_KEY`, etc. | CRITICAL |
+| `private-key-pem` | PEM-encoded private key blocks | CRITICAL |
+| `env-secret-assignment` | Plaintext passwords/tokens in variable assignments | HIGH |
+| `mnemonic-seed-phrase` | BIP-39 mnemonic seed phrases | CRITICAL |
+| `github-pat` | GitHub personal access tokens | HIGH |
+| `aws-access-key` | AWS access key IDs | HIGH |
+
+Additionally, all built-in gitleaks detectors are active.
+
+### Where scanning runs
+
+1. **Pre-commit hook** — `gitleaks protect --staged` runs on every `git commit`
+   before the commit is made, scanning only staged files. Install the hooks with:
+   ```bash
+   git config core.hooksPath .githooks
+   # or
+   ./scripts/install_hooks.sh
+   ```
+
+2. **CI on every PR** — The `.github/workflows/secrets-scan.yml` workflow runs
+   gitleaks on every pull request and push to `main`/`develop`. A PR cannot be
+   merged if gitleaks finds a secret.
+
+### Installing gitleaks
+
+**macOS (Homebrew):**
+```bash
+brew install gitleaks
+```
+
+**Linux (binary):**
+```bash
+curl -sSfL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_x64.tar.gz \
+  | tar -xz -C /usr/local/bin
+```
+
+**Windows:**
+```powershell
+winget install gitleaks
+```
+
+Verify the installation:
+```bash
+gitleaks version
+```
+
+### Manual scan
+
+To scan the full repository history at any time:
+```bash
+gitleaks detect --source . --config .gitleaks.toml
+```
+
+To scan only staged changes before committing:
+```bash
+gitleaks protect --staged --config .gitleaks.toml
+```
+
+### Handling false positives
+
+If gitleaks flags a value that is not a real secret (e.g., a test fixture, a
+placeholder address in documentation, or a public key), add an allowlist entry
+to `.gitleaks.toml` with a clear justification comment:
+
+```toml
+[[rules]]
+id    = "stellar-secret-key"
+# ... existing rule ...
+
+  [rules.allowlist]
+  description = "Allow placeholder keys in docs"
+  regexTarget = "line"
+  regexes     = [
+    # Justification: README.md uses <admin-secret> as a literal placeholder
+    '''<admin-secret>''',
+  ]
+```
+
+Or add path-level allowlist entries in the `[allowlist]` section for entire files
+that are safe by construction (e.g., `.env.example`).
+
+**Never add a real secret to an allowlist.** If a real key was committed by
+mistake, rotate it immediately — do not simply allowlist it.
+
+---
 
 ## Environment files
 
@@ -74,4 +174,61 @@ docker compose up -d stellar # start the local Stellar quickstart node
 
 `docker compose config` resolves and type-checks `docker-compose.yml`. The
 committed compose file contains no secrets; it only sets the public `NETWORK`
-value for the local quickstart node, so it is safe to commit as-is..
+value for the local quickstart node, so it is safe to commit as-is.
+
+## Frontend Content Security Policy (CSP)
+
+All frontend HTML pages include a `Content-Security-Policy` meta tag to protect
+against XSS attacks, wallet-key exfiltration, and Soroban RPC hijacking.
+
+### Policy structure
+
+```html
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'self';
+  script-src  'self' https://cdn.jsdelivr.net;
+  style-src   'self' 'unsafe-inline';
+  connect-src 'self'
+              https://soroban-testnet.stellar.org
+              https://horizon-testnet.stellar.org
+              https://horizon.stellar.org;
+  img-src     'self' data:;
+  font-src    'self';
+  object-src  'none';
+  frame-ancestors 'none';
+" />
+```
+
+### Directive rationale
+
+| Directive       | Value                                   | Why                                                                           |
+| --------------- | --------------------------------------- | ----------------------------------------------------------------------------- |
+| `default-src`   | `'self'`                                | Block all unlisted resource origins by default.                               |
+| `script-src`    | `'self' https://cdn.jsdelivr.net`       | Allows the Stellar SDK loaded via jsDelivr CDN. No `unsafe-inline`.          |
+| `style-src`     | `'self' 'unsafe-inline'`               | Inline styles used by shared utilities (overlays, banners). No external CSS. |
+| `connect-src`   | `'self'` + Stellar RPC/Horizon URLs     | Restricts XHR/fetch to the configured Soroban RPC and Horizon endpoints.     |
+| `img-src`       | `'self' data:`                          | Allows inline SVG data URIs used for icons.                                   |
+| `font-src`      | `'self'`                                | System fonts only; no external font loading.                                  |
+| `object-src`    | `'none'`                                | Blocks Flash/plugins entirely.                                                |
+| `frame-ancestors` | `'none'`                              | Prevents clickjacking by disallowing framing.                                 |
+
+### Adapting the policy for production
+
+If you deploy to mainnet or a custom RPC endpoint, update `connect-src` to include
+your production URLs. For example:
+
+```
+connect-src 'self' https://soroban-mainnet.stellar.org https://horizon.stellar.org https://your-rpc.example.com;
+```
+
+Never add `unsafe-eval` or `unsafe-inline` to `script-src` — doing so would
+defeat the XSS protection the policy provides.
+
+### CI linting
+
+The policy is validated in CI using the `htmlhint` linter (configured in
+`.htmlhintrc`). Run locally with:
+
+```bash
+cd frontend && npx htmlhint "*.html"
+```

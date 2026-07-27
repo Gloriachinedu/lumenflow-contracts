@@ -8,6 +8,23 @@ TypeScript SDK for the LumenFlow Soroban smart contract on Stellar.
 npm install @lumenflow/sdk
 ```
 
+## Quality & Testing
+
+### Differential Testing
+
+The SDK is **differentially tested** against the raw `@stellar/stellar-sdk` library on every PR and weekly on Mondays. Differential tests call each SDK method _and_ the equivalent direct `stellar-sdk` invocation, then compare the results byte-for-byte. Any discrepancy — wrong XDR encoding, wrong field name, off-by-one in serialization — causes the test to fail with a descriptive diff showing exactly which bytes differ.
+
+The differential test suite lives in `sdk/src/tests/differential.test.ts` and is tagged `@differential`. Run it locally:
+
+```bash
+cd sdk
+npm test -- --testPathPattern="differential" --verbose
+```
+
+The CI workflow `.github/workflows/differential-tests.yml` runs the full suite weekly (Monday 08:00 UTC) and on every pull request. Test results and coverage are uploaded as build artifacts.
+
+---
+
 ## Quick Start
 
 ```typescript
@@ -103,6 +120,32 @@ await client.setMaxRefundsPerOrder(adminAddress, 5);
 
 ---
 
+### MerchantCategory
+
+`MerchantCategory` is a tagged union type that mirrors the Rust contract's enum.
+Simple variants are plain string literals; the `Custom` variant carries an
+arbitrary label (1–32 characters).
+
+```typescript
+// Simple variants — use the string literal directly or the namespace helper
+const category: MerchantCategory = "Retail";        // plain string
+const category: MerchantCategory = MerchantCategory.Food; // namespace helper
+
+// Custom variant — use an object with a Custom key
+const category: MerchantCategory = { Custom: "Handmade" };
+
+// Or use the namespace helper for Custom
+const category: MerchantCategory = MerchantCategory.custom("Handmade");
+```
+
+Available simple variants: `"Retail"` | `"Food"` | `"Services"` | `"Digital"` | `"Other"`
+
+The `Custom` label must be non-empty and at most 32 characters. Passing an empty
+string or a string longer than 32 characters throws synchronously before any RPC
+call is made.
+
+---
+
 ### Merchant Management
 
 #### `registerMerchant(merchantAddress, name, description, contactInfo, category): Promise<void>`
@@ -115,15 +158,57 @@ Register a new merchant. The caller must be the merchant address.
 | `name` | `string` | Display name |
 | `description` | `string` | Business description |
 | `contactInfo` | `string` | Contact email or URL |
-| `category` | `MerchantCategory` | One of `Retail`, `Food`, `Services`, `Digital`, `Other` |
+| `category` | `MerchantCategory` | A simple variant string or `{ Custom: string }` for a custom category |
 
 ```typescript
+// Register with a standard category
 await client.registerMerchant(
   keypair.publicKey(),
   'My Store',
   'Best prices in town',
   'support@mystore.com',
   MerchantCategory.Retail,
+);
+
+// Register with a custom category
+await client.registerMerchant(
+  keypair.publicKey(),
+  'Artisan Goods',
+  'Handcrafted items from local artisans',
+  'hello@artisan.com',
+  { Custom: 'Handmade' },
+);
+```
+
+#### `updateMerchant(merchantAddress, name, description, contactInfo, category): Promise<void>`
+
+Update an existing merchant profile. The caller must be the merchant address.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `merchantAddress` | `string` | Merchant's Stellar address |
+| `name` | `string` | Updated display name |
+| `description` | `string` | Updated business description |
+| `contactInfo` | `string` | Updated contact email or URL |
+| `category` | `MerchantCategory` | Updated category — any simple variant or `{ Custom: string }` |
+
+```typescript
+// Update to a custom category
+await client.updateMerchant(
+  keypair.publicKey(),
+  'Artisan Goods',
+  'Handcrafted & vintage items',
+  'hello@artisan.com',
+  { Custom: 'Handmade' },
+);
+
+// Update back to a standard category
+await client.updateMerchant(
+  keypair.publicKey(),
+  'Artisan Goods',
+  'Online marketplace',
+  'hello@artisan.com',
+  MerchantCategory.Digital,
 );
 ```
 
@@ -769,6 +854,23 @@ interface GlobalStats {
 
 ---
 
+## Installation
+
+```bash
+npm install @lumenflow/sdk
+```
+
+## Development
+
+To build the SDK from source:
+
+```bash
+cd sdk
+npm install
+npm run build
+npm test
+```
+
 ## Error Handling
 
 Contract errors surface as `LumenFlowError` with a typed `code` property:
@@ -912,4 +1014,100 @@ const sub = subscribeToPayments(merchant, callback, {
 const sub = subscribeToPayments(merchant, callback, {
   horizonUrl: 'https://horizon.stellar.org',
 });
+```
+
+## Address Validation
+
+For frontend applications, the SDK provides utilities to validate Stellar addresses:
+
+```typescript
+import { isValidStellarAddress, isValidStellarContractId } from '@lumenflow/sdk';
+
+// Validate a Stellar public key (G-address)
+const isValid = isValidStellarAddress('GD6WUVRX7XJ6E5Q5K2L2K3K4K5K6K7K8K9K0K1K2K3K4K5K6K7K8K9K0K1K2');
+console.log(isValid); // true
+
+// Validate a Stellar contract ID (C-address)
+const isContractValid = isValidStellarContractId('CD6WUVRX7XJ6E5Q5K2L2K3K4K5K6K7K8K9K0K1K2K3K4K5K6K7K8K9K0K1K2');
+console.log(isContractValid); // true
+```
+
+### Validation Rules
+
+- **Stellar Public Keys (G-address)**: Must start with 'G', be exactly 56 characters, and use valid base32 encoding
+- **Stellar Contract IDs (C-address)**: Must start with 'C', be exactly 56 characters, and use valid base32 encoding
+
+**Note**: The validation functions perform lightweight format checking. For production use with full checksum validation, consider using `@stellar/stellar-sdk`'s `StrKey` utilities:
+
+```typescript
+import { StrKey } from '@stellar/stellar-sdk';
+
+try {
+  StrKey.decodeEd25519PublicKey(address);
+  // Valid address
+} catch {
+  // Invalid address
+}
+```
+
+## Retry Configuration
+
+The SDK provides automatic retry logic for transient HTTP errors (429, 503, 504, network failures) when using the `Client` class.
+
+### Default Retry Configuration
+
+```typescript
+import { DEFAULT_RETRY_CONFIG } from '@lumenflow/sdk';
+
+console.log(DEFAULT_RETRY_CONFIG);
+// {
+//   maxAttempts: 5,
+//   initialDelayMs: 100,
+//   maxDelayMs: 10000,
+//   backoffMultiplier: 2,
+//   jitterFactor: 0.1,
+//   retryableStatusCodes: [429, 503, 504],
+// }
+```
+
+### Using the Client with Custom Retry Config
+
+```typescript
+import { Client, ClientConfig } from '@lumenflow/sdk';
+
+const config: ClientConfig = {
+  rpcUrl: 'https://soroban-testnet.stellar.org',
+  contractId: 'your-contract-id',
+  retryConfig: {
+    maxAttempts: 10,           // Increase max attempts
+    initialDelayMs: 200,       // Start with longer delay
+    maxDelayMs: 30000,          // Allow longer max delay
+  },
+};
+
+const client = new Client(config);
+```
+
+### Retry Behavior
+
+- **Transient errors** (429, 503, 504, network failures) are automatically retried with exponential backoff and jitter
+- **Business logic errors** (`LumenFlowError`) are not retried and propagate immediately
+- **Non-retryable HTTP errors** (400, 401, 403, etc.) are not retried
+
+### Manual Retry
+
+You can also use the `withRetry` utility directly:
+
+```typescript
+import { withRetry, RetryConfig } from '@lumenflow/sdk';
+
+const config: Partial<RetryConfig> = {
+  maxAttempts: 3,
+  initialDelayMs: 100,
+};
+
+await withRetry(async () => {
+  // Your async operation here
+  await someApiCall();
+}, config);
 ```

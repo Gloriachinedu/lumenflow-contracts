@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://horizon.stellar.org; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none';" />
   <title>Merchant Dashboard – LumenFlow</title>
   <meta name="description" content="LumenFlow merchant dashboard: view your payment stats, recent transactions, and manage refunds." />
   <style>
@@ -333,7 +334,7 @@
 </div>
 
 <script type="module">
-  import { DEMO_MODE, CONTRACT_ID, NETWORK, formatAmount, formatDate, renderModeBanner, copyButtonHtml, initCopyButtons } from './lumenflow-shared.js';
+  import { DEMO_MODE, CONTRACT_ID, NETWORK, formatAmount, formatDate, renderModeBanner, copyButtonHtml, initCopyButtons, showLoadingOverlay, hideLoadingOverlay } from './lumenflow-shared.js';
   import { validateAddress } from './validation.js';
   import { showErrorToast } from './errorMessages.js';
 
@@ -383,7 +384,7 @@
       return `<tr>
         <td class="order-id"><code>${p.order_id}</code>${copyButtonHtml(p.order_id, 'Copy order ID')}</td>
         <td>${formatDate(p.paid_at)}</td>
-        <td class="amount">${formatAmount(p.amount)} XLM</td>
+        <td class="amount">${formatAmount(p.amount, 7, 'XLM')}</td>
         <td><span class="${badgeClass(p.status)}">${p.status}</span></td>
         <td>${p.memo || '—'}</td>
         <td><a class="action-link" href="${receiptHref}">Receipt</a></td>
@@ -413,7 +414,7 @@
     const rows = refunds.map(r => `<tr>
       <td class="refund-id"><code>${r.refund_id}</code>${copyButtonHtml(r.refund_id, 'Copy refund ID')}</td>
       <td class="order-id"><code>${r.order_id}</code>${copyButtonHtml(r.order_id, 'Copy order ID')}</td>
-      <td class="amount">${formatAmount(r.amount)} XLM</td>
+      <td class="amount">${formatAmount(r.amount, 7, 'XLM')}</td>
       <td><span class="${badgeClass(r.status)}">${r.status}</span></td>
       <td>${r.reason}</td>
       <td>${formatDate(r.created_at)}</td>
@@ -471,7 +472,9 @@
       payments = MOCK_PAYMENTS;
       refunds  = MOCK_REFUNDS;
     } else {
+      showLoadingOverlay('Loading dashboard data…');
       const live = await fetchLiveData(address);
+      hideLoadingOverlay();
       if (!live) {
         document.getElementById('payments-container').innerHTML =
           '<div class="alert alert-error">Could not load live data. Check console for details.</div>';
@@ -482,10 +485,10 @@
     }
 
     const stats = computeStats(payments);
-    document.getElementById('stat-volume').textContent  = formatAmount(stats.totalVol)  + ' XLM';
+    document.getElementById('stat-volume').textContent  = formatAmount(stats.totalVol, 7, 'XLM');
     document.getElementById('stat-count').textContent   = stats.count;
     document.getElementById('stat-refunds').textContent = stats.refunds;
-    document.getElementById('stat-avg').textContent     = formatAmount(stats.avg) + ' XLM';
+    document.getElementById('stat-avg').textContent     = formatAmount(stats.avg, 7, 'XLM');
 
     document.getElementById('payments-container').innerHTML = buildPaymentsTable(payments);
     document.getElementById('refunds-container').innerHTML  = buildRefundsTable(refunds);

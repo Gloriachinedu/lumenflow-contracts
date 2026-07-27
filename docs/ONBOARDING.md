@@ -62,12 +62,49 @@ Install the following tools:
 | Stellar CLI | [Installation guide](https://developers.stellar.org/docs/tools/stellar-cli) | `stellar --version` |
 | Docker Desktop | [docker.com](https://www.docker.com/products/docker-desktop) | `docker --version` |
 | Git | System package manager | `git --version` |
+| gitleaks | See below | `gitleaks version` |
 
 Add the WASM compilation target:
 
 ```bash
 rustup target add wasm32-unknown-unknown
 ```
+
+### Installing gitleaks (secrets scanning)
+
+LumenFlow uses [gitleaks](https://github.com/gitleaks/gitleaks) to prevent
+accidental commits of private keys, seed phrases, and API tokens. Install it
+before running the pre-commit hook:
+
+**macOS:**
+```bash
+brew install gitleaks
+```
+
+**Linux:**
+```bash
+curl -sSfL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_x64.tar.gz \
+  | tar -xz -C /usr/local/bin
+```
+
+**Windows:**
+```powershell
+winget install gitleaks
+```
+
+After installation, activate the pre-commit hook:
+
+```bash
+git config core.hooksPath .githooks
+# or
+./scripts/install_hooks.sh
+```
+
+The hook runs `gitleaks protect --staged` on every commit, blocking any
+staged files that match the rules in `.gitleaks.toml`.
+
+See [`docs/secrets-and-local-env.md`](./secrets-and-local-env.md) for the full
+secrets scanning policy, false-positive handling, and manual scan commands.
 
 ---
 

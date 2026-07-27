@@ -105,6 +105,18 @@ Out-of-scope:
 - Issues in third-party dependencies (report upstream)
 - Theoretical attacks without a practical exploit path
 
+## Admin Key Rotation
+
+The contract admin key controls all privileged operations. A documented rotation procedure is required to maintain security posture across key holder changes, suspected compromises, and regular rotation cycles.
+
+**See [docs/admin-key-rotation.md](docs/admin-key-rotation.md) for the full key rotation runbook**, including:
+
+- Planned rotation step-by-step using `transfer_admin`
+- Hardware Security Module (HSM) setup requirements for production
+- Emergency rotation procedure for a compromised key
+- Two-person integrity requirements (all production rotations must be witnessed)
+- Post-rotation verification checklist
+
 ## Incident Response Playbook
 
 ### Critical Vulnerability (Severity: Critical)
@@ -166,3 +178,89 @@ We maintain a bug bounty program for eligible reports. Rewards are offered at ou
 ## Hall of Fame
 
 With the reporter's consent, we will credit acknowledged disclosures in published security advisories and maintain a Hall of Fame for recognized contributors.
+
+---
+
+## Emergency Pause Mechanism
+
+The contract has a built-in emergency pause mechanism designed to limit blast radius when a critical vulnerability is discovered. This section describes the available tools and the procedures for using them.
+
+### Pause functions
+
+| Function | Who can call | Effect |
+|----------|-------------|--------|
+| `pause_contract(admin)` | Admin | Immediately pauses all state-mutating functions. No timelock. Use for routine maintenance. |
+| `pause_with_reason(admin, reason)` | Admin | Pauses with a recorded reason and activates a **7-day unpause timelock**. Use for security incidents. |
+| `unpause_contract(admin)` | Admin | Unpauses. If the contract was paused via `pause_with_reason`, this call is blocked until the 7-day timelock expires. |
+| `approve_early_unpause(guardian)` | Registered pause guardian | Casts one vote for early unpause. When **3 out of 5 guardians** have approved, the contract unpauses automatically and the timelock is cleared. |
+| `set_pause_guardians(admin, guardians)` | Admin | Registers the 5 authorized pause guardian addresses. Must be called before an emergency. |
+
+### When to use `pause_with_reason`
+
+Use `pause_with_reason` (not `pause_contract`) for security incidents. It:
+
+1. Records the reason on-chain, giving auditors and users immediate context.
+2. Emits the reason in the `contract_paused` event so off-chain monitors surface it instantly.
+3. Sets a 7-day timelock that prevents a compromised admin key from silently unpausing after an exploit.
+
+### Emergency pause procedure
+
+1. **Detect** the vulnerability — via monitoring, bug report, or automated alert.
+2. **Pause immediately:**
+   ```bash
+   stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network mainnet \
+     -- pause_with_reason \
+     --admin $ADMIN_ADDR \
+     --reason "Critical vulnerability CVE-YYYY-NNNNN: reentrancy in execute_refund"
+   ```
+3. **Confirm** the pause event is visible on Horizon:
+   ```bash
+   stellar contract invoke --id $CONTRACT_ID -- get_contract_version
+   # Should return error ContractPaused (70)
+   ```
+4. **Investigate** and develop a patch. The 7-day timelock gives the team time to audit, fix, and deploy before any pressure to unpause.
+5. **Deploy patched WASM** (admin only, contract must remain paused during upgrade).
+6. **Unpause** — two paths:
+   - **Standard:** Wait for the 7-day timelock to expire, then call `unpause_contract`.
+   - **Early (3-of-5 multisig):** Have 3 of the 5 registered guardians each call `approve_early_unpause` from their own key. The contract unpauses automatically on the third approval.
+
+### Setting up pause guardians
+
+Before any incident occurs, register the 5 guardian addresses. These should be held by distinct individuals (e.g. core team members) on separate key management systems.
+
+```bash
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network mainnet \
+  -- set_pause_guardians \
+  --admin $ADMIN_ADDR \
+  --guardians '["G...GUARDIAN1","G...GUARDIAN2","G...GUARDIAN3","G...GUARDIAN4","G...GUARDIAN5"]'
+```
+
+### Early unpause example (3-of-5 multisig override)
+
+```bash
+# Guardian 1
+stellar contract invoke --id $CONTRACT_ID --source-account $GUARDIAN1_KEY --network mainnet \
+  -- approve_early_unpause --guardian $GUARDIAN1_ADDR
+
+# Guardian 2
+stellar contract invoke --id $CONTRACT_ID --source-account $GUARDIAN2_KEY --network mainnet \
+  -- approve_early_unpause --guardian $GUARDIAN2_ADDR
+
+# Guardian 3 — triggers auto-unpause
+stellar contract invoke --id $CONTRACT_ID --source-account $GUARDIAN3_KEY --network mainnet \
+  -- approve_early_unpause --guardian $GUARDIAN3_ADDR
+```
+
+The `contract_unpaused` event will include `("multisig_override",)` in its data payload, distinguishing it from a standard admin unpause.
+
+### Monitoring the pause state
+
+Subscribe to `contract_paused` and `contract_unpaused` events via the Horizon SSE stream:
+
+```
+GET https://horizon.stellar.org/contracts/{CONTRACT_ID}/events
+    ?cursor=now&topic1=lumenflow&topic2=contract_paused
+```
+
+The data payload of a `contract_paused` event from `pause_with_reason` contains `(reason: String, lock_until: u64)` where `lock_until` is the Unix timestamp after which the admin can unpause without guardian approval.
+
