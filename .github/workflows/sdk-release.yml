@@ -1,4 +1,4 @@
-feat/npm-sdk-publishing
+feat/stellar-address-validation
 name: SDK Release
 
 on:
