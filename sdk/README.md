@@ -8,6 +8,23 @@ TypeScript SDK for the LumenFlow Soroban smart contract on Stellar.
 npm install @lumenflow/sdk
 ```
 
+## Quality & Testing
+
+### Differential Testing
+
+The SDK is **differentially tested** against the raw `@stellar/stellar-sdk` library on every PR and weekly on Mondays. Differential tests call each SDK method _and_ the equivalent direct `stellar-sdk` invocation, then compare the results byte-for-byte. Any discrepancy — wrong XDR encoding, wrong field name, off-by-one in serialization — causes the test to fail with a descriptive diff showing exactly which bytes differ.
+
+The differential test suite lives in `sdk/src/tests/differential.test.ts` and is tagged `@differential`. Run it locally:
+
+```bash
+cd sdk
+npm test -- --testPathPattern="differential" --verbose
+```
+
+The CI workflow `.github/workflows/differential-tests.yml` runs the full suite weekly (Monday 08:00 UTC) and on every pull request. Test results and coverage are uploaded as build artifacts.
+
+---
+
 ## Quick Start
 
 ```typescript
