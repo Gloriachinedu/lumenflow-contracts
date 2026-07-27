@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Installs local git hooks from .githooks/ into the repository's hook directory.
+# Run once after cloning:  ./scripts/install_hooks.sh
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,10 +17,28 @@ if [[ "$git_dir" != /* ]]; then
   git_dir="$repo_root/$git_dir"
 fi
 
-hook_source="$repo_root/.githooks/pre-commit"
-hook_target="$git_dir/hooks/pre-commit"
+hooks_source_dir="$repo_root/.githooks"
+hooks_target_dir="$git_dir/hooks"
 
-chmod +x "$hook_source"
-ln -sf "$hook_source" "$hook_target"
+install_hook() {
+  local name="$1"
+  local source="$hooks_source_dir/$name"
+  local target="$hooks_target_dir/$name"
 
-echo "Installed git pre-commit hook at $hook_target"
+  if [[ ! -f "$source" ]]; then
+    echo "Warning: hook source not found: $source" >&2
+    return
+  fi
+
+  chmod +x "$source"
+  ln -sf "$source" "$target"
+  echo "Installed git $name hook → $target"
+}
+
+# Install all hooks
+install_hook "pre-commit"
+install_hook "commit-msg"
+
+echo ""
+echo "✅ Git hooks installed. Commit messages must follow Conventional Commits format."
+echo "   See CONTRIBUTING.md for the commit message format."

@@ -6,8 +6,59 @@ This document provides a detailed reference for all events emitted by the LumenF
 
 All events in LumenFlow follow the Soroban event standard.
 - **Contract ID**: The address of the deployed LumenFlow contract.
-- **Topics**: The first topic is always the symbol `lumenflow`. The second topic is the event name (e.g., `payment_processed`).
+- **Topics**: The first topic is always the symbol `lumenflow`. The second topic is the event name (e.g., `payment_processed`). Payment and refund events also include the **merchant address as a third topic** so Horizon can filter by merchant without client-side scanning.
 - **Data**: A single XDR-encoded value (can be a tuple, struct, or primitive).
+
+---
+
+## Filtering by Merchant Address
+
+Payment and refund events expose the merchant address as **`topic[2]`** (zero-indexed). This allows you to subscribe to events for a specific merchant directly on the Horizon SSE stream or via Soroban RPC without downloading all platform events.
+
+### Soroban RPC — filter by merchant
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "getEvents",
+  "params": {
+    "startLedger": 123456,
+    "filters": [
+      {
+        "type": "contract",
+        "contractIds": ["C...CONTRACT_ID"],
+        "topics": [
+          ["<base64-xdr-of-symbol-lumenflow>"],
+          ["<base64-xdr-of-symbol-payment_processed>"],
+          ["<base64-xdr-of-merchant-address>"]
+        ]
+      }
+    ],
+    "pagination": { "limit": 20 }
+  }
+}
+```
+
+To compute the XDR of a merchant address in JavaScript:
+
+```javascript
+import { xdr, Address } from '@stellar/stellar-sdk';
+
+const merchantXdr = Address.fromString('G...MERCHANT_ADDR')
+  .toScVal()
+  .toXDR('base64');
+```
+
+### Horizon SSE — filter by merchant
+
+```
+GET https://horizon-testnet.stellar.org/contracts/{CONTRACT_ID}/events
+    ?cursor=now
+    &topic1=lumenflow
+    &topic2=payment_processed
+    &topic3=<merchant-address-xdr>
+```
 
 ---
 
@@ -20,9 +71,9 @@ Emitted when the contract administrator is successfully initialized.
 |---|---|
 | **Trigger** | One-time initialization via `set_admin`. |
 | **Topics** | `["lumenflow", "admin_set"]` |
-| **Payload** | `admin: Address` |
+| **Data** | `admin: Address` |
 
-**Payload Details:**
+**Data Details:**
 - `admin`: The `Address` of the newly set administrator.
 
 ---
@@ -34,9 +85,9 @@ Emitted when a new merchant profile is created.
 |---|---|
 | **Trigger** | Successful call to `register_merchant`. |
 | **Topics** | `["lumenflow", "merchant_registered"]` |
-| **Payload** | `merchant_address: Address` |
+| **Data** | `merchant_address: Address` |
 
-**Payload Details:**
+**Data Details:**
 - `merchant_address`: The `Address` of the registered merchant.
 
 ---
@@ -44,16 +95,22 @@ Emitted when a new merchant profile is created.
 ### `payment_processed`
 Emitted when a payment is successfully completed (via signature or batch).
 
+The merchant address is emitted as **`topic[2]`** (filterable) so subscribers can efficiently receive only their own payment events.
+
 | Field | Description |
 |---|---|
 | **Trigger** | Successful call to `process_payment_with_signature` or `batch_payment`. |
-| **Topics** | `["lumenflow", "payment_processed"]` |
-| **Payload** | `(order_id: String, payer: Address, merchant: Address, amount: i128)` |
+| **Topics** | `["lumenflow", "payment_processed", merchant_address: Address]` |
+| **Data** | `(order_id: String, payer: Address, amount: i128)` |
 
-**Payload Details:**
+**Topic Details:**
+- `topic[0]`: `"lumenflow"` — contract namespace.
+- `topic[1]`: `"payment_processed"` — event name.
+- `topic[2]`: `merchant_address` — the merchant who received payment. **Filterable.**
+
+**Data Details:**
 - `order_id`: The unique identifier for the order.
 - `payer`: The `Address` of the account that made the payment.
-- `merchant`: The `Address` of the merchant who received the payment.
 - `amount`: The amount paid (in the token's smallest unit).
 
 ---
@@ -65,9 +122,9 @@ Emitted when a transaction exceeds defined safety thresholds (e.g., large paymen
 |---|---|
 | **Trigger** | Payment amount exceeds `LargePaymentThreshold`. |
 | **Topics** | `["lumenflow", "suspicious_activity"]` |
-| **Payload** | `(reason: SuspiciousActivityReason, actor: Address, value: i128)` |
+| **Data** | `(reason: SuspiciousActivityReason, actor: Address, value: i128)` |
 
-**Payload Details:**
+**Data Details:**
 - `reason`: An enum indicating why the activity was flagged.
     - `LargePayment` (1)
     - `RapidRefunds` (2)
@@ -84,18 +141,27 @@ Emitted when a payment record is manually removed from contract storage by an ad
 |---|---|
 | **Trigger** | Successful call to `archive_payment_record`. |
 | **Topics** | `["lumenflow", "payment_archived"]` |
-| **Payload** | `order_id: String` |
+| **Data** | `order_id: String` |
 
 ---
 
 ### `refund_initiated`
 Emitted when a new refund request is opened.
 
+The merchant address is emitted as **`topic[2]`** so merchants can subscribe only to refund events relevant to them.
+
 | Field | Description |
 |---|---|
 | **Trigger** | Successful call to `initiate_refund`. |
-| **Topics** | `["lumenflow", "refund_initiated"]` |
-| **Payload** | `refund_id: String` |
+| **Topics** | `["lumenflow", "refund_initiated", merchant_address: Address]` |
+| **Data** | `(refund_id: String, order_id: String)` |
+
+**Topic Details:**
+- `topic[2]`: `merchant_address` — merchant associated with the payment. **Filterable.**
+
+**Data Details:**
+- `refund_id`: The unique refund identifier.
+- `order_id`: The associated payment order identifier.
 
 ---
 
@@ -105,8 +171,11 @@ Emitted when a refund request is approved by a merchant or admin.
 | Field | Description |
 |---|---|
 | **Trigger** | Successful call to `approve_refund`. |
-| **Topics** | `["lumenflow", "refund_approved"]` |
-| **Payload** | `refund_id: String` |
+| **Topics** | `["lumenflow", "refund_approved", merchant_address: Address]` |
+| **Data** | `(refund_id: String, order_id: String)` |
+
+**Topic Details:**
+- `topic[2]`: `merchant_address` — merchant associated with the payment. **Filterable.**
 
 ---
 
@@ -116,8 +185,11 @@ Emitted when a refund request is rejected.
 | Field | Description |
 |---|---|
 | **Trigger** | Successful call to `reject_refund`. |
-| **Topics** | `["lumenflow", "refund_rejected"]` |
-| **Payload** | `refund_id: String` |
+| **Topics** | `["lumenflow", "refund_rejected", merchant_address: Address]` |
+| **Data** | `(refund_id: String, order_id: String)` |
+
+**Topic Details:**
+- `topic[2]`: `merchant_address` — merchant associated with the payment. **Filterable.**
 
 ---
 
@@ -127,8 +199,35 @@ Emitted when an approved refund transfer is completed.
 | Field | Description |
 |---|---|
 | **Trigger** | Successful call to `execute_refund`. |
-| **Topics** | `["lumenflow", "refund_executed"]` |
-| **Payload** | `refund_id: String` |
+| **Topics** | `["lumenflow", "refund_executed", merchant_address: Address]` |
+| **Data** | `(refund_id: String, order_id: String)` |
+
+**Topic Details:**
+- `topic[2]`: `merchant_address` — merchant associated with the payment. **Filterable.**
+
+---
+
+### `contract_paused`
+Emitted when the contract is paused.
+
+When paused via `pause_with_reason`, the data includes the reason and timelock expiry timestamp.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful call to `pause_contract` or `pause_with_reason`. |
+| **Topics** | `["lumenflow", "contract_paused"]` |
+| **Data** | `()` (from `pause_contract`) or `(reason: String, lock_until: u64)` (from `pause_with_reason`) |
+
+---
+
+### `contract_unpaused`
+Emitted when the contract is unpaused.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful call to `unpause_contract` or threshold reached in `approve_early_unpause`. |
+| **Topics** | `["lumenflow", "contract_unpaused"]` |
+| **Data** | `()` (admin unpause) or `("multisig_override",)` (guardian threshold reached) |
 
 ---
 
@@ -139,7 +238,7 @@ Emitted when a multi-signature payment is created.
 |---|---|
 | **Trigger** | Successful call to `initiate_multisig_payment`. |
 | **Topics** | `["lumenflow", "multisig_initiated"]` |
-| **Payload** | `payment_id: String` |
+| **Data** | `payment_id: String` |
 
 ---
 
@@ -150,7 +249,7 @@ Emitted when a multi-signature payment is successfully executed.
 |---|---|
 | **Trigger** | Successful call to `execute_multisig_payment`. |
 | **Topics** | `["lumenflow", "multisig_executed"]` |
-| **Payload** | `payment_id: String` |
+| **Data** | `payment_id: String` |
 
 ---
 
@@ -161,7 +260,7 @@ Emitted when a pre-generated payment request is paid by a user.
 |---|---|
 | **Trigger** | Successful call to `pay_payment_request`. |
 | **Topics** | `["lumenflow", "payment_request_paid"]` |
-| **Payload** | `request_id: String` |
+| **Data** | `request_id: String` |
 
 ---
 
@@ -172,7 +271,7 @@ You can subscribe to LumenFlow events using any Stellar SDK or by querying Horiz
 ### Via Stellar RPC (Recommended)
 Soroban-RPC provides the `getEvents` method to query events within a ledger range.
 
-**Example Request (JSON-RPC):**
+**Example Request (JSON-RPC) — all `payment_processed` events:**
 ```json
 {
   "jsonrpc": "2.0",
@@ -184,17 +283,22 @@ Soroban-RPC provides the `getEvents` method to query events within a ledger rang
       {
         "type": "contract",
         "contractIds": ["C...CONTRACT_ID"],
-        "topics": [["AAAABAAAABlsdW1lbmZsb3cAAAA="]] 
+        "topics": [["AAAABAAAABlsdW1lbmZsb3cAAAA="]]
       }
     ],
     "pagination": { "limit": 10 }
   }
 }
 ```
+
 *Note: `AAAABAAAABlsdW1lbmZsb3cAAAA=` is the base64 XDR for the symbol `lumenflow`.*
 
 ### Via Horizon
-While Soroban-RPC is preferred for real-time Soroban events, Horizon also exposes them via the `/events` endpoint if the ingestion is configured.
+While Soroban-RPC is preferred for real-time Soroban events, Horizon also exposes them via the `/events` endpoint:
+
+```
+https://horizon-testnet.stellar.org/contracts/{CONTRACT_ID}/events?cursor=now&topic1=lumenflow
+```
 
 ---
 
@@ -210,8 +314,10 @@ const rawData = "AAAAE... (base64 XDR)";
 const scVal = xdr.ScVal.fromXDR(rawData, 'base64');
 const nativeData = scValToNative(scVal);
 
-console.log(nativeData); 
-// Output: ["ORDER_123", "G...PAYER", "G...MERCHANT", 1000n]
+// payment_processed data is now (order_id, payer, amount)
+// The merchant address is in topic[2], not in the data
+console.log(nativeData);
+// Output: ["ORDER_123", "G...PAYER", 1000n]
 ```
 
 For more information on Soroban events, visit the [Stellar Developers Documentation](https://developers.stellar.org/docs/build/smart-contracts/getting-started/events).

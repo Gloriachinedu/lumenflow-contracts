@@ -3,11 +3,12 @@
   "private": true,
   "scripts": {
     "test:receipt": "playwright test tests/receipt.spec.js",
-    "test:a11y": "playwright test tests/playwright/a11y.spec.js",
-    "test:a11y:report": "playwright test tests/playwright/a11y.spec.js --reporter=html"
+    "test:playwright": "playwright test tests/playwright/",
+    "test:e2e": "playwright test",
+    "lint:html": "htmlhint \"frontend/**/*.html\" --config .htmlhintrc",
+    "lint:js": "eslint \"frontend/**/*.js\" \"tests/**/*.js\""
   },
   "devDependencies": {
-    "@axe-core/playwright": "^4.10.1",
-    "@playwright/test": "^1.48.2"
+    "@playwright/test": "^1.62.0"
   }
 }
