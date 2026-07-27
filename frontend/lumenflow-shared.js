@@ -106,25 +106,58 @@ export function statusBadgeHtml(status) {
 // ── Formatting helpers ────────────────────────────────────────────────────────
 
 /**
- * Formats a stroop amount into a human-readable XLM string.
- * @param {bigint|number|string} amount - Amount in stroops.
- * @param {number} decimals - Decimal places for the asset (default 7 for XLM).
- * @returns {string}
+ * Formats a raw integer amount (e.g. stroops) into a human-readable string
+ * with the token symbol appended.
+ *
+ * Satisfies issue #553: formatAmount(amount, decimals, symbol) utility.
+ *
+ * @param {bigint|number|string} amount  - Raw integer amount in smallest unit.
+ * @param {number}               decimals - Decimal precision (default 7 for XLM).
+ * @param {string}               [symbol] - Token symbol to append (e.g. 'XLM').
+ *                                          When omitted no symbol is appended.
+ * @returns {string}  e.g. '1,234.5670000 XLM'
  */
-export function formatAmount(amount, decimals = 7) {
-  return (Number(amount) / Math.pow(10, decimals)).toLocaleString(undefined, {
-    minimumFractionDigits: 2,
+export function formatAmount(amount, decimals = 7, symbol) {
+  const value = Number(amount) / Math.pow(10, decimals);
+  const formatted = formatNumber(value, {
+    minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   });
+  return symbol ? `${formatted} ${symbol}` : formatted;
 }
 
 /**
- * Formats a Unix timestamp (seconds) into a locale date/time string.
- * @param {bigint|number|string} timestamp
+ * Formats a Unix timestamp (seconds) into a locale-aware date/time string
+ * using the user's browser locale and local timezone.
+ *
+ * Satisfies issue #555: Intl.DateTimeFormat with the user's browser locale.
+ * Timestamps are stored as UTC Unix seconds; display timezone is local.
+ *
+ * @param {bigint|number|string} timestamp - Unix seconds (UTC).
  * @returns {string}
  */
 export function formatDate(timestamp) {
-  return new Date(Number(timestamp) * 1000).toLocaleString();
+  return new Intl.DateTimeFormat(undefined, {
+    year:   'numeric',
+    month:  'short',
+    day:    'numeric',
+    hour:   '2-digit',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  }).format(new Date(Number(timestamp) * 1000));
+}
+
+/**
+ * Formats a numeric value using the user's browser locale.
+ *
+ * Satisfies issue #555: Intl.NumberFormat with the user's browser locale.
+ *
+ * @param {number}  value   - The number to format.
+ * @param {Intl.NumberFormatOptions} [options] - Optional Intl.NumberFormat options.
+ * @returns {string}
+ */
+export function formatNumber(value, options = {}) {
+  return new Intl.NumberFormat(undefined, options).format(value);
 }
 
 // ── Token metadata ────────────────────────────────────────────────────────────
@@ -161,6 +194,7 @@ export function getTokenMetadata(tokenId) {
 /**
  * Formats a raw integer amount (e.g. stroops) into a human-readable string
  * using the correct decimal precision and symbol for the given token.
+ * Uses the user's browser locale for number formatting (issue #555).
  * Examples: '5.00 USDC', '5.0000000 XLM', '1.2345678 TOKEN'
  * @param {bigint|number|string} amount - Raw integer amount.
  * @param {string} tokenId - Contract/asset ID or 'native'.
@@ -169,7 +203,7 @@ export function getTokenMetadata(tokenId) {
 export function formatTokenAmount(amount, tokenId) {
   const { symbol, decimals } = getTokenMetadata(tokenId);
   const value = Number(amount) / Math.pow(10, decimals);
-  const formatted = value.toLocaleString(undefined, {
+  const formatted = formatNumber(value, {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   });
@@ -189,6 +223,7 @@ const XLM_RATES = {
 /**
  * Converts a raw token amount to an approximate XLM equivalent.
  * Uses a hardcoded demo rate table — not suitable for production pricing.
+ * Uses the user's browser locale for number formatting (issue #555).
  * @param {bigint|number|string} amount - Raw integer amount in token's smallest unit.
  * @param {string} tokenId - Contract/asset ID or 'native'.
  * @returns {string} Formatted XLM string, e.g. '40.0000000 XLM'
@@ -198,11 +233,143 @@ export function convertToXlm(amount, tokenId) {
   const humanAmount = Number(amount) / Math.pow(10, decimals);
   const rate = XLM_RATES[symbol] ?? 1;
   const xlmAmount = humanAmount * rate;
-  const formatted = xlmAmount.toLocaleString(undefined, {
+  const formatted = formatNumber(xlmAmount, {
     minimumFractionDigits: 7,
     maximumFractionDigits: 7,
   });
   return `${formatted} XLM`;
+}
+
+// ── Global loading overlay (#556) ────────────────────────────────────────────
+
+/**
+ * Injects the CSS for the global loading overlay once per page.
+ * The overlay is a full-page semi-transparent backdrop that blocks all input
+ * while a contract transaction is pending.
+ */
+function ensureOverlayStyles() {
+  if (document.getElementById('lf-overlay-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'lf-overlay-styles';
+  style.textContent = `
+    #lf-loading-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(26, 26, 46, 0.6);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1.25rem;
+      z-index: 99999;
+      /* Overlay cannot be dismissed by pointer events on the backdrop */
+      pointer-events: all;
+    }
+    #lf-loading-overlay[hidden] { display: none; }
+
+    #lf-loading-overlay .lf-overlay-box {
+      background: #fff;
+      border-radius: 14px;
+      padding: 2rem 2.5rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1rem;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+      max-width: 320px;
+      width: 90vw;
+      text-align: center;
+      pointer-events: all;
+    }
+
+    #lf-loading-overlay .lf-overlay-spinner {
+      width: 48px;
+      height: 48px;
+      border: 4px solid #e0d9ff;
+      border-top-color: #6c47ff;
+      border-radius: 50%;
+      animation: lf-spin 0.8s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes lf-spin {
+      to { transform: rotate(360deg); }
+    }
+
+    #lf-loading-overlay .lf-overlay-msg {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: #1a1a2e;
+      line-height: 1.45;
+    }
+
+    /* Disable all interactive elements while overlay is visible */
+    body.lf-tx-pending button,
+    body.lf-tx-pending input,
+    body.lf-tx-pending select,
+    body.lf-tx-pending textarea,
+    body.lf-tx-pending a[href] {
+      pointer-events: none;
+      opacity: 0.5;
+    }
+    /* Re-enable the overlay box itself so it is never dimmed */
+    body.lf-tx-pending #lf-loading-overlay,
+    body.lf-tx-pending #lf-loading-overlay * {
+      pointer-events: all;
+      opacity: 1;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+/**
+ * Shows the global transaction loading overlay.
+ *
+ * - Renders a full-page semi-transparent backdrop with a spinner.
+ * - Disables all form inputs and buttons via the `lf-tx-pending` class.
+ * - The overlay has role="dialog" aria-modal="true" and a descriptive label
+ *   so screen readers announce the pending state (issue #556 accessibility).
+ * - Cannot be dismissed by clicking outside (pointer-events block the backdrop).
+ *
+ * Call `hideLoadingOverlay()` when the transaction settles (success or failure).
+ *
+ * @param {string} [message] - Optional custom message. Defaults to
+ *   "Waiting for transaction confirmation…".
+ */
+export function showLoadingOverlay(message = 'Waiting for transaction confirmation…') {
+  ensureOverlayStyles();
+
+  let overlay = document.getElementById('lf-loading-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'lf-loading-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-label', 'Transaction pending');
+    overlay.setAttribute('aria-live', 'assertive');
+    overlay.innerHTML = `
+      <div class="lf-overlay-box">
+        <div class="lf-overlay-spinner" aria-hidden="true"></div>
+        <p class="lf-overlay-msg" id="lf-overlay-msg-text"></p>
+      </div>`;
+    document.body.appendChild(overlay);
+  }
+
+  document.getElementById('lf-overlay-msg-text').textContent = message;
+  overlay.removeAttribute('hidden');
+  document.body.classList.add('lf-tx-pending');
+
+  // Trap focus inside the overlay so keyboard users cannot reach disabled controls
+  overlay.focus && overlay.setAttribute('tabindex', '-1');
+  overlay.focus({ preventScroll: true });
+}
+
+/**
+ * Hides the global transaction loading overlay and re-enables all inputs.
+ */
+export function hideLoadingOverlay() {
+  const overlay = document.getElementById('lf-loading-overlay');
+  if (overlay) overlay.setAttribute('hidden', '');
+  document.body.classList.remove('lf-tx-pending');
 }
 
 // ── Copy-to-clipboard ────────────────────────────────────────────────────────

@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://horizon.stellar.org; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none';" />
   <title>Multisig Payment – LumenFlow</title>
   <meta name="description" content="Initiate and manage multi-signature payments on LumenFlow. Requires threshold approvals before funds are released." />
   <meta property="og:title" content="Multisig Payment – LumenFlow" />
@@ -338,7 +339,7 @@
 </div>
 
 <script type="module">
-  import { CONTRACT_ID, RPC_URL, renderModeBanner, copyButtonHtml, initCopyButtons, formatAmount } from './lumenflow-shared.js';
+  import { CONTRACT_ID, RPC_URL, renderModeBanner, copyButtonHtml, initCopyButtons, formatAmount, showLoadingOverlay, hideLoadingOverlay } from './lumenflow-shared.js';
   import { validateOrderId, validateAmount, validateAddress, isValidStellarKey } from './validation.js';
   import { initWalletStatus } from './wallet-status.js';
 
@@ -778,7 +779,9 @@ feat/sdk-rpc-retry-integration
     const signers        = getSignerValues();
     const required       = parseInt(document.getElementById('required-sigs').value, 10);
 
+    showLoadingOverlay('Initiating multisig payment…');
     const result = await callInitiateMultisig({ paymentId, merchantAddress, tokenAddress, amount, signers, required });
+    hideLoadingOverlay();
 
     if (!result.success) {
       const alert = document.getElementById('form-alert');
@@ -845,7 +848,9 @@ feat/sdk-rpc-retry-integration
       .find(b => b.onclick && b.onclick.toString().includes(signerAddress));
     if (btn) { btn.disabled = true; btn.textContent = 'Signing…'; }
 
+    showLoadingOverlay('Waiting for transaction confirmation…');
     const result = await callSignMultisig(state.paymentId, signerAddress);
+    hideLoadingOverlay();
 
     if (result.success) {
       state.signatures.add(signerAddress);
@@ -861,7 +866,9 @@ feat/sdk-rpc-retry-integration
     btn.disabled = true;
     btn.textContent = 'Executing…';
 
+    showLoadingOverlay('Waiting for transaction confirmation…');
     const result = await callExecuteMultisig(state.paymentId);
+    hideLoadingOverlay();
 
     if (result.success) {
       showExecuteAlert('✔ Payment executed successfully!', true);
