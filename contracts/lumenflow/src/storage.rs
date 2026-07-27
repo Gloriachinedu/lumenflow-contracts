@@ -106,6 +106,10 @@ pub enum DataKey {
     RateLimitCounter(Address, u32),
     /// Time-locked escrow record keyed by order_id.
     Escrow(String),
+    /// Auth failure counter for rate-limiting (Issue #628): (address) → (failure_count, first_fail_ledger).
+    AuthFailCount(Address),
+    /// Auth lockout expiry (Issue #628): (address) → ledger at which lockout expires.
+    AuthLockoutUntil(Address),
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -866,4 +870,115 @@ pub fn set_referral_fee_bps(env: &Env, fee_bps: u32) {
     env.storage()
         .instance()
         .set(&DataKey::ReferralFeeBps, &fee_bps);
+}
+
+// ── Auth failure rate limiting (Issue #628) ───────────────────────────────────
+//
+// To prevent brute-force probing of admin-restricted functions, a per-address
+// failure counter is maintained. After AUTH_MAX_FAILURES consecutive failures
+// within AUTH_FAILURE_WINDOW_LEDGERS, the address is temporarily locked out for
+// AUTH_LOCKOUT_LEDGERS.
+//
+// Ledger-time approximations (5 s/ledger):
+//   100 ledgers  ≈  8.3 minutes  (failure counting window)
+//   1000 ledgers ≈ 83 minutes    (lockout duration)
+
+/// Maximum auth failures within AUTH_FAILURE_WINDOW_LEDGERS before lockout.
+pub const AUTH_MAX_FAILURES: u32 = 10;
+/// Sliding-window width in ledgers for failure counting.
+pub const AUTH_FAILURE_WINDOW_LEDGERS: u32 = 100;
+/// Lockout duration in ledgers once the threshold is exceeded.
+pub const AUTH_LOCKOUT_LEDGERS: u32 = 1_000;
+/// TTL for failure counter entries — kept for 2× the lockout duration.
+pub const AUTH_TTL_LEDGERS: u32 = 2_000;
+
+/// (failure_count, window_start_ledger) stored per address.
+#[derive(Clone, Copy)]
+pub struct AuthFailRecord {
+    pub failure_count: u32,
+    pub window_start: u32,
+}
+
+/// Returns the current auth failure record for `address`, or a zeroed record.
+pub fn get_auth_fail_count(env: &Env, address: &Address) -> (u32, u32) {
+    env.storage()
+        .temporary()
+        .get::<_, (u32, u32)>(&DataKey::AuthFailCount(address.clone()))
+        .unwrap_or((0u32, 0u32))
+}
+
+/// Persists the auth failure record `(count, window_start)` for `address`.
+fn set_auth_fail_count(env: &Env, address: &Address, count: u32, window_start: u32) {
+    let key = DataKey::AuthFailCount(address.clone());
+    env.storage().temporary().set(&key, &(count, window_start));
+    env.storage()
+        .temporary()
+        .extend_ttl(&key, AUTH_TTL_LEDGERS, AUTH_TTL_LEDGERS);
+}
+
+/// Clears the auth failure counter for `address` (called on successful auth or after reset).
+pub fn clear_auth_fail_count(env: &Env, address: &Address) {
+    env.storage()
+        .temporary()
+        .remove(&DataKey::AuthFailCount(address.clone()));
+}
+
+/// Returns the lockout-expiry ledger for `address`, or `0` if not locked out.
+pub fn get_auth_lockout_until(env: &Env, address: &Address) -> u32 {
+    env.storage()
+        .temporary()
+        .get::<_, u32>(&DataKey::AuthLockoutUntil(address.clone()))
+        .unwrap_or(0u32)
+}
+
+/// Sets the lockout-expiry ledger for `address` to
+/// `current_ledger + AUTH_LOCKOUT_LEDGERS`.
+fn set_auth_lockout(env: &Env, address: &Address) {
+    let until = env.ledger().sequence() + AUTH_LOCKOUT_LEDGERS;
+    let key = DataKey::AuthLockoutUntil(address.clone());
+    env.storage().temporary().set(&key, &until);
+    env.storage()
+        .temporary()
+        .extend_ttl(&key, AUTH_TTL_LEDGERS, AUTH_TTL_LEDGERS);
+}
+
+/// Clears the lockout for `address` (used by `reset_auth_lockout`).
+pub fn clear_auth_lockout(env: &Env, address: &Address) {
+    env.storage()
+        .temporary()
+        .remove(&DataKey::AuthLockoutUntil(address.clone()));
+    clear_auth_fail_count(env, address);
+}
+
+/// Returns `true` if `address` is currently locked out.
+pub fn is_auth_locked_out(env: &Env, address: &Address) -> bool {
+    let until = get_auth_lockout_until(env, address);
+    until > 0 && env.ledger().sequence() < until
+}
+
+/// Records one auth failure for `address`. Increments the counter within the
+/// current window and returns `true` if this failure triggers a lockout (i.e.
+/// the count just hit AUTH_MAX_FAILURES).
+///
+/// Window resets if the most recent failure is outside AUTH_FAILURE_WINDOW_LEDGERS.
+pub fn record_auth_failure(env: &Env, address: &Address) -> bool {
+    let seq = env.ledger().sequence();
+    let (count, window_start) = get_auth_fail_count(env, address);
+
+    let (new_count, new_window) = if window_start == 0 || seq >= window_start + AUTH_FAILURE_WINDOW_LEDGERS {
+        // First failure or window expired — start a fresh window.
+        (1u32, seq)
+    } else {
+        // Still within the current window.
+        (count + 1, window_start)
+    };
+
+    set_auth_fail_count(env, address, new_count, new_window);
+
+    if new_count >= AUTH_MAX_FAILURES {
+        set_auth_lockout(env, address);
+        true
+    } else {
+        false
+    }
 }

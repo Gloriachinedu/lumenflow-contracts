@@ -6245,3 +6245,145 @@ fn test_set_referral_fee_bps_unauthorized() {
     let result = client.try_set_referral_fee_bps(&non_admin, &100);
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
+
+// ── Issue #628: Auth lockout tests ────────────────────────────────────────────
+
+#[test]
+fn test_auth_lockout_triggers_on_10th_failure() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let stranger = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    client.add_allowed_token(&admin, &token);
+
+    // 9 failures should succeed without lockout
+    for _ in 0..9 {
+        let result = client.try_deactivate_merchant(&stranger, &admin);
+        assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+    }
+
+    // 10th failure should trigger lockout and emit suspicious_activity event
+    let result = client.try_deactivate_merchant(&stranger, &admin);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+
+    // 11th attempt should return AuthLockedOut
+    let result = client.try_deactivate_merchant(&stranger, &admin);
+    assert_eq!(result, Err(Ok(PaymentError::AuthLockedOut)));
+}
+
+#[test]
+fn test_auth_lockout_expires_after_1000_ledgers() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let stranger = Address::generate(&env);
+
+    // Trigger lockout with 10 failures
+    for _ in 0..10 {
+        let _ = client.try_set_payment_cleanup_period(&stranger, &3600);
+    }
+
+    // Verify locked out
+    let result = client.try_set_payment_cleanup_period(&stranger, &3600);
+    assert_eq!(result, Err(Ok(PaymentError::AuthLockedOut)));
+
+    // Advance 1001 ledgers (lockout duration + 1)
+    let mut ledger = env.ledger().get();
+    ledger.sequence_number += 1001;
+    env.ledger().set(ledger);
+
+    // Now the lockout should have expired — still fails auth but no longer locked
+    let result = client.try_set_payment_cleanup_period(&stranger, &3600);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_reset_auth_lockout_clears_block() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let stranger = Address::generate(&env);
+
+    // Trigger lockout
+    for _ in 0..10 {
+        let _ = client.try_set_payment_cleanup_period(&stranger, &3600);
+    }
+
+    // Verify locked out
+    let result = client.try_set_payment_cleanup_period(&stranger, &3600);
+    assert_eq!(result, Err(Ok(PaymentError::AuthLockedOut)));
+
+    // Admin resets the lockout
+    client.reset_auth_lockout(&admin, &stranger);
+
+    // Now stranger is not locked out (still fails auth but not due to lockout)
+    let result = client.try_set_payment_cleanup_period(&stranger, &3600);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_auth_failure_window_resets_after_100_ledgers() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let stranger = Address::generate(&env);
+
+    // 5 failures within window
+    for _ in 0..5 {
+        let _ = client.try_set_payment_cleanup_period(&stranger, &3600);
+    }
+
+    // Advance 101 ledgers (past the window)
+    let mut ledger = env.ledger().get();
+    ledger.sequence_number += 101;
+    env.ledger().set(ledger);
+
+    // Next 5 failures start a fresh window — should not trigger lockout
+    for _ in 0..5 {
+        let result = client.try_set_payment_cleanup_period(&stranger, &3600);
+        assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+    }
+
+    // Verify not locked out yet
+    let result = client.try_set_payment_cleanup_period(&stranger, &3600);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_successful_admin_call_clears_failure_counter() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let token = create_token(&env, &admin);
+    client.add_allowed_token(&admin, &token);
+
+    // 9 failures
+    let stranger = Address::generate(&env);
+    for _ in 0..9 {
+        let _ = client.try_deactivate_merchant(&stranger, &admin);
+    }
+
+    // Now make a successful admin call (as the real admin)
+    client.set_payment_cleanup_period(&admin, &7200);
+
+    // The counter should be cleared — stranger can fail 10 more times before lockout
+    for i in 0..10 {
+        let result = client.try_set_payment_cleanup_period(&stranger, &3600);
+        if i < 9 {
+            assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+        } else {
+            // 10th failure triggers lockout
+            assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+        }
+    }
+
+    // 11th call should be locked out
+    let result = client.try_set_payment_cleanup_period(&stranger, &3600);
+    assert_eq!(result, Err(Ok(PaymentError::AuthLockedOut)));
+}

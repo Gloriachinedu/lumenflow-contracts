@@ -2,11 +2,23 @@ use soroban_sdk::{Address, Bytes, Env, String, Vec};
 
 use crate::error::PaymentError;
 use crate::storage;
-use crate::types::MerchantCategory;
+use crate::types::{MerchantCategory, SuspiciousActivityReason};
 
 pub const MAX_PAGE_LIMIT: u32 = 100;
 pub const REFUND_WINDOW_SECS: u64 = 30 * 24 * 3600; // 30 days
 pub const MULTISIG_EXPIRY_SECS: u64 = 7 * 24 * 3600; // 7 days
+
+// ── String length constants (Issue #622) ──────────────────────────────────────
+/// Maximum UTF-8 character length for a merchant name.
+pub const MAX_NAME_LEN: u32 = 64;
+/// Maximum UTF-8 character length for a merchant description.
+pub const MAX_DESCRIPTION_LEN: u32 = 256;
+/// Maximum UTF-8 character length for a payment memo.
+pub const MAX_MEMO_LEN: u32 = 128;
+/// Maximum UTF-8 character length for a refund reason.
+pub const MAX_REASON_LEN: u32 = 256;
+/// Maximum UTF-8 character length for merchant contact information.
+pub const MAX_CONTACT_INFO_LEN: u32 = 128;
 
 /// Return ContractPaused if the contract is currently paused.
 pub fn require_not_paused(env: &Env) -> Result<(), PaymentError> {
@@ -18,11 +30,53 @@ pub fn require_not_paused(env: &Env) -> Result<(), PaymentError> {
 }
 
 /// Require that `caller` is the stored admin.
+///
+/// This version does NOT track auth failures — it is used by functions that
+/// are not attack-surface entry points (e.g., internal helpers). Use
+/// `require_admin_rate_limited` for all public-facing admin-guarded endpoints.
 pub fn require_admin(env: &Env, caller: &Address) -> Result<(), PaymentError> {
     caller.require_auth();
     match storage::get_admin(env) {
         Some(admin) if admin == *caller => Ok(()),
         _ => Err(PaymentError::Unauthorized),
+    }
+}
+
+/// Require that `caller` is the stored admin, with brute-force rate limiting.
+///
+/// On each failed attempt (caller does not match the stored admin):
+///   - The failure counter for `caller` is incremented within the current 100-ledger window.
+///   - On the 10th failure, the address is temporarily locked out for 1 000 ledgers (~83 min).
+///   - A `suspicious_activity` event with `ManyAuthFailures` reason is emitted on the 10th fail.
+///
+/// On a successful attempt, the failure counter is cleared for `caller`.
+///
+/// Returns `AuthLockedOut` if the caller is currently under a lockout, *before* any auth check.
+pub fn require_admin_rate_limited(env: &Env, caller: &Address) -> Result<(), PaymentError> {
+    // Check lockout first — do not even attempt auth verification if locked.
+    if storage::is_auth_locked_out(env, caller) {
+        return Err(PaymentError::AuthLockedOut);
+    }
+
+    caller.require_auth();
+
+    match storage::get_admin(env) {
+        Some(admin) if admin == *caller => {
+            // Successful auth — clear any outstanding failure record.
+            storage::clear_auth_fail_count(env, caller);
+            Ok(())
+        }
+        _ => {
+            // Failed auth — record the failure and potentially lock out.
+            let triggered_lockout = storage::record_auth_failure(env, caller);
+            if triggered_lockout {
+                env.events().publish(
+                    ("lumenflow", "suspicious_activity"),
+                    (SuspiciousActivityReason::ManyAuthFailures, caller.clone()),
+                );
+            }
+            Err(PaymentError::Unauthorized)
+        }
     }
 }
 
