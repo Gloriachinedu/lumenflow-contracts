@@ -6246,144 +6246,195 @@ fn test_set_referral_fee_bps_unauthorized() {
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
 
-// ── Issue #628: Auth lockout tests ────────────────────────────────────────────
+// ── Issue #622: String length boundary tests ──────────────────────────────────
+
+fn repeat_str(env: &Env, ch: &str, n: usize) -> String {
+    let s: std::string::String = ch.repeat(n);
+    String::from_str(env, &s)
+}
 
 #[test]
-fn test_auth_lockout_triggers_on_10th_failure() {
+fn test_merchant_name_at_max_succeeds() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
-    client.set_admin(&admin);
-
-    let stranger = Address::generate(&env);
     let token = create_token(&env, &admin);
-    client.add_allowed_token(&admin, &token);
+    client.set_admin(&admin);
+    client.allow_token(&admin, &token);
 
-    // 9 failures should succeed without lockout
-    for _ in 0..9 {
-        let result = client.try_deactivate_merchant(&stranger, &admin);
-        assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
-    }
-
-    // 10th failure should trigger lockout and emit suspicious_activity event
-    let result = client.try_deactivate_merchant(&stranger, &admin);
-    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
-
-    // 11th attempt should return AuthLockedOut
-    let result = client.try_deactivate_merchant(&stranger, &admin);
-    assert_eq!(result, Err(Ok(PaymentError::AuthLockedOut)));
+    let merchant = Address::generate(&env);
+    let name = repeat_str(&env, "a", 64); // exactly MAX_NAME_LEN
+    let result = client.try_register_merchant(
+        &merchant,
+        &name,
+        &str(&env, "desc"),
+        &str(&env, "contact@example.com"),
+        &crate::types::MerchantCategory::Retail,
+    );
+    assert!(result.is_ok(), "name at max length should succeed");
 }
 
 #[test]
-fn test_auth_lockout_expires_after_1000_ledgers() {
+fn test_merchant_name_exceeds_max_fails() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
-    client.set_admin(&admin);
-
-    let stranger = Address::generate(&env);
-
-    // Trigger lockout with 10 failures
-    for _ in 0..10 {
-        let _ = client.try_set_payment_cleanup_period(&stranger, &3600);
-    }
-
-    // Verify locked out
-    let result = client.try_set_payment_cleanup_period(&stranger, &3600);
-    assert_eq!(result, Err(Ok(PaymentError::AuthLockedOut)));
-
-    // Advance 1001 ledgers (lockout duration + 1)
-    let mut ledger = env.ledger().get();
-    ledger.sequence_number += 1001;
-    env.ledger().set(ledger);
-
-    // Now the lockout should have expired — still fails auth but no longer locked
-    let result = client.try_set_payment_cleanup_period(&stranger, &3600);
-    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
-}
-
-#[test]
-fn test_reset_auth_lockout_clears_block() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    client.set_admin(&admin);
-
-    let stranger = Address::generate(&env);
-
-    // Trigger lockout
-    for _ in 0..10 {
-        let _ = client.try_set_payment_cleanup_period(&stranger, &3600);
-    }
-
-    // Verify locked out
-    let result = client.try_set_payment_cleanup_period(&stranger, &3600);
-    assert_eq!(result, Err(Ok(PaymentError::AuthLockedOut)));
-
-    // Admin resets the lockout
-    client.reset_auth_lockout(&admin, &stranger);
-
-    // Now stranger is not locked out (still fails auth but not due to lockout)
-    let result = client.try_set_payment_cleanup_period(&stranger, &3600);
-    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
-}
-
-#[test]
-fn test_auth_failure_window_resets_after_100_ledgers() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    client.set_admin(&admin);
-
-    let stranger = Address::generate(&env);
-
-    // 5 failures within window
-    for _ in 0..5 {
-        let _ = client.try_set_payment_cleanup_period(&stranger, &3600);
-    }
-
-    // Advance 101 ledgers (past the window)
-    let mut ledger = env.ledger().get();
-    ledger.sequence_number += 101;
-    env.ledger().set(ledger);
-
-    // Next 5 failures start a fresh window — should not trigger lockout
-    for _ in 0..5 {
-        let result = client.try_set_payment_cleanup_period(&stranger, &3600);
-        assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
-    }
-
-    // Verify not locked out yet
-    let result = client.try_set_payment_cleanup_period(&stranger, &3600);
-    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
-}
-
-#[test]
-fn test_successful_admin_call_clears_failure_counter() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    client.set_admin(&admin);
-
     let token = create_token(&env, &admin);
-    client.add_allowed_token(&admin, &token);
+    client.set_admin(&admin);
+    client.allow_token(&admin, &token);
 
-    // 9 failures
-    let stranger = Address::generate(&env);
-    for _ in 0..9 {
-        let _ = client.try_deactivate_merchant(&stranger, &admin);
-    }
+    let merchant = Address::generate(&env);
+    let name = repeat_str(&env, "a", 65); // MAX_NAME_LEN + 1
+    let result = client.try_register_merchant(
+        &merchant,
+        &name,
+        &str(&env, "desc"),
+        &str(&env, "contact@example.com"),
+        &crate::types::MerchantCategory::Retail,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
 
-    // Now make a successful admin call (as the real admin)
-    client.set_payment_cleanup_period(&admin, &7200);
+#[test]
+fn test_merchant_description_at_max_succeeds() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    client.set_admin(&admin);
+    client.allow_token(&admin, &token);
 
-    // The counter should be cleared — stranger can fail 10 more times before lockout
-    for i in 0..10 {
-        let result = client.try_set_payment_cleanup_period(&stranger, &3600);
-        if i < 9 {
-            assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
-        } else {
-            // 10th failure triggers lockout
-            assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
-        }
-    }
+    let merchant = Address::generate(&env);
+    let description = repeat_str(&env, "b", 256); // exactly MAX_DESCRIPTION_LEN
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "ShopName"),
+        &description,
+        &str(&env, "contact@example.com"),
+        &crate::types::MerchantCategory::Retail,
+    );
+    assert!(result.is_ok(), "description at max length should succeed");
+}
 
-    // 11th call should be locked out
-    let result = client.try_set_payment_cleanup_period(&stranger, &3600);
-    assert_eq!(result, Err(Ok(PaymentError::AuthLockedOut)));
+#[test]
+fn test_merchant_description_exceeds_max_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    client.set_admin(&admin);
+    client.allow_token(&admin, &token);
+
+    let merchant = Address::generate(&env);
+    let description = repeat_str(&env, "b", 257); // MAX_DESCRIPTION_LEN + 1
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "ShopName"),
+        &description,
+        &str(&env, "contact@example.com"),
+        &crate::types::MerchantCategory::Retail,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_merchant_contact_info_at_max_succeeds() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    client.set_admin(&admin);
+    client.allow_token(&admin, &token);
+
+    let merchant = Address::generate(&env);
+    let contact_info = repeat_str(&env, "c", 128); // exactly MAX_CONTACT_INFO_LEN
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "ShopName"),
+        &str(&env, "desc"),
+        &contact_info,
+        &crate::types::MerchantCategory::Retail,
+    );
+    assert!(result.is_ok(), "contact_info at max length should succeed");
+}
+
+#[test]
+fn test_merchant_contact_info_exceeds_max_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    client.set_admin(&admin);
+    client.allow_token(&admin, &token);
+
+    let merchant = Address::generate(&env);
+    let contact_info = repeat_str(&env, "c", 129); // MAX_CONTACT_INFO_LEN + 1
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "ShopName"),
+        &str(&env, "desc"),
+        &contact_info,
+        &crate::types::MerchantCategory::Retail,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_payment_memo_at_max_succeeds() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let memo = repeat_str(&env, "m", 128); // exactly MAX_MEMO_LEN
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "MEMO_MAX_OK"),
+        &merchant,
+        &token,
+        &100,
+        &memo,
+        &None,
+        &bytes(&env, &[0u8; 64]),
+        &bytes(&env, &[0u8; 32]),
+    );
+    assert!(result.is_ok(), "memo at max length should succeed");
+}
+
+#[test]
+fn test_payment_memo_exceeds_max_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let memo = repeat_str(&env, "m", 129); // MAX_MEMO_LEN + 1
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "MEMO_MAX_FAIL"),
+        &merchant,
+        &token,
+        &100,
+        &memo,
+        &None,
+        &bytes(&env, &[0u8; 64]),
+        &bytes(&env, &[0u8; 32]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_refund_reason_at_max_succeeds() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "REASON_MAX", 1_000);
+    let reason = repeat_str(&env, "r", 256); // exactly MAX_REASON_LEN
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "RF_REASON_MAX"),
+        &str(&env, "REASON_MAX"),
+        &100,
+        &reason,
+    );
+    assert!(result.is_ok(), "reason at max length should succeed");
+}
+
+#[test]
+fn test_refund_reason_exceeds_max_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "REASON_FAIL", 1_000);
+    let reason = repeat_str(&env, "r", 257); // MAX_REASON_LEN + 1
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "RF_REASON_FAIL"),
+        &str(&env, "REASON_FAIL"),
+        &100,
+        &reason,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
 }

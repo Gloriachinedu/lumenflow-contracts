@@ -2572,7 +2572,7 @@ impl PaymentProcessingContract {
         require_not_paused(&env)?;
         merchant.require_auth();
         require_positive(amount)?;
-        require_non_empty_string(&request_id)?;
+        require_bounded_string(&request_id, 1, 64)?;
 
         if !storage::is_token_allowed(&env, &token) {
             return Err(PaymentError::TokenNotAllowed);
