@@ -216,6 +216,16 @@ const _: () = {
 
 `migrate_storage_keys` is safe to call multiple times. If a v1 key is absent (already migrated), the function is a no-op for that entry.
 
+### Per-account payment ID cap (`MP`/`PP`)
+
+Both `MP(Address)` and `PP(Address)` are unbounded-looking `Vec<String>` indexes (one entry appended per payment) that are in fact capped by `MAX_PAYMENT_IDS_PER_ACCOUNT = 10_000` (defined in [`storage.rs`](../contracts/lumenflow/src/storage.rs)). Once an account's index reaches this cap, any further payment for that account fails with `PaymentError::PaymentHistoryLimitExceeded` (code 71) — this applies independently to a merchant's `MP` index and a payer's `PP` index.
+
+**Warning threshold.** To give integrators advance notice, `PAYMENT_HISTORY_WARNING_THRESHOLD` (90% of the cap, i.e. 9,000) triggers a one-time `payment_history_near_limit` event (see [`docs/events-reference.md`](./events-reference.md)) the moment an account's index crosses that threshold. The event does not repeat on every subsequent payment — only on the single payment that pushes the count from below 9,000 to 9,000 or above.
+
+**Checking current usage.** Call the read-only contract function `get_account_payment_count(address)` to get the current count for an address (it returns whichever of the merchant or payer index count is higher for that address). The admin CLI also exposes this via `lumenflow admin account-stats --address G...`.
+
+> **Known limitation — cleanup does not currently relieve this cap.** `cleanup_expired_payments` deletes the underlying `Payment(order_id)` record once it is older than the configured cleanup period, but it does **not** remove the corresponding entry from the `MP`/`PP` index vec. This means an account's payment count — and therefore its distance from `MAX_PAYMENT_IDS_PER_ACCOUNT` — is never reduced by running cleanup today. Until a dedicated index-compaction admin function exists, the practical mitigation for a merchant or payer approaching the cap is to rotate to a new address for future payments before the index is exhausted. Monitor the `payment_history_near_limit` event (or poll `get_account_payment_count`) to plan for this ahead of time.
+
 ---
 
 ## Off-chain Indexing

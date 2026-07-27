@@ -115,6 +115,21 @@ enum Commands {
         #[arg(long)]
         merchant_public_key: String,
     },
+    /// Admin diagnostics and maintenance operations
+    Admin {
+        #[command(subcommand)]
+        action: AdminCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum AdminCommands {
+    /// Show an account's payment-ID count vs. the MAX_PAYMENT_IDS_PER_ACCOUNT cap
+    AccountStats {
+        /// Address to inspect (merchant or payer)
+        #[arg(long)]
+        address: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -167,6 +182,11 @@ enum RefundCommands {
 // ── Config models and Validation ──────────────────────────────────────────────────
 
 const VALID_NETWORKS: &[&str] = &["local", "testnet", "mainnet"];
+
+/// Mirrors `storage::MAX_PAYMENT_IDS_PER_ACCOUNT` in `contracts/lumenflow/src/storage.rs`.
+/// Kept as a local constant (rather than a second on-chain getter) purely for
+/// display purposes in `admin account-stats`; update alongside the contract constant.
+const MAX_PAYMENT_IDS_PER_ACCOUNT: u32 = 10_000;
 
 #[derive(Debug, Deserialize, Default, Clone, PartialEq)]
 pub struct Config {
@@ -867,6 +887,37 @@ fn main() -> Result<()> {
         Commands::Multisig { action } => {
             handle_multisig(action, &config);
         }
+        Commands::Admin { action } => match action {
+            AdminCommands::AccountStats { address } => {
+                let mut cmd = base_invoke(&config)?;
+                cmd.args(["--", "get_account_payment_count", "--address", address]);
+
+                let output = cmd
+                    .output()
+                    .context("failed to invoke get_account_payment_count")?;
+
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    bail!("get_account_payment_count failed: {}", stderr.trim());
+                }
+
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let count: u32 = stdout
+                    .lines()
+                    .rev()
+                    .find_map(|l| l.trim().parse::<u32>().ok())
+                    .with_context(|| format!("could not parse payment count from output: {}", stdout.trim()))?;
+
+                let pct = (count as f64 / MAX_PAYMENT_IDS_PER_ACCOUNT as f64) * 100.0;
+                println!("Account:        {}", address);
+                println!("Payment count:  {}", count);
+                println!("Cap:            {}", MAX_PAYMENT_IDS_PER_ACCOUNT);
+                println!("Usage:          {:.1}%", pct);
+                if count >= MAX_PAYMENT_IDS_PER_ACCOUNT * 9 / 10 {
+                    println!("\nWarning: this account is at or above 90% of MAX_PAYMENT_IDS_PER_ACCOUNT. Further payments may soon fail with PaymentHistoryLimitExceeded.");
+                }
+            }
+        },
     }
 
     Ok(())
@@ -916,6 +967,25 @@ mod tests {
             ..Default::default()
         };
         assert!(base_invoke(&config).is_ok());
+    }
+
+    #[test]
+    fn test_admin_account_stats_parses() {
+        let cli = Cli::try_parse_from([
+            "lumenflow",
+            "admin",
+            "account-stats",
+            "--address",
+            "GADDRESS",
+        ])
+        .expect("admin account-stats should parse");
+
+        match cli.command {
+            Commands::Admin {
+                action: AdminCommands::AccountStats { address },
+            } => assert_eq!(address, "GADDRESS"),
+            _ => panic!("expected Commands::Admin { AccountStats }"),
+        }
     }
 
     #[test]

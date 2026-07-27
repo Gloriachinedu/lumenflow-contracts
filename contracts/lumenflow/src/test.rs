@@ -3694,6 +3694,52 @@ fn test_event_payment_archived() {
 }
 
 #[test]
+fn test_event_payment_history_near_limit_fires_at_threshold() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Pre-seed the merchant's index to one below the warning threshold directly
+    // via storage, avoiding thousands of real (and expensive) payment invocations.
+    env.as_contract(&client.address, || {
+        for i in 0..(storage::PAYMENT_HISTORY_WARNING_THRESHOLD - 1) {
+            let id = str(&env, &format!("SEED_{}", i));
+            storage::add_merchant_payment_id(&env, &merchant, &id).unwrap();
+        }
+    });
+
+    // This payment pushes the merchant's count to exactly the threshold and
+    // should emit the warning event.
+    make_payment(&env, &client, &merchant, &payer, &token, "THRESHOLD_PAY", 100);
+
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "payment_history_near_limit"),
+        "payment_history_near_limit event must fire when crossing the 90% threshold"
+    );
+
+    let count = client.get_account_payment_count(&merchant);
+    assert_eq!(count, storage::PAYMENT_HISTORY_WARNING_THRESHOLD);
+}
+
+#[test]
+fn test_event_payment_history_near_limit_does_not_fire_below_threshold() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Well below the 90% threshold — a handful of payments should not warn.
+    for i in 0..5 {
+        make_payment(&env, &client, &merchant, &payer, &token, &format!("LOW_{}", i), 100);
+    }
+
+    let events = env.events().all();
+    assert!(
+        !find_event(&env, &events, "payment_history_near_limit"),
+        "payment_history_near_limit event must not fire well below the threshold"
+    );
+
+    let count = client.get_account_payment_count(&merchant);
+    assert_eq!(count, 5);
+}
+
+#[test]
 fn test_event_refund_lifecycle() {
     // Verifies refund_initiated, refund_approved, and refund_executed are all emitted.
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
