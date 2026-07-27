@@ -235,6 +235,11 @@
 </head>
 <body>
 
+<nav class="lf-nav" aria-label="LumenFlow navigation">
+  <span class="lf-nav__brand">⚡ LumenFlow</span>
+  <div id="wallet-status-container"></div>
+</nav>
+
 <!-- Step indicator -->
 <div class="wizard-steps" id="stepIndicator" role="list" aria-label="Onboarding steps">
   <div class="step-node active" id="step-node-1" role="listitem">
@@ -645,6 +650,10 @@
 
     setTimeout(() => goToStep(5), 1000);
   }
+</script>
+<script type="module">
+  import { initWalletStatus } from './wallet-status.js';
+  initWalletStatus(document.getElementById('wallet-status-container'));
 </script>
 </body>
 </html>
