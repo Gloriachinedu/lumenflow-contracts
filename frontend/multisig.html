@@ -354,7 +354,6 @@
     // Move focus to the new input for keyboard users
     row.querySelector('.signer-input').focus();
   }
-
   function removeSigner(btn) {
     const list = document.getElementById('signers-list');
     const rows = list.querySelectorAll('.signer-row');
@@ -393,8 +392,7 @@
     const required = parseInt(document.getElementById('required-sigs').value, 10);
     const count    = document.querySelectorAll('.signer-input').length;
     const msg      = document.getElementById('threshold-msg');
-
-    if (!required || required < 1) {
+ if (!required || required < 1) {
       msg.textContent = 'Required signatures must be at least 1.';
       msg.className   = 'validation-msg bad';
       return false;
@@ -408,7 +406,6 @@
     msg.className   = 'validation-msg ok';
     return true;
   }
-
   // ── Form validation ────────────────────────────────────────────────────────
   // Field-level rules live in the shared validation.js module.
 
@@ -453,15 +450,13 @@
     'token-address':    'err-token',
     'amount':           'err-amount',
   };
-
-  const FIELD_VALIDATORS = {
+const FIELD_VALIDATORS = {
     'payment-id':       v => validateOrderId(v, 'Payment ID'),
     'merchant-address': v => validateAddress(v, { label: 'Merchant address' }),
     'token-address':    v => validateAddress(v, { label: 'Token address', prefixes: ['C', 'G'] }),
     'amount':           v => validateAmount(v, { integer: true }),
   };
-
-  function validateField(fieldId, show) {
+ function validateField(fieldId, show) {
     const message = FIELD_VALIDATORS[fieldId](document.getElementById(fieldId).value);
     if (show) {
       setErr(FIELD_ERR_IDS[fieldId], message);
