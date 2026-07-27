@@ -181,6 +181,58 @@ fn test_set_admin_valid_account_succeeds() {
     assert!(result.is_ok());
 }
 
+// ── Admin key rotation dry-run test (Issue #623) ──────────────────────────────
+
+#[test]
+fn test_admin_key_rotation_dry_run() {
+    let (env, client) = setup();
+    let current_admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let token = create_token(&env, &current_admin);
+    
+    // Step 1: Set up contract with initial admin
+    client.set_admin(&current_admin);
+    client.add_allowed_token(&current_admin, &token);
+    
+    // Step 2: Register a merchant with the current admin context
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Merchant Store"),
+        &str(&env, "Test merchant"),
+        &str(&env, "merchant@test.com"),
+        &MerchantCategory::Retail,
+    );
+    
+    // Step 3: Verify current admin can perform admin-only operations
+    client.set_platform_fee(&current_admin, &250, &current_admin);
+    let result = client.try_set_payment_cleanup_period(&current_admin, &86400);
+    assert_eq!(result, Ok(Ok(())));
+    
+    // Step 4: Simulate key rotation — transfer admin to new key
+    client.transfer_admin(&current_admin, &new_admin);
+    
+    // Step 5: Verify old admin is revoked
+    let old_admin_attempt = client.try_set_payment_cleanup_period(&current_admin, &86400);
+    assert_eq!(old_admin_attempt, Err(Ok(PaymentError::Unauthorized)));
+    
+    // Step 6: Verify new admin has full privileges
+    let new_admin_attempt = client.try_set_payment_cleanup_period(&new_admin, &172800);
+    assert_eq!(new_admin_attempt, Ok(Ok(())));
+    
+    // Verify contract state is intact: merchant still registered
+    let merchant_profile = client.get_merchant(&merchant);
+    assert!(merchant_profile.active);
+    assert_eq!(merchant_profile.name, str(&env, "Merchant Store"));
+    
+    // Verify new admin can perform all privileged operations
+    client.pause_contract(&new_admin);
+    client.unpause_contract(&new_admin);
+    client.deactivate_merchant(&new_admin, &merchant);
+    let deactivated = client.get_merchant(&merchant);
+    assert!(!deactivated.active);
+}
+
 // ── Merchant tests ────────────────────────────────────────────────────────────
 
 #[test]
