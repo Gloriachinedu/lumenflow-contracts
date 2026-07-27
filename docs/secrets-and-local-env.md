@@ -1,7 +1,107 @@
 # Secrets and local environment setup
 
 This guide explains how to configure LumenFlow locally without committing secrets,
-and how to validate the Docker Compose stack.
+how to validate the Docker Compose stack, and the automated secrets scanning
+policy that protects the repository from accidental key commits.
+
+## Secrets scanning policy (Issue #627)
+
+LumenFlow uses [gitleaks](https://github.com/gitleaks/gitleaks) to automatically
+detect and block accidental commits of secrets such as Stellar secret keys,
+private key PEM blocks, API tokens, and seed phrases.
+
+### What is scanned
+
+The `.gitleaks.toml` file at the repository root defines the following custom rules:
+
+| Rule ID | Description | Severity |
+|---------|-------------|----------|
+| `stellar-secret-key` | Stellar secret keys starting with `S` (56 chars) | CRITICAL |
+| `stellar-secret-key-env` | Stellar keys assigned to `SOURCE_ACCOUNT`, `ADMIN_KEY`, etc. | CRITICAL |
+| `private-key-pem` | PEM-encoded private key blocks | CRITICAL |
+| `env-secret-assignment` | Plaintext passwords/tokens in variable assignments | HIGH |
+| `mnemonic-seed-phrase` | BIP-39 mnemonic seed phrases | CRITICAL |
+| `github-pat` | GitHub personal access tokens | HIGH |
+| `aws-access-key` | AWS access key IDs | HIGH |
+
+Additionally, all built-in gitleaks detectors are active.
+
+### Where scanning runs
+
+1. **Pre-commit hook** — `gitleaks protect --staged` runs on every `git commit`
+   before the commit is made, scanning only staged files. Install the hooks with:
+   ```bash
+   git config core.hooksPath .githooks
+   # or
+   ./scripts/install_hooks.sh
+   ```
+
+2. **CI on every PR** — The `.github/workflows/secrets-scan.yml` workflow runs
+   gitleaks on every pull request and push to `main`/`develop`. A PR cannot be
+   merged if gitleaks finds a secret.
+
+### Installing gitleaks
+
+**macOS (Homebrew):**
+```bash
+brew install gitleaks
+```
+
+**Linux (binary):**
+```bash
+curl -sSfL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_x64.tar.gz \
+  | tar -xz -C /usr/local/bin
+```
+
+**Windows:**
+```powershell
+winget install gitleaks
+```
+
+Verify the installation:
+```bash
+gitleaks version
+```
+
+### Manual scan
+
+To scan the full repository history at any time:
+```bash
+gitleaks detect --source . --config .gitleaks.toml
+```
+
+To scan only staged changes before committing:
+```bash
+gitleaks protect --staged --config .gitleaks.toml
+```
+
+### Handling false positives
+
+If gitleaks flags a value that is not a real secret (e.g., a test fixture, a
+placeholder address in documentation, or a public key), add an allowlist entry
+to `.gitleaks.toml` with a clear justification comment:
+
+```toml
+[[rules]]
+id    = "stellar-secret-key"
+# ... existing rule ...
+
+  [rules.allowlist]
+  description = "Allow placeholder keys in docs"
+  regexTarget = "line"
+  regexes     = [
+    # Justification: README.md uses <admin-secret> as a literal placeholder
+    '''<admin-secret>''',
+  ]
+```
+
+Or add path-level allowlist entries in the `[allowlist]` section for entire files
+that are safe by construction (e.g., `.env.example`).
+
+**Never add a real secret to an allowlist.** If a real key was committed by
+mistake, rotate it immediately — do not simply allowlist it.
+
+---
 
 ## Environment files
 
@@ -74,4 +174,4 @@ docker compose up -d stellar # start the local Stellar quickstart node
 
 `docker compose config` resolves and type-checks `docker-compose.yml`. The
 committed compose file contains no secrets; it only sets the public `NETWORK`
-value for the local quickstart node, so it is safe to commit as-is.
+value for the local quickstart node, so it is safe to commit as-is..

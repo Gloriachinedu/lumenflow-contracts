@@ -217,3 +217,179 @@ describe("NETWORKS preset", () => {
     expect(NETWORKS.mainnet.networkPassphrase).toBe(Networks.PUBLIC);
   });
 });
+
+// ── serializeMerchantCategory ─────────────────────────────────────────────────
+
+describe("serializeMerchantCategory", () => {
+  const { serializeMerchantCategory } = require("../client");
+  const { xdr, scValToNative } = jest.requireActual("@stellar/stellar-sdk");
+
+  test("unit variant 'Retail' serializes to ScVec([ScSymbol('Retail')])", () => {
+    const scVal = serializeMerchantCategory("Retail");
+    expect(scVal.switch().name).toBe("scvVec");
+    const vec = scVal.vec();
+    expect(vec).toHaveLength(1);
+    expect(vec[0].switch().name).toBe("scvSymbol");
+    expect(vec[0].sym().toString()).toBe("Retail");
+  });
+
+  test("each unit variant round-trips through scValToNative", () => {
+    const units = ["Retail", "Food", "Services", "Digital", "Other"] as const;
+    for (const variant of units) {
+      const scVal = serializeMerchantCategory(variant);
+      const native = scValToNative(scVal);
+      expect(native).toEqual([variant]);
+    }
+  });
+
+  test("Custom('Handmade') serializes to ScVec([ScSymbol('Custom'), ScString('Handmade')])", () => {
+    const scVal = serializeMerchantCategory({ Custom: "Handmade" });
+    expect(scVal.switch().name).toBe("scvVec");
+    const vec = scVal.vec();
+    expect(vec).toHaveLength(2);
+    expect(vec[0].switch().name).toBe("scvSymbol");
+    expect(vec[0].sym().toString()).toBe("Custom");
+    expect(vec[1].switch().name).toBe("scvString");
+    expect(vec[1].str().toString()).toBe("Handmade");
+  });
+
+  test("Custom('Handmade') round-trips through scValToNative", () => {
+    const scVal = serializeMerchantCategory({ Custom: "Handmade" });
+    const native = scValToNative(scVal);
+    // scValToNative returns ["Custom", "Handmade"] for a ScVec enum tuple
+    expect(native).toEqual(["Custom", "Handmade"]);
+  });
+
+  test("throws when Custom label is empty", () => {
+    expect(() => serializeMerchantCategory({ Custom: "" })).toThrow(
+      /empty/i
+    );
+  });
+
+  test("throws when Custom label exceeds 32 characters", () => {
+    expect(() =>
+      serializeMerchantCategory({ Custom: "a".repeat(33) })
+    ).toThrow(/32/);
+  });
+
+  test("accepts Custom label of exactly 32 characters", () => {
+    const label = "a".repeat(32);
+    expect(() => serializeMerchantCategory({ Custom: label })).not.toThrow();
+    const scVal = serializeMerchantCategory({ Custom: label });
+    expect(scVal.vec()[1].str().toString()).toBe(label);
+  });
+});
+
+// ── Custom('Handmade') end-to-end round-trip ──────────────────────────────────
+
+describe("registerMerchant with Custom category — round-trip", () => {
+  const { Keypair, xdr, nativeToScVal, scValToNative } =
+    jest.requireActual("@stellar/stellar-sdk");
+  const source = Keypair.random();
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetAccount.mockResolvedValue(makeAccount(source.publicKey()));
+    mockSendTransaction.mockResolvedValue({
+      hash: "custom-round-trip-hash",
+      status: "PENDING",
+    });
+    mockGetTransaction.mockResolvedValue({
+      status: SorobanRpc.Api.GetTransactionStatus.SUCCESS,
+      returnValue: nativeToScVal(null),
+    });
+  });
+
+  test("registerMerchant with Custom('Handmade') submits and confirms", async () => {
+    mockSimulateTransaction.mockResolvedValue(
+      makeSuccessSimulation(nativeToScVal(null))
+    );
+
+    const client = makeClient();
+    client.setSigner((tx) => {
+      tx.sign(source);
+      return tx;
+    });
+
+    // Should not throw — the Custom variant must be serialized correctly
+    await expect(
+      client.registerMerchant(
+        source.publicKey(),
+        "Artisan Goods",
+        "Handcrafted items",
+        "hello@artisan.com",
+        { Custom: "Handmade" }
+      )
+    ).resolves.toBeUndefined();
+
+    expect(mockSendTransaction).toHaveBeenCalledTimes(1);
+    expect(mockGetTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  test("the ScVal passed to simulateTransaction contains the Custom enum encoding", async () => {
+    mockSimulateTransaction.mockResolvedValue(
+      makeSuccessSimulation(nativeToScVal(null))
+    );
+
+    const client = makeClient();
+    client.setSigner((tx) => {
+      tx.sign(source);
+      return tx;
+    });
+
+    await client.registerMerchant(
+      source.publicKey(),
+      "Artisan Goods",
+      "Handcrafted items",
+      "hello@artisan.com",
+      { Custom: "Handmade" }
+    );
+
+    // Inspect the transaction passed to simulateTransaction
+    const [[submittedTx]] = mockSimulateTransaction.mock.calls;
+    const op = submittedTx.operations[0] as any;
+    const args: xdr.ScVal[] = op.func.invokeContract().args();
+
+    // args[4] is the category (after address, name, description, contactInfo)
+    const categoryArg = args[4];
+    expect(categoryArg.switch().name).toBe("scvVec");
+    const vec = categoryArg.vec();
+    expect(vec).toHaveLength(2);
+    expect(vec[0].sym().toString()).toBe("Custom");
+    expect(vec[1].str().toString()).toBe("Handmade");
+  });
+
+  test("getMerchant correctly deserializes a Custom category response", async () => {
+    // Simulate contract returning a merchant with a Custom category
+    const categoryScVal = xdr.ScVal.scvVec([
+      xdr.ScVal.scvSymbol("Custom"),
+      xdr.ScVal.scvString("Handmade"),
+    ]);
+
+    const merchantScVal = xdr.ScVal.scvMap([
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol("name"),
+        val: xdr.ScVal.scvString("Artisan Goods"),
+      }),
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol("category"),
+        val: categoryScVal,
+      }),
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol("active"),
+        val: xdr.ScVal.scvBool(true),
+      }),
+    ]);
+
+    mockSimulateTransaction.mockResolvedValue(
+      makeSuccessSimulation(merchantScVal)
+    );
+
+    const client = makeClient();
+    const merchant = await client.getMerchant(source.publicKey());
+
+    // scValToNative converts ScVec([Symbol("Custom"), String("Handmade")]) → ["Custom", "Handmade"]
+    expect(merchant.category).toEqual(["Custom", "Handmade"]);
+    expect(merchant.name).toBe("Artisan Goods");
+  });
+});
