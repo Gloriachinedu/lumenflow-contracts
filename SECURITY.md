@@ -68,6 +68,18 @@ Out-of-scope:
 - Issues in third-party dependencies (report upstream)
 - Theoretical attacks without a practical exploit path
 
+## Admin Key Rotation
+
+The contract admin key controls all privileged operations. A documented rotation procedure is required to maintain security posture across key holder changes, suspected compromises, and regular rotation cycles.
+
+**See [docs/admin-key-rotation.md](docs/admin-key-rotation.md) for the full key rotation runbook**, including:
+
+- Planned rotation step-by-step using `transfer_admin`
+- Hardware Security Module (HSM) setup requirements for production
+- Emergency rotation procedure for a compromised key
+- Two-person integrity requirements (all production rotations must be witnessed)
+- Post-rotation verification checklist
+
 ## Incident Response Playbook
 
 ### Critical Vulnerability (Severity: Critical)
