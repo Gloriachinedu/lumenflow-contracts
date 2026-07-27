@@ -14,9 +14,9 @@ use soroban_sdk::{contract, contractimpl, token, xdr::ToXdr, Address, Bytes, Env
 
 use error::PaymentError;
 use helper::{
-    require_admin, require_admin_or, require_min_refund_amount, require_non_empty_string,
-    require_not_paused, require_positive, require_valid_id, require_valid_limit,
-    validate_merchant_category, validate_tags, verify_signature,
+    require_admin, require_admin_or, require_admin_rate_limited, require_min_refund_amount,
+    require_non_empty_string, require_not_paused, require_positive, require_valid_id,
+    require_valid_limit, validate_merchant_category, validate_tags, verify_signature,
 };
 use types::{
     BatchPaymentItem, EscrowRecord, EscrowStatus, GlobalStats, Merchant, MerchantCategory,
@@ -124,7 +124,7 @@ impl PaymentProcessingContract {
         admin: Address,
         period: u64,
     ) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         storage::set_cleanup_period(&env, period);
         Ok(())
     }
@@ -137,7 +137,7 @@ impl PaymentProcessingContract {
         fee_bps: u32,
         fee_recipient: Address,
     ) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         if fee_bps > storage::MAX_PLATFORM_FEE_BPS {
             return Err(PaymentError::InvalidInput);
         }
@@ -166,7 +166,7 @@ impl PaymentProcessingContract {
         admin: Address,
         threshold: i128,
     ) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         require_positive(threshold)?;
         storage::set_large_payment_threshold(&env, threshold);
         Ok(())
@@ -174,7 +174,7 @@ impl PaymentProcessingContract {
 
     /// Add a token to the whitelist (admin only).
     pub fn add_allowed_token(env: Env, admin: Address, token: Address) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         storage::set_token_allowed(&env, &token, true);
         env.events().publish(("lumenflow", "token_allowed"), token);
         Ok(())
@@ -186,7 +186,7 @@ impl PaymentProcessingContract {
         admin: Address,
         token: Address,
     ) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         storage::set_token_allowed(&env, &token, false);
         env.events().publish(("lumenflow", "token_removed"), token);
         Ok(())
@@ -198,7 +198,7 @@ impl PaymentProcessingContract {
         admin: Address,
         duration: u64,
     ) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         if duration == 0 {
             return Err(PaymentError::InvalidInput);
         }
@@ -212,7 +212,7 @@ impl PaymentProcessingContract {
         admin: Address,
         window_secs: u64,
     ) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         if window_secs < storage::MIN_REFUND_WINDOW_SECS {
             return Err(PaymentError::InvalidInput);
         }
@@ -223,7 +223,7 @@ impl PaymentProcessingContract {
 
     /// Pause the contract. All state-mutating functions will return ContractPaused. Admin only.
     pub fn pause_contract(env: Env, admin: Address) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         storage::set_paused(&env, true);
         env.events().publish(("lumenflow", "contract_paused"), ());
         Ok(())
@@ -231,7 +231,7 @@ impl PaymentProcessingContract {
 
     /// Unpause the contract. Admin only. Subject to a 7-day timelock when paused via pause_with_reason.
     pub fn unpause_contract(env: Env, admin: Address) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         // Check timelock
         if let Some(lock_until) = storage::get_unpause_lock_until(&env) {
             if env.ledger().timestamp() < lock_until {
@@ -265,7 +265,7 @@ impl PaymentProcessingContract {
     /// * [`PaymentError::Unauthorized`] — caller is not the admin.
     /// * [`PaymentError::InvalidInput`] — reason is empty.
     pub fn pause_with_reason(env: Env, admin: Address, reason: String) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         require_non_empty_string(&reason)?;
         storage::set_paused(&env, true);
         storage::set_pause_reason(&env, &reason);
@@ -294,7 +294,7 @@ impl PaymentProcessingContract {
         admin: Address,
         guardians: Vec<Address>,
     ) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         if guardians.len() != 5 {
             return Err(PaymentError::InvalidInput);
         }
@@ -360,9 +360,47 @@ impl PaymentProcessingContract {
         admin: Address,
         amount: i128,
     ) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         require_positive(amount)?;
         storage::set_min_refund_amount(&env, amount);
+        Ok(())
+    }
+
+    /// Reset the auth failure lockout for a specific address (admin only).
+    ///
+    /// Clears both the failure counter and the lockout expiry for `address`.
+    /// This allows an admin to manually intervene when a legitimate user is
+    /// accidentally locked out, or to clear the lockout for an address after
+    /// investigation.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator address.
+    /// * `address` - The address whose lockout and failure counter should be cleared.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    ///
+    /// # Example
+    /// ```ignore
+    /// stellar contract invoke \
+    ///   --id $CONTRACT_ID \
+    ///   --source-account $ADMIN_KEY \
+    ///   --network testnet \
+    ///   -- reset_auth_lockout \
+    ///   --admin $ADMIN_ADDRESS \
+    ///   --address $LOCKED_ADDRESS
+    /// ```
+    pub fn reset_auth_lockout(
+        env: Env,
+        admin: Address,
+        address: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin_rate_limited(&env, &admin)?;
+        storage::clear_auth_lockout(&env, &address);
+        env.events().publish(("lumenflow", "auth_lockout_reset"), address);
         Ok(())
     }
 
@@ -384,7 +422,7 @@ impl PaymentProcessingContract {
     /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
     /// * [`PaymentError::InvalidInput`] — `limit` is zero.
     pub fn set_rate_limit(env: Env, admin: Address, limit: u32) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         if limit == 0 {
             return Err(PaymentError::InvalidInput);
         }
@@ -532,7 +570,7 @@ impl PaymentProcessingContract {
         merchant_address: Address,
     ) -> Result<(), PaymentError> {
         require_not_paused(&env)?;
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         let mut merchant =
             storage::get_merchant(&env, &merchant_address).ok_or(PaymentError::MerchantNotFound)?;
         merchant.active = false;
@@ -556,7 +594,7 @@ impl PaymentProcessingContract {
         merchant_address: Address,
     ) -> Result<(), PaymentError> {
         require_not_paused(&env)?;
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         let mut merchant = storage::get_merchant(&env, &merchant_address)
             .ok_or(PaymentError::MerchantNotFound)?;
         if merchant.active {
@@ -594,7 +632,7 @@ impl PaymentProcessingContract {
         admin: Address,
         merchant_address: Address,
     ) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         let mut merchant =
             storage::get_merchant(&env, &merchant_address).ok_or(PaymentError::MerchantNotFound)?;
         merchant.verified = true;
@@ -625,7 +663,7 @@ impl PaymentProcessingContract {
         merchant_address: Address,
     ) -> Result<(), PaymentError> {
         require_not_paused(&env)?;
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         let mut merchant =
             storage::get_merchant(&env, &merchant_address).ok_or(PaymentError::MerchantNotFound)?;
         merchant.verified = false;
@@ -1296,7 +1334,7 @@ impl PaymentProcessingContract {
         order_id: String,
     ) -> Result<(), PaymentError> {
         require_not_paused(&env)?;
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         if storage::get_payment(&env, &order_id).is_none() {
             return Err(PaymentError::PaymentNotFound);
         }
@@ -1322,7 +1360,7 @@ impl PaymentProcessingContract {
     /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
     pub fn cleanup_expired_payments(env: Env, admin: Address) -> Result<u32, PaymentError> {
         require_not_paused(&env)?;
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         let cutoff = env
             .ledger()
             .timestamp()
@@ -1442,7 +1480,7 @@ impl PaymentProcessingContract {
         date_start: Option<u64>,
         date_end: Option<u64>,
     ) -> Result<GlobalStats, PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
 
         // Validate bounds when both are present.
         if let (Some(start), Some(end)) = (date_start, date_end) {
@@ -1870,7 +1908,7 @@ impl PaymentProcessingContract {
         force_refund: bool,
     ) -> Result<(), PaymentError> {
         require_not_paused(&env)?;
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
 
         if resolution.len() == 0 || resolution.len() > 256 {
             return Err(PaymentError::InvalidInput);
@@ -2231,7 +2269,7 @@ impl PaymentProcessingContract {
 
     /// Admin: record the current binary version on-chain (call once after deploy/upgrade).
     pub fn set_contract_version(env: Env, admin: Address) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         let version = String::from_str(&env, env!("CARGO_PKG_VERSION"));
         storage::set_stored_version(&env, &version);
         Ok(())
@@ -2250,14 +2288,14 @@ impl PaymentProcessingContract {
     /// # Errors
     /// * [`PaymentError::Unauthorized`] — caller is not the admin.
     pub fn migrate_storage_keys(env: Env, admin: Address) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         storage::migrate_storage_keys(&env);
         Ok(())
     }
 
     /// Admin guard: returns error if stored on-chain version does not match binary version.
     pub fn assert_version_matches(env: Env, admin: Address) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         let current = String::from_str(&env, env!("CARGO_PKG_VERSION"));
         if let Some(stored) = storage::get_stored_version(&env) {
             if stored != current {
@@ -2294,7 +2332,7 @@ impl PaymentProcessingContract {
         admin: Address,
         new_wasm_hash: soroban_sdk::BytesN<32>,
     ) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
         env.events()
             .publish(("lumenflow", "contract_upgraded"), new_wasm_hash);
@@ -2310,7 +2348,7 @@ impl PaymentProcessingContract {
         cursor: Option<Address>,
         limit: u32,
     ) -> Result<MerchantPage, PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         require_valid_limit(limit)?;
         let addresses = storage::get_merchant_list(&env);
         Self::build_merchant_page(&env, addresses, cursor, limit)
@@ -2667,7 +2705,7 @@ impl PaymentProcessingContract {
         max_cycles: u32,
     ) -> Result<(), PaymentError> {
         require_not_paused(&env)?;
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         require_valid_id(&plan_id)?;
         require_positive(amount)?;
         if interval_secs == 0 || max_cycles == 0 {

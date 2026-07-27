@@ -13,6 +13,10 @@ pub enum PaymentError {
     InvalidAdminAddress = 3,
     /// The provided nonce does not match the expected value. Remediation: Fetch the current nonce and increment by 1.
     InvalidNonce = 4,
+    /// The address is temporarily locked out due to too many failed authentication attempts.
+    /// Remediation: Wait ~83 minutes for the lockout to expire, or ask an admin to call
+    /// `reset_auth_lockout` to clear it immediately.
+    AuthLockedOut = 5,
 
     // Merchant
     /// The requested merchant profile does not exist. Remediation: Check the merchant address and ensure the merchant is registered.
