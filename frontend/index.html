@@ -4,6 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>LumenFlow</title>
+    <link rel="manifest" href="manifest.json" />
+    <meta name="theme-color" content="#6c47ff" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="LumenFlow" />
+    <link rel="apple-touch-icon" href="icons/icon.svg" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -17,5 +24,14 @@
         <a href="multisig.html"  style="font-weight:600;color:#6c47ff;text-decoration:none;padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:8px;">Multisig Payment</a>
       </nav>
     </main>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker
+            .register('./sw.js', { scope: './' })
+            .catch((err) => console.warn('[PWA] Service worker registration failed:', err));
+        });
+      }
+    </script>
   </body>
 </html>

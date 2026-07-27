@@ -100,10 +100,20 @@ enum Commands {
     },
     /// Print the resolved configuration (useful for debugging)
     PrintConfig,
-    /// Batch payment
+    /// Batch pay multiple merchants from a CSV file
     BatchPay {
-        #[arg(long = "item", value_name = "ORDER_ID:MERCHANT_ADDR:AMOUNT")]
-        items: Vec<String>,
+        /// Path to CSV file (columns: order_id,merchant_address,token_address,amount,memo)
+        #[arg(long, value_name = "FILE")]
+        file: PathBuf,
+        /// Token address (overrides CSV token_address column if provided)
+        #[arg(long)]
+        token: Option<String>,
+        /// Signature (hex) for all payments (required)
+        #[arg(long)]
+        signature: String,
+        /// Merchant public key (hex) for all payments (required)
+        #[arg(long)]
+        merchant_public_key: String,
     },
 }
 
@@ -395,6 +405,40 @@ fn resolve_config(
         contract_id,
         source_account,
     }
+
+    #[test]
+    fn test_stellar_invoke_prefix_defaults() {
+        let config = Config::default();
+        let prefix = stellar_invoke_prefix(&config);
+        assert!(prefix.contains("testnet"));
+        assert!(prefix.contains("<CONTRACT_ID>"));
+        assert!(prefix.contains("<SOURCE_ACCOUNT>"));
+    }
+
+    #[test]
+    fn test_stellar_invoke_prefix_with_config() {
+        let config = Config {
+            network: Some("mainnet".to_string()),
+            contract_id: Some("CABC123".to_string()),
+            source_account: Some("SABC456".to_string()),
+        };
+        let prefix = stellar_invoke_prefix(&config);
+        assert!(prefix.contains("mainnet"));
+        assert!(prefix.contains("CABC123"));
+        assert!(prefix.contains("SABC456"));
+    }
+
+    #[test]
+    fn test_multisig_init_signers_formatting() {
+        // Verify that comma-separated signers are formatted into a JSON array
+        let signers = "GAAA,GBBB,GCCC";
+        let signer_list: Vec<String> = signers
+            .split(',')
+            .map(|s| format!("\"{}\"", s.trim()))
+            .collect();
+        let json = format!("[{}]", signer_list.join(","));
+        assert_eq!(json, "[\"GAAA\",\"GBBB\",\"GCCC\"]");
+    }
 }
 
 // ── Wallet / Key loading ──────────────────────────────────────────────────────
@@ -489,6 +533,173 @@ fn base_invoke(config: &Config) -> Result<Command> {
     Ok(cmd)
 }
 
+// ── CSV Batch Payment ─────────────────────────────────────────────────────────
+
+/// A single row parsed from the batch-pay CSV file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CsvRow {
+    pub order_id: String,
+    pub merchant_address: String,
+    pub token_address: String,
+    pub amount: i128,
+    pub memo: String,
+}
+
+/// Parse and validate a CSV file for batch payments.
+///
+/// Expected header: `order_id,merchant_address,token_address,amount,memo`
+/// Returns validated rows or a list of per-row error messages.
+pub fn parse_csv(content: &str) -> Result<Vec<CsvRow>> {
+    let mut rows: Vec<CsvRow> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    let mut lines = content.lines().enumerate();
+
+    // Consume (and validate) the header line.
+    let header = loop {
+        match lines.next() {
+            None => bail!("CSV file is empty"),
+            Some((_, line)) if line.trim().is_empty() => continue,
+            Some((_, line)) => break line,
+        }
+    };
+
+    let expected_header = "order_id,merchant_address,token_address,amount,memo";
+    if header.trim().to_lowercase() != expected_header {
+        bail!(
+            "CSV header mismatch.\n  Expected: {}\n  Got:      {}",
+            expected_header,
+            header.trim()
+        );
+    }
+
+    // Parse data rows.
+    for (line_num, line) in lines {
+        let display_num = line_num + 1; // 1-indexed for user messages
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let parts: Vec<&str> = trimmed.splitn(5, ',').collect();
+        if parts.len() != 5 {
+            errors.push(format!(
+                "Row {}: expected 5 columns, got {} (line: {:?})",
+                display_num,
+                parts.len(),
+                trimmed
+            ));
+            continue;
+        }
+
+        let order_id = parts[0].trim().to_string();
+        let merchant_address = parts[1].trim().to_string();
+        let token_address = parts[2].trim().to_string();
+        let amount_str = parts[3].trim();
+        let memo = parts[4].trim().to_string();
+
+        let mut row_ok = true;
+
+        if order_id.is_empty() {
+            errors.push(format!("Row {}: order_id must not be empty", display_num));
+            row_ok = false;
+        }
+
+        // Stellar addresses: start with 'G' and are exactly 56 characters.
+        if !merchant_address.starts_with('G') || merchant_address.len() != 56 {
+            errors.push(format!(
+                "Row {}: merchant_address '{}' is not a valid Stellar address (must start with 'G' and be 56 chars)",
+                display_num, merchant_address
+            ));
+            row_ok = false;
+        }
+
+        if !token_address.starts_with('G') || token_address.len() != 56 {
+            errors.push(format!(
+                "Row {}: token_address '{}' is not a valid Stellar address (must start with 'G' and be 56 chars)",
+                display_num, token_address
+            ));
+            row_ok = false;
+        }
+
+        let amount: i128 = match amount_str.parse() {
+            Ok(n) if n > 0 => n,
+            Ok(_) => {
+                errors.push(format!(
+                    "Row {}: amount must be a positive integer, got '{}'",
+                    display_num, amount_str
+                ));
+                row_ok = false;
+                0
+            }
+            Err(_) => {
+                errors.push(format!(
+                    "Row {}: amount '{}' is not a valid integer",
+                    display_num, amount_str
+                ));
+                row_ok = false;
+                0
+            }
+        };
+
+        if row_ok {
+            rows.push(CsvRow { order_id, merchant_address, token_address, amount, memo });
+        }
+    }
+
+    if !errors.is_empty() {
+        let msg = errors.join("\n");
+        bail!("CSV validation failed:\n{}", msg);
+    }
+
+    if rows.is_empty() {
+        bail!("CSV file contains no data rows");
+    }
+
+    Ok(rows)
+}
+
+/// Outcome of submitting a single CSV row.
+#[derive(Debug)]
+struct RowResult {
+    order_id: String,
+    status: String,
+    tx_hash: String,
+}
+
+/// Print a results table: | order_id | status | tx_hash |
+fn print_results_table(results: &[RowResult]) {
+    // Calculate column widths.
+    let w_order = results.iter().map(|r| r.order_id.len()).max().unwrap_or(0).max("order_id".len());
+    let w_status = results.iter().map(|r| r.status.len()).max().unwrap_or(0).max("status".len());
+    let w_hash = results.iter().map(|r| r.tx_hash.len()).max().unwrap_or(0).max("tx_hash".len());
+
+    let sep = format!(
+        "+-{}-+-{}-+-{}-+",
+        "-".repeat(w_order),
+        "-".repeat(w_status),
+        "-".repeat(w_hash)
+    );
+
+    println!("{}", sep);
+    println!(
+        "| {:<w_order$} | {:<w_status$} | {:<w_hash$} |",
+        "order_id", "status", "tx_hash",
+        w_order = w_order, w_status = w_status, w_hash = w_hash
+    );
+    println!("{}", sep);
+
+    for r in results {
+        println!(
+            "| {:<w_order$} | {:<w_status$} | {:<w_hash$} |",
+            r.order_id, r.status, r.tx_hash,
+            w_order = w_order, w_status = w_status, w_hash = w_hash
+        );
+    }
+
+    println!("{}", sep);
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 fn main() -> Result<()> {
@@ -560,27 +771,101 @@ fn main() -> Result<()> {
             }).unwrap_or_else(|| "(not set)".to_string());
             println!("  source_account:     {}", source_display);
         }
-        Commands::BatchPay { items } => {
-            if items.is_empty() {
-                anyhow::bail!("At least one --item is required");
+        Commands::BatchPay { file, token, signature, merchant_public_key } => {
+            if config.source_account.is_none() {
+                bail!("No signing key available. Use --key-file, --prompt-key, or set LUMENFLOW_SOURCE.");
             }
-            if items.len() > 10 {
-                anyhow::bail!("Too many items: {} (max 10)", items.len());
+
+            // Read and parse the CSV file.
+            let content = std::fs::read_to_string(file)
+                .with_context(|| format!("Failed to read CSV file: {}", file.display()))?;
+            let rows = parse_csv(&content)?;
+
+            if rows.len() > 10 {
+                bail!("Too many rows: {} (batch_payment supports at most 10 items per call)", rows.len());
             }
-            println!("Batch payment ({} items):", items.len());
-            let mut total: i128 = 0;
-            for item in items {
-                let parts: Vec<&str> = item.splitn(3, ':').collect();
-                if parts.len() != 3 {
-                    anyhow::bail!("Invalid item format '{}' - expected ORDER_ID:MERCHANT_ADDR:AMOUNT", item);
+
+            let payer = config.source_account.as_deref().unwrap_or_default();
+            println!("Submitting {} payment(s) from {} on {}...\n", rows.len(), payer, network);
+
+            let mut results: Vec<RowResult> = Vec::new();
+
+            for row in &rows {
+                // Resolve token: CLI flag overrides CSV column.
+                let token_addr = token.as_deref().unwrap_or(&row.token_address);
+
+                let mut cmd = base_invoke(&config)?;
+                cmd.args([
+                    "--",
+                    "process_payment_with_signature",
+                    "--payer", payer,
+                    "--order_id", &row.order_id,
+                    "--merchant_address", &row.merchant_address,
+                    "--token_address", token_addr,
+                    "--amount", &row.amount.to_string(),
+                    "--memo", &row.memo,
+                    "--tags", "null",
+                    "--nonce", "1",
+                    "--signature", signature,
+                    "--merchant_public_key", merchant_public_key,
+                ]);
+
+                let output = cmd.output();
+                match output {
+                    Ok(out) if out.status.success() => {
+                        let stdout = String::from_utf8_lossy(&out.stdout);
+                        // The Stellar CLI prints the tx hash on stdout; extract it if present.
+                        let tx_hash = stdout
+                            .lines()
+                            .find(|l| l.len() == 64 && l.chars().all(|c| c.is_ascii_hexdigit()))
+                            .unwrap_or("(no hash)")
+                            .trim()
+                            .to_string();
+                        results.push(RowResult {
+                            order_id: row.order_id.clone(),
+                            status: "success".to_string(),
+                            tx_hash,
+                        });
+                    }
+                    Ok(out) => {
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        // Summarise the error in one line for the table.
+                        let err_summary = stderr
+                            .lines()
+                            .find(|l| !l.trim().is_empty())
+                            .unwrap_or("unknown error")
+                            .trim()
+                            .chars()
+                            .take(60)
+                            .collect::<String>();
+                        results.push(RowResult {
+                            order_id: row.order_id.clone(),
+                            status: format!("FAILED: {}", err_summary),
+                            tx_hash: "-".to_string(),
+                        });
+                    }
+                    Err(e) => {
+                        results.push(RowResult {
+                            order_id: row.order_id.clone(),
+                            status: format!("ERROR: {}", e),
+                            tx_hash: "-".to_string(),
+                        });
+                    }
                 }
-                let amount: i128 = parts[2].parse()
-                    .map_err(|_| anyhow::anyhow!("Invalid amount '{}' in item '{}'", parts[2], item))?;
-                println!("  Order: {}  Merchant: {}  Amount: {}", parts[0], parts[1], amount);
-                total += amount;
             }
-            println!("Total amount: {}", total);
-            println!("Network: {}", config.network.as_deref().unwrap_or("testnet"));
+
+            print_results_table(&results);
+
+            // Report overall outcome.
+            let failed = results.iter().filter(|r| r.status.starts_with("FAILED") || r.status.starts_with("ERROR")).count();
+            let succeeded = results.len() - failed;
+            println!("\n{}/{} payment(s) succeeded.", succeeded, results.len());
+            if failed > 0 {
+                bail!("{} payment(s) failed. See table above for details.", failed);
+            }
+        }
+        Commands::Multisig { action } => {
+            handle_multisig(action, &config);
         }
     }
 

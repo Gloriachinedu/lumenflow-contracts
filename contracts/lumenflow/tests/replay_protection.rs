@@ -111,6 +111,7 @@ fn test_signature_payment_first_call_succeeds() {
         &1_000,
         &str(&env, "test"),
         &None,
+                &1u64,
         &zero_bytes64(&env),
         &zero_bytes32(&env),
     );
@@ -133,6 +134,7 @@ fn test_signature_payment_duplicate_order_id_rejected() {
         &1_000,
         &str(&env, "original"),
         &None,
+                &1u64,
         &zero_bytes64(&env),
         &zero_bytes32(&env),
     );
@@ -146,6 +148,7 @@ fn test_signature_payment_duplicate_order_id_rejected() {
         &1_000,
         &str(&env, "original"),
         &None,
+                &1u64,
         &zero_bytes64(&env),
         &zero_bytes32(&env),
     );
@@ -165,6 +168,7 @@ fn test_signature_payment_replay_different_amount_rejected() {
         &500,
         &str(&env, "first"),
         &None,
+                &1u64,
         &zero_bytes64(&env),
         &zero_bytes32(&env),
     );
@@ -178,6 +182,7 @@ fn test_signature_payment_replay_different_amount_rejected() {
         &9_999,
         &str(&env, "replay"),
         &None,
+                &1u64,
         &zero_bytes64(&env),
         &zero_bytes32(&env),
     );

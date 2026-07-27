@@ -199,3 +199,155 @@ Soroban contracts are immutable once deployed. There is no in-place upgrade path
 5. **Archive or document** the old `CONTRACT_ID` so historical payment records remain queryable during the transition window.
 
 To minimise downtime, prepare the new contract in parallel before switching traffic.
+
+---
+
+## Canary Deployment Strategy
+
+Soroban contracts are immutable once deployed. A canary deployment works by deploying a **new contract instance** (the canary) alongside the existing **stable** contract, then using a router contract to split live traffic between them before committing to a full cutover.
+
+### Overview
+
+```
+stable contract  ←──95%──┐
+                          │  router contract  ←── all incoming calls
+canary contract  ←── 5%──┘
+```
+
+1. **Deploy canary** — a new contract instance built from the updated code.
+2. **Configure router** — point the router at both stable and canary, set weight to 5%.
+3. **Monitor** — compare error rates and latency between stable and canary via Horizon event streaming (see [docs/monitoring.md](monitoring.md)).
+4. **Promote or roll back** — if the canary is healthy, promote it to stable; otherwise roll back.
+
+---
+
+### Deploy a canary
+
+```bash
+NETWORK=testnet SOURCE_ACCOUNT=<deployer-secret> ./scripts/deploy-canary.sh
+```
+
+The script:
+- Builds the WASM from the current source tree.
+- Deploys a new contract instance and prints the `CANARY_CONTRACT_ID`.
+- Writes the canary ID to `canary-contract-id.txt` in the workspace root.
+- Prints next-step instructions for configuring the router and monitoring.
+
+After deploying, initialise the canary admin and register it with the router:
+
+```bash
+# 1. Initialise admin on the canary
+stellar contract invoke \
+  --id <CANARY_CONTRACT_ID> \
+  --source-account $SOURCE_ACCOUNT \
+  --network testnet \
+  -- set_admin --admin <ADMIN_ADDRESS>
+
+# 2. Register the canary in the router
+stellar contract invoke \
+  --id $ROUTER_CONTRACT_ID \
+  --source-account $SOURCE_ACCOUNT \
+  --network testnet \
+  -- set_canary_contract --admin <ADMIN_ADDRESS> --canary_id <CANARY_CONTRACT_ID>
+
+# 3. Set traffic weight (default is already 5%)
+stellar contract invoke \
+  --id $ROUTER_CONTRACT_ID \
+  --source-account $SOURCE_ACCOUNT \
+  --network testnet \
+  -- set_canary_weight --admin <ADMIN_ADDRESS> --weight 5
+```
+
+---
+
+### Router contract
+
+The router contract lives in `contracts/router/`. It holds two addresses (stable and canary) and a `CANARY_WEIGHT` value (0–100, default: 5). For each call the router evaluates:
+
+```
+bucket = ledger_sequence_number mod 100
+if bucket < canary_weight  →  forward to canary
+else                       →  forward to stable
+```
+
+The ledger sequence is monotonically increasing and cycles through all 100 buckets evenly, so a weight of 5 routes approximately 5% of calls to the canary without any off-chain randomness source.
+
+To deploy the router:
+
+```bash
+cargo build --target wasm32-unknown-unknown --release --package lumenflow-router
+stellar contract deploy \
+  --wasm target/wasm32-unknown-unknown/release/lumenflow_router.wasm \
+  --source-account $SOURCE_ACCOUNT \
+  --network testnet
+```
+
+---
+
+### Monitor error rates
+
+Subscribe to `lumenflow/routed_to_canary` and `lumenflow/routed_to_stable` events from the router, plus the standard `lumenflow/payment_processed` events from both contracts. Compare:
+
+- Error rate (failed invocations / total calls)
+- Latency (Horizon response times)
+- Refund and payment anomalies
+
+For detailed Horizon SSE subscription guidance see [docs/monitoring.md](monitoring.md).
+
+---
+
+### Promote a canary
+
+Once the canary has processed sufficient traffic without elevated errors:
+
+```bash
+NETWORK=testnet ./scripts/promote-canary.sh
+```
+
+The script:
+- Reads `CANARY_CONTRACT_ID` from `canary-contract-id.txt` (or `$CANARY_CONTRACT_ID` env var).
+- Overwrites `testnet-contract-id.txt` with the canary ID, making it the new stable.
+- Clears `canary-contract-id.txt`.
+- Prints a post-promotion checklist.
+
+After promotion, set the router weight to 0 to disable canary routing and update all SDK / frontend / CI references to the new `CONTRACT_ID`.
+
+---
+
+### Roll back a canary
+
+If the canary shows elevated error rates or unexpected behaviour:
+
+```bash
+NETWORK=testnet ./scripts/rollback-canary.sh
+```
+
+The script:
+- Reads the previous stable ID from `stable-contract-id.txt` or `$STABLE_CONTRACT_ID`.
+- Restores `testnet-contract-id.txt` to the previous stable ID.
+- Clears `canary-contract-id.txt`.
+- Prints a post-rollback checklist including smoke test instructions.
+
+Set the router weight back to 0 to stop sending traffic to the canary:
+
+```bash
+stellar contract invoke \
+  --id $ROUTER_CONTRACT_ID \
+  --source-account $SOURCE_ACCOUNT \
+  --network testnet \
+  -- set_canary_weight --admin <ADMIN_ADDRESS> --weight 0
+```
+
+The abandoned canary contract remains deployed on-chain. It can be queried for diagnostic purposes but should not be used in production.
+
+---
+
+### Key considerations
+
+| Topic | Detail |
+|-------|--------|
+| Contract immutability | Soroban contracts cannot be modified or deleted after deployment. Both stable and canary remain on-chain indefinitely. |
+| Historical data | Payments made against the canary during the evaluation window remain queryable on the canary contract ID. |
+| Router dependency | Traffic splitting requires the router contract to be deployed and configured. Without a router, all traffic goes to the stable contract. |
+| Key management | Use the same admin key for stable and canary. Do not use testnet keys on mainnet. |
+| Rollback scope | Rolling back reverts the canonical contract ID only. It does not undo payments already processed by the canary. |
