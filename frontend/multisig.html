@@ -415,17 +415,21 @@
     el.style.display = message ? 'block' : 'none';
     el.classList.toggle('visible', !!message);
   }
-feat/stellar-address-validation
+
+ feat/sdk-rpc-retry-integration
   function validateForm() {
     let ok = true;
- const paymentId = document.getElementById('payment-id').value.trim();
+
+    const paymentId = document.getElementById('payment-id').value.trim();
     showErr('err-payment-id', !paymentId);
     if (!paymentId) ok = false;
- const merchant = document.getElementById('merchant-address').value.trim();
+
+    const merchant = document.getElementById('merchant-address').value.trim();
     const merchantValid = isValidStellarAddress(merchant);
     showErr('err-merchant', !merchant || !merchantValid);
     if (!merchant || !merchantValid) ok = false;
- const token = document.getElementById('token-address').value.trim();
+
+    const token = document.getElementById('token-address').value.trim();
     const tokenValid = isValidStellarAddress(token) || isValidStellarContractId(token);
     showErr('err-token', !token || !tokenValid);
     if (!token || !tokenValid) ok = false;
@@ -438,7 +442,8 @@ feat/stellar-address-validation
     } else {
       el.removeAttribute('aria-invalid');
     }
-  }
+  }main
+
   const FIELD_ERR_IDS = {
     'payment-id':       'err-payment-id',
     'merchant-address': 'err-merchant',
@@ -459,14 +464,16 @@ const FIELD_VALIDATORS = {
     }
     return !message;
   }
-feat/stellar-address-validation
+
+feat/sdk-rpc-retry-integration
     // Validate each signer input individually
     const signerInputs = document.querySelectorAll('.signer-input');
     let hasValidSigner = false;
     signerInputs.forEach((input, index) => {
       const value = input.value.trim();
       const errEl = input.parentElement.querySelector('.signer-err');
-       if (value && !isValidStellarAddress(value)) {
+      
+      if (value && !isValidStellarAddress(value)) {
         errEl.style.display = 'block';
         ok = false;
       } else {
@@ -474,7 +481,8 @@ feat/stellar-address-validation
         if (value) hasValidSigner = true;
       }
     });
- const sigErr = document.getElementById('err-signers');
+
+    const sigErr = document.getElementById('err-signers');
     if (!hasValidSigner) {
       sigErr.style.display = 'block';
       ok = false;
