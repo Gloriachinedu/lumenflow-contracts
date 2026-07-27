@@ -52,6 +52,8 @@ pub enum PaymentError {
     /// The refund has already been executed. Remediation: No action needed; the refund is complete.
     RefundAlreadyCompleted = 35,
     RefundBelowMinimum = 36,
+    /// The number of refunds for this payment has reached the maximum allowed (10). Remediation: No further refunds can be initiated for this payment.
+    RefundLimitExceeded = 37,
 
     // Multisig
     /// The multi-signature payment request was not found. Remediation: Verify the payment ID.
@@ -64,12 +66,26 @@ pub enum PaymentError {
     InsufficientSignatures = 43,
     /// The multi-signature payment has already been cancelled. Remediation: No action needed.
     MultisigAlreadyCancelled = 44,
+    /// The multi-signature payment has been cancelled. Remediation: No action needed.
+    MultisigCancelled = 45,
+    /// The multi-signature payment has expired. Remediation: Create a new multisig payment.
+    MultisigExpired = 46,
 
     // Contract state
     /// The contract is currently paused. Remediation: An admin must unpause the contract.
     ContractPaused = 70,
     /// The payment history limit for this account has been exceeded. Remediation: Archive old payments.
     PaymentHistoryLimitExceeded = 71,
+    /// Unpause attempted before the 7-day timelock expires. Remediation: Wait for the timelock to expire or use the 3-of-5 multisig early unpause.
+    TimelockActive = 72,
+    /// Not enough multisig approvals for early unpause. Remediation: Collect at least 3 approvals from registered pause guardians.
+    InsufficientUnpauseSignatures = 73,
+    /// The signer has already approved the early unpause. Remediation: Wait for other guardians to approve.
+    AlreadyApprovedUnpause = 74,
+    /// The caller is not a registered pause guardian. Remediation: Only addresses set via set_pause_guardians can approve early unpause.
+    NotAPauseGuardian = 75,
+    /// The on-chain stored version does not match the binary version. Remediation: Call set_contract_version after upgrading.
+    VersionMismatch = 80,
 
     // General
     /// The provided input parameters are invalid. Remediation: Check the input values and format.
@@ -80,6 +96,11 @@ pub enum PaymentError {
     BatchSizeExceeded = 52,
     /// The provided tags exceed length or count limits. Remediation: Ensure tags are within the allowed limits (e.g., max 5 tags, max 20 chars per tag).
     InvalidTags = 53,
+
+    // Referral
+    /// The referral address is invalid: either it does not belong to a registered merchant or
+    /// the caller attempted to refer themselves. Remediation: Provide a valid, distinct referrer address.
+    InvalidReferral = 80,
 
     // Subscriptions
     /// A subscription plan with the given ID already exists. Remediation: Use a unique plan ID.
@@ -96,4 +117,32 @@ pub enum PaymentError {
     SubscriptionMaxCyclesReached = 65,
     /// The required interval between subscription charges has not elapsed. Remediation: Wait for the next billing cycle.
     SubscriptionIntervalNotElapsed = 66,
+
+    // Rate limiting
+    /// The merchant has exceeded the payment rate limit for the current ledger window. Remediation: Wait for the next rate-limit window (~25 minutes) before submitting more payments.
+    RateLimitExceeded = 90,
+
+    // Escrow
+    /// The requested escrow record was not found. Remediation: Verify the order ID.
+    EscrowNotFound = 100,
+    /// An escrow record with the given order ID already exists. Remediation: Use a unique order ID.
+    EscrowAlreadyExists = 101,
+    /// The escrow unlock time has not yet been reached. Remediation: Wait until the unlock_at timestamp before releasing.
+    EscrowNotUnlocked = 102,
+    /// The escrow has already been released or cancelled. Remediation: No action needed; the escrow is finalised.
+    EscrowAlreadyFinalised = 103,
+    /// The cancel_escrow_before_lock caller is not the payer of the escrow. Remediation: Only the original payer can cancel an escrow.
+    EscrowUnauthorised = 104,
+    /// The escrow unlock time has already passed; it can no longer be cancelled. Remediation: Call release_escrow instead.
+    EscrowLockExpired = 105,
+
+    // Disputes
+    /// The requested dispute was not found. Remediation: Verify the dispute ID.
+    DisputeNotFound = 110,
+    /// A dispute with the given ID already exists. Remediation: Use a unique dispute ID.
+    DisputeAlreadyExists = 111,
+    /// A dispute can only be raised on a rejected refund. Remediation: Ensure the refund status is Rejected before raising a dispute.
+    DisputeRefundNotRejected = 112,
+    /// The dispute has already been resolved. Remediation: No further action needed.
+    DisputeAlreadyResolved = 113,
 }
