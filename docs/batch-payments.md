@@ -128,3 +128,51 @@ The response's `tags` field will contain the values you supplied.
 All items are validated and signatures verified **before** any token transfer
 occurs. If the contract returns an error, no funds move and no payment records
 are written.
+
+---
+
+## Multi-token transfer grouping (introduced in #568)
+
+In previous versions, `batch_payment` issued one `token.transfer` call per
+batch item — 10 items always produced 10 cross-contract calls. Starting in this
+release, transfers are **grouped by `(token_address, merchant_address)` pair**
+before execution.
+
+### How it works
+
+1. **Phase 1 — Validation:** All items are validated and their ed25519 signatures
+   verified. Any failure aborts the entire batch before any state changes.
+2. **Phase 2 — Grouping:** The contract scans all items and accumulates amounts
+   into a `(token, merchant, total)` table. Multiple items sharing the same token
+   and merchant are summed into a single group.
+3. **Phase 3 — Transfers:** One `token.transfer` call is made per unique group,
+   not per item. A batch of 10 items using 3 distinct tokens results in at most
+   3–10 transfers (depending on merchant diversity).
+4. **Phase 4 — Records:** Payment records are written and statistics updated per
+   item (individual `order_id` records are preserved).
+5. **Phase 5 — Events:** One `payment_processed` event is emitted per item, so
+   off-chain consumers still receive granular per-order events.
+
+### Example: 10 items, 3 tokens
+
+```
+Item  token  merchant  amount
+ 1    USDC   M1        500
+ 2    USDC   M1        300   ← grouped with item 1 → 800 transferred
+ 3    USDC   M2        200
+ 4    XLM    M1        1000
+ 5    XLM    M1        500   ← grouped with item 4 → 1500 transferred
+ 6    XLM    M2        750
+ 7    EURC   M3        400
+ 8    EURC   M3        600   ← grouped with item 7 → 1000 transferred
+ 9    USDC   M3        100
+10    XLM    M3        250
+
+Groups → 6 token.transfer calls instead of 10
+```
+
+### Benefit
+
+Reducing `token.transfer` calls lowers the number of cross-contract invocations
+in a transaction, which directly reduces fee costs for batches that contain
+repeated (token, merchant) combinations.

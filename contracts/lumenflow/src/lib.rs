@@ -229,11 +229,128 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
-    /// Unpause the contract. Admin only.
+    /// Unpause the contract. Admin only. Subject to a 7-day timelock when paused via pause_with_reason.
     pub fn unpause_contract(env: Env, admin: Address) -> Result<(), PaymentError> {
         require_admin(&env, &admin)?;
+        // Check timelock
+        if let Some(lock_until) = storage::get_unpause_lock_until(&env) {
+            if env.ledger().timestamp() < lock_until {
+                return Err(PaymentError::TimelockActive);
+            }
+        }
+        // Clear pause state
+        storage::clear_unpause_lock_until(&env);
+        storage::clear_pause_reason(&env);
+        storage::clear_early_unpause_approvals(&env);
         storage::set_paused(&env, false);
         env.events().publish(("lumenflow", "contract_unpaused"), ());
+        Ok(())
+    }
+
+    /// Pause the contract with a recorded reason and a 7-day unpause timelock.
+    ///
+    /// Unlike `pause_contract`, this function stores the human-readable `reason`
+    /// on-chain and sets a timelock: `unpause_contract` will be blocked until
+    /// 7 days after this call unless overridden by the 3-of-5 multisig guardian
+    /// mechanism via `approve_early_unpause`.
+    ///
+    /// The reason and timelock expiry are emitted in the `contract_paused` event
+    /// so that off-chain monitors can surface the pause context immediately.
+    ///
+    /// # Arguments
+    /// * `admin` - Contract administrator. Must sign.
+    /// * `reason` - Non-empty human-readable description of the pause cause.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — caller is not the admin.
+    /// * [`PaymentError::InvalidInput`] — reason is empty.
+    pub fn pause_with_reason(env: Env, admin: Address, reason: String) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        require_non_empty_string(&reason)?;
+        storage::set_paused(&env, true);
+        storage::set_pause_reason(&env, &reason);
+        let lock_until = env.ledger().timestamp() + PAUSE_TIMELOCK_SECS;
+        storage::set_unpause_lock_until(&env, lock_until);
+        storage::clear_early_unpause_approvals(&env);
+        env.events()
+            .publish(("lumenflow", "contract_paused"), (reason, lock_until));
+        Ok(())
+    }
+
+    /// Register the 5 authorized pause guardians who can vote for early unpause.
+    ///
+    /// Exactly 5 guardian addresses must be supplied. Replaces any previous
+    /// guardian list. Admin only.
+    ///
+    /// # Arguments
+    /// * `admin` - Contract administrator. Must sign.
+    /// * `guardians` - Exactly 5 unique guardian `Address` values.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — caller is not the admin.
+    /// * [`PaymentError::InvalidInput`] — list is not exactly 5 addresses.
+    pub fn set_pause_guardians(
+        env: Env,
+        admin: Address,
+        guardians: Vec<Address>,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        if guardians.len() != 5 {
+            return Err(PaymentError::InvalidInput);
+        }
+        storage::set_pause_guardians(&env, &guardians);
+        Ok(())
+    }
+
+    /// Vote to approve an early (pre-timelock) unpause of the contract.
+    ///
+    /// Each registered pause guardian may call this once per pause event. When
+    /// the approval count reaches `EARLY_UNPAUSE_THRESHOLD` (3), the contract is
+    /// automatically unpaused and the timelock, reason, and approval list are
+    /// cleared.
+    ///
+    /// # Arguments
+    /// * `guardian` - A registered pause guardian. Must sign.
+    ///
+    /// # Errors
+    /// * [`PaymentError::NotAPauseGuardian`] — caller is not in the guardian list.
+    /// * [`PaymentError::AlreadyApprovedUnpause`] — caller already voted.
+    pub fn approve_early_unpause(env: Env, guardian: Address) -> Result<(), PaymentError> {
+        guardian.require_auth();
+
+        // Verify this caller is a registered guardian
+        let guardians = storage::get_pause_guardians(&env);
+        let mut is_guardian = false;
+        for g in guardians.iter() {
+            if g == guardian {
+                is_guardian = true;
+                break;
+            }
+        }
+        if !is_guardian {
+            return Err(PaymentError::NotAPauseGuardian);
+        }
+
+        // Check for duplicate approval
+        let mut approvals = storage::get_early_unpause_approvals(&env);
+        for a in approvals.iter() {
+            if a == guardian {
+                return Err(PaymentError::AlreadyApprovedUnpause);
+            }
+        }
+
+        approvals.push_back(guardian.clone());
+        storage::set_early_unpause_approvals(&env, &approvals);
+
+        // If threshold reached, auto-unpause
+        if approvals.len() >= EARLY_UNPAUSE_THRESHOLD {
+            storage::set_paused(&env, false);
+            storage::clear_unpause_lock_until(&env);
+            storage::clear_pause_reason(&env);
+            storage::clear_early_unpause_approvals(&env);
+            env.events()
+                .publish(("lumenflow", "contract_unpaused"), ("multisig_override",));
+        }
         Ok(())
     }
 
@@ -712,8 +829,8 @@ impl PaymentProcessingContract {
         }
 
         env.events().publish(
-            ("lumenflow", "payment_processed"),
-            (order_id, payer, merchant_address, amount),
+            ("lumenflow", "payment_processed", merchant_address.clone()),
+            (order_id, payer, amount),
         );
         Ok(())
     }
@@ -852,8 +969,8 @@ impl PaymentProcessingContract {
         }
 
         env.events().publish(
-            ("lumenflow", "payment_processed"),
-            (order_id, payer, merchant_address, amount),
+            ("lumenflow", "payment_processed", merchant_address.clone()),
+            (order_id, payer, amount),
         );
         Ok(())
     }
@@ -890,13 +1007,17 @@ impl PaymentProcessingContract {
 
     /// Pay multiple merchants in one transaction. Maximum 10 items. Atomic.
     ///
-    /// All items are validated and transferred atomically — if any item fails the
-    /// entire batch is rolled back.
+    /// All items are validated and signatures verified in a first pass before any
+    /// token transfer occurs. Transfers are then **grouped by `(token_address,
+    /// merchant_address)` pair**: when multiple items share the same token and
+    /// merchant, their amounts are summed and only **one `token.transfer` call**
+    /// is made for that pair, reducing the total number of cross-contract calls
+    /// from N (one per item) to M (one per unique token+merchant combination).
     ///
     /// # Arguments
     /// * `payer` - Address funding all payments. Must sign the call.
     /// * `payments` - List of up to 10 [`BatchPaymentItem`] entries, each containing
-    ///   `order_id`, `merchant_address`, `token_address`, `amount`, `memo`,
+    ///   `order_id`, `merchant_address`, `token_address`, `amount`, `memo`, `tags`,
     ///   `signature`, and `merchant_public_key`.
     ///
     /// # Returns
@@ -905,9 +1026,10 @@ impl PaymentProcessingContract {
     /// # Errors
     /// * [`PaymentError::BatchSizeExceeded`] — more than 10 items provided.
     /// * [`PaymentError::InvalidAmount`] — any item has a non-positive amount.
-    /// * [`PaymentError::InvalidInput`] — any item has an empty `order_id`.
+    /// * [`PaymentError::InvalidInput`] — any item has an empty `order_id` or invalid tags.
     /// * [`PaymentError::TokenNotAllowed`] — any item's token is not on the allow-list.
-    /// * [`PaymentError::PaymentAlreadyExists`] — any item's `order_id` already exists.
+    /// * [`PaymentError::PaymentAlreadyExists`] — any item's `order_id` already exists
+    ///   on-chain or appears more than once within this batch.
     /// * [`PaymentError::MerchantNotFound`] — any item's merchant is not registered.
     /// * [`PaymentError::MerchantInactive`] — any item's merchant is deactivated.
     /// * [`PaymentError::InvalidSignature`] — any item's signature verification fails.
@@ -922,11 +1044,23 @@ impl PaymentProcessingContract {
             return Err(PaymentError::BatchSizeExceeded);
         }
 
-        // Check for intra-batch duplicate order IDs before doing any work
-        let mut seen: Vec<String> = Vec::new(&env);
+        // ── Phase 1: Validate ALL items first — fail fast before any state change ──
+        //
+        // We also track intra-batch duplicate order IDs with a linear scan (no_std
+        // environment: no HashMap/BTreeMap available, only soroban_sdk::Vec).
+        let mut seen_ids: Vec<String> = Vec::new(&env);
         for item in payments.iter() {
             require_positive(item.amount)?;
             require_valid_id(&item.order_id)?;
+            validate_tags(&item.tags)?;
+
+            // Intra-batch duplicate check (linear scan — max 10 iterations)
+            for seen in seen_ids.iter() {
+                if seen == item.order_id {
+                    return Err(PaymentError::PaymentAlreadyExists);
+                }
+            }
+            seen_ids.push_back(item.order_id.clone());
 
             if !storage::is_token_allowed(&env, &item.token_address) {
                 return Err(PaymentError::TokenNotAllowed);
@@ -964,12 +1098,52 @@ impl PaymentProcessingContract {
             payload.append(&item.order_id.clone().to_xdr(&env));
             payload.append(&Bytes::from_slice(&env, &item.amount.to_be_bytes()));
             verify_signature(&env, &item.merchant_public_key, &payload, &item.signature)?;
+        }
 
-            // Transfer tokens from payer to merchant
-            let token_client = token::Client::new(&env, &item.token_address);
-            token_client.transfer(&payer, &item.merchant_address, &item.amount);
+        // ── Phase 2: Group amounts by (token_address, merchant_address) ──
+        //
+        // We use a Vec of (token, merchant, total_amount) tuples and a linear scan
+        // to accumulate sums.  With at most 10 items this is O(n²) in the worst
+        // case but n ≤ 10, so it is effectively constant and avoids any std
+        // collection type.
+        //
+        // Each entry is (token_address, merchant_address, grouped_total).
+        let mut groups: Vec<(Address, Address, i128)> = Vec::new(&env);
 
-            let now = env.ledger().timestamp();
+        for item in payments.iter() {
+            let mut found = false;
+            // Rebuild a new vec accumulating updated entries — soroban_sdk::Vec
+            // does not support in-place mutation of interior values.
+            let mut updated_groups: Vec<(Address, Address, i128)> = Vec::new(&env);
+            for (tok, merch, total) in groups.iter() {
+                if tok == item.token_address && merch == item.merchant_address {
+                    updated_groups.push_back((tok, merch, total + item.amount));
+                    found = true;
+                } else {
+                    updated_groups.push_back((tok, merch, total));
+                }
+            }
+            if !found {
+                updated_groups.push_back((
+                    item.token_address.clone(),
+                    item.merchant_address.clone(),
+                    item.amount,
+                ));
+            }
+            groups = updated_groups;
+        }
+
+        // ── Phase 3: Execute one token.transfer per unique (token, merchant) group ──
+        for (tok, merch, grouped_total) in groups.iter() {
+            let token_client = token::Client::new(&env, &tok);
+            token_client.transfer(&payer, &merch, &grouped_total);
+        }
+
+        // ── Phase 4: Store payment records and update stats for all items ──
+        let now = env.ledger().timestamp();
+        let mut global_stats = storage::get_global_stats(&env);
+
+        for item in payments.iter() {
             let payment = PaymentOrder {
                 order_id: item.order_id.clone(),
                 merchant_address: item.merchant_address.clone(),
@@ -980,7 +1154,7 @@ impl PaymentProcessingContract {
                 paid_at: now,
                 refunded_amount: 0,
                 memo: item.memo.clone(),
-                tags: None,
+                tags: item.tags.clone(),
                 platform_fee: 0,
             };
 
@@ -988,33 +1162,38 @@ impl PaymentProcessingContract {
             storage::add_merchant_payment_id(&env, &item.merchant_address, &item.order_id)?;
             storage::add_payer_payment_id(&env, &payer, &item.order_id)?;
 
-            // Update merchant total
-            let mut m = merchant;
-            m.total_received += item.amount;
-            storage::set_merchant(&env, &m);
+            // Update merchant total_received
+            if let Some(mut m) = storage::get_merchant(&env, &item.merchant_address) {
+                m.total_received += item.amount;
+                storage::set_merchant(&env, &m);
+            }
 
-            // Update merchant stats
+            // Update per-merchant stats
             let mut merchant_stats = storage::get_merchant_stats(&env, &item.merchant_address);
             merchant_stats.total_payments += 1;
             merchant_stats.total_volume = merchant_stats.total_volume.saturating_add(item.amount);
             storage::set_merchant_stats(&env, &item.merchant_address, &merchant_stats);
 
-            // Update global stats
-            let mut stats = storage::get_global_stats(&env);
-            stats.total_payments += 1;
-            stats.total_volume = stats.total_volume.saturating_add(item.amount);
-            storage::set_global_stats(&env, &stats);
+            // Accumulate into a single global stats update (written once after the loop)
+            global_stats.total_payments += 1;
+            global_stats.total_volume = global_stats.total_volume.saturating_add(item.amount);
+        }
 
+        // Write the accumulated global stats once
+        storage::set_global_stats(&env, &global_stats);
+
+        // ── Phase 5: Emit per-item payment_processed events ──
+        for item in payments.iter() {
             env.events().publish(
-                ("lumenflow", "payment_processed"),
+                ("lumenflow", "payment_processed", item.merchant_address.clone()),
                 (
                     item.order_id,
                     payer.clone(),
-                    item.merchant_address,
                     item.amount,
                 ),
             );
         }
+
         Ok(())
     }
 
@@ -1405,8 +1584,10 @@ impl PaymentProcessingContract {
         storage::set_refund(&env, &refund);
         storage::add_order_refund_id(&env, &order_id, &refund_id);
 
-        env.events()
-            .publish(("lumenflow", "refund_initiated"), refund_id);
+        env.events().publish(
+            ("lumenflow", "refund_initiated", payment.merchant_address.clone()),
+            (refund_id.clone(), order_id.clone()),
+        );
         Ok(())
     }
 
@@ -1472,8 +1653,10 @@ impl PaymentProcessingContract {
         r.status = RefundStatus::Approved;
         storage::set_refund(&env, &r);
 
-        env.events()
-            .publish(("lumenflow", "refund_approved"), refund_id);
+        env.events().publish(
+            ("lumenflow", "refund_approved", payment.merchant_address.clone()),
+            (refund_id.clone(), r.order_id.clone()),
+        );
         Ok(())
     }
 
@@ -1494,8 +1677,10 @@ impl PaymentProcessingContract {
         r.status = RefundStatus::Rejected;
         storage::set_refund(&env, &r);
 
-        env.events()
-            .publish(("lumenflow", "refund_rejected"), refund_id);
+        env.events().publish(
+            ("lumenflow", "refund_rejected", payment.merchant_address.clone()),
+            (refund_id.clone(), r.order_id.clone()),
+        );
         Ok(())
     }
 
@@ -1559,8 +1744,10 @@ impl PaymentProcessingContract {
         let token_client = token::Client::new(&env, &payment.token);
         token_client.transfer(&payment.merchant_address, &payment.payer, &refund_amount);
 
-        env.events()
-            .publish(("lumenflow", "refund_executed"), refund_id);
+        env.events().publish(
+            ("lumenflow", "refund_executed", payment.merchant_address.clone()),
+            (refund_id, r.order_id.clone()),
+        );
         Ok(())
     }
 
@@ -2048,6 +2235,24 @@ impl PaymentProcessingContract {
         require_admin(&env, &admin)?;
         let version = String::from_str(&env, env!("CARGO_PKG_VERSION"));
         storage::set_stored_version(&env, &version);
+        Ok(())
+    }
+
+    /// One-time storage migration from v1 verbose key names to v2 short codes.
+    ///
+    /// Call this function **once** immediately after upgrading to the version
+    /// that introduces the shortened `DataKey` variant names (#566). It remaps
+    /// all instance-storage singleton keys (e.g. `CleanupPeriod` → `CP`,
+    /// `LargePaymentThreshold` → `LPT`) to their new compact representations.
+    ///
+    /// The migration is idempotent — calling it again after the keys have
+    /// already been migrated is safe and has no effect.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — caller is not the admin.
+    pub fn migrate_storage_keys(env: Env, admin: Address) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::migrate_storage_keys(&env);
         Ok(())
     }
 

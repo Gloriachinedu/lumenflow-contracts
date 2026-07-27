@@ -6,28 +6,88 @@ The storage keys are defined in the `DataKey` enum in [`contracts/lumenflow/src/
 
 ---
 
-## Key Layout
+## Key Naming (v2 — short codes, introduced in #566)
+
+In v2, all verbose `DataKey` variant names were replaced with 2–4 character codes to reduce per-ledger-entry overhead. Soroban serialises each `DataKey` variant as an XDR symbol whose byte length directly contributes to ledger storage rent. Shorter names lower rent costs and improve read/write performance.
+
+### Short Code Mapping Table
+
+| Short Code | Old Verbose Name          | Notes |
+|------------|---------------------------|-------|
+| `CP`       | `CleanupPeriod`           | Instance — payment cleanup period in seconds |
+| `PFB`      | `PlatformFeeBps`          | Instance — platform fee in basis points |
+| `FR`       | `FeeRecipient`            | Instance — fee recipient address |
+| `RW`       | `RefundWindow`            | Instance — refund window in seconds |
+| `LPT`      | `LargePaymentThreshold`   | Instance — suspicious-activity threshold |
+| `MRA`      | `MinRefundAmount`         | Instance — minimum refund in stroops |
+| `MED`      | `MultisigExpiryDuration`  | Instance — multisig expiry in seconds |
+| `SV`       | `StoredVersion`           | Instance — on-chain contract version string |
+| `ML`       | `MerchantList`            | Instance — `Vec<Address>` of all registered merchants |
+| `MS`       | `MerchantStats`           | Instance — per-merchant stats (`MS(Address)`) |
+| `MP`       | `MerchantPayments`        | Persistent — list of order IDs for a merchant (`MP(Address)`) |
+| `PP`       | `PayerPayments`           | Persistent — list of order IDs for a payer (`PP(Address)`) |
+| `OR`       | `OrderRefunds`            | Persistent — list of refund IDs for an order (`OR(String)`) |
+| `AT`       | `AllowedToken`            | Instance — presence flag for allowed tokens (`AT(Address)`) |
+| `SP`       | `SubscriptionPlan`        | Persistent — subscription plan (`SP(String)`) |
+| `Sub`      | `Subscription`            | Persistent — subscription record (`Sub(String)`) |
+| `SR`       | `SubscriptionReserve`     | Persistent — reserve amount (`SR(Address, Address)`) |
+| `PR`       | `PauseReason`             | Instance — pause reason string (set by `pause_with_reason`) |
+| `ULU`      | `UnpauseLockUntil`        | Instance — timelock expiry timestamp |
+| `PG`       | `PauseGuardians`          | Instance — `Vec<Address>` of pause guardians |
+| `EPA`      | `EarlyUnpauseApprovals`   | Instance — `Vec<Address>` of guardian approvals |
+
+Unchanged variants (already short or semantically significant):
+
+| Variant              | Storage Type | Notes |
+|----------------------|--------------|-------|
+| `Admin`              | Instance     | Single admin address |
+| `Paused`             | Instance     | `bool` pause flag |
+| `GlobalStats`        | Instance     | Aggregate payment statistics |
+| `Merchant(Address)`  | Persistent   | Merchant profile |
+| `Payment(String)`    | Persistent   | Payment order keyed by `order_id` |
+| `Refund(String)`     | Persistent   | Refund record keyed by `refund_id` |
+| `Dispute(String)`    | Persistent   | Dispute record keyed by `refund_id` |
+| `Multisig(String)`   | Persistent   | Multisig payment keyed by `payment_id` |
+| `PaymentRequest(String)` | Temporary | Payment request (auto-expires) |
+| `Nonce(Address)`     | Persistent   | Per-payer replay-protection nonce |
+
+---
+
+## Full Key Layout
 
 | Key Variant | Storage Type | Value Type | TTL Policy | Notes |
 |---|---|---|---|---|
-| `Admin` | Instance | `Address` | Lives with contract instance | Set once; immutable after `set_admin` |
-| `CleanupPeriod` | Instance | `u64` (seconds) | Lives with contract instance | Defaults to 2592000 (30 days) |
-| `GlobalStats` | Instance | `GlobalStats` | Lives with contract instance | Saturating counters; never removed |
-| `LargePaymentThreshold` | Instance | `i128` | Lives with contract instance | Defaults to 10,000,000 units |
-| `MaxRefundsPerOrder` | Instance | `u32` | Lives with contract instance | Defaults to 5 |
-| `MerchantList` | Instance | `Vec<Address>` | Lives with contract instance | Append-only list of all registered merchants |
-| `Merchant(Address)` | Persistent | `Merchant` | No explicit TTL; persists until removed | One entry per registered merchant address |
-| `Payment(String)` | Persistent | `PaymentOrder` | Removed by `archive_payment_record` or `cleanup_expired_payments` | Keyed by `order_id` |
-| `MerchantPayments(Address)` | Persistent | `Vec<String>` | Updated on archive/cleanup | List of `order_id` values for a merchant |
-| `PayerPayments(Address)` | Persistent | `Vec<String>` | Updated on archive/cleanup | List of `order_id` values for a payer |
-| `Refund(String)` | Persistent | `RefundRecord` | No explicit TTL | Keyed by `refund_id` |
-| `OrderRefundCount(String)` | Persistent | `u32` | No explicit TTL | Keyed by `order_id`; enforces `MaxRefundsPerOrder` |
-| `Multisig(String)` | Persistent | `MultisigPayment` | No explicit TTL | Keyed by `payment_id` |
+| `Admin` | Instance | `Address` | Lives with contract instance | Set once; transfer via `transfer_admin` |
+| `Paused` | Instance | `bool` | Lives with contract instance | True when contract is paused |
+| `CP` | Instance | `u64` (seconds) | Lives with contract instance | Defaults to 2 592 000 (30 days) |
+| `GlobalStats` | Instance | `GlobalStats` | Lives with contract instance | Saturating counters |
+| `LPT` | Instance | `i128` | Lives with contract instance | Defaults to 10 000 000 units |
+| `ML` | Instance | `Vec<Address>` | Lives with contract instance | Append-only list of all registered merchants |
+| `MS(Address)` | Instance | `MerchantStats` | Lives with contract instance | Per-merchant payment statistics |
+| `MRA` | Instance | `i128` | Lives with contract instance | Defaults to 100 stroops |
+| `PFB` | Instance | `u32` (bps) | Lives with contract instance | Defaults to 0 bps |
+| `FR` | Instance | `Address` | Lives with contract instance | Optional; absent if no fee configured |
+| `RW` | Instance | `u64` (seconds) | Lives with contract instance | Defaults to 2 592 000 (30 days) |
+| `MED` | Instance | `u64` (seconds) | Lives with contract instance | Defaults to 604 800 (7 days) |
+| `SV` | Instance | `String` | Lives with contract instance | Set by `set_contract_version` |
+| `AT(Address)` | Instance | `()` (presence flag) | Lives with contract instance | Presence = allowed token |
+| `PR` | Instance | `String` | Lives with contract instance | Cleared on unpause |
+| `ULU` | Instance | `u64` (timestamp) | Lives with contract instance | Cleared on unpause |
+| `PG` | Instance | `Vec<Address>` | Lives with contract instance | Exactly 5 guardians |
+| `EPA` | Instance | `Vec<Address>` | Lives with contract instance | Cleared on unpause |
+| `Merchant(Address)` | Persistent | `Merchant` | TTL extended to 2 years on write | One entry per registered merchant |
+| `Payment(String)` | Persistent | `PaymentOrder` | TTL extended to 2 years on write | Keyed by `order_id` |
+| `MP(Address)` | Persistent | `Vec<String>` | TTL extended to 2 years on write | List of `order_id` values for a merchant |
+| `PP(Address)` | Persistent | `Vec<String>` | TTL extended to 2 years on write | List of `order_id` values for a payer |
+| `Refund(String)` | Persistent | `RefundRecord` | TTL extended to 1 year on write | Keyed by `refund_id` |
+| `OR(String)` | Persistent | `Vec<String>` | No explicit TTL | Keyed by `order_id` |
+| `Dispute(String)` | Persistent | `DisputeRecord` | No explicit TTL | Keyed by `refund_id` |
+| `Multisig(String)` | Persistent | `MultisigPayment` | TTL extended to 1 year on write | Keyed by `payment_id` |
 | `PaymentRequest(String)` | Temporary | `PaymentRequest` | Expires with ledger TTL | Keyed by `request_id`; auto-expires |
-| `AllowedToken(Address)` | Instance | `()` (presence flag) | Lives with contract instance | Presence = allowed; absence = not allowed |
-| `SubscriptionPlan(String)` | Persistent | `SubscriptionPlan` | TTL extended to 2 years on every write | Keyed by `plan_id`; created by admin |
-| `Subscription(String)` | Persistent | `Subscription` | TTL extended to 2 years on every write | Keyed by `subscription_id`; one entry per subscription |
-| `SubscriptionReserve(Address, Address)` | Persistent | `i128` | TTL extended to 2 years on every write | Keyed by (subscriber, token); removed when it drops to zero |
+| `Nonce(Address)` | Persistent | `u64` | TTL extended to 2 years on write | Per-payer sequential nonce |
+| `SP(String)` | Persistent | `SubscriptionPlan` | TTL extended to 2 years on write | Keyed by `plan_id` |
+| `Sub(String)` | Persistent | `Subscription` | TTL extended to 2 years on write | Keyed by `subscription_id` |
+| `SR(Address, Address)` | Persistent | `i128` | TTL extended to 2 years on write | Keyed by `(subscriber, token)` |
 
 ---
 
@@ -38,34 +98,49 @@ Soroban serialises `#[contracttype]` enum variants as XDR `ScVal`. Each `DataKey
 | Key Variant | XDR Representation |
 |---|---|
 | `Admin` | `ScVec[ScSymbol("Admin")]` |
-| `CleanupPeriod` | `ScVec[ScSymbol("CleanupPeriod")]` |
+| `Paused` | `ScVec[ScSymbol("Paused")]` |
+| `CP` | `ScVec[ScSymbol("CP")]` |
 | `GlobalStats` | `ScVec[ScSymbol("GlobalStats")]` |
-| `LargePaymentThreshold` | `ScVec[ScSymbol("LargePaymentThreshold")]` |
-| `MaxRefundsPerOrder` | `ScVec[ScSymbol("MaxRefundsPerOrder")]` |
-| `MerchantList` | `ScVec[ScSymbol("MerchantList")]` |
+| `LPT` | `ScVec[ScSymbol("LPT")]` |
+| `ML` | `ScVec[ScSymbol("ML")]` |
+| `MS(addr)` | `ScVec[ScSymbol("MS"), ScAddress(addr)]` |
+| `MRA` | `ScVec[ScSymbol("MRA")]` |
+| `PFB` | `ScVec[ScSymbol("PFB")]` |
+| `FR` | `ScVec[ScSymbol("FR")]` |
+| `RW` | `ScVec[ScSymbol("RW")]` |
+| `MED` | `ScVec[ScSymbol("MED")]` |
+| `SV` | `ScVec[ScSymbol("SV")]` |
+| `AT(addr)` | `ScVec[ScSymbol("AT"), ScAddress(addr)]` |
+| `PR` | `ScVec[ScSymbol("PR")]` |
+| `ULU` | `ScVec[ScSymbol("ULU")]` |
+| `PG` | `ScVec[ScSymbol("PG")]` |
+| `EPA` | `ScVec[ScSymbol("EPA")]` |
 | `Merchant(addr)` | `ScVec[ScSymbol("Merchant"), ScAddress(addr)]` |
 | `Payment(order_id)` | `ScVec[ScSymbol("Payment"), ScString(order_id)]` |
-| `MerchantPayments(addr)` | `ScVec[ScSymbol("MerchantPayments"), ScAddress(addr)]` |
-| `PayerPayments(addr)` | `ScVec[ScSymbol("PayerPayments"), ScAddress(addr)]` |
+| `MP(addr)` | `ScVec[ScSymbol("MP"), ScAddress(addr)]` |
+| `PP(addr)` | `ScVec[ScSymbol("PP"), ScAddress(addr)]` |
 | `Refund(refund_id)` | `ScVec[ScSymbol("Refund"), ScString(refund_id)]` |
-| `OrderRefundCount(order_id)` | `ScVec[ScSymbol("OrderRefundCount"), ScString(order_id)]` |
+| `OR(order_id)` | `ScVec[ScSymbol("OR"), ScString(order_id)]` |
+| `Dispute(refund_id)` | `ScVec[ScSymbol("Dispute"), ScString(refund_id)]` |
 | `Multisig(payment_id)` | `ScVec[ScSymbol("Multisig"), ScString(payment_id)]` |
-| `PaymentRequest(request_id)` | `ScVec[ScSymbol("PaymentRequest"), ScString(request_id)]` |
-| `AllowedToken(addr)` | `ScVec[ScSymbol("AllowedToken"), ScAddress(addr)]` |
-| `SubscriptionPlan(plan_id)` | `ScVec[ScSymbol("SubscriptionPlan"), ScString(plan_id)]` |
-| `Subscription(subscription_id)` | `ScVec[ScSymbol("Subscription"), ScString(subscription_id)]` |
-| `SubscriptionReserve(subscriber, token)` | `ScVec[ScSymbol("SubscriptionReserve"), ScAddress(subscriber), ScAddress(token)]` |
-
-To read a key with the Stellar CLI:
-
-```bash
-stellar contract read \
-  --id <CONTRACT_ID> \
-  --key '{"vec":[{"symbol":"Payment"},{"string":"ORDER_001"}]}' \
-  --network testnet
-```
+| `PaymentRequest(req_id)` | `ScVec[ScSymbol("PaymentRequest"), ScString(req_id)]` |
+| `Nonce(addr)` | `ScVec[ScSymbol("Nonce"), ScAddress(addr)]` |
+| `SP(plan_id)` | `ScVec[ScSymbol("SP"), ScString(plan_id)]` |
+| `Sub(sub_id)` | `ScVec[ScSymbol("Sub"), ScString(sub_id)]` |
+| `SR(subscriber, token)` | `ScVec[ScSymbol("SR"), ScAddress(subscriber), ScAddress(token)]` |
 
 ---
+
+## Storage Migration (v1 → v2)
+
+When upgrading a deployed contract from v1 (verbose key names) to v2 (short codes), call the `migrate_storage_keys(admin)` contract function once after the WASM upgrade:
+
+```bash
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- migrate_storage_keys --admin $ADMIN_ADDR
+```
+
+### What is migrated
 
 ## Storage TTL Constants
 
@@ -135,51 +210,24 @@ const _: () = {
 
 ## Unbounded Growth Keys
 
-The following keys grow with usage and have no automatic pruning:
+> **Important:** If the contract was deployed with v1 code and has existing persistent entries (payments, merchants, etc.), those entries remain readable under their original keys by any v1 indexer or tool but will **not** be accessible by v2 code directly. For persistent key migration, a custom one-time migration script is needed to re-key those entries using `archive_payment_record` / re-registration flows.
 
-| Key | Growth Driver | Mitigation |
-|---|---|---|
-| `Payment(String)` | One entry per payment order | `cleanup_expired_payments` (admin) and `archive_payment_record` (admin) remove stale entries |
-| `MerchantPayments(Address)` | One `order_id` appended per payment | Entries are removed in sync with `Payment` cleanup/archive |
-| `PayerPayments(Address)` | One `order_id` appended per payment | Entries are removed in sync with `Payment` cleanup/archive |
-| `Refund(String)` | One entry per refund request | No automatic pruning; manual cleanup not yet implemented |
-| `OrderRefundCount(String)` | One entry per order that has refunds | Bounded per order by `MaxRefundsPerOrder`; not pruned after order removal |
-| `Multisig(String)` | One entry per multisig payment | No automatic pruning |
-| `MerchantList` | One address appended per registration | Append-only; deactivation does not remove from list |
-| `SubscriptionPlan(String)` | One entry per plan created | No automatic pruning |
-| `Subscription(String)` | One entry per subscription | No automatic pruning; cancelled/completed records are kept for history |
-| `SubscriptionReserve(Address, Address)` | One entry per (subscriber, token) with active subscriptions | Removed automatically when the reserve reaches zero |
+### Idempotency
 
-Operators running off-chain indexers should monitor ledger entry counts for the persistent keys above and schedule admin cleanup calls as needed..
+`migrate_storage_keys` is safe to call multiple times. If a v1 key is absent (already migrated), the function is a no-op for that entry.
 
 ---
 
-## Subscription Records
+## Off-chain Indexing
 
-Value types stored under the subscription keys (defined in `contracts/lumenflow/src/types.rs`):
+When reading storage directly via Soroban RPC `getLedgerEntries`, construct keys using the XDR representations listed above. The key bytes must match exactly — use the **new short code symbols** for any contract deployed with v2 code.
 
-`SubscriptionPlan` (key: `SubscriptionPlan(plan_id)`):
+```javascript
+import { xdr, Address } from '@stellar/stellar-sdk';
 
-| Field | Type | Notes |
-|---|---|---|
-| `plan_id` | `String` | Unique plan identifier (max 64 chars) |
-| `token` | `Address` | Token contract used for every charge; must be on the allow-list at creation |
-| `amount` | `i128` | Positive amount charged per billing cycle |
-| `interval_secs` | `u64` | Seconds required between charges; non-zero |
-| `max_cycles` | `u32` | Maximum number of charges; non-zero |
-| `created_at` | `u64` | Ledger timestamp at creation |
-
-`Subscription` (key: `Subscription(subscription_id)`):
-
-| Field | Type | Notes |
-|---|---|---|
-| `subscription_id` | `String` | Unique subscription identifier (max 64 chars) |
-| `plan_id` | `String` | References the `SubscriptionPlan` key |
-| `merchant` | `Address` | Receives each charge; only address allowed to call `charge_subscription` |
-| `subscriber` | `Address` | Charged each cycle; authorised the subscription |
-| `status` | `SubscriptionStatus` | `Active`, `Cancelled`, or `Completed` |
-| `cycles_charged` | `u32` | Number of successful charges so far |
-| `last_charged_at` | `u64` | Interval anchor: subscribe time until the first charge, then the last charge time |
-| `created_at` | `u64` | Ledger timestamp at subscribe time |
-
-Lifecycle: `subscribe` writes an `Active` record with `cycles_charged = 0`, adds `amount * max_cycles` to the subscriber's `SubscriptionReserve` for the plan's token, and approves the contract for the full reserve. SEP-41 `approve` sets (not adds to) the per-(from, spender) allowance, so the reserve tracks the combined remaining cycles of all of the subscriber's active subscriptions in that token and every `subscribe` re-approves that total. `charge_subscription` requires `now >= last_charged_at + interval_secs` and `cycles_charged < max_cycles`, and re-checks at charge time that the plan token is still on the allow-list and the merchant is still active, so admin deactivation or token delisting also stops recurring charges. A successful charge draws the plan amount from the allowance via `transfer_from`, decrements the reserve, increments `cycles_charged`, resets `last_charged_at`, and sets status to `Completed` when `max_cycles` is reached, at which point that subscription's share of the allowance has been fully consumed. `cancel_subscription` (merchant or subscriber) sets status to `Cancelled` and releases the uncharged cycles from the reserve; a subscriber-initiated cancel also re-approves the allowance down to the new reserve, while a merchant-initiated cancel cannot (approve needs the subscriber's auth) and leaves a residual allowance the subscriber can clear with `renew_subscription_allowance`. Cancelled and completed subscriptions can never be charged again. The allowance itself lives on the token contract, not in this contract's storage, and its expiry is capped by the network's maximum entry TTL, which can be shorter than a long subscription's lifetime; `renew_subscription_allowance` re-approves the current reserve with a fresh expiry whenever needed.
+// Example: build the MP (MerchantPayments) key for a merchant address
+const key = xdr.ScVal.scvVec([
+  xdr.ScVal.scvSymbol('MP'),
+  xdr.ScVal.scvAddress(Address.fromString(MERCHANT_ADDR).toScAddress()),
+]);
+```

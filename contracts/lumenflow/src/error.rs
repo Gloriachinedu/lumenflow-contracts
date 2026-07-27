@@ -76,6 +76,14 @@ pub enum PaymentError {
     ContractPaused = 70,
     /// The payment history limit for this account has been exceeded. Remediation: Archive old payments.
     PaymentHistoryLimitExceeded = 71,
+    /// Unpause attempted before the 7-day timelock expires. Remediation: Wait for the timelock to expire or use the 3-of-5 multisig early unpause.
+    TimelockActive = 72,
+    /// Not enough multisig approvals for early unpause. Remediation: Collect at least 3 approvals from registered pause guardians.
+    InsufficientUnpauseSignatures = 73,
+    /// The signer has already approved the early unpause. Remediation: Wait for other guardians to approve.
+    AlreadyApprovedUnpause = 74,
+    /// The caller is not a registered pause guardian. Remediation: Only addresses set via set_pause_guardians can approve early unpause.
+    NotAPauseGuardian = 75,
     /// The on-chain stored version does not match the binary version. Remediation: Call set_contract_version after upgrading.
     VersionMismatch = 80,
 
