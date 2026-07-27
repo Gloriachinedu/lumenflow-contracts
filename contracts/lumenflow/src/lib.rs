@@ -2268,6 +2268,40 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Upgrade the contract WASM to a new hash (admin only).
+    ///
+    /// Replaces the deployed contract binary with the WASM identified by
+    /// `new_wasm_hash`. The hash must have been uploaded to the network with
+    /// `stellar contract upload` before this call. The function:
+    ///   1. Verifies the caller is the stored admin.
+    ///   2. Calls `env.deployer().update_current_contract_wasm(new_wasm_hash)`.
+    ///   3. Emits a `lumenflow/contract_upgraded` event with the new WASM hash.
+    ///
+    /// After the upgrade, call `set_contract_version` to record the new version
+    /// on-chain, then `assert_version_matches` to confirm the stored version
+    /// aligns with the binary. A mismatch returns [`PaymentError::VersionMismatch`].
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator address.
+    /// * `new_wasm_hash` - 32-byte SHA-256 hash of the new WASM binary.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    pub fn upgrade(
+        env: Env,
+        admin: Address,
+        new_wasm_hash: soroban_sdk::BytesN<32>,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+        env.events()
+            .publish(("lumenflow", "contract_upgraded"), new_wasm_hash);
+        Ok(())
+    }
+
     // ── Internal helpers ──────────────────────────────────────────────────────
 
     /// List merchants with cursor-based pagination. Admin only.
