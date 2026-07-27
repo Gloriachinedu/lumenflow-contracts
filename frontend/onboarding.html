@@ -206,6 +206,31 @@
     @media (max-width: 480px) {
       .benefits-grid { grid-template-columns: 1fr; }
     }
+
+    /* ── Progress bar (below step nodes) ────────────────────────────────── */
+    .wizard-progress-wrap {
+      max-width: 600px;
+      width: 100%;
+      margin-bottom: 1.5rem;
+    }
+    .wizard-progress-track {
+      height: 6px;
+      background: #e0e0e0;
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    .wizard-progress-fill {
+      height: 100%;
+      background: #6c47ff;
+      border-radius: 99px;
+      transition: width 0.35s ease;
+    }
+    .wizard-progress-label {
+      font-size: 0.75rem;
+      color: #888;
+      margin-top: 0.4rem;
+      text-align: right;
+    }
   </style>
 </head>
 <body>
@@ -213,25 +238,41 @@
 <!-- Step indicator -->
 <div class="wizard-steps" id="stepIndicator" role="list" aria-label="Onboarding steps">
   <div class="step-node active" id="step-node-1" role="listitem">
-    <div class="step-circle" aria-label="Step 1">1</div>
+    <div class="step-circle" id="step-circle-1" aria-label="Step 1: Welcome">1</div>
     <div class="step-label">Welcome</div>
   </div>
   <div class="step-node" id="step-node-2" role="listitem">
-    <div class="step-circle" aria-label="Step 2">2</div>
+    <div class="step-circle" id="step-circle-2" aria-label="Step 2: Wallet">2</div>
     <div class="step-label">Wallet</div>
   </div>
   <div class="step-node" id="step-node-3" role="listitem">
-    <div class="step-circle" aria-label="Step 3">3</div>
+    <div class="step-circle" id="step-circle-3" aria-label="Step 3: Details">3</div>
     <div class="step-label">Details</div>
   </div>
   <div class="step-node" id="step-node-4" role="listitem">
-    <div class="step-circle" aria-label="Step 4">4</div>
+    <div class="step-circle" id="step-circle-4" aria-label="Step 4: Review">4</div>
     <div class="step-label">Review</div>
   </div>
   <div class="step-node" id="step-node-5" role="listitem">
-    <div class="step-circle" aria-label="Step 5">5</div>
+    <div class="step-circle" id="step-circle-5" aria-label="Step 5: Done">5</div>
     <div class="step-label">Done</div>
   </div>
+</div>
+
+<!-- Accessible progress bar -->
+<div class="wizard-progress-wrap">
+  <div
+    class="wizard-progress-track"
+    role="progressbar"
+    id="wizard-progressbar"
+    aria-valuenow="1"
+    aria-valuemin="1"
+    aria-valuemax="5"
+    aria-label="Onboarding progress: Step 1 of 5"
+  >
+    <div class="wizard-progress-fill" id="wizard-progress-fill" style="width:20%"></div>
+  </div>
+  <div class="wizard-progress-label" id="wizard-progress-label" aria-hidden="true">Step 1 of 5</div>
 </div>
 
 <div class="wizard-card">
@@ -388,6 +429,7 @@
 
 </div>
 
+<script type="module" src="toast.js"></script>
 <script>
   // ── State ──────────────────────────────────────────────────────────────────
   const form = {
@@ -399,29 +441,94 @@
     isDemo: false,
   };
 
-  let currentStep = 1;
+  const TOTAL_STEPS = 5;
+  const SESSION_KEY = 'lf_onboarding_step';
+
+  // Restore step from sessionStorage (default to 1)
+  let currentStep = parseInt(sessionStorage.getItem(SESSION_KEY) || '1', 10);
+  if (currentStep < 1 || currentStep > TOTAL_STEPS) currentStep = 1;
+
+  // ── Progress bar helpers ───────────────────────────────────────────────────
+  const STEP_LABELS = ['', 'Welcome', 'Wallet', 'Details', 'Review', 'Done'];
+
+  function updateProgressBar(step) {
+    const pct = Math.round((step / TOTAL_STEPS) * 100);
+    const fill = document.getElementById('wizard-progress-fill');
+    const bar  = document.getElementById('wizard-progressbar');
+    const lbl  = document.getElementById('wizard-progress-label');
+    if (fill) fill.style.width = pct + '%';
+    if (bar) {
+      bar.setAttribute('aria-valuenow', String(step));
+      bar.setAttribute('aria-label', `Onboarding progress: Step ${step} of ${TOTAL_STEPS}`);
+    }
+    if (lbl) lbl.textContent = `Step ${step} of ${TOTAL_STEPS}`;
+  }
+
+  function updateStepNodes(step) {
+    for (let i = 1; i <= TOTAL_STEPS; i++) {
+      const node   = document.getElementById(`step-node-${i}`);
+      const circle = document.getElementById(`step-circle-${i}`);
+      if (!node || !circle) continue;
+
+      node.classList.remove('active', 'completed');
+      node.removeAttribute('aria-current');
+
+      if (i < step) {
+        // Completed step — show checkmark
+        node.classList.add('completed');
+        circle.textContent = '✓';
+        circle.setAttribute('aria-label', `Step ${i}: ${STEP_LABELS[i]} — completed`);
+      } else if (i === step) {
+        // Current step
+        node.classList.add('active');
+        node.setAttribute('aria-current', 'step');
+        circle.textContent = String(i);
+        circle.setAttribute('aria-label', `Step ${i}: ${STEP_LABELS[i]} — current`);
+      } else {
+        // Future step
+        circle.textContent = String(i);
+        circle.setAttribute('aria-label', `Step ${i}: ${STEP_LABELS[i]} — upcoming`);
+      }
+    }
+  }
 
   // ── Step navigation ────────────────────────────────────────────────────────
   function goToStep(n) {
     document.getElementById(`step-${currentStep}`).classList.remove('active');
-    document.getElementById(`step-node-${currentStep}`).classList.remove('active');
-    if (n > currentStep) {
-      document.getElementById(`step-node-${currentStep}`).classList.add('completed');
-    } else {
-      // going back — remove completed from current
-      document.getElementById(`step-node-${currentStep}`).classList.remove('completed');
-    }
     currentStep = n;
     document.getElementById(`step-${n}`).classList.add('active');
-    document.getElementById(`step-node-${n}`).classList.add('active');
-    document.getElementById(`step-node-${n}`).setAttribute('aria-current', 'step');
+
+    updateStepNodes(n);
+    updateProgressBar(n);
+
+    // Persist to sessionStorage so refresh survives
+    sessionStorage.setItem(SESSION_KEY, String(n));
 
     if (n === 4) buildReview();
-    if (n === 5) document.getElementById('done-address').textContent =
-      form.walletAddress || 'G…(demo address)';
+    if (n === 5) {
+      document.getElementById('done-address').textContent =
+        form.walletAddress || 'G…(demo address)';
+      // Clear persisted step on completion so a new session starts fresh
+      sessionStorage.removeItem(SESSION_KEY);
+    }
 
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
+
+  // ── Initialise the UI to the persisted step on page load ──────────────────
+  (function initWizard() {
+    // Show correct step panel
+    document.querySelectorAll('.wizard-step').forEach(s => s.classList.remove('active'));
+    document.getElementById(`step-${currentStep}`).classList.add('active');
+    updateStepNodes(currentStep);
+    updateProgressBar(currentStep);
+
+    if (currentStep === 4) buildReview();
+    if (currentStep === 5) {
+      document.getElementById('done-address').textContent =
+        form.walletAddress || 'G…(demo address)';
+    }
+  })();
 
   // ── Wallet connect ─────────────────────────────────────────────────────────
   async function connectFreighter() {
@@ -429,11 +536,12 @@
       try {
         const resp = await window.freighter.getConnectedAccount();
         setWallet(resp.publicKey, 'btn-freighter');
+        showToast('Freighter wallet connected.', 'success');
       } catch {
-        alert('Freighter connection failed. Make sure the extension is installed and unlocked.');
+        showToast('Freighter connection failed. Make sure the extension is installed and unlocked.', 'error');
       }
     } else {
-      alert('Freighter extension not found. Install it from https://www.freighter.app/');
+      showToast('Freighter extension not found. Install it from https://www.freighter.app/', 'error');
     }
   }
 
@@ -442,11 +550,12 @@
       try {
         const resp = await window.albedo.publicKey({});
         setWallet(resp.pubkey, 'btn-albedo');
+        showToast('Albedo wallet connected.', 'success');
       } catch {
-        alert('Albedo connection failed.');
+        showToast('Albedo connection failed.', 'error');
       }
     } else {
-      alert('Albedo not available. Visit https://albedo.link/');
+      showToast('Albedo not available. Visit https://albedo.link/', 'error');
     }
   }
 

@@ -12,6 +12,14 @@
   "keywords": ["stellar", "soroban", "lumenflow", "payments", "sdk"],
   "author": "LumenFlow Contributors",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Gloriachinedu/lumenflow-contracts.git",
+    "directory": "sdk"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@stellar/stellar-sdk": "^16.0.1",
     "tweetnacl": "1.0.3"
