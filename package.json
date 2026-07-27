@@ -2,9 +2,12 @@
   "name": "lumenflow-contracts-ui-tests",
   "private": true,
   "scripts": {
-    "test:receipt": "playwright test tests/receipt.spec.js"
+    "test:receipt": "playwright test tests/receipt.spec.js",
+    "test:a11y": "playwright test tests/playwright/a11y.spec.js",
+    "test:a11y:report": "playwright test tests/playwright/a11y.spec.js --reporter=html"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.10.1",
     "@playwright/test": "^1.48.2"
   }
 }
