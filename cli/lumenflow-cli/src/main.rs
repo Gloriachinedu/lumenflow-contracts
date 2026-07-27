@@ -405,6 +405,40 @@ fn resolve_config(
         contract_id,
         source_account,
     }
+
+    #[test]
+    fn test_stellar_invoke_prefix_defaults() {
+        let config = Config::default();
+        let prefix = stellar_invoke_prefix(&config);
+        assert!(prefix.contains("testnet"));
+        assert!(prefix.contains("<CONTRACT_ID>"));
+        assert!(prefix.contains("<SOURCE_ACCOUNT>"));
+    }
+
+    #[test]
+    fn test_stellar_invoke_prefix_with_config() {
+        let config = Config {
+            network: Some("mainnet".to_string()),
+            contract_id: Some("CABC123".to_string()),
+            source_account: Some("SABC456".to_string()),
+        };
+        let prefix = stellar_invoke_prefix(&config);
+        assert!(prefix.contains("mainnet"));
+        assert!(prefix.contains("CABC123"));
+        assert!(prefix.contains("SABC456"));
+    }
+
+    #[test]
+    fn test_multisig_init_signers_formatting() {
+        // Verify that comma-separated signers are formatted into a JSON array
+        let signers = "GAAA,GBBB,GCCC";
+        let signer_list: Vec<String> = signers
+            .split(',')
+            .map(|s| format!("\"{}\"", s.trim()))
+            .collect();
+        let json = format!("[{}]", signer_list.join(","));
+        assert_eq!(json, "[\"GAAA\",\"GBBB\",\"GCCC\"]");
+    }
 }
 
 // ── Wallet / Key loading ──────────────────────────────────────────────────────
@@ -829,6 +863,9 @@ fn main() -> Result<()> {
             if failed > 0 {
                 bail!("{} payment(s) failed. See table above for details.", failed);
             }
+        }
+        Commands::Multisig { action } => {
+            handle_multisig(action, &config);
         }
     }
 

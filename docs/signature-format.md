@@ -125,3 +125,56 @@ def build_signature_payload(network_passphrase: str, contract_address_xdr: bytes
 
 - [Stellar XDR Definitions](https://github.com/stellar/stellar-core/blob/master/src/xdr/Stellar-ledger-entries.x#L571)
 - [Soroban SDK String to_xdr](https://docs.rs/soroban-sdk/latest/soroban_sdk/struct.String.html#method.to_xdr)
+
+---
+
+## Smoke Test Usage
+
+`scripts/smoke_test.sh` exercises the full signature verification path against a live
+deployment. It delegates key generation and signing to `scripts/generate_smoke_keypair.sh`,
+which implements exactly the payload layout described above.
+
+### What the helper does
+
+1. Calls `get_merchant_nonce(merchant_address)` via `stellar contract invoke` to obtain
+   the current on-chain nonce, then sets `nonce = current_nonce + 1`.
+2. Builds the canonical payload:
+   ```
+   SHA-256(network_passphrase)       ← 32 bytes (network_id)
+   || ScAddress XDR(contract_id)    ← variable
+   || nonce as u64 big-endian        ← 8 bytes
+   || ScVal::String XDR(order_id)   ← variable (tag + len + data + padding)
+   || amount as i128 big-endian      ← 16 bytes
+   ```
+3. Generates a throwaway ed25519 keypair using Node.js 18+ built-in `crypto.generateKeyPairSync`.
+4. Signs the payload with `crypto.sign(null, payload, privateKey)`.
+5. Exports `SMOKE_SIG` (128 hex chars), `SMOKE_PUBKEY` (64 hex chars), and `SMOKE_NONCE`.
+
+### Network passphrases
+
+| Network | Passphrase |
+|---------|-----------|
+| Testnet | `Test SDF Network ; September 2015` |
+| Mainnet | `Public Global Stellar Network ; September 2015` |
+| Local   | `Standalone Network ; February 2017` |
+
+### Running manually
+
+```bash
+eval "$(./scripts/generate_smoke_keypair.sh \
+  --contract-id  "$CONTRACT_ID" \
+  --merchant     "$MERCHANT_ADDRESS" \
+  --order-id     "SMOKE_$(date +%s)" \
+  --amount       1 \
+  --network      testnet)"
+
+echo "Signature : $SMOKE_SIG"
+echo "Public key: $SMOKE_PUBKEY"
+echo "Nonce     : $SMOKE_NONCE"
+
+./scripts/smoke_test.sh
+```
+
+> **Note:** The helper caches `@stellar/stellar-sdk` under `scripts/.smoke_node_modules` to
+> avoid re-downloading it on every CI run. This directory is excluded from version control
+> (add it to `.gitignore` if it is not already there).

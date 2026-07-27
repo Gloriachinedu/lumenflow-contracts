@@ -1,345 +1,5 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Multisig Payment – LumenFlow</title>
-  <meta name="description" content="Initiate and manage multi-signature payments on LumenFlow. Requires threshold approvals before funds are released." />
-  <meta property="og:title" content="Multisig Payment – LumenFlow" />
-  <meta property="og:description" content="Initiate and manage multi-signature payments on LumenFlow. Requires threshold approvals before funds are released." />
-  <meta name="twitter:card" content="summary" />
-  <link rel="manifest" href="manifest.json" />
-  <meta name="theme-color" content="#6c47ff" />
-  <meta name="mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-  <meta name="apple-mobile-web-app-title" content="LumenFlow" />
-  <link rel="apple-touch-icon" href="icons/icon.svg" />
-  <style>
-    /* Multisig-specific styles not in the shared design system */
-
-    .signer-row {
-      display: flex;
-      gap: 0.5rem;
-      margin-bottom: 0.5rem;
-      align-items: center;
-    }
-    .signer-row input { flex: 1; min-width: 0; }
-
-    .threshold-row {
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-      margin-top: 0.5rem;
-      flex-wrap: wrap;
-    }
-    .threshold-row input[type=number] { width: 80px; }
-    .threshold-row .of-label { font-size: 0.85rem; color: #555; }
-
-    /* Progress panel */
-    #progress-panel { display: none; }
-
-    .progress-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 1rem;
-      flex-wrap: wrap;
-      gap: 0.5rem;
-    }
-    .progress-header h2 { border: none; padding: 0; margin: 0; }
-
-    .progress-bar-wrap {
-      background: #eee;
-      border-radius: 999px;
-      height: 10px;
-      margin-bottom: 0.5rem;
-      overflow: hidden;
-    }
-    .progress-bar {
-      height: 100%;
-      background: #6c47ff;
-      border-radius: 999px;
-      transition: width 0.4s;
-    }
-    .progress-label { font-size: 0.82rem; color: #555; margin-bottom: 1.25rem; }
-
-    .signer-status-list { list-style: none; }
-    .signer-status-list li {
-      display: flex;
-      align-items: center;
-      gap: 0.6rem;
-      padding: 0.5rem 0;
-      border-bottom: 1px solid #f0f0f0;
-      font-size: 0.85rem;
-      flex-wrap: wrap;
-    }
-    .signer-status-list li:last-child { border-bottom: none; }
-    .sig-icon { font-size: 1rem; flex-shrink: 0; }
-    .sig-addr { flex: 1; word-break: break-all; color: #333; min-width: 0; }
-    .sig-status { font-size: 0.75rem; font-weight: 600; flex-shrink: 0; }
-    .sig-status.signed  { color: #1a9e5c; }
-    .sig-status.pending { color: #888; }
-
-    .sign-btn {
-      padding: 0.3rem 0.7rem;
-      border: 1.5px solid #6c47ff;
-      border-radius: 6px;
-      background: #fff;
-      color: #6c47ff;
-      font-size: 0.78rem;
-      font-weight: 600;
-      cursor: pointer;
-      flex-shrink: 0;
-    }
-    .sign-btn:hover { background: #f0ecff; }
-    .sign-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-    .execute-section { margin-top: 1.25rem; }
-
-    /* Wallet / mode styles */
-    #wallet-bar {
-      padding: 0.5rem 1rem;
-      font-size: 0.82rem;
-      font-weight: 600;
-      border-radius: 8px;
-      margin-bottom: 1rem;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      flex-wrap: wrap;
-    }
-    #wallet-bar.demo  { background: #fff3cd; color: #856404; }
-    #wallet-bar.live  { background: #d1f3e0; color: #1a5e37; }
-    #wallet-bar.error { background: #fce8e8; color: #c0392b; }
-    #connect-wallet-btn {
-      margin-left: auto;
-      padding: 0.3rem 0.8rem;
-      border: 1.5px solid currentColor;
-      border-radius: 6px;
-      background: transparent;
-      color: inherit;
-      font-size: 0.78rem;
-      font-weight: 700;
-      cursor: pointer;
-    }
-    #connect-wallet-btn:hover { opacity: 0.75; }
-
-    /* Demo security notice */
-    #demo-security-notice {
-      display: none; /* shown by JS when CONTRACT_ID is not set */
-      background: #fff3cd;
-      color: #856404;
-      border: 1.5px solid #ffe69c;
-      border-radius: 8px;
-      padding: 0.85rem 1.1rem;
-      margin-bottom: 1.25rem;
-      font-size: 0.88rem;
-      line-height: 1.55;
-    }
-    #demo-security-notice strong { display: block; margin-bottom: 0.35rem; font-size: 0.95rem; }
-    #demo-security-notice a { color: #856404; font-weight: 600; }
-
-    /* ── Mobile responsive (320 px – 480 px) ───────────────────────────────── */
-    @media (max-width: 480px) {
-      body {
-        padding: 1rem 0.75rem;
-        align-items: stretch;
-      }
-
-      .card {
-        padding: 1.25rem 1rem;
-        border-radius: 8px;
-      }
-
-      /* Full-width inputs and buttons on small screens */
-      .field input,
-      .field select,
-      .btn,
-      .btn-full {
-        width: 100%;
-      }
-
-      /* Signer rows: stack input and remove button on very narrow viewports */
-      .signer-row {
-        flex-wrap: wrap;
-      }
-      .signer-row input {
-        width: 100%;
-        flex: 1 1 calc(100% - 56px); /* leave room for the remove button */
-      }
-
-      /* Threshold row wraps naturally via flex-wrap: wrap above */
-      .threshold-row input[type=number] {
-        width: 70px;
-      }
-
-      /* Wallet bar: text takes full row, button below */
-      #wallet-bar {
-        flex-direction: column;
-        align-items: flex-start;
-      }
-      #connect-wallet-btn {
-        margin-left: 0;
-        width: 100%;
-        text-align: center;
-        padding: 0.5rem 1rem;
-      }
-
-      /* Signer status list: address takes full row, status+button on next row */
-      .signer-status-list li {
-        display: grid;
-        grid-template-columns: auto 1fr;
-        grid-template-rows: auto auto;
-        gap: 0.3rem 0.5rem;
-        align-items: center;
-      }
-      .sig-icon  { grid-row: 1; grid-column: 1; }
-      .sig-addr  { grid-row: 1; grid-column: 2; }
-      .sig-status {
-        grid-row: 2;
-        grid-column: 2;
-      }
-      .sign-btn {
-        grid-row: 2;
-        grid-column: 2;
-        justify-self: start;
-        min-height: 36px;
-        padding: 0.4rem 0.9rem;
-      }
-
-      /* Progress fraction: always below heading on small screens */
-      .progress-header {
-        flex-direction: column;
-        align-items: flex-start;
-      }
-
-      /* Demo security notice: make list readable on narrow screens */
-      #demo-security-notice ul {
-        margin-left: 1rem;
-      }
-    }
-  </style>
-</head>
-<body>
-<a href="#multisig-main" class="skip-link">Skip to main content</a>
-
-<nav class="lf-nav" aria-label="LumenFlow navigation">
-  <span class="lf-nav__brand">⚡ LumenFlow</span>
-  <div id="wallet-status-container"></div>
-</nav>
-
-<main id="multisig-main">
-<h1>Multisig Payment</h1>
-<p class="subtitle">Initiate a payment that requires multiple signers to approve.</p>
-
-<!--
-  ⚠ DEMO SECURITY NOTICE (shown by JS when CONTRACT_ID is not configured)
-  This banner is intentionally visible in demo/preview mode so developers are
-  aware of the integration requirements before deploying to production.
--->
-<div id="demo-security-notice" role="note" aria-label="Demo mode security notice">
-  <strong>⚠ Demo Mode — Not for Production Use</strong>
-  Signing logic on this page is a <strong>placeholder only</strong>. No real transactions are
-  sent and no funds are moved.<br><br>
-  <strong>Before going live you must:</strong>
-  <ul style="margin:0.4rem 0 0.4rem 1.2rem; padding:0;">
-    <li>Configure <code>LUMENFLOW_CONTRACT_ID</code>, <code>LUMENFLOW_NETWORK</code>, and <code>LUMENFLOW_RPC_URL</code>.</li>
-    <li>Integrate a Stellar browser wallet (e.g. <a href="https://www.freighter.app/" target="_blank" rel="noopener">Freighter</a>) using the <code>walletAdapter</code> hooks in this file.</li>
-    <li><strong>Never hardcode or expose private keys in frontend code.</strong></li>
-  </ul>
-  See <a href="../docs/multisig-guide.md" target="_blank" rel="noopener">docs/multisig-guide.md</a> for production integration instructions.
-</div>
-
-<!-- Wallet / mode status bar -->
-<div id="wallet-bar" class="demo" role="status" aria-live="polite">
-  <span id="wallet-bar-text">⚠ Demo mode – transactions are simulated. Connect a wallet to go live.</span>
-  <button id="connect-wallet-btn" type="button" onclick="connectWallet()">Connect Wallet</button>
-</div>
-
-<!-- Initiation form -->
-<div class="card" id="form-panel">
-  <h2>New Multisig Payment</h2>
-
-  <div class="field">
-    <label for="payment-id">Payment ID</label>
-    <input type="text" id="payment-id" placeholder="MS_001" aria-describedby="err-payment-id" aria-required="true" />
-    <div class="err-msg" id="err-payment-id" role="alert" aria-live="polite">Payment ID is required.</div>
-  </div>
-
-  <div class="field">
-    <label for="merchant-address">Merchant Address</label>
-    <input type="text" id="merchant-address" placeholder="G…" aria-describedby="err-merchant" aria-required="true" />
-    <div class="err-msg" id="err-merchant" role="alert" aria-live="polite">Merchant address is required.</div>
-  </div>
-
-  <div class="field">
-    <label for="token-address">Token Address</label>
-    <input type="text" id="token-address" placeholder="C… or G…" aria-describedby="err-token" aria-required="true" />
-    <div class="err-msg" id="err-token" role="alert" aria-live="polite">Token address is required.</div>
-  </div>
-
-  <div class="field">
-    <label for="amount">Amount (stroops)</label>
-    <input type="number" id="amount" placeholder="5000000" min="1" aria-describedby="amount-hint err-amount" aria-required="true" />
-    <div class="hint" id="amount-hint">1 XLM = 10,000,000 stroops</div>
-    <div class="err-msg" id="err-amount" role="alert" aria-live="polite">Amount must be a positive number.</div>
-  </div>
-
-  <!-- Signers -->
-  <div class="field">
-    <label>Signer Addresses</label>
-    <div id="signers-list">
-      <div class="signer-row">
-        <input type="text" placeholder="G… signer address" class="signer-input" aria-label="Signer address 1" aria-describedby="err-signers" oninput="onSignerInput()" />
-        <button type="button" class="btn-icon" onclick="removeSigner(this)" aria-label="Remove signer 1">✕</button>
-      </div>
-    </div>
-    <button type="button" class="btn-link" id="add-signer-btn" onclick="addSigner()">+ Add signer</button>
-    <div class="err-msg" id="err-signers" role="alert" aria-live="polite">At least one signer is required.</div>
-  </div>
-
-  <!-- Required signatures threshold -->
-  <div class="field">
-    <label for="required-sigs">Required Signatures</label>
-    <div class="threshold-row">
-      <input type="number" id="required-sigs" min="1" value="1" aria-describedby="threshold-msg" oninput="validateThreshold()" />
-      <span class="of-label">of <strong id="signer-count">1</strong> signers</span>
-    </div>
-    <div class="validation-msg" id="threshold-msg" role="status" aria-live="polite"></div>
-  </div>
-
-  <div id="form-alert" class="alert" role="alert" aria-live="assertive" style="display:none"></div>
-
-  <button class="btn btn-primary btn-full" id="submit-btn" onclick="submitForm()" disabled>Initiate Payment</button>
-</div>
-
-<!-- Progress panel (shown after initiation) -->
-<div class="card" id="progress-panel">
-  <div class="progress-header">
-    <h2>Signature Progress</h2>
-    <span id="progress-fraction" style="font-size:0.85rem;color:#555;"></span>
-  </div>
-
-  <div class="progress-bar-wrap">
-    <div class="progress-bar" id="progress-bar" style="width:0%"></div>
-  </div>
-  <div class="progress-label" id="progress-label"></div>
-
-  <ul class="signer-status-list" id="signer-status-list"></ul>
-
-  <div class="execute-section">
-    <div id="execute-alert" class="alert" style="display:none"></div>
-    <button class="btn btn-primary btn-full" id="execute-btn" onclick="executePayment()" disabled>
-      Execute Payment
-    </button>
-  </div>
-</div>
-
-<script type="module">
   import { CONTRACT_ID, RPC_URL, renderModeBanner, copyButtonHtml, initCopyButtons, formatAmount } from './lumenflow-shared.js';
   import { validateOrderId, validateAmount, validateAddress, isValidStellarKey } from './validation.js';
-  import { initWalletStatus } from './wallet-status.js';
 
   // ── State ──────────────────────────────────────────────────────────────────
 
@@ -360,6 +20,7 @@
     // Move focus to the new input for keyboard users
     row.querySelector('.signer-input').focus();
   }
+
   function removeSigner(btn) {
     const list = document.getElementById('signers-list');
     const rows = list.querySelectorAll('.signer-row');
@@ -398,7 +59,8 @@
     const required = parseInt(document.getElementById('required-sigs').value, 10);
     const count    = document.querySelectorAll('.signer-input').length;
     const msg      = document.getElementById('threshold-msg');
- if (!required || required < 1) {
+
+    if (!required || required < 1) {
       msg.textContent = 'Required signatures must be at least 1.';
       msg.className   = 'validation-msg bad';
       return false;
@@ -412,6 +74,7 @@
     msg.className   = 'validation-msg ok';
     return true;
   }
+
   // ── Form validation ────────────────────────────────────────────────────────
   // Field-level rules live in the shared validation.js module.
 
@@ -422,23 +85,6 @@
     el.classList.toggle('visible', !!message);
   }
 
- feat/sdk-rpc-retry-integration
-  function validateForm() {
-    let ok = true;
-
-    const paymentId = document.getElementById('payment-id').value.trim();
-    showErr('err-payment-id', !paymentId);
-    if (!paymentId) ok = false;
-
-    const merchant = document.getElementById('merchant-address').value.trim();
-    const merchantValid = isValidStellarAddress(merchant);
-    showErr('err-merchant', !merchant || !merchantValid);
-    if (!merchant || !merchantValid) ok = false;
-
-    const token = document.getElementById('token-address').value.trim();
-    const tokenValid = isValidStellarAddress(token) || isValidStellarContractId(token);
-    showErr('err-token', !token || !tokenValid);
-    if (!token || !tokenValid) ok = false;
   function markInput(id, invalid) {
     const el = document.getElementById(id);
     if (!el) return;
@@ -448,7 +94,7 @@
     } else {
       el.removeAttribute('aria-invalid');
     }
-  }main
+  }
 
   const FIELD_ERR_IDS = {
     'payment-id':       'err-payment-id',
@@ -456,13 +102,15 @@
     'token-address':    'err-token',
     'amount':           'err-amount',
   };
-const FIELD_VALIDATORS = {
+
+  const FIELD_VALIDATORS = {
     'payment-id':       v => validateOrderId(v, 'Payment ID'),
     'merchant-address': v => validateAddress(v, { label: 'Merchant address' }),
     'token-address':    v => validateAddress(v, { label: 'Token address', prefixes: ['C', 'G'] }),
     'amount':           v => validateAmount(v, { integer: true }),
   };
- function validateField(fieldId, show) {
+
+  function validateField(fieldId, show) {
     const message = FIELD_VALIDATORS[fieldId](document.getElementById(fieldId).value);
     if (show) {
       setErr(FIELD_ERR_IDS[fieldId], message);
@@ -471,27 +119,6 @@ const FIELD_VALIDATORS = {
     return !message;
   }
 
-feat/sdk-rpc-retry-integration
-    // Validate each signer input individually
-    const signerInputs = document.querySelectorAll('.signer-input');
-    let hasValidSigner = false;
-    signerInputs.forEach((input, index) => {
-      const value = input.value.trim();
-      const errEl = input.parentElement.querySelector('.signer-err');
-      
-      if (value && !isValidStellarAddress(value)) {
-        errEl.style.display = 'block';
-        ok = false;
-      } else {
-        errEl.style.display = 'none';
-        if (value) hasValidSigner = true;
-      }
-    });
-
-    const sigErr = document.getElementById('err-signers');
-    if (!hasValidSigner) {
-      sigErr.style.display = 'block';
-      ok = false;
   function validateSigners(show) {
     const signerInputs = Array.from(document.querySelectorAll('.signer-input'));
     const signers = signerInputs.map(i => i.value.trim()).filter(Boolean);
@@ -914,19 +541,3 @@ feat/sdk-rpc-retry-integration
   renderModeBanner();
   initCopyButtons(document.body);
   updateThresholdLabel();
-  initWalletStatus(document.getElementById('wallet-status-container'));
-</script>
-
-<script>
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker
-        .register('./sw.js', { scope: './' })
-        .catch((err) => console.warn('[PWA] Service worker registration failed:', err));
-    });
-  }
-</script>
-
-</main>
-</body>
-</html>
