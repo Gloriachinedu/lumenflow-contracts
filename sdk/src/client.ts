@@ -88,6 +88,35 @@ import {
   nativeToScVal,
   TimeoutInfinite,
 } from "@stellar/stellar-sdk";
+
+/**
+ * Serialize a {@link MerchantCategory} value to the XDR ScVal form expected
+ * by the Soroban contract.
+ *
+ * - Unit variants  →  `ScVec([ScSymbol("<Variant>")])`
+ * - Custom variant →  `ScVec([ScSymbol("Custom"), ScString("<label>")])`
+ *
+ * @throws {Error} When a `Custom` label is empty or exceeds 32 characters.
+ */
+export function serializeMerchantCategory(category: MerchantCategory): xdr.ScVal {
+  if (typeof category === "string") {
+    return xdr.ScVal.scvVec([xdr.ScVal.scvSymbol(category)]);
+  }
+  // { Custom: string }
+  const label = category.Custom;
+  if (!label || label.length === 0) {
+    throw new Error("MerchantCategory.Custom label must not be empty.");
+  }
+  if (label.length > 32) {
+    throw new Error(
+      `MerchantCategory.Custom label must be at most 32 characters (got ${label.length}).`
+    );
+  }
+  return xdr.ScVal.scvVec([
+    xdr.ScVal.scvSymbol("Custom"),
+    xdr.ScVal.scvString(label),
+  ]);
+}
 import {
   Merchant,
   MerchantCategory,
@@ -190,7 +219,23 @@ export class LumenFlowClient {
       name,
       description,
       contactInfo,
-      category,
+      serializeMerchantCategory(category),
+    ]);
+  }
+
+  async updateMerchant(
+    merchantAddress: string,
+    name: string,
+    description: string,
+    contactInfo: string,
+    category: MerchantCategory
+  ): Promise<void> {
+    await this.invoke("update_merchant", [
+      new Address(merchantAddress),
+      name,
+      description,
+      contactInfo,
+      serializeMerchantCategory(category),
     ]);
   }
 
