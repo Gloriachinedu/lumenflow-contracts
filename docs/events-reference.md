@@ -145,6 +145,23 @@ Emitted when a payment record is manually removed from contract storage by an ad
 
 ---
 
+### `payment_history_near_limit`
+Emitted once when an account's payment-ID index (as a merchant or a payer) crosses 90% of `MAX_PAYMENT_IDS_PER_ACCOUNT` (9,000 of 10,000). Further payments continue to succeed until the hard cap (10,000) is reached, at which point they fail with `PaymentError::PaymentHistoryLimitExceeded` (code 71). This event fires only on the single payment that crosses the threshold — it does not repeat on subsequent payments. See [`docs/storage-schema.md`](./storage-schema.md#per-account-payment-id-cap-mppp) for the recommended mitigation.
+
+The affected account's address is emitted as **`topic[2]`** so integrators can subscribe only to warnings relevant to their own merchant or payer address.
+
+| Field | Description |
+|---|---|
+| **Trigger** | A call to `process_payment_with_signature`, `process_payment_with_nonce`, `batch_pay`, `execute_multisig_payment`, or `pay_payment_request` that pushes an account's `MP` or `PP` index count to 9,000 or above for the first time. |
+| **Topics** | `["lumenflow", "payment_history_near_limit", account: Address]` |
+| **Data** | `(current_count: u32, max_allowed: u32)` |
+
+**Data Details:**
+- `current_count`: The account's payment-ID count immediately after the triggering payment.
+- `max_allowed`: `MAX_PAYMENT_IDS_PER_ACCOUNT` (10,000), included so subscribers don't need to hardcode the cap.
+
+---
+
 ### `refund_initiated`
 Emitted when a new refund request is opened.
 
