@@ -305,6 +305,10 @@
       </div>
     </div>
 
+    <div style="display:flex;justify-content:flex-end;margin-top:0.75rem;">
+      <button id="reset-filters-btn" onclick="resetFilters()" style="padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:6px;background:#fff;color:#6c47ff;font-weight:600;font-size:0.85rem;cursor:pointer;transition:background 0.15s,color 0.15s;" aria-label="Reset all filters and clear saved preferences">Reset filters</button>
+    </div>
+
     <div id="active-filters" class="active-filters" aria-live="polite">
       <!-- Chips will be rendered here -->
     </div>
@@ -351,6 +355,9 @@
   const RPC_URL     = window.LUMENFLOW_RPC_URL     || 'https://soroban-testnet.stellar.org';
   const DEMO_MODE   = !CONTRACT_ID;
 
+  // ── LocalStorage key ────────────────────────────────────────────────────────
+  const PREFS_KEY = 'lumenflow_history_prefs';
+
   // ── State Management ────────────────────────────────────────────────────────
 
   const filters = {
@@ -362,6 +369,65 @@
     token: '',
     status: 'Any'
   };
+
+  // Sort state
+  let sortField = 'Date';
+  let sortOrder = 'Descending';
+
+  // ── LocalStorage Helpers ────────────────────────────────────────────────────
+  function savePrefs() {
+    try {
+      const prefs = {
+        filters: { ...filters },
+        sortField,
+        sortOrder
+      };
+      localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+    } catch (e) {
+      console.warn('Failed to save preferences to localStorage:', e);
+    }
+  }
+
+  function loadPrefs() {
+    try {
+      const stored = localStorage.getItem(PREFS_KEY);
+      if (!stored) return;
+      const prefs = JSON.parse(stored);
+      
+      // Restore filters (excluding PII: merchant_address is NOT persisted)
+      if (prefs.filters) {
+        filters.date_start = prefs.filters.date_start || '';
+        filters.date_end = prefs.filters.date_end || '';
+        filters.amount_min = prefs.filters.amount_min || '';
+        filters.amount_max = prefs.filters.amount_max || '';
+        filters.token = prefs.filters.token || '';
+        filters.status = prefs.filters.status || 'Any';
+        // merchant_address is intentionally excluded from persistence
+      }
+      
+      // Restore sort preferences
+      if (prefs.sortField) sortField = prefs.sortField;
+      if (prefs.sortOrder) sortOrder = prefs.sortOrder;
+      
+      // Update UI
+      document.getElementById('date-start').value = filters.date_start;
+      document.getElementById('date-end').value = filters.date_end;
+      document.getElementById('amount-min').value = filters.amount_min;
+      document.getElementById('amount-max').value = filters.amount_max;
+      document.getElementById('token-selector').value = filters.token;
+      document.getElementById('status-selector').value = filters.status;
+    } catch (e) {
+      console.warn('Failed to load preferences from localStorage:', e);
+    }
+  }
+
+  function clearPrefs() {
+    try {
+      localStorage.removeItem(PREFS_KEY);
+    } catch (e) {
+      console.warn('Failed to clear preferences from localStorage:', e);
+    }
+  }
 
   // ── Initialize from URL ─────────────────────────────────────────────────────
 
@@ -412,6 +478,39 @@
     const idMap = { merchant_address: 'merchant-address', date_start: 'date-start', date_end: 'date-end', amount_min: 'amount-min', amount_max: 'amount-max', token: 'token-selector', status: 'status-selector' };
     const el = document.getElementById(idMap[key]);
     if (el) el.value = filters[key];
+    updateUrl();
+    savePrefs();
+    renderActiveFilters();
+    updateResults();
+  }
+
+  function resetFilters() {
+    // Reset all filters
+    filters.merchant_address = '';
+    filters.date_start = '';
+    filters.date_end = '';
+    filters.amount_min = '';
+    filters.amount_max = '';
+    filters.token = '';
+    filters.status = 'Any';
+    
+    // Reset sort to defaults
+    sortField = 'Date';
+    sortOrder = 'Descending';
+    
+    // Update UI
+    document.getElementById('merchant-address').value = '';
+    document.getElementById('date-start').value = '';
+    document.getElementById('date-end').value = '';
+    document.getElementById('amount-min').value = '';
+    document.getElementById('amount-max').value = '';
+    document.getElementById('token-selector').value = '';
+    document.getElementById('status-selector').value = 'Any';
+    
+    // Clear localStorage
+    clearPrefs();
+    
+    // Update URL and UI
     updateUrl();
     renderActiveFilters();
     updateResults();
@@ -567,14 +666,29 @@
     document.getElementById(id).addEventListener('change', e => {
       filters[key] = e.target.value;
       updateUrl();
+      savePrefs();
       renderActiveFilters();
       updateResults();
     });
   });
 
   window.removeFilter = removeFilter;
+  window.resetFilters = resetFilters;
   window.retryFetch   = retryFetch;
   window.addEventListener('popstate', initFromUrl);
+  
+  // Stub for demo mode banner (if not already implemented)
+  function renderModeBanner() {
+    if (DEMO_MODE) {
+      const banner = document.createElement('div');
+      banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#ff6b35;color:#fff;text-align:center;padding:0.5rem;font-size:0.85rem;font-weight:600;z-index:9999;';
+      banner.textContent = '🔧 Demo Mode: Showing mock data';
+      document.body.prepend(banner);
+    }
+  }
+  
+  // Load saved preferences before initializing from URL
+  loadPrefs();
   renderModeBanner();
   initFromUrl();
 </script>
