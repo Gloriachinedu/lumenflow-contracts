@@ -103,6 +103,32 @@ await client.setMaxRefundsPerOrder(adminAddress, 5);
 
 ---
 
+### MerchantCategory
+
+`MerchantCategory` is a tagged union type that mirrors the Rust contract's enum.
+Simple variants are plain string literals; the `Custom` variant carries an
+arbitrary label (1–32 characters).
+
+```typescript
+// Simple variants — use the string literal directly or the namespace helper
+const category: MerchantCategory = "Retail";        // plain string
+const category: MerchantCategory = MerchantCategory.Food; // namespace helper
+
+// Custom variant — use an object with a Custom key
+const category: MerchantCategory = { Custom: "Handmade" };
+
+// Or use the namespace helper for Custom
+const category: MerchantCategory = MerchantCategory.custom("Handmade");
+```
+
+Available simple variants: `"Retail"` | `"Food"` | `"Services"` | `"Digital"` | `"Other"`
+
+The `Custom` label must be non-empty and at most 32 characters. Passing an empty
+string or a string longer than 32 characters throws synchronously before any RPC
+call is made.
+
+---
+
 ### Merchant Management
 
 #### `registerMerchant(merchantAddress, name, description, contactInfo, category): Promise<void>`
@@ -115,15 +141,57 @@ Register a new merchant. The caller must be the merchant address.
 | `name` | `string` | Display name |
 | `description` | `string` | Business description |
 | `contactInfo` | `string` | Contact email or URL |
-| `category` | `MerchantCategory` | One of `Retail`, `Food`, `Services`, `Digital`, `Other` |
+| `category` | `MerchantCategory` | A simple variant string or `{ Custom: string }` for a custom category |
 
 ```typescript
+// Register with a standard category
 await client.registerMerchant(
   keypair.publicKey(),
   'My Store',
   'Best prices in town',
   'support@mystore.com',
   MerchantCategory.Retail,
+);
+
+// Register with a custom category
+await client.registerMerchant(
+  keypair.publicKey(),
+  'Artisan Goods',
+  'Handcrafted items from local artisans',
+  'hello@artisan.com',
+  { Custom: 'Handmade' },
+);
+```
+
+#### `updateMerchant(merchantAddress, name, description, contactInfo, category): Promise<void>`
+
+Update an existing merchant profile. The caller must be the merchant address.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `merchantAddress` | `string` | Merchant's Stellar address |
+| `name` | `string` | Updated display name |
+| `description` | `string` | Updated business description |
+| `contactInfo` | `string` | Updated contact email or URL |
+| `category` | `MerchantCategory` | Updated category — any simple variant or `{ Custom: string }` |
+
+```typescript
+// Update to a custom category
+await client.updateMerchant(
+  keypair.publicKey(),
+  'Artisan Goods',
+  'Handcrafted & vintage items',
+  'hello@artisan.com',
+  { Custom: 'Handmade' },
+);
+
+// Update back to a standard category
+await client.updateMerchant(
+  keypair.publicKey(),
+  'Artisan Goods',
+  'Online marketplace',
+  'hello@artisan.com',
+  MerchantCategory.Digital,
 );
 ```
 
