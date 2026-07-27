@@ -13,6 +13,10 @@ pub enum PaymentError {
     InvalidAdminAddress = 3,
     /// The provided nonce does not match the expected value. Remediation: Fetch the current nonce and increment by 1.
     InvalidNonce = 4,
+    /// The address is temporarily locked out due to too many failed authentication attempts.
+    /// Remediation: Wait ~83 minutes for the lockout to expire, or ask an admin to call
+    /// `reset_auth_lockout` to clear it immediately.
+    AuthLockedOut = 5,
 
     // Merchant
     /// The requested merchant profile does not exist. Remediation: Check the merchant address and ensure the merchant is registered.
@@ -76,6 +80,14 @@ pub enum PaymentError {
     ContractPaused = 70,
     /// The payment history limit for this account has been exceeded. Remediation: Archive old payments.
     PaymentHistoryLimitExceeded = 71,
+    /// Unpause attempted before the 7-day timelock expires. Remediation: Wait for the timelock to expire or use the 3-of-5 multisig early unpause.
+    TimelockActive = 72,
+    /// Not enough multisig approvals for early unpause. Remediation: Collect at least 3 approvals from registered pause guardians.
+    InsufficientUnpauseSignatures = 73,
+    /// The signer has already approved the early unpause. Remediation: Wait for other guardians to approve.
+    AlreadyApprovedUnpause = 74,
+    /// The caller is not a registered pause guardian. Remediation: Only addresses set via set_pause_guardians can approve early unpause.
+    NotAPauseGuardian = 75,
     /// The on-chain stored version does not match the binary version. Remediation: Call set_contract_version after upgrading.
     VersionMismatch = 80,
 
@@ -127,4 +139,14 @@ pub enum PaymentError {
     EscrowUnauthorised = 104,
     /// The escrow unlock time has already passed; it can no longer be cancelled. Remediation: Call release_escrow instead.
     EscrowLockExpired = 105,
+
+    // Disputes
+    /// The requested dispute was not found. Remediation: Verify the dispute ID.
+    DisputeNotFound = 110,
+    /// A dispute with the given ID already exists. Remediation: Use a unique dispute ID.
+    DisputeAlreadyExists = 111,
+    /// A dispute can only be raised on a rejected refund. Remediation: Ensure the refund status is Rejected before raising a dispute.
+    DisputeRefundNotRejected = 112,
+    /// The dispute has already been resolved. Remediation: No further action needed.
+    DisputeAlreadyResolved = 113,
 }

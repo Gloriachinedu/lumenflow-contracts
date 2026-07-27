@@ -181,6 +181,58 @@ fn test_set_admin_valid_account_succeeds() {
     assert!(result.is_ok());
 }
 
+// ── Admin key rotation dry-run test (Issue #623) ──────────────────────────────
+
+#[test]
+fn test_admin_key_rotation_dry_run() {
+    let (env, client) = setup();
+    let current_admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let token = create_token(&env, &current_admin);
+    
+    // Step 1: Set up contract with initial admin
+    client.set_admin(&current_admin);
+    client.add_allowed_token(&current_admin, &token);
+    
+    // Step 2: Register a merchant with the current admin context
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Merchant Store"),
+        &str(&env, "Test merchant"),
+        &str(&env, "merchant@test.com"),
+        &MerchantCategory::Retail,
+    );
+    
+    // Step 3: Verify current admin can perform admin-only operations
+    client.set_platform_fee(&current_admin, &250, &current_admin);
+    let result = client.try_set_payment_cleanup_period(&current_admin, &86400);
+    assert_eq!(result, Ok(Ok(())));
+    
+    // Step 4: Simulate key rotation — transfer admin to new key
+    client.transfer_admin(&current_admin, &new_admin);
+    
+    // Step 5: Verify old admin is revoked
+    let old_admin_attempt = client.try_set_payment_cleanup_period(&current_admin, &86400);
+    assert_eq!(old_admin_attempt, Err(Ok(PaymentError::Unauthorized)));
+    
+    // Step 6: Verify new admin has full privileges
+    let new_admin_attempt = client.try_set_payment_cleanup_period(&new_admin, &172800);
+    assert_eq!(new_admin_attempt, Ok(Ok(())));
+    
+    // Verify contract state is intact: merchant still registered
+    let merchant_profile = client.get_merchant(&merchant);
+    assert!(merchant_profile.active);
+    assert_eq!(merchant_profile.name, str(&env, "Merchant Store"));
+    
+    // Verify new admin can perform all privileged operations
+    client.pause_contract(&new_admin);
+    client.unpause_contract(&new_admin);
+    client.deactivate_merchant(&new_admin, &merchant);
+    let deactivated = client.get_merchant(&merchant);
+    assert!(!deactivated.active);
+}
+
 // ── Merchant tests ────────────────────────────────────────────────────────────
 
 #[test]
@@ -6244,4 +6296,197 @@ fn test_set_referral_fee_bps_unauthorized() {
     let non_admin = Address::generate(&env);
     let result = client.try_set_referral_fee_bps(&non_admin, &100);
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+// ── Issue #622: String length boundary tests ──────────────────────────────────
+
+fn repeat_str(env: &Env, ch: &str, n: usize) -> String {
+    let s: std::string::String = ch.repeat(n);
+    String::from_str(env, &s)
+}
+
+#[test]
+fn test_merchant_name_at_max_succeeds() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    client.set_admin(&admin);
+    client.allow_token(&admin, &token);
+
+    let merchant = Address::generate(&env);
+    let name = repeat_str(&env, "a", 64); // exactly MAX_NAME_LEN
+    let result = client.try_register_merchant(
+        &merchant,
+        &name,
+        &str(&env, "desc"),
+        &str(&env, "contact@example.com"),
+        &crate::types::MerchantCategory::Retail,
+    );
+    assert!(result.is_ok(), "name at max length should succeed");
+}
+
+#[test]
+fn test_merchant_name_exceeds_max_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    client.set_admin(&admin);
+    client.allow_token(&admin, &token);
+
+    let merchant = Address::generate(&env);
+    let name = repeat_str(&env, "a", 65); // MAX_NAME_LEN + 1
+    let result = client.try_register_merchant(
+        &merchant,
+        &name,
+        &str(&env, "desc"),
+        &str(&env, "contact@example.com"),
+        &crate::types::MerchantCategory::Retail,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_merchant_description_at_max_succeeds() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    client.set_admin(&admin);
+    client.allow_token(&admin, &token);
+
+    let merchant = Address::generate(&env);
+    let description = repeat_str(&env, "b", 256); // exactly MAX_DESCRIPTION_LEN
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "ShopName"),
+        &description,
+        &str(&env, "contact@example.com"),
+        &crate::types::MerchantCategory::Retail,
+    );
+    assert!(result.is_ok(), "description at max length should succeed");
+}
+
+#[test]
+fn test_merchant_description_exceeds_max_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    client.set_admin(&admin);
+    client.allow_token(&admin, &token);
+
+    let merchant = Address::generate(&env);
+    let description = repeat_str(&env, "b", 257); // MAX_DESCRIPTION_LEN + 1
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "ShopName"),
+        &description,
+        &str(&env, "contact@example.com"),
+        &crate::types::MerchantCategory::Retail,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_merchant_contact_info_at_max_succeeds() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    client.set_admin(&admin);
+    client.allow_token(&admin, &token);
+
+    let merchant = Address::generate(&env);
+    let contact_info = repeat_str(&env, "c", 128); // exactly MAX_CONTACT_INFO_LEN
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "ShopName"),
+        &str(&env, "desc"),
+        &contact_info,
+        &crate::types::MerchantCategory::Retail,
+    );
+    assert!(result.is_ok(), "contact_info at max length should succeed");
+}
+
+#[test]
+fn test_merchant_contact_info_exceeds_max_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    client.set_admin(&admin);
+    client.allow_token(&admin, &token);
+
+    let merchant = Address::generate(&env);
+    let contact_info = repeat_str(&env, "c", 129); // MAX_CONTACT_INFO_LEN + 1
+    let result = client.try_register_merchant(
+        &merchant,
+        &str(&env, "ShopName"),
+        &str(&env, "desc"),
+        &contact_info,
+        &crate::types::MerchantCategory::Retail,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_payment_memo_at_max_succeeds() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let memo = repeat_str(&env, "m", 128); // exactly MAX_MEMO_LEN
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "MEMO_MAX_OK"),
+        &merchant,
+        &token,
+        &100,
+        &memo,
+        &None,
+        &bytes(&env, &[0u8; 64]),
+        &bytes(&env, &[0u8; 32]),
+    );
+    assert!(result.is_ok(), "memo at max length should succeed");
+}
+
+#[test]
+fn test_payment_memo_exceeds_max_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let memo = repeat_str(&env, "m", 129); // MAX_MEMO_LEN + 1
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "MEMO_MAX_FAIL"),
+        &merchant,
+        &token,
+        &100,
+        &memo,
+        &None,
+        &bytes(&env, &[0u8; 64]),
+        &bytes(&env, &[0u8; 32]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_refund_reason_at_max_succeeds() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "REASON_MAX", 1_000);
+    let reason = repeat_str(&env, "r", 256); // exactly MAX_REASON_LEN
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "RF_REASON_MAX"),
+        &str(&env, "REASON_MAX"),
+        &100,
+        &reason,
+    );
+    assert!(result.is_ok(), "reason at max length should succeed");
+}
+
+#[test]
+fn test_refund_reason_exceeds_max_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "REASON_FAIL", 1_000);
+    let reason = repeat_str(&env, "r", 257); // MAX_REASON_LEN + 1
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "RF_REASON_FAIL"),
+        &str(&env, "REASON_FAIL"),
+        &100,
+        &reason,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
 }

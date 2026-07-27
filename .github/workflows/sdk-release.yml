@@ -1,3 +1,52 @@
+feat/stellar-address-validation
+name: SDK Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'sdk/**'
+      - '.github/workflows/sdk-release.yml'
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    name: Release SDK to npm
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./sdk
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Release with semantic-release
+        run: npx semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 name: SDK Release (npm)
 
 on:
