@@ -5,7 +5,22 @@ use crate::storage;
 
 pub const MAX_PAGE_LIMIT: u32 = 100;
 pub const REFUND_WINDOW_SECS: u64 = 30 * 24 * 3600; // 30 days
-pub const MAX_MEMO_LENGTH: u32 = 256;
+
+// ── String length constants (Issue #622) ──────────────────────────────────────
+/// Maximum UTF-8 character length for a merchant name.
+pub const MAX_NAME_LEN: u32 = 64;
+/// Maximum UTF-8 character length for a merchant description.
+pub const MAX_DESCRIPTION_LEN: u32 = 256;
+/// Maximum UTF-8 character length for a payment memo or refund reason.
+pub const MAX_MEMO_LEN: u32 = 128;
+/// Maximum UTF-8 character length for a refund reason.
+pub const MAX_REASON_LEN: u32 = 256;
+/// Maximum UTF-8 character length for merchant contact information.
+pub const MAX_CONTACT_INFO_LEN: u32 = 128;
+
+/// Kept for backwards-compat callers that referenced the old constant name.
+#[deprecated(note = "Use MAX_MEMO_LEN instead")]
+pub const MAX_MEMO_LENGTH: u32 = MAX_MEMO_LEN;
 
 /// Require that `caller` is the stored admin.
 pub fn require_admin(env: &Env, caller: &Address) -> Result<(), PaymentError> {
@@ -78,8 +93,20 @@ pub fn require_non_empty_string(s: &String) -> Result<(), PaymentError> {
     }
 }
 
+/// Validate that a string is non-empty and does not exceed `max` characters.
+///
+/// Returns `InvalidInput` if the string is empty (length < `min`) or exceeds `max`.
+pub fn require_bounded_string(s: &String, min: u32, max: u32) -> Result<(), PaymentError> {
+    let len = s.len();
+    if len < min || len > max {
+        Err(PaymentError::InvalidInput)
+    } else {
+        Ok(())
+    }
+}
+
 pub fn validate_memo_length(s: &String) -> Result<(), PaymentError> {
-    if s.len() > MAX_MEMO_LENGTH {
+    if s.len() > MAX_MEMO_LEN {
         Err(PaymentError::InvalidInput)
     } else {
         Ok(())

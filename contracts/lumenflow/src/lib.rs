@@ -15,8 +15,9 @@ use soroban_sdk::{
 
 use error::PaymentError;
 use helper::{
-    require_admin, require_admin_or, require_non_empty_string, require_positive,
-    require_valid_limit, validate_memo_length, validate_tags, verify_signature, REFUND_WINDOW_SECS,
+    require_admin, require_admin_or, require_bounded_string, require_positive, require_valid_limit,
+    validate_memo_length, validate_tags, verify_signature, MAX_CONTACT_INFO_LEN,
+    MAX_DESCRIPTION_LEN, MAX_MEMO_LEN, MAX_NAME_LEN, MAX_REASON_LEN, REFUND_WINDOW_SECS,
 };
 use types::{
     BatchPaymentItem, GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder,
@@ -97,7 +98,9 @@ impl PaymentProcessingContract {
         category: MerchantCategory,
     ) -> Result<(), PaymentError> {
         merchant_address.require_auth();
-        require_non_empty_string(&name)?;
+        require_bounded_string(&name, 1, MAX_NAME_LEN)?;
+        require_bounded_string(&description, 1, MAX_DESCRIPTION_LEN)?;
+        require_bounded_string(&contact_info, 1, MAX_CONTACT_INFO_LEN)?;
 
         if storage::get_merchant(&env, &merchant_address).is_some() {
             return Err(PaymentError::MerchantAlreadyRegistered);
@@ -207,8 +210,8 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         payer.require_auth();
         require_positive(amount)?;
-        require_non_empty_string(&order_id)?;
-        validate_memo_length(&memo)?;
+        require_bounded_string(&order_id, 1, 64)?; // order_id max 64 chars
+        require_bounded_string(&memo, 0, MAX_MEMO_LEN)?; // memo can be empty
         validate_tags(&tags)?;
 
         if !storage::is_token_allowed(&env, &token_address) {
@@ -306,7 +309,8 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         payer.require_auth();
         require_positive(amount)?;
-        require_non_empty_string(&order_id)?;
+        require_bounded_string(&order_id, 1, 64)?; // order_id max 64 chars
+        require_bounded_string(&memo, 0, MAX_MEMO_LEN)?; // memo can be empty
         validate_tags(&tags)?;
 
         // Check nonce against stored per-payer nonce
@@ -381,7 +385,8 @@ impl PaymentProcessingContract {
 
         for item in payments.iter() {
             require_positive(item.amount)?;
-            require_non_empty_string(&item.order_id)?;
+            require_bounded_string(&item.order_id, 1, 64)?;
+            require_bounded_string(&item.memo, 0, MAX_MEMO_LEN)?;
 
             if !storage::is_token_allowed(&env, &item.token_address) {
                 return Err(PaymentError::TokenNotAllowed);
@@ -629,8 +634,8 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         caller.require_auth();
         require_positive(amount)?;
-        require_non_empty_string(&refund_id)?;
-        validate_memo_length(&reason)?;
+        require_bounded_string(&refund_id, 1, 64)?; // refund_id max 64 chars
+        require_bounded_string(&reason, 1, MAX_REASON_LEN)?;
 
         if storage::get_refund(&env, &refund_id).is_some() {
             return Err(PaymentError::RefundAlreadyExists);
@@ -886,7 +891,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         initiator.require_auth();
         require_positive(amount)?;
-        require_non_empty_string(&payment_id)?;
+        require_bounded_string(&payment_id, 1, 64)?; // payment_id max 64 chars
 
         if !storage::is_token_allowed(&env, &token_address) {
             return Err(PaymentError::TokenNotAllowed);
@@ -1032,7 +1037,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         merchant.require_auth();
         require_positive(amount)?;
-        require_non_empty_string(&plan_id)?;
+        require_bounded_string(&plan_id, 1, 64)?;
 
         if storage::get_subscription_plan(&env, &plan_id).is_some() {
             return Err(PaymentError::SubscriptionPlanAlreadyExists);
@@ -1056,7 +1061,7 @@ impl PaymentProcessingContract {
         plan_id: String,
     ) -> Result<(), PaymentError> {
         subscriber.require_auth();
-        require_non_empty_string(&subscription_id)?;
+        require_bounded_string(&subscription_id, 1, 64)?;
 
         if storage::get_subscription(&env, &subscription_id).is_some() {
             return Err(PaymentError::SubscriptionAlreadyExists);
@@ -1311,7 +1316,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         merchant.require_auth();
         require_positive(amount)?;
-        require_non_empty_string(&request_id)?;
+        require_bounded_string(&request_id, 1, 64)?;
 
         if !storage::is_token_allowed(&env, &token) {
             return Err(PaymentError::TokenNotAllowed);
