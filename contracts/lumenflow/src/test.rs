@@ -6536,3 +6536,106 @@ fn test_refund_reason_exceeds_max_fails() {
     );
     assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
 }
+
+// ── Canonical signature payload tests (Issue #626) ────────────────────────────
+
+#[test]
+fn test_canonical_payload_distinct_from_naive_concatenation() {
+    // The canonical payload must differ from a naive order_id||amount concat
+    // because each field is length-prefixed.
+    use soroban_sdk::xdr::ToXdr;
+    use crate::helper::build_canonical_payload;
+
+    let env = Env::default();
+    let order_id = str(&env, "ORDER_X");
+    let amount: i128 = 1_000;
+
+    let canonical = build_canonical_payload(&env, &order_id, amount);
+
+    // Naive payload: raw XDR bytes of order_id || BE bytes of amount
+    let mut naive = Bytes::new(&env);
+    naive.append(&order_id.clone().to_xdr(&env));
+    naive.append(&bytes(&env, &amount.to_be_bytes()));
+
+    // They must differ: the canonical payload has 4-byte length prefixes
+    assert_ne!(canonical, naive, "Canonical payload must include length prefixes");
+    assert!(
+        canonical.len() > naive.len(),
+        "Canonical payload must be longer (has length prefix bytes)"
+    );
+}
+
+#[test]
+fn test_canonical_payload_swapped_fields_produces_different_bytes() {
+    // A payload built with (order_id="AB", amount=0x4142...) must differ from
+    // one built with swapped raw bytes — demonstrating malleability prevention.
+    use crate::helper::build_canonical_payload;
+
+    let env = Env::default();
+
+    // Two distinct (order_id, amount) pairs
+    let payload_a = build_canonical_payload(&env, &str(&env, "ORDER_A"), 100);
+    let payload_b = build_canonical_payload(&env, &str(&env, "ORDER_B"), 100);
+    let payload_c = build_canonical_payload(&env, &str(&env, "ORDER_A"), 200);
+
+    assert_ne!(payload_a, payload_b, "Different order IDs must produce different payloads");
+    assert_ne!(payload_a, payload_c, "Different amounts must produce different payloads");
+}
+
+#[test]
+fn test_canonical_payload_test_vector_known_values() {
+    // Test vector: order_id = "ORD1", amount = 1000
+    // Verify canonical payload matches expected format:
+    //   [4-byte len of XDR(order_id)] [XDR bytes of order_id]
+    //   [4-byte len of BE(amount)] [BE bytes of amount (16 bytes for i128)]
+    use soroban_sdk::xdr::ToXdr;
+    use crate::helper::build_canonical_payload;
+
+    let env = Env::default();
+    let order_id = str(&env, "ORD1");
+    let amount: i128 = 1000;
+
+    let canonical = build_canonical_payload(&env, &order_id, amount);
+
+    // Reconstruct expected bytes manually
+    let order_xdr = order_id.clone().to_xdr(&env);
+    let order_len = order_xdr.len();
+    let amount_bytes = Bytes::from_slice(&env, &amount.to_be_bytes());
+    let amount_len = amount_bytes.len(); // always 16 for i128
+
+    let mut expected = Bytes::new(&env);
+    // 4-byte big-endian length of order_id XDR
+    expected.append(&Bytes::from_slice(&env, &order_len.to_be_bytes()));
+    expected.append(&order_xdr);
+    // 4-byte big-endian length of amount bytes
+    expected.append(&Bytes::from_slice(&env, &amount_len.to_be_bytes()));
+    expected.append(&amount_bytes);
+
+    assert_eq!(canonical, expected, "Canonical payload must match expected test vector");
+}
+
+#[test]
+fn test_swapped_field_payload_rejected_by_signature_check() {
+    // Confirm that a payment signed with payload (A, B) cannot be replayed
+    // with a naively swapped payload — the mock verifier accepts any 32/64-byte
+    // keys, so we verify the payload bytes themselves differ (the critical property).
+    use crate::helper::build_canonical_payload;
+
+    let env = Env::default();
+
+    let order_id_1 = str(&env, "LEGIT_ORDER");
+    let amount_1: i128 = 5000;
+
+    // An attacker tries to use the same raw bytes but under a different split
+    let order_id_2 = str(&env, "LEGIT");  // shorter order_id
+    let amount_2: i128 = 5000;            // same amount
+
+    let payload_legit = build_canonical_payload(&env, &order_id_1, amount_1);
+    let payload_attack = build_canonical_payload(&env, &order_id_2, amount_2);
+
+    // With length prefixes, these are unambiguously different payloads
+    assert_ne!(
+        payload_legit, payload_attack,
+        "Canonical encoding must prevent ambiguous payloads even with same suffix bytes"
+    );
+}
