@@ -1,176 +1,180 @@
-# LumenFlow Signature Payload Format
+# Signature Format
 
-This document specifies the canonical encoding used for the ed25519 signature
-payload in LumenFlow payment authorisation.  All integrators (contract, SDK,
-and off-chain tooling) **must** use this format exactly.
+To process payments with a signature in LumenFlow, the merchant must sign a specific payload using their Ed25519 private key. This document describes the exact byte layout of that payload for SDK implementors.
 
----
+## Payload Layout
 
-## Why Length-Prefixed Canonicalisation?
+The payload is the concatenation of the network ID, the XDR-encoded `contract_address`, the big-endian 8-byte `nonce`, the XDR-encoded `order_id`, and the big-endian 16-byte representation of the `amount`.
 
-The naive approach of concatenating field bytes directly is **vulnerable to
-malleability attacks**.  Consider:
+| Field | Type | Description |
+|-------|------|-------------|
+| `network_id` | 32 Bytes | The SHA-256 hash of the network passphrase (e.g., testnet or public). |
+| `contract_address` | XDR Address | The contract's Stellar Address, encoded as a Soroban XDR `ScAddress`. |
+| `nonce` | u64 (8 bytes) | Replay-protection counter. Must equal `get_merchant_nonce(merchant) + 1`. |
+| `order_id` | XDR String | The unique order identifier, encoded as a Stellar/Soroban XDR `ScVal` String. |
+| `amount` | i128 (16 bytes) | The payment amount as a 128-bit signed integer in big-endian byte order. |
 
-| order_id | amount raw bytes | Naive concat |
-|----------|-----------------|--------------|
-| `"AB"`   | `\x41\x42…`     | `AB4142…`    |
-| `"ABAB"` | `\x42…`         | `ABAB42…` ← different |
+### 0. Nonce (Replay Protection)
 
-An adversary could craft an `(order_id, amount)` pair whose raw bytes happen to
-collide with a legitimately signed pair by shifting the field boundary.
-Length-prefixing each field closes this attack surface by making the boundary
-unambiguous.
+Before constructing the payload, call `get_merchant_nonce(merchant_address)` to retrieve the
+merchant's current nonce counter. The value passed in the `nonce` parameter (and included in
+the payload) **must be exactly `current_nonce + 1`**. On a successful payment the contract
+increments the stored nonce, permanently invalidating any previously captured signature.
 
----
+This prevents an attacker who intercepts a valid `(signature, order_id)` pair from
+resubmitting it with a different `order_id` to drain merchant funds.
 
-## Canonical Format
+### 1. Network ID
 
-Each field is serialised as:
+The 32-byte hash of the network passphrase. For example, Testnet uses `Test SDF Network ; September 2015`. The SHA-256 hash of this string is the network ID.
 
-```
-[ 4-byte big-endian uint32 : byte length of field ]
-[ N bytes : field data ]
-```
+### 2. XDR Encoding of contract_address
 
-The full payload for `process_payment_with_signature` is:
+The contract address is encoded as a Soroban `ScAddress` XDR object.
 
-```
-canonical_payload =
-    u32_be(len(XDR(order_id))) || XDR(order_id)
- || u32_be(len(BE16(amount)))  || BE16(amount)
-```
+### 3. XDR Encoding of order_id
 
-Where:
-- `XDR(order_id)` — the Soroban `String` serialised to XDR bytes via `to_xdr()`.
-- `BE16(amount)` — the `i128` amount serialised as 16 big-endian bytes.
-- `u32_be(n)` — `n` encoded as a 4-byte big-endian unsigned integer.
+In the smart contract, `order_id.to_xdr()` is used. This produces the XDR representation of a Soroban `String` object. In the Stellar XDR definition, this corresponds to an `ScVal` of type `SCV_STRING`.
 
-The `amount` field is always exactly 16 bytes, so its length prefix is always
-`\x00\x00\x00\x10`.
+The byte layout for `order_id.to_xdr()` is:
+- **ScVal Tag**: `0x0000000e` (4 bytes, representing `SCV_STRING` / 14)
+- **Length**: 4 bytes, big-endian unsigned integer (number of bytes in the string).
+- **Data**: The UTF-8 bytes of the string.
+- **Padding**: 0 to 3 null bytes (`0x00`) to align the data to a 4-byte boundary.
+
+### 4. Amount Encoding
+
+The `amount` is a 128-bit signed integer. It must be encoded as exactly 16 bytes in big-endian order.
 
 ---
 
-## Rust Implementation
+## JavaScript Implementation Example
 
-The canonical payload is built by `build_canonical_payload` in
-`contracts/lumenflow/src/helper.rs`:
+Using the `@stellar/stellar-sdk` library:
 
-```rust
-pub fn build_canonical_payload(env: &Env, order_id: &String, amount: i128) -> Bytes {
-    let mut payload = Bytes::new(env);
-    let order_id_bytes = order_id.clone().to_xdr(env);
-    let amount_bytes = Bytes::from_slice(env, &amount.to_be_bytes());
-    append_length_prefixed(env, &mut payload, &order_id_bytes);
-    append_length_prefixed(env, &mut payload, &amount_bytes);
-    payload
-}
-```
+```javascript
+import { xdr, hash } from '@stellar/stellar-sdk';
+import { Address } from '@stellar/stellar-sdk';
 
----
-
-## TypeScript / SDK Implementation
-
-In the SDK (`sdk/src/signPaymentPayload.ts`):
-
-```typescript
 /**
- * Builds the canonical length-prefixed payload for a LumenFlow payment.
- *
- * Format per field:
- *   [ 4-byte BE uint32 length ][ field bytes ]
- *
- * Fields (in order):
- *   1. XDR-encoded order_id string
- *   2. 16-byte big-endian i128 amount
+ * Builds the payload that the merchant needs to sign.
+ * 
+ * @param {string} networkPassphrase - The network passphrase.
+ * @param {string} contractId - The contract's address (C...).
+ * @param {bigint} nonce - Must equal get_merchant_nonce(merchant) + 1n.
+ * @param {string} orderId - The unique order ID.
+ * @param {bigint|string} amount - The payment amount.
+ * @returns {Buffer} The concatenated payload.
  */
-export function buildCanonicalPayload(orderIdXdr: Uint8Array, amount: bigint): Uint8Array {
-    const amountBytes = bigintToBeBytes16(amount);
-    return concatLengthPrefixed(orderIdXdr, amountBytes);
+function buildSignaturePayload(networkPassphrase, contractId, nonce, orderId, amount) {
+  // 1. Network ID (SHA-256 of passphrase)
+  const networkId = hash(Buffer.from(networkPassphrase));
+
+  // 2. Encode contract_address as ScAddress XDR
+  const contractIdXdr = Address.fromString(contractId).toScAddress().toXDR();
+
+  // 3. Encode nonce as 8-byte big-endian u64
+  const nonceBuf = Buffer.alloc(8);
+  nonceBuf.writeBigUInt64BE(BigInt(nonce), 0);
+
+  // 4. Encode order_id as ScVal String XDR
+  const orderIdXdr = xdr.ScVal.scvString(orderId).toXDR();
+
+  // 5. Encode amount as 16-byte big-endian integer
+  const amountBuf = Buffer.alloc(16);
+  const bigAmount = BigInt(amount);
+  amountBuf.writeBigInt64BE(bigAmount >> 64n, 0);
+  amountBuf.writeBigInt64BE(bigAmount & 0xFFFFFFFFFFFFFFFFn, 8);
+
+  return Buffer.concat([networkId, contractIdXdr, nonceBuf, orderIdXdr, amountBuf]);
 }
 ```
 
-See `sdk/src/signPaymentPayload.ts` for the full implementation including
-`concatLengthPrefixed` and `bigintToBeBytes16`.
+## Python Implementation Example
+
+```python
+import xdrbuf # or any XDR library
+import struct
+import hashlib
+
+def build_signature_payload(network_passphrase: str, contract_address_xdr: bytes,
+                             nonce: int, order_id: str, amount: int):
+    # 1. Network ID
+    network_id = hashlib.sha256(network_passphrase.encode('utf-8')).digest()
+
+    # 2. Contract Address XDR (Assuming it's already encoded to XDR)
+    # Using stellar-sdk for Python can do Address(contract_id).to_xdr()
+
+    # 3. Nonce as 8-byte big-endian u64
+    nonce_bytes = struct.pack(">Q", nonce)
+
+    # 4. ScVal tag for SCV_STRING is 14
+    tag = struct.pack(">I", 14)
+    order_bytes = order_id.encode('utf-8')
+    length = struct.pack(">I", len(order_bytes))
+    padding = b'\x00' * ((4 - (len(order_bytes) % 4)) % 4)
+    order_xdr = tag + length + order_bytes + padding
+    
+    # 5. Amount as 16-byte big-endian
+    amount_bytes = amount.to_bytes(16, byteorder='big', signed=True)
+    
+    return network_id + contract_address_xdr + nonce_bytes + order_xdr + amount_bytes
+```
+
+## Reference
+
+- [Stellar XDR Definitions](https://github.com/stellar/stellar-core/blob/master/src/xdr/Stellar-ledger-entries.x#L571)
+- [Soroban SDK String to_xdr](https://docs.rs/soroban-sdk/latest/soroban_sdk/struct.String.html#method.to_xdr)
 
 ---
 
-## Test Vectors
+## Smoke Test Usage
 
-All hex values are lowercase without `0x` prefix.
+`scripts/smoke_test.sh` exercises the full signature verification path against a live
+deployment. It delegates key generation and signing to `scripts/generate_smoke_keypair.sh`,
+which implements exactly the payload layout described above.
 
-### Vector 1 — Simple order
+### What the helper does
 
-| Field | Value |
-|-------|-------|
-| `order_id` | `"ORD1"` (ASCII) |
-| `amount` | `1000` |
+1. Calls `get_merchant_nonce(merchant_address)` via `stellar contract invoke` to obtain
+   the current on-chain nonce, then sets `nonce = current_nonce + 1`.
+2. Builds the canonical payload:
+   ```
+   SHA-256(network_passphrase)       ← 32 bytes (network_id)
+   || ScAddress XDR(contract_id)    ← variable
+   || nonce as u64 big-endian        ← 8 bytes
+   || ScVal::String XDR(order_id)   ← variable (tag + len + data + padding)
+   || amount as i128 big-endian      ← 16 bytes
+   ```
+3. Generates a throwaway ed25519 keypair using Node.js 18+ built-in `crypto.generateKeyPairSync`.
+4. Signs the payload with `crypto.sign(null, payload, privateKey)`.
+5. Exports `SMOKE_SIG` (128 hex chars), `SMOKE_PUBKEY` (64 hex chars), and `SMOKE_NONCE`.
 
-XDR encoding of the Soroban `String "ORD1"`:
-- XDR `ScVal::String` → type discriminant (4 bytes) + length (4 bytes) + data + padding
-- Raw bytes (hex): `00000006 00000004 4f524431 00000000`
-  (type=6 String, len=4, `O`=0x4f `R`=0x52 `D`=0x44 `1`=0x31, 0-padded to 4-byte boundary)
+### Network passphrases
 
-Amount `1000` as 16-byte big-endian i128:
-```
-00000000 00000000 00000000 000003e8
-```
+| Network | Passphrase |
+|---------|-----------|
+| Testnet | `Test SDF Network ; September 2015` |
+| Mainnet | `Public Global Stellar Network ; September 2015` |
+| Local   | `Standalone Network ; February 2017` |
 
-Canonical payload (hex):
-```
-[length of XDR(order_id) = 16 bytes → 00000010]
-00000010
-00000006 00000004 4f524431 00000000
-[length of amount bytes = 16 → 00000010]
-00000010
-00000000 00000000 00000000 000003e8
-```
+### Running manually
 
-Full hex string:
-```
-00000010 00000006 00000004 4f524431 00000000
-00000010 00000000 00000000 00000000 000003e8
-```
+```bash
+eval "$(./scripts/generate_smoke_keypair.sh \
+  --contract-id  "$CONTRACT_ID" \
+  --merchant     "$MERCHANT_ADDRESS" \
+  --order-id     "SMOKE_$(date +%s)" \
+  --amount       1 \
+  --network      testnet)"
 
-### Vector 2 — i128::MAX boundary
+echo "Signature : $SMOKE_SIG"
+echo "Public key: $SMOKE_PUBKEY"
+echo "Nonce     : $SMOKE_NONCE"
 
-| Field | Value |
-|-------|-------|
-| `order_id` | `"MAX"` |
-| `amount` | `170141183460469231731687303715884105727` (i128::MAX) |
-
-Amount as 16-byte big-endian:
-```
-7fffffff ffffffff ffffffff ffffffff
+./scripts/smoke_test.sh
 ```
 
-Canonical payload ends with:
-```
-00000010 7fffffff ffffffff ffffffff ffffffff
-```
-
-### Vector 3 — Malleability attempt rejected
-
-Payload for `("ORDER_A", 100)` and `("ORDER", 100)` produce **different** byte
-sequences despite having the same trailing bytes, because the length prefixes
-encode different order_id lengths.
-
----
-
-## Cross-Verification Checklist
-
-| Test | Location | Status |
-|------|----------|--------|
-| `test_canonical_payload_distinct_from_naive_concatenation` | `src/test.rs` | ✅ |
-| `test_canonical_payload_swapped_fields_produces_different_bytes` | `src/test.rs` | ✅ |
-| `test_canonical_payload_test_vector_known_values` | `src/test.rs` | ✅ |
-| `test_swapped_field_payload_rejected_by_signature_check` | `src/test.rs` | ✅ |
-| SDK `buildCanonicalPayload` unit tests | `sdk/src/signPaymentPayload.test.ts` | ✅ |
-
----
-
-## Migration Notes
-
-If you have existing signed payloads produced with the **old** naive format
-(order_id XDR || amount BE, no length prefix), those signatures will no longer
-verify against the new canonical format.  Re-sign all pending authorisation
-payloads using the updated SDK before upgrading the on-chain contract.
+> **Note:** The helper caches `@stellar/stellar-sdk` under `scripts/.smoke_node_modules` to
+> avoid re-downloading it on every CI run. This directory is excluded from version control
+> (add it to `.gitignore` if it is not already there).
