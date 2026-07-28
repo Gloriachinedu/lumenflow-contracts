@@ -10,13 +10,12 @@ mod test;
 
 use soroban_sdk::{
     contract, contractimpl, token, Address, Bytes, Env, String, Vec,
-    xdr::ToXdr,
 };
 
 use error::PaymentError;
 use helper::{
-    require_admin, require_admin_or, require_non_empty_string, require_positive,
-    require_valid_limit, validate_tags, verify_signature, REFUND_WINDOW_SECS,
+    build_canonical_payload, require_admin, require_admin_or, require_non_empty_string,
+    require_positive, require_valid_limit, validate_tags, verify_signature, REFUND_WINDOW_SECS,
 };
 use types::{
     BatchPaymentItem, GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder,
@@ -208,10 +207,8 @@ impl PaymentProcessingContract {
             return Err(PaymentError::MerchantInactive);
         }
 
-        // Build payload: order_id bytes + amount bytes
-        let mut payload = Bytes::new(&env);
-        payload.append(&order_id.clone().to_xdr(&env));
-        payload.append(&Bytes::from_slice(&env, &amount.to_be_bytes()));
+        // Build canonical length-prefixed payload: prevents malleability attacks
+        let payload = build_canonical_payload(&env, &order_id, amount);
         verify_signature(&env, &merchant_public_key, &payload, &signature)?;
 
         // Transfer tokens from payer to merchant
@@ -288,10 +285,8 @@ impl PaymentProcessingContract {
                 return Err(PaymentError::MerchantInactive);
             }
 
-            // Build payload: order_id bytes + amount bytes
-            let mut payload = Bytes::new(&env);
-            payload.append(&item.order_id.clone().to_xdr(&env));
-            payload.append(&Bytes::from_slice(&env, &item.amount.to_be_bytes()));
+            // Build canonical length-prefixed payload: prevents malleability attacks
+            let payload = build_canonical_payload(&env, &item.order_id, item.amount);
             verify_signature(&env, &item.merchant_public_key, &payload, &item.signature)?;
 
             // Transfer tokens from payer to merchant

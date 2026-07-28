@@ -1,10 +1,38 @@
-use soroban_sdk::{Address, Bytes, Env, String, Vec};
+use soroban_sdk::{xdr::ToXdr, Address, Bytes, Env, String, Vec};
 
 use crate::error::PaymentError;
 use crate::storage;
 
 pub const MAX_PAGE_LIMIT: u32 = 100;
 pub const REFUND_WINDOW_SECS: u64 = 30 * 24 * 3600; // 30 days
+
+/// Append a single length-prefixed field to `buf`.
+///
+/// Encoding: 4-byte big-endian length (u32) followed by the raw field bytes.
+/// This prevents ambiguous payloads when field values could shift boundaries
+/// (malleability attack via field-length confusion).
+fn append_length_prefixed(env: &Env, buf: &mut Bytes, field: &Bytes) {
+    let len = field.len();
+    buf.append(&Bytes::from_slice(env, &len.to_be_bytes()));
+    buf.append(field);
+}
+
+/// Build the canonical signature payload for a payment authorisation.
+///
+/// Format (all fields length-prefixed):
+///   [ 4-byte BE len | order_id XDR bytes ] [ 4-byte BE len | amount BE bytes ]
+///
+/// The 4-byte big-endian length prefix for each field prevents an attacker from
+/// constructing a different `(order_id, amount)` pair that yields the same byte
+/// sequence as a legitimate payload (malleability via boundary shifting).
+pub fn build_canonical_payload(env: &Env, order_id: &String, amount: i128) -> Bytes {
+    let mut payload = Bytes::new(env);
+    let order_id_bytes = order_id.clone().to_xdr(env);
+    let amount_bytes = Bytes::from_slice(env, &amount.to_be_bytes());
+    append_length_prefixed(env, &mut payload, &order_id_bytes);
+    append_length_prefixed(env, &mut payload, &amount_bytes);
+    payload
+}
 
 /// Require that `caller` is the stored admin.
 pub fn require_admin(env: &Env, caller: &Address) -> Result<(), PaymentError> {
