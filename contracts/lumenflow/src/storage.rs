@@ -14,6 +14,11 @@ pub const MIN_REFUND_AMOUNT: i128 = 100;
 /// Maximum number of payment IDs stored per account index.
 pub const MAX_PAYMENT_IDS_PER_ACCOUNT: u32 = 10_000;
 
+/// Warning threshold (90% of `MAX_PAYMENT_IDS_PER_ACCOUNT`) at which a
+/// `payment_history_near_limit` event is emitted so integrators can react
+/// before the hard cap halts further payments for the account.
+pub const PAYMENT_HISTORY_WARNING_THRESHOLD: u32 = MAX_PAYMENT_IDS_PER_ACCOUNT * 9 / 10;
+
 // ── Config defaults ───────────────────────────────────────────────────────────
 
 /// Default platform fee: 0 bps (no fee). Admin should set explicitly at deploy time.
@@ -316,17 +321,31 @@ pub fn get_merchant_payment_ids(env: &Env, merchant: &Address) -> Vec<String> {
         .unwrap_or(Vec::new(env))
 }
 
+/// Current number of payment IDs indexed for `merchant`.
+pub fn get_merchant_payment_count(env: &Env, merchant: &Address) -> u32 {
+    get_merchant_payment_ids(env, merchant).len()
+}
+
 pub fn add_merchant_payment_id(env: &Env, merchant: &Address, order_id: &String) -> Result<(), PaymentError> {
     let mut ids = get_merchant_payment_ids(env, merchant);
-    if ids.len() >= MAX_PAYMENT_IDS_PER_ACCOUNT {
+    let old_len = ids.len();
+    if old_len >= MAX_PAYMENT_IDS_PER_ACCOUNT {
         return Err(PaymentError::PaymentHistoryLimitExceeded);
     }
     ids.push_back(order_id.clone());
+    let new_len = ids.len();
     let key = DataKey::MP(merchant.clone());
     env.storage().persistent().set(&key, &ids);
     env.storage()
         .persistent()
         .extend_ttl(&key, PAYMENT_TTL_LEDGERS, PAYMENT_TTL_LEDGERS);
+
+    if old_len < PAYMENT_HISTORY_WARNING_THRESHOLD && new_len >= PAYMENT_HISTORY_WARNING_THRESHOLD {
+        env.events().publish(
+            ("lumenflow", "payment_history_near_limit", merchant.clone()),
+            (new_len, MAX_PAYMENT_IDS_PER_ACCOUNT),
+        );
+    }
     Ok(())
 }
 
@@ -337,17 +356,31 @@ pub fn get_payer_payment_ids(env: &Env, payer: &Address) -> Vec<String> {
         .unwrap_or(Vec::new(env))
 }
 
+/// Current number of payment IDs indexed for `payer`.
+pub fn get_payer_payment_count(env: &Env, payer: &Address) -> u32 {
+    get_payer_payment_ids(env, payer).len()
+}
+
 pub fn add_payer_payment_id(env: &Env, payer: &Address, order_id: &String) -> Result<(), PaymentError> {
     let mut ids = get_payer_payment_ids(env, payer);
-    if ids.len() >= MAX_PAYMENT_IDS_PER_ACCOUNT {
+    let old_len = ids.len();
+    if old_len >= MAX_PAYMENT_IDS_PER_ACCOUNT {
         return Err(PaymentError::PaymentHistoryLimitExceeded);
     }
     ids.push_back(order_id.clone());
+    let new_len = ids.len();
     let key = DataKey::PP(payer.clone());
     env.storage().persistent().set(&key, &ids);
     env.storage()
         .persistent()
         .extend_ttl(&key, PAYMENT_TTL_LEDGERS, PAYMENT_TTL_LEDGERS);
+
+    if old_len < PAYMENT_HISTORY_WARNING_THRESHOLD && new_len >= PAYMENT_HISTORY_WARNING_THRESHOLD {
+        env.events().publish(
+            ("lumenflow", "payment_history_near_limit", payer.clone()),
+            (new_len, MAX_PAYMENT_IDS_PER_ACCOUNT),
+        );
+    }
     Ok(())
 }
 

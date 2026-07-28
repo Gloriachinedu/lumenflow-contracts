@@ -1533,6 +1533,14 @@ impl PaymentProcessingContract {
         Ok(storage::get_merchant_stats(&env, &merchant))
     }
 
+    /// Returns the current payment-ID index count for `address`, as either a
+    /// merchant or a payer — whichever is higher, since each index independently
+    /// enforces `storage::MAX_PAYMENT_IDS_PER_ACCOUNT`.
+    pub fn get_account_payment_count(env: Env, address: Address) -> u32 {
+        storage::get_merchant_payment_count(&env, &address)
+            .max(storage::get_payer_payment_count(&env, &address))
+    }
+
     // ── Refunds ───────────────────────────────────────────────────────────────
 
     /// Initiate a refund request.
