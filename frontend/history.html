@@ -238,11 +238,24 @@
     .status-fullyrefunded      { background: #fce8e8; color: #c0392b; }
     .status-unknown            { background: #f0f0f0; color: #666; }
 
+    /* ── Empty state ─────────────────────────────────────────────────────────── */
     .empty-state {
       padding: 4rem 2rem;
       text-align: center;
       color: #888;
     }
+    .empty-state .empty-svg { margin-bottom: 1.25rem; }
+    .empty-state .empty-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: #444;
+      margin-bottom: 0.4rem;
+    }
+    .empty-state .empty-sub { font-size: 0.875rem; color: #888; }
+
+    /* ── Copy button ──────────────────────────────────────────────────────────── */
+    .lf-copy-btn:hover { background: #f0ecff !important; color: #6c47ff !important; border-color: #6c47ff !important; }
+    .lf-copyable { display: inline-flex; align-items: center; }
 
     /* ── Skeleton loading rows ────────────────────────────────────────────────── */
     .skeleton-body tr td {

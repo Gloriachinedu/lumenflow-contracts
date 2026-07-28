@@ -729,6 +729,7 @@
     const expired = params.expires && Date.now() > params.expires;
 
     document.getElementById('prefill-merchant').textContent  = params.merchant;
+    document.getElementById('prefill-merchant').appendChild(makeCopyButton(params.merchant, 'Copy merchant address'));
     document.getElementById('prefill-order-id').textContent  = params.orderId;
     document.getElementById('prefill-amount').textContent    = formatAmount(BigInt(params.amount), 7, 'XLM');
     document.getElementById('prefill-token').textContent     = params.token;
@@ -784,7 +785,10 @@
     document.getElementById('loading').style.display = 'block';
     showLoadingOverlay('Loading payment receipt…');
 
-    const data = await fetchPayment(orderId);
+    const data = await fetchPayment(orderId).catch(e => {
+      showErrorToast(e);
+      return null;
+    });
 
     document.getElementById('loading').style.display = 'none';
     hideLoadingOverlay();

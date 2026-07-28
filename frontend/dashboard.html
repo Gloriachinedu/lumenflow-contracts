@@ -229,6 +229,26 @@
       font-size: 0.875rem;
     }
     .state-box .icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
+    .state-box .state-title { font-size: 1rem; font-weight: 700; color: #444; margin-bottom: 0.4rem; }
+    .state-box .state-sub { font-size: 0.875rem; color: #888; margin-bottom: 1rem; }
+    .state-box .btn-cta {
+      display: inline-block;
+      background: #6c47ff;
+      color: #fff;
+      font-weight: 700;
+      font-size: 0.875rem;
+      padding: 0.55rem 1.25rem;
+      border-radius: 8px;
+      text-decoration: none;
+      border: none;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .state-box .btn-cta:hover { opacity: 0.85; }
+
+    /* ── Copy button ─────────────────────────────────────────────────────────── */
+    .lf-copy-btn:hover { background: #f0ecff !important; color: #6c47ff !important; border-color: #6c47ff !important; }
+    .lf-copyable { display: inline-flex; align-items: center; }
 
     /* ── Alert ───────────────────────────────────────────────────────────────── */
     .alert {
@@ -316,6 +336,7 @@
 <script type="module">
   import { DEMO_MODE, CONTRACT_ID, NETWORK, formatAmount, formatDate, renderModeBanner, copyButtonHtml, initCopyButtons, showLoadingOverlay, hideLoadingOverlay } from './lumenflow-shared.js';
   import { validateAddress } from './validation.js';
+  import { showErrorToast } from './errorMessages.js';
 
   // ── Mode banner ──────────────────────────────────────────────────────────────
   renderModeBanner();
@@ -471,6 +492,10 @@
 
     document.getElementById('payments-container').innerHTML = buildPaymentsTable(payments);
     document.getElementById('refunds-container').innerHTML  = buildRefundsTable(refunds);
+
+    // Activate copy buttons inserted into both tables
+    attachCopyButtons(document.getElementById('payments-container'));
+    attachCopyButtons(document.getElementById('refunds-container'));
   };
 
   // Auto-load in demo mode
