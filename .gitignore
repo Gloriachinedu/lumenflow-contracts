@@ -1,7 +1,6 @@
 # Rust
 /target/
 **/*.rs.bk
-Cargo.lock
 
 # WASM build artifacts
 *.wasm
@@ -27,3 +26,7 @@ identity/
 
 # Logs
 *.log
+node_modules/
+
+# Smoke test: ephemeral npm cache for generate_smoke_keypair.sh
+scripts/.smoke_node_modules/
