@@ -5,14 +5,15 @@
   "private": true,
   "scripts": {
     "test": "playwright test",
-    "test:e2e": "playwright test tests/playwright/refund-lifecycle.spec.ts",
-    "test:visual": "playwright test tests/playwright/visual-regression.spec.ts",
+    "test:e2e": "playwright test playwright/refund-lifecycle.spec.ts",
+    "test:visual": "playwright test playwright/visual-regression.spec.ts",
     "test:update-snapshots": "playwright test --update-snapshots",
     "test:report": "playwright show-report"
   },
   "devDependencies": {
     "@playwright/test": "1.44.1",
     "pixelmatch": "5.3.0",
-    "pngjs": "7.0.0"
+    "pngjs": "7.0.0",
+    "serve": "14.2.3"
   }
 }

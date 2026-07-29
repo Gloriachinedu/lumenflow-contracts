@@ -1,3 +1,12 @@
-# Playwright screenshot baselines are stored here.
-# Baseline PNG files are committed to the repository so CI can compare against them.
-# To update baselines run: npm --prefix tests run test:update-snapshots
+# Playwright visual regression baseline screenshots are stored here.
+#
+# These PNG files are committed to the repository so CI can compare
+# incoming changes against approved baselines.
+#
+# To update baselines after intentional UI changes:
+#   1. Run: npm --prefix tests run test:update-snapshots
+#   2. Review the updated PNGs with: npm --prefix tests run test:report
+#   3. Commit the changes and open a PR for maintainer review.
+#
+# In CI the update-baselines job in .github/workflows/visual-regression.yml
+# can be triggered manually (workflow_dispatch) to automate this process.
