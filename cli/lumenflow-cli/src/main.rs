@@ -1,14 +1,20 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::process::Command;
 
 // ── CLI definition ────────────────────────────────────────────────────────────
 
+// ── CLI structure ─────────────────────────────────────────────────────────────
+
 #[derive(Parser)]
 #[command(name = "lumenflow")]
 #[command(about = "LumenFlow CLI tool for common operations", long_about = None)]
+#[command(
+    after_help = "INTERACTIVE MODE:\n  Run `lumenflow pay` with no flags to enter interactive mode.\n  You will be prompted for each field with real-time validation.\n  Press Ctrl-C at any prompt to cancel."
+)]
 struct Cli {
     /// Path to config file (default: .lumenflow.toml)
     #[arg(short, long, value_name = "FILE")]
@@ -51,7 +57,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Pay a merchant
+    /// Pay a merchant.
+    ///
+    /// Run with no flags to enter interactive (guided) mode.
+    /// All flags must be provided together to use non-interactive mode.
     Pay {
         #[arg(short, long)]
         merchant: String,
@@ -434,6 +443,7 @@ fn resolve_config(
         assert!(prefix.contains("<CONTRACT_ID>"));
         assert!(prefix.contains("<SOURCE_ACCOUNT>"));
     }
+}
 
     #[test]
     fn test_stellar_invoke_prefix_with_config() {
@@ -459,6 +469,17 @@ fn resolve_config(
         let json = format!("[{}]", signer_list.join(","));
         assert_eq!(json, "[\"GAAA\",\"GBBB\",\"GCCC\"]");
     }
+    Ok(())
+}
+
+// ── Payment struct for the interactive flow ───────────────────────────────────
+
+struct PaymentArgs {
+    merchant: String,
+    amount: i128,
+    order_id: String,
+    memo: String,
+    token: String,
 }
 
 // ── Wallet / Key loading ──────────────────────────────────────────────────────
@@ -767,6 +788,23 @@ fn main() -> Result<()> {
                 RefundCommands::Status { refund_id } => {
                     println!("Querying status of refund {}...", refund_id);
                 }
+            } else if all_flags_present {
+                // ── Non-interactive (flag-based) mode — unchanged behaviour ──
+                let args = PaymentArgs {
+                    merchant: merchant.clone().unwrap(),
+                    amount: amount.unwrap(),
+                    order_id: order_id.clone().unwrap(),
+                    memo: memo.clone().unwrap_or_default(),
+                    token: token.clone().unwrap_or_else(|| "native".to_string()),
+                };
+                execute_payment(&args, &config);
+            } else {
+                // Partial flags: guide the user rather than silently failing.
+                return Err(anyhow!(
+                    "Provide either ALL of --merchant, --amount, --order-id \
+                     (plus optional --memo and --token) for flag mode, \
+                     or run `lumenflow pay` with NO flags to use interactive mode."
+                ));
             }
         }
         Commands::History { merchant, .. } => {
