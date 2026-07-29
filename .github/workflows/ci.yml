@@ -5,6 +5,9 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  schedule:
+    # Weekly full security audit every Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
 
 env:
   CARGO_TERM_COLOR: always
@@ -206,6 +209,78 @@ jobs:
         env:
           PROPTEST_CASES: "100000"
         run: cargo test --package lumenflow --all-features prop_
+
+  # ---------------------------------------------------------------------------
+  # Security: dependency vulnerability scan (cargo-audit)
+  # ---------------------------------------------------------------------------
+  security-audit:
+    name: Security Audit (cargo-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.87.0
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-audit-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-audit-
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo-audit
+        run: cargo audit --config audit.toml
+        # Fails the job on any known CVE; ignores listed in audit.toml
+
+      - name: Open issue on scheduled audit failure
+        if: failure() && github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = `🔒 Scheduled dependency audit failed – ${new Date().toISOString().slice(0,10)}`;
+            const body = [
+              '## Automated Dependency Audit Failure',
+              '',
+              'The weekly `cargo-audit` run detected one or more advisories.',
+              '',
+              '**Action required:** review the [workflow run](' +
+                `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}` +
+              ') and either:',
+              '- Upgrade the affected crate(s), or',
+              '- Add a justified, time-limited ignore entry to `audit.toml`.',
+              '',
+              '_This issue was opened automatically by the CI security audit job._',
+            ].join('\n');
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ['security', 'dependencies'],
+            });
+
+  # ---------------------------------------------------------------------------
+  # Security: licence / duplicate / yanked crate check (cargo-deny)
+  # ---------------------------------------------------------------------------
+  security-deny:
+    name: Security Deny (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --config deny.toml all
 
   build:
     name: Build WASM
