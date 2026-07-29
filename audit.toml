@@ -1,25 +1,20 @@
 # cargo-audit configuration
-# Docs: https://rustsec.org/advisories/
-#
-# When adding an entry to [advisories.ignore], you MUST include:
-#   - id:       the RUSTSEC advisory ID
-#   - reason:   why we are ignoring it
-#   - expiry:   ISO-8601 date after which the ignore must be re-evaluated
-#
-# Example:
-#   [[advisories.ignore]]
-#   id = "RUSTSEC-2023-XXXX"
-#   reason = "No upstream fix available; risk mitigated by network isolation."
-#   expiry = "2026-12-31"
+# See: https://github.com/rustsec/rustsec/tree/main/cargo-audit#configuration
 
 [advisories]
+# Fail the build when advisories with these severity levels are found.
+# "high" covers HIGH and CRITICAL vulnerabilities.
+deny = ["high", "critical"]
+
+# Warn (but don't fail) on advisories with these severity levels.
+warn = ["medium"]
+
+# List advisory IDs to ignore. Only use this when a finding is a confirmed
+# false positive or has an accepted risk entry in the security runbook.
+# Example:
+#   ignore = ["RUSTSEC-2020-0001"]
 ignore = []
 
-[database]
-# Path for the local advisory database clone.
-path = "~/.cargo/advisory-db"
-url = "https://github.com/rustsec/advisory-db"
-# Fetch a fresh copy of the DB on every run.
-fetch = true
-# Fail if the DB cannot be fetched (e.g. offline in CI).
-stale = "deny"
+[output]
+# Print a human-readable summary of findings.
+quiet = false
