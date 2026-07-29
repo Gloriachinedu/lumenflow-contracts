@@ -9,6 +9,8 @@ pub mod types;
 
 #[cfg(test)]
 mod test;
+#[cfg(test)]
+mod test_error_codes;
 
 use soroban_sdk::{contract, contractimpl, token, xdr::ToXdr, Address, Bytes, Env, String, Vec};
 
