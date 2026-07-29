@@ -70,11 +70,13 @@ LumenFlow is a production-grade payment processing smart contract for the [Stell
 ## Security & Docs
 
 - **Full contract API reference** (all functions, parameters, return types, errors): [`docs/api-reference.md`](docs/api-reference.md)
+- **Interactive API explorer** for the public contract entrypoints: [`docs/openapi.yaml`](docs/openapi.yaml)
 - Architecture overview available in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Audit plan and scope published in `docs/audit/audit-report.md`
 - Refund lifecycle state diagram available in `docs/refund-lifecycle.md`
 - Testing guidance available in `docs/testing-guide.md`
 - Multisig payment flow guide available in `docs/multisig-guide.md`
+- Contributor onboarding video script available in [docs/onboarding-video-script.md](docs/onboarding-video-script.md)
 - Secrets and secure local environment setup in [`docs/secrets-and-local-env.md`](docs/secrets-and-local-env.md)
 
 ## Refund lifecycle overview
@@ -91,6 +93,8 @@ stateDiagram-v2
 ## Notes
 
 This contract uses saturating accumulation for global payment and refund volumes to prevent runtime panics in release mode.
+
+For interactive contract testing, load the OpenAPI file in Swagger UI or any compatible viewer. Soroban contract calls are authenticated through signed transactions rather than a bearer token, so each request should include the required signer and authorization context.
 
 ---
 
