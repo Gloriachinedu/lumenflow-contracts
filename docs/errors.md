@@ -131,3 +131,66 @@ If the contract returns `PaymentError::RefundExceedsOriginal` (code `33`), the c
 
 - Ensure the cumulative refund amount does not exceed the original payment amount.
 - Adjust the refund request to a valid amount.
+
+## Regression Test Coverage
+
+Every error code listed above has a dedicated regression test in
+[`contracts/lumenflow/tests/test_error_codes.rs`](../contracts/lumenflow/tests/test_error_codes.rs).
+Tests follow the naming convention `test_error_{code_name}_is_triggered`.
+
+| Error Name | Test |
+| :--- | :--- |
+| `Unauthorized` | `test_error_unauthorized_is_triggered` |
+| `AdminAlreadySet` | `test_error_admin_already_set_is_triggered` |
+| `InvalidAdminAddress` | `test_error_invalid_admin_address_is_triggered` |
+| `InvalidNonce` | `test_error_invalid_nonce_is_triggered` |
+| `AuthLockedOut` | `test_error_auth_locked_out_is_triggered` |
+| `MerchantNotFound` | `test_error_merchant_not_found_is_triggered` |
+| `MerchantAlreadyRegistered` | `test_error_merchant_already_registered_is_triggered` |
+| `MerchantInactive` | `test_error_merchant_inactive_is_triggered` |
+| `PaymentNotFound` | `test_error_payment_not_found_is_triggered` |
+| `PaymentAlreadyExists` | `test_error_payment_already_exists_is_triggered` |
+| `InvalidAmount` | `test_error_invalid_amount_is_triggered` |
+| `InvalidSignature` | `test_error_invalid_signature_is_triggered` |
+| `PaymentExpired` | `test_error_payment_expired_is_triggered` |
+| `TokenNotAllowed` | `test_error_token_not_allowed_is_triggered` |
+| `RefundNotFound` | `test_error_refund_not_found_is_triggered` |
+| `RefundAlreadyExists` | `test_error_refund_already_exists_is_triggered` |
+| `RefundWindowExpired` | `test_error_refund_window_expired_is_triggered` |
+| `RefundExceedsOriginal` | `test_error_refund_exceeds_original_is_triggered` |
+| `RefundNotApproved` | `test_error_refund_not_approved_is_triggered` |
+| `RefundAlreadyCompleted` | `test_error_refund_already_completed_is_triggered` |
+| `RefundBelowMinimum` | `test_error_refund_below_minimum_is_triggered` |
+| `MultisigNotFound` | `test_error_multisig_not_found_is_triggered` |
+| `MultisigAlreadySigned` | `test_error_multisig_already_signed_is_triggered` |
+| `MultisigAlreadyExecuted` | `test_error_multisig_already_executed_is_triggered` |
+| `InsufficientSignatures` | `test_error_insufficient_signatures_is_triggered` |
+| `MultisigAlreadyCancelled` | `test_error_multisig_already_cancelled_is_triggered` |
+| `MultisigCancelled` | `test_error_multisig_cancelled_is_triggered` |
+| `MultisigExpired` | `test_error_multisig_expired_is_triggered` |
+| `ContractPaused` | `test_error_contract_paused_is_triggered` |
+| `VersionMismatch` | `test_error_version_mismatch_is_triggered` |
+| `TimelockActive` | `test_error_timelock_active_is_triggered` |
+| `NotAPauseGuardian` | `test_error_not_a_pause_guardian_is_triggered` |
+| `AlreadyApprovedUnpause` | `test_error_already_approved_unpause_is_triggered` |
+| `InvalidInput` | `test_error_invalid_input_is_triggered` |
+| `PaginationLimitExceeded` | `test_error_pagination_limit_exceeded_is_triggered` |
+| `BatchSizeExceeded` | `test_error_batch_size_exceeded_is_triggered` |
+| `InvalidTags` | `test_error_invalid_tags_is_triggered` |
+| `SubscriptionPlanAlreadyExists` | `test_error_subscription_plan_already_exists_is_triggered` |
+| `SubscriptionPlanNotFound` | `test_error_subscription_plan_not_found_is_triggered` |
+| `SubscriptionAlreadyExists` | `test_error_subscription_already_exists_is_triggered` |
+| `SubscriptionNotFound` | `test_error_subscription_not_found_is_triggered` |
+| `SubscriptionNotActive` | `test_error_subscription_not_active_is_triggered` |
+| `SubscriptionIntervalNotElapsed` | `test_error_subscription_interval_not_elapsed_is_triggered` |
+| `SubscriptionMaxCyclesReached` | `test_error_subscription_max_cycles_reached_is_triggered` |
+| `EscrowNotFound` | `test_error_escrow_not_found_is_triggered` |
+| `EscrowAlreadyExists` | `test_error_escrow_already_exists_is_triggered` |
+| `EscrowNotUnlocked` | `test_error_escrow_not_unlocked_is_triggered` |
+| `EscrowAlreadyFinalised` | `test_error_escrow_already_finalised_is_triggered` |
+| `EscrowUnauthorised` | `test_error_escrow_unauthorised_is_triggered` |
+| `EscrowLockExpired` | `test_error_escrow_lock_expired_is_triggered` |
+| `DisputeNotFound` | `test_error_dispute_not_found_is_triggered` |
+| `DisputeRefundNotRejected` | `test_error_dispute_refund_not_rejected_is_triggered` |
+| `DisputeAlreadyExists` | `test_error_dispute_already_exists_is_triggered` |
+| `DisputeAlreadyResolved` | `test_error_dispute_already_resolved_is_triggered` |
