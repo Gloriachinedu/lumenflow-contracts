@@ -1,0 +1,3 @@
+# Playwright screenshot baselines are stored here.
+# Baseline PNG files are committed to the repository so CI can compare against them.
+# To update baselines run: npm --prefix tests run test:update-snapshots
