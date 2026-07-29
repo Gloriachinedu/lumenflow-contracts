@@ -3,6 +3,7 @@
 **Scalable, secure, and decentralized smart contracts for Soroban on Stellar.**
 
 [![CI](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml/badge.svg)](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml)
+[![Security Audit](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml/badge.svg?event=schedule&label=security-audit)](https://github.com/Gloriachinedu/lumenflow-contracts/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Stellar](https://img.shields.io/badge/Stellar-Soroban-blueviolet)](https://soroban.stellar.org)
 [![Discord](https://img.shields.io/discord/123456789012345678?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/lumenflow)
