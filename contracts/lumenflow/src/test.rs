@@ -765,7 +765,7 @@ fn test_batch_payment_invalid_tags_reject_full_batch() {
     let history = client.get_payer_payment_history(
         &payer, &None, &10, &None, &SortField::Date, &SortOrder::Ascending,
     );
-    assert_eq!(history.total, 0);
+    assert_eq!(history.total_matching, 0);
 }
 
 #[test]
@@ -863,6 +863,7 @@ fn test_batch_payment_intra_batch_duplicate_fails() {
             token_address: token.clone(),
             amount: 100,
             memo: str(&env, ""),
+            tags: None,
             signature: bytes(&env, &[0u8; 64]),
             merchant_public_key: bytes(&env, &[0u8; 32]),
         });
@@ -898,6 +899,7 @@ fn test_batch_payment_cross_call_duplicate_fails() {
         token_address: token.clone(),
         amount: 100,
         memo: str(&env, ""),
+        tags: None,
         signature: bytes(&env, &[0u8; 64]),
         merchant_public_key: bytes(&env, &[0u8; 32]),
     });
@@ -4033,6 +4035,7 @@ fn test_batch_payment_disallowed_token_fails() {
         token_address: bad_token.clone(),
         amount: 100,
         memo: str(&env, ""),
+        tags: None,
         signature: bytes(&env, &[0u8; 64]),
         merchant_public_key: bytes(&env, &[0u8; 32]),
     });
@@ -5271,6 +5274,7 @@ fn test_batch_payment_first_item_not_stored_on_later_failure() {
             token_address: token.clone(),
             amount: 100,
             memo: str(&env, "valid"),
+            tags: None,
             signature: bytes(&env, &[0u8; 64]),
             merchant_public_key: bytes(&env, &[0u8; 32]),
         },
@@ -5280,6 +5284,7 @@ fn test_batch_payment_first_item_not_stored_on_later_failure() {
             token_address: token.clone(),
             amount: -1,
             memo: str(&env, "bad amount"),
+            tags: None,
             signature: bytes(&env, &[0u8; 64]),
             merchant_public_key: bytes(&env, &[0u8; 32]),
         },
@@ -5325,6 +5330,7 @@ fn test_batch_payment_no_partial_state_on_inactive_merchant() {
             token_address: token.clone(),
             amount: 100,
             memo: str(&env, "valid"),
+            tags: None,
             signature: bytes(&env, &[0u8; 64]),
             merchant_public_key: bytes(&env, &[0u8; 32]),
         },
@@ -5334,6 +5340,7 @@ fn test_batch_payment_no_partial_state_on_inactive_merchant() {
             token_address: token.clone(),
             amount: 100,
             memo: str(&env, "inactive merchant"),
+            tags: None,
             signature: bytes(&env, &[0u8; 64]),
             merchant_public_key: bytes(&env, &[0u8; 32]),
         },

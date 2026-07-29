@@ -50,6 +50,8 @@ const signature = signPaymentPayload(payload, secretKey);
 
 Suggested visuals for this guide include a merchant dashboard screenshot, a receipt page screenshot on mobile and desktop, and the refund lifecycle diagram in [docs/refund-lifecycle.md](./refund-lifecycle.md).
 
+If you are preparing a contributor walkthrough or onboarding video, use the script in [docs/onboarding-video-script.md](./onboarding-video-script.md).
+
 ---
 
 ## 1. Prerequisites (~10 min)
