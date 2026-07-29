@@ -2,6 +2,8 @@
 
 Welcome to LumenFlow! This guide takes you from zero to running tests locally and opening your first PR.
 
+> 🎥 **Prefer video?** Watch the [10-minute onboarding walkthrough on YouTube](https://youtube.com/watch?v=PLACEHOLDER) covering project setup, local network start, first contract deploy, first payment, and checking history. The full script is at [`docs/onboarding-video-script.md`](./onboarding-video-script.md).
+
 ---
 
 ## Merchant and payer quickstart
