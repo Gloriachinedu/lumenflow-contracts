@@ -112,6 +112,8 @@ LumenFlow is a production-grade payment processing smart contract for the [Stell
 
 ## Security & Docs
 
+- **Interactive API Explorer (Swagger UI)**: [View on Swagger Editor](https://editor.swagger.io/?url=https://raw.githubusercontent.com/Gloriachinedu/lumenflow-contracts/main/docs/openapi.yaml) — browse and try all contract functions against testnet directly in the browser
+- **OpenAPI 3.0 spec**: [`docs/openapi.yaml`](docs/openapi.yaml) — validated in CI via `swagger-cli`
 - **Full contract API reference** (all functions, parameters, return types, errors): [`docs/api-reference.md`](docs/api-reference.md)
 - Architecture overview available in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Audit plan and scope published in `docs/audit/audit-report.md`

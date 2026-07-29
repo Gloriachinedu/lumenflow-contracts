@@ -1,0 +1,1000 @@
+openapi: "3.0.3"
+info:
+  title: LumenFlow Contract API
+  version: "1.0.0"
+  description: |
+    Interactive API reference for the LumenFlow Soroban smart contract on Stellar.
+
+    ## Authentication
+
+    All mutating contract functions require a signed Stellar transaction.
+    The caller address must authorise the call via Soroban's native `require_auth`
+    mechanism — equivalent to signing the transaction envelope with the
+    corresponding Ed25519 private key.
+
+    Payments additionally require an **Ed25519 merchant signature** over the
+    canonical payload:
+    `network_id (32 B) || contract_address XDR || nonce u64 BE (8 B) || order_id ScVal XDR || amount i128 BE (16 B)`
+
+    See [docs/signature-format.md](./signature-format.md) for the full specification.
+
+    ## Try It Out
+
+    Point the **Servers** dropdown at `https://soroban-testnet.stellar.org` and
+    use your testnet contract ID. Install the
+    [Freighter wallet extension](https://www.freighter.app/) to sign transactions
+    directly from the browser.
+
+    All request/response schemas match the TypeScript types in `sdk/src/types.ts`.
+  contact:
+    name: LumenFlow Contributors
+    url: https://github.com/Gloriachinedu/lumenflow-contracts
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://soroban-testnet.stellar.org
+    description: Stellar Testnet (Soroban RPC)
+  - url: http://localhost:8000/soroban/rpc
+    description: Local Stellar node (docker-compose)
+
+tags:
+  - name: Admin
+    description: Contract administration — set/transfer admin, pause, fees, configuration
+  - name: Merchant
+    description: Merchant registration, profile management, and verification
+  - name: Payment
+    description: Payment processing, history queries, and batch operations
+  - name: Refund
+    description: Refund lifecycle — initiate, approve, reject, execute
+  - name: Multisig
+    description: Multi-signature payment initiation, signing, and execution
+  - name: Subscription
+    description: Subscription plan management and recurring billing
+  - name: Escrow
+    description: Time-locked escrow creation and release
+  - name: Dispute
+    description: Dispute raising and admin resolution
+  - name: PaymentRequest
+    description: Merchant-created payment request links
+
+components:
+  schemas:
+    Address:
+      type: string
+      description: Stellar account address (G... or C... prefix)
+      example: "GABC...XYZ"
+
+    MerchantCategory:
+      type: string
+      enum: [Retail, Food, Services, Digital, Other]
+      description: Business category for the merchant
+
+    PaymentStatus:
+      type: string
+      enum: [Completed, PartiallyRefunded, FullyRefunded]
+
+    RefundStatus:
+      type: string
+      enum: [Pending, Approved, Rejected, Completed]
+
+    SortField:
+      type: string
+      enum: [Date, Amount]
+
+    SortOrder:
+      type: string
+      enum: [Ascending, Descending]
+
+    Merchant:
+      type: object
+      properties:
+        address:
+          $ref: "#/components/schemas/Address"
+        name:
+          type: string
+        description:
+          type: string
+        contact_info:
+          type: string
+        category:
+          $ref: "#/components/schemas/MerchantCategory"
+        active:
+          type: boolean
+        verified:
+          type: boolean
+        registered_at:
+          type: integer
+          format: int64
+          description: Unix timestamp
+        total_received:
+          type: integer
+          format: int64
+        referral_count:
+          type: integer
+
+    PaymentOrder:
+      type: object
+      properties:
+        order_id:
+          type: string
+        merchant_address:
+          $ref: "#/components/schemas/Address"
+        payer:
+          $ref: "#/components/schemas/Address"
+        token:
+          $ref: "#/components/schemas/Address"
+        amount:
+          type: integer
+          format: int64
+        status:
+          $ref: "#/components/schemas/PaymentStatus"
+        paid_at:
+          type: integer
+          format: int64
+        refunded_amount:
+          type: integer
+          format: int64
+        memo:
+          type: string
+        platform_fee:
+          type: integer
+          format: int64
+
+    RefundRecord:
+      type: object
+      properties:
+        refund_id:
+          type: string
+        order_id:
+          type: string
+        initiator:
+          $ref: "#/components/schemas/Address"
+        amount:
+          type: integer
+          format: int64
+        reason:
+          type: string
+        status:
+          $ref: "#/components/schemas/RefundStatus"
+        created_at:
+          type: integer
+          format: int64
+
+    MultisigPayment:
+      type: object
+      properties:
+        payment_id:
+          type: string
+        initiator:
+          $ref: "#/components/schemas/Address"
+        merchant_address:
+          $ref: "#/components/schemas/Address"
+        token:
+          $ref: "#/components/schemas/Address"
+        amount:
+          type: integer
+          format: int64
+        required_signatures:
+          type: integer
+        executed:
+          type: boolean
+        cancelled:
+          type: boolean
+        created_at:
+          type: integer
+          format: int64
+        expires_at:
+          type: integer
+          format: int64
+          nullable: true
+
+    GlobalStats:
+      type: object
+      properties:
+        total_payments:
+          type: integer
+        total_volume:
+          type: integer
+          format: int64
+        total_refunds:
+          type: integer
+        total_refund_volume:
+          type: integer
+          format: int64
+        active_merchants:
+          type: integer
+
+    MerchantStats:
+      type: object
+      properties:
+        total_payments:
+          type: integer
+        total_volume:
+          type: integer
+          format: int64
+        total_refunds:
+          type: integer
+        total_refund_volume:
+          type: integer
+          format: int64
+
+    PaymentPage:
+      type: object
+      properties:
+        payments:
+          type: array
+          items:
+            $ref: "#/components/schemas/PaymentOrder"
+        next_cursor:
+          type: string
+          nullable: true
+        total_matching:
+          type: integer
+
+    EscrowRecord:
+      type: object
+      properties:
+        order_id:
+          type: string
+        payer:
+          $ref: "#/components/schemas/Address"
+        merchant:
+          $ref: "#/components/schemas/Address"
+        token:
+          $ref: "#/components/schemas/Address"
+        amount:
+          type: integer
+          format: int64
+        unlock_at:
+          type: integer
+          format: int64
+        status:
+          type: string
+          enum: [Locked, Released, Cancelled]
+        created_at:
+          type: integer
+          format: int64
+
+    DisputeRecord:
+      type: object
+      properties:
+        dispute_id:
+          type: string
+        refund_id:
+          type: string
+        order_id:
+          type: string
+        initiator:
+          $ref: "#/components/schemas/Address"
+        reason:
+          type: string
+        status:
+          type: string
+          enum: [Open, Resolved]
+        resolution:
+          type: string
+          nullable: true
+        created_at:
+          type: integer
+          format: int64
+
+    SubscriptionPlan:
+      type: object
+      properties:
+        plan_id:
+          type: string
+        token:
+          $ref: "#/components/schemas/Address"
+        amount:
+          type: integer
+          format: int64
+        interval_secs:
+          type: integer
+          format: int64
+        max_cycles:
+          type: integer
+        created_at:
+          type: integer
+          format: int64
+
+    ContractError:
+      type: object
+      properties:
+        code:
+          type: integer
+          description: Numeric PaymentError discriminant
+        message:
+          type: string
+      example:
+        code: 1
+        message: "Unauthorized"
+
+  responses:
+    Unauthorized:
+      description: Caller is not authorised for this action
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ContractError"
+    NotFound:
+      description: Requested resource does not exist
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ContractError"
+    InvalidInput:
+      description: One or more input parameters are invalid
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ContractError"
+
+paths:
+  /set_admin:
+    post:
+      summary: Initialise the contract administrator (one-time)
+      operationId: setAdmin
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [admin]
+              properties:
+                admin:
+                  $ref: "#/components/schemas/Address"
+      responses:
+        "200":
+          description: Admin set successfully
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "409":
+          description: AdminAlreadySet — admin was already initialised
+
+  /transfer_admin:
+    post:
+      summary: Transfer admin rights to a new address
+      operationId: transferAdmin
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_admin, new_admin]
+              properties:
+                current_admin:
+                  $ref: "#/components/schemas/Address"
+                new_admin:
+                  $ref: "#/components/schemas/Address"
+      responses:
+        "200":
+          description: Admin transferred
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /pause_contract:
+    post:
+      summary: Pause all mutating contract operations (admin only)
+      operationId: pauseContract
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [admin]
+              properties:
+                admin:
+                  $ref: "#/components/schemas/Address"
+      responses:
+        "200":
+          description: Contract paused
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /unpause_contract:
+    post:
+      summary: Unpause the contract (admin only, subject to timelock)
+      operationId: unpauseContract
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [admin]
+              properties:
+                admin:
+                  $ref: "#/components/schemas/Address"
+      responses:
+        "200":
+          description: Contract unpaused
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "423":
+          description: TimelockActive — 7-day unpause timelock has not yet expired
+
+  /add_allowed_token:
+    post:
+      summary: Whitelist a token for payments (admin only)
+      operationId: addAllowedToken
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [admin, token]
+              properties:
+                admin:
+                  $ref: "#/components/schemas/Address"
+                token:
+                  $ref: "#/components/schemas/Address"
+      responses:
+        "200":
+          description: Token added to whitelist
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /set_platform_fee:
+    post:
+      summary: Configure platform fee in basis points (admin only)
+      operationId: setPlatformFee
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [admin, fee_bps, fee_recipient]
+              properties:
+                admin:
+                  $ref: "#/components/schemas/Address"
+                fee_bps:
+                  type: integer
+                  description: Fee in basis points (e.g. 250 = 2.5%)
+                fee_recipient:
+                  $ref: "#/components/schemas/Address"
+      responses:
+        "200":
+          description: Fee configured
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /register_merchant:
+    post:
+      summary: Register a new merchant
+      operationId: registerMerchant
+      tags: [Merchant]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [merchant_address, name, description, contact_info, category]
+              properties:
+                merchant_address:
+                  $ref: "#/components/schemas/Address"
+                name:
+                  type: string
+                description:
+                  type: string
+                contact_info:
+                  type: string
+                category:
+                  $ref: "#/components/schemas/MerchantCategory"
+                referral_id:
+                  $ref: "#/components/schemas/Address"
+                  nullable: true
+      responses:
+        "200":
+          description: Merchant registered
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "409":
+          description: MerchantAlreadyRegistered
+
+  /get_merchant:
+    get:
+      summary: Retrieve merchant profile
+      operationId: getMerchant
+      tags: [Merchant]
+      parameters:
+        - name: merchant_address
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/Address"
+      responses:
+        "200":
+          description: Merchant profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Merchant"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /deactivate_merchant:
+    post:
+      summary: Deactivate a merchant (admin only)
+      operationId: deactivateMerchant
+      tags: [Merchant]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [admin, merchant_address]
+              properties:
+                admin:
+                  $ref: "#/components/schemas/Address"
+                merchant_address:
+                  $ref: "#/components/schemas/Address"
+      responses:
+        "200":
+          description: Merchant deactivated
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /process_payment_with_signature:
+    post:
+      summary: Process a payment with Ed25519 merchant signature verification
+      operationId: processPaymentWithSignature
+      tags: [Payment]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payer, order_id, merchant_address, token_address, amount, memo, nonce, signature, merchant_public_key]
+              properties:
+                payer:
+                  $ref: "#/components/schemas/Address"
+                order_id:
+                  type: string
+                  maxLength: 64
+                merchant_address:
+                  $ref: "#/components/schemas/Address"
+                token_address:
+                  $ref: "#/components/schemas/Address"
+                amount:
+                  type: integer
+                  format: int64
+                memo:
+                  type: string
+                tags:
+                  type: array
+                  items:
+                    type: string
+                  nullable: true
+                nonce:
+                  type: integer
+                  format: int64
+                signature:
+                  type: string
+                  description: 64-byte Ed25519 signature (hex-encoded)
+                merchant_public_key:
+                  type: string
+                  description: 32-byte Ed25519 public key (hex-encoded)
+      responses:
+        "200":
+          description: Payment processed
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          description: InvalidSignature or Unauthorized
+        "409":
+          description: PaymentAlreadyExists
+
+  /batch_payment:
+    post:
+      summary: Process up to 10 payments atomically
+      operationId: batchPayment
+      tags: [Payment]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payer, payments]
+              properties:
+                payer:
+                  $ref: "#/components/schemas/Address"
+                payments:
+                  type: array
+                  maxItems: 10
+                  items:
+                    type: object
+      responses:
+        "200":
+          description: All payments processed
+        "400":
+          description: BatchSizeExceeded or invalid item
+
+  /get_payment_by_id:
+    get:
+      summary: Retrieve a payment by order ID
+      operationId: getPaymentById
+      tags: [Payment]
+      parameters:
+        - name: caller
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/Address"
+        - name: order_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Payment record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentOrder"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /get_merchant_payment_history:
+    get:
+      summary: Paginated payment history for a merchant
+      operationId: getMerchantPaymentHistory
+      tags: [Payment]
+      parameters:
+        - name: merchant
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/Address"
+        - name: cursor
+          in: query
+          schema:
+            type: string
+            nullable: true
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            maximum: 100
+        - name: sort_field
+          in: query
+          schema:
+            $ref: "#/components/schemas/SortField"
+        - name: sort_order
+          in: query
+          schema:
+            $ref: "#/components/schemas/SortOrder"
+      responses:
+        "200":
+          description: Paginated payment list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentPage"
+
+  /get_global_payment_stats:
+    get:
+      summary: Global payment statistics (admin only)
+      operationId: getGlobalPaymentStats
+      tags: [Payment]
+      parameters:
+        - name: admin
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/Address"
+        - name: date_start
+          in: query
+          schema:
+            type: integer
+            format: int64
+            nullable: true
+        - name: date_end
+          in: query
+          schema:
+            type: integer
+            format: int64
+            nullable: true
+      responses:
+        "200":
+          description: Global stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GlobalStats"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /initiate_refund:
+    post:
+      summary: Initiate a refund request
+      operationId: initiateRefund
+      tags: [Refund]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [caller, refund_id, order_id, amount, reason]
+              properties:
+                caller:
+                  $ref: "#/components/schemas/Address"
+                refund_id:
+                  type: string
+                  maxLength: 64
+                order_id:
+                  type: string
+                amount:
+                  type: integer
+                  format: int64
+                reason:
+                  type: string
+      responses:
+        "200":
+          description: Refund initiated
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "410":
+          description: RefundWindowExpired
+
+  /approve_refund:
+    post:
+      summary: Approve a pending refund (merchant or admin)
+      operationId: approveRefund
+      tags: [Refund]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [caller, refund_id]
+              properties:
+                caller:
+                  $ref: "#/components/schemas/Address"
+                refund_id:
+                  type: string
+      responses:
+        "200":
+          description: Refund approved
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /execute_refund:
+    post:
+      summary: Execute an approved refund (merchant signs the transfer)
+      operationId: executeRefund
+      tags: [Refund]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refund_id]
+              properties:
+                refund_id:
+                  type: string
+      responses:
+        "200":
+          description: Refund executed
+        "400":
+          description: RefundNotApproved
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /initiate_multisig_payment:
+    post:
+      summary: Initiate a multi-signature payment
+      operationId: initiateMultisigPayment
+      tags: [Multisig]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [initiator, payment_id, merchant_address, token_address, amount, signers, required_signatures]
+              properties:
+                initiator:
+                  $ref: "#/components/schemas/Address"
+                payment_id:
+                  type: string
+                merchant_address:
+                  $ref: "#/components/schemas/Address"
+                token_address:
+                  $ref: "#/components/schemas/Address"
+                amount:
+                  type: integer
+                  format: int64
+                signers:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/Address"
+                required_signatures:
+                  type: integer
+                expires_at:
+                  type: integer
+                  format: int64
+                  nullable: true
+      responses:
+        "200":
+          description: Multisig payment initiated
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+
+  /execute_multisig_payment:
+    post:
+      summary: Execute a multisig payment once threshold is met
+      operationId: executeMultisigPayment
+      tags: [Multisig]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payer, payment_id]
+              properties:
+                payer:
+                  $ref: "#/components/schemas/Address"
+                payment_id:
+                  type: string
+      responses:
+        "200":
+          description: Payment executed
+        "400":
+          description: InsufficientSignatures or MultisigExpired
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /create_escrow:
+    post:
+      summary: Create a time-locked escrow payment
+      operationId: createEscrow
+      tags: [Escrow]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payer, merchant, amount, token, unlock_at, order_id]
+              properties:
+                payer:
+                  $ref: "#/components/schemas/Address"
+                merchant:
+                  $ref: "#/components/schemas/Address"
+                amount:
+                  type: integer
+                  format: int64
+                token:
+                  $ref: "#/components/schemas/Address"
+                unlock_at:
+                  type: integer
+                  format: int64
+                order_id:
+                  type: string
+      responses:
+        "200":
+          description: Escrow created
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+
+  /raise_dispute:
+    post:
+      summary: Raise a dispute on a rejected refund
+      operationId: raiseDispute
+      tags: [Dispute]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [caller, dispute_id, refund_id, reason]
+              properties:
+                caller:
+                  $ref: "#/components/schemas/Address"
+                dispute_id:
+                  type: string
+                refund_id:
+                  type: string
+                reason:
+                  type: string
+                  maxLength: 256
+      responses:
+        "200":
+          description: Dispute raised
+        "400":
+          description: DisputeRefundNotRejected
+        "409":
+          description: DisputeAlreadyExists
+
+  /create_subscription_plan:
+    post:
+      summary: Create a subscription plan (admin only)
+      operationId: createSubscriptionPlan
+      tags: [Subscription]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [admin, plan_id, token, amount, interval_secs, max_cycles]
+              properties:
+                admin:
+                  $ref: "#/components/schemas/Address"
+                plan_id:
+                  type: string
+                token:
+                  $ref: "#/components/schemas/Address"
+                amount:
+                  type: integer
+                  format: int64
+                interval_secs:
+                  type: integer
+                  format: int64
+                max_cycles:
+                  type: integer
+      responses:
+        "200":
+          description: Plan created
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: SubscriptionPlanAlreadyExists
+
+  /subscribe:
+    post:
+      summary: Subscribe to a plan
+      operationId: subscribe
+      tags: [Subscription]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subscriber, subscription_id, plan_id, merchant]
+              properties:
+                subscriber:
+                  $ref: "#/components/schemas/Address"
+                subscription_id:
+                  type: string
+                plan_id:
+                  type: string
+                merchant:
+                  $ref: "#/components/schemas/Address"
+      responses:
+        "200":
+          description: Subscription created
+        "404":
+          description: SubscriptionPlanNotFound
+        "409":
+          description: SubscriptionAlreadyExists
