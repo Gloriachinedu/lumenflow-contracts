@@ -235,7 +235,50 @@ For the full events reference see [events-reference.md](./events-reference.md).
 
 ---
 
-## 6. Further Resources
+## 6. SDK Helper — `WebhookRelay`
+
+The TypeScript SDK ships a `WebhookRelay` that implements the retry and
+deduplication rules described above so you don't have to re-derive them.
+
+```ts
+import { WebhookRelay, MemoryDedupeStore } from '@lumenflow/sdk';
+
+const relay = new WebhookRelay({
+  // POST the event to your downstream endpoint; return the HTTP status.
+  deliver: async (event) => {
+    const res = await fetch(WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(event),
+    });
+    return { status: res.status };
+  },
+  // Swap MemoryDedupeStore for a Redis/DB-backed store in production.
+  store: new MemoryDedupeStore(),
+  maxAttempts: 4,
+});
+
+// For each event from the Horizon SSE / RPC poll:
+await relay.relay({ pagingToken: event.paging_token, type, topic, value: data, ledger });
+```
+
+Semantics:
+
+| Situation | Behaviour |
+|-----------|-----------|
+| Event already in the dedupe store | Dropped, returns `{ status: 'duplicate' }`, webhook not called |
+| Downstream returns 2xx | Key recorded, returns `{ status: 'delivered', attempts }` |
+| Downstream returns 408 / 425 / 429 / 5xx, or the request throws | Retried with exponential backoff up to `maxAttempts` |
+| Downstream returns any other 4xx (401, 422, …) | Fails fast with `WebhookDeliveryError` — never retried |
+| Retry budget exhausted | Throws `WebhookDeliveryError`; the key is **not** recorded, so the event is redelivered on the next poll |
+
+Because a key is only recorded after a successful POST, delivery is
+**at-least-once** — your downstream handler must stay idempotent on the event
+key (see [Idempotency Considerations](#4-idempotency-considerations)).
+
+---
+
+## 7. Further Resources
 
 - [Stellar Horizon API — Contract Events](https://developers.stellar.org/docs/data/horizon/api-reference/resources/contract-events)
 - [Soroban Events](https://developers.stellar.org/docs/learn/encyclopedia/contract-development/events)
