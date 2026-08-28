@@ -106,3 +106,4 @@ Confirms successful registration and provides next steps:
 - [Contract API — Merchant Management](../README.md#merchant-management)
 - [CLI Usage](../README.md#cli-usage)
 - [Developer Onboarding Guide](ONBOARDING.md)
+- [Merchant Onboarding — Completion Metrics & Funnel Events](merchant-onboarding-metrics.md)
