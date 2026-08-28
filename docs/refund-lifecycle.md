@@ -210,3 +210,46 @@ stellar contract invoke --id $CONTRACT_ID --source-account $PAYER_KEY --network 
   -- get_dispute \
   --dispute_id "DISPUTE_001"
 ```
+
+---
+
+## Recovering an interrupted refund
+
+A client that drives a refund through `initiate_refund → approve_refund →
+execute_refund` can be interrupted between calls — or *during* a call, where the
+transaction lands on-chain but the client only sees a dropped connection. The
+refund is then stuck in `Pending` or `Approved`.
+
+The TypeScript SDK exposes `recoverRefund` to reconcile against the
+authoritative on-chain record and resume from wherever the refund actually is:
+
+```ts
+import { recoverRefund, RefundRecoveryError } from '@lumenflow/sdk';
+
+const result = await recoverRefund(ops, {
+  refundId: 'REFUND_001',
+  orderId:  'ORDER_001',
+  amount:   1000n,
+  reason:   'customer request',
+  caller:   merchantAddress, // authorised to initiate + approve
+  // targetPhase: 'executed' (default) | 'approved' | 'initiated'
+});
+// result.finalStatus === 'Completed'
+// result.stepsApplied lists the calls this run actually made
+```
+
+Guarantees:
+
+| On-chain state on entry | Behaviour |
+|-------------------------|-----------|
+| Refund missing | `initiate_refund`, then continues |
+| `Pending` | `approve_refund`, then `execute_refund` |
+| `Approved` | `execute_refund` |
+| `Completed` | no-op (`alreadyComplete: true`) |
+| `Rejected` / `Disputed` | throws `RefundRecoveryError` — never auto-overridden; use the dispute flow |
+
+After any failed step the routine **re-reads on-chain state** before retrying, so
+a transaction that committed despite a client-side network error is recognised
+and not re-submitted. Transient errors are retried with a per-step budget;
+deterministic contract errors abort immediately. The routine is idempotent —
+running it repeatedly converges to the same result.
