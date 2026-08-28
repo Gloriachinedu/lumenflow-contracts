@@ -53,6 +53,16 @@ let suspicious_event = events.iter().find(|e| {
 assert!(suspicious_event.is_some());
 ```
 
+## API contract tests (generated from OpenAPI)
+
+`tests/contract/` generates assertions from `docs/openapi.yaml` and cross-checks
+them against `contracts/lumenflow/src/lib.rs`: every operation must be
+well-formed, every `x-soroban-contract-method` must be a real `pub fn`, and a
+validator built from each request schema must accept a conforming body and
+reject missing-required / wrong-typed / bad-enum bodies. Run with
+`cd tests/contract && npm test` (uses `node --test`, no dependencies). See
+`tests/contract/README.md`.
+
 ## Common pitfalls
 
 - Do not assume `mock_all_auths()` tests auth logic. For auth-related code paths, add explicit integration-style tests.
