@@ -338,3 +338,32 @@ console.log(nativeData);
 ```
 
 For more information on Soroban events, visit the [Stellar Developers Documentation](https://developers.stellar.org/docs/build/smart-contracts/getting-started/events).
+
+---
+
+## SDK event catalog
+
+The TypeScript SDK ships a machine-readable version of the table above as
+`EVENT_CATALOG` (`@lumenflow/sdk`), together with `parseLumenFlowEvent(raw)`
+which decodes a raw Horizon / RPC event into a named, keyed shape:
+
+```ts
+import { parseLumenFlowEvent } from '@lumenflow/sdk';
+
+const parsed = parseLumenFlowEvent({
+  topic: ['lumenflow', 'payment_processed', merchantXdr],
+  value: ['ORDER_123', payerAddr, 1000n],
+});
+// { name: 'payment_processed', merchant: <merchantXdr>,
+//   data: { order_id: 'ORDER_123', payer: <payerAddr>, amount: 1000n } }
+```
+
+`parseLumenFlowEvent` throws `EventCompatError` for events that aren't in the
+catalog, have a malformed topic, or whose data tuple arity doesn't match — so an
+unrecognised or changed contract event surfaces loudly instead of being
+silently mis-decoded.
+
+The catalog is kept in lock-step with the contract by
+`sdk/src/tests/contractEventCompat.test.ts`, which diffs it against the actual
+`env.events().publish(...)` calls in `contracts/lumenflow/src` on every run.
+**If you add or change a contract event, update `EVENT_CATALOG` and this table.**
