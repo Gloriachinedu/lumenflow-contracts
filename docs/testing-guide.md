@@ -53,6 +53,27 @@ let suspicious_event = events.iter().find(|e| {
 assert!(suspicious_event.is_some());
 ```
 
+## Frontend unit tests
+
+The static frontend ships pure helper modules (e.g. `frontend/validation.js`)
+that are unit-tested with the Node.js built-in test runner — no extra
+dependencies:
+
+```bash
+cd frontend
+npm run test:unit        # runs tests/unit/*.test.mjs
+```
+
+Tests live in `frontend/tests/unit/` as ESM (`*.test.mjs`) and import the module
+under test directly. Keep them focused on logic that does not need a DOM;
+DOM-driven form behavior is covered by the Playwright specs under
+`frontend/tests/` and `tests/playwright/`.
+
+`frontend/tests/unit/validation.test.mjs` covers the shared form validators,
+including edge cases: non-string input, length boundaries (`ORDER_ID_MAX_LENGTH`
+and one over), whitespace trimming, base32-alphabet enforcement for Stellar
+keys, and the `integer` / `allowZero` / `required` / `prefixes` option flags.
+
 ## Common pitfalls
 
 - Do not assume `mock_all_auths()` tests auth logic. For auth-related code paths, add explicit integration-style tests.
