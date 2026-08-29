@@ -1082,3 +1082,132 @@ fn test_auth_sign_multisig_requires_listed_signer() {
     let result = client.try_sign_multisig_payment(&stranger, &str(&env, "AUTH_MS"), &bytes(&env, &[0u8; 64]));
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
+
+// ── Batch payment gas-optimization tests (#831) ───────────────────────────────
+//
+// These tests verify correctness of the optimised batch_payment loop.
+//
+// Gas measurement methodology (Soroban):
+//   Run `cargo test -- --nocapture 2>&1 | grep "cpu_insns"` with the Soroban
+//   host-function cost model enabled (env var SOROBAN_TEST_BUDGET=1) to compare
+//   CPU instruction counts before and after this change.
+//
+// Key reductions vs the original implementation (per 10-item batch):
+//   - get_global_stats:    10 reads  →  1 read  (saves 9 ledger entry reads)
+//   - set_global_stats:    10 writes →  1 write (saves 9 ledger entry writes)
+//   - get_payer_payment_ids: 10 reads  →  1 read
+//   - set_payer_payment_ids: 10 writes →  1 write
+//   - env.ledger().timestamp(): 10 calls → 1 call
+
+fn make_batch_item(
+    env: &Env,
+    order_id: &str,
+    merchant: &Address,
+    token: &Address,
+    amount: i128,
+) -> BatchPaymentItem {
+    BatchPaymentItem {
+        order_id: str(env, order_id),
+        merchant_address: merchant.clone(),
+        token_address: token.clone(),
+        amount,
+        memo: str(env, "batch"),
+        signature: bytes(env, &[0u8; 64]),
+        merchant_public_key: bytes(env, &[0u8; 32]),
+    }
+}
+
+#[test]
+fn test_batch_payment_single_item() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let mut items = Vec::new(&env);
+    items.push_back(make_batch_item(&env, "BATCH_1", &merchant, &token, 100));
+    client.batch_payment(&payer, &items);
+
+    let payment = client.get_payment_by_id(&payer, &str(&env, "BATCH_1"));
+    assert_eq!(payment.amount, 100);
+    assert_eq!(payment.merchant_address, merchant);
+}
+
+#[test]
+fn test_batch_payment_multiple_items_stats_correct() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let mut items = Vec::new(&env);
+    items.push_back(make_batch_item(&env, "BSTATS_1", &merchant, &token, 100));
+    items.push_back(make_batch_item(&env, "BSTATS_2", &merchant, &token, 200));
+    items.push_back(make_batch_item(&env, "BSTATS_3", &merchant, &token, 300));
+    client.batch_payment(&payer, &items);
+
+    // Global stats must reflect all three payments in a single batch.
+    let stats = client.get_global_payment_stats(&admin, &None, &None);
+    assert_eq!(stats.total_payments, 3);
+    assert_eq!(stats.total_volume, 600);
+}
+
+#[test]
+fn test_batch_payment_payer_history_contains_all_items() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let mut items = Vec::new(&env);
+    items.push_back(make_batch_item(&env, "BHIST_1", &merchant, &token, 50));
+    items.push_back(make_batch_item(&env, "BHIST_2", &merchant, &token, 60));
+    items.push_back(make_batch_item(&env, "BHIST_3", &merchant, &token, 70));
+    client.batch_payment(&payer, &items);
+
+    let page = client.get_payer_payment_history(
+        &payer, &None, &10, &None, &SortField::Amount, &SortOrder::Ascending,
+    );
+    assert_eq!(page.total, 3);
+}
+
+#[test]
+fn test_batch_payment_max_10_items_enforced() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let order_ids = [
+        "BLIMIT_0", "BLIMIT_1", "BLIMIT_2", "BLIMIT_3", "BLIMIT_4",
+        "BLIMIT_5", "BLIMIT_6", "BLIMIT_7", "BLIMIT_8", "BLIMIT_9", "BLIMIT_10",
+    ];
+    let mut items = Vec::new(&env);
+    for order in order_ids.iter() {
+        items.push_back(make_batch_item(&env, order, &merchant, &token, 10));
+    }
+    let result = client.try_batch_payment(&payer, &items);
+    assert_eq!(result, Err(Ok(PaymentError::BatchSizeExceeded)));
+}
+
+#[test]
+fn test_batch_payment_fails_on_duplicate_order_id() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // First batch succeeds.
+    let mut items = Vec::new(&env);
+    items.push_back(make_batch_item(&env, "BDUP_1", &merchant, &token, 100));
+    client.batch_payment(&payer, &items);
+
+    // Second batch with same order ID must fail atomically.
+    let mut items2 = Vec::new(&env);
+    items2.push_back(make_batch_item(&env, "BDUP_1", &merchant, &token, 100));
+    let result = client.try_batch_payment(&payer, &items2);
+    assert_eq!(result, Err(Ok(PaymentError::PaymentAlreadyExists)));
+}
+
+#[test]
+fn test_batch_payment_validation_pass_prevents_partial_state() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Item 0 is valid; item 1 has a duplicate order (will fail validation).
+    // With the validation-first approach, item 0 must NOT be committed.
+    make_payment(&env, &client, &merchant, &payer, &token, "BVAL_EXISTING", 100);
+
+    let mut items = Vec::new(&env);
+    items.push_back(make_batch_item(&env, "BVAL_NEW", &merchant, &token, 50));
+    items.push_back(make_batch_item(&env, "BVAL_EXISTING", &merchant, &token, 50)); // duplicate → error
+    let result = client.try_batch_payment(&payer, &items);
+    assert_eq!(result, Err(Ok(PaymentError::PaymentAlreadyExists)));
+
+    // BVAL_NEW must not have been written because the batch failed.
+    let payer_page = client.get_payer_payment_history(
+        &payer, &None, &10, &None, &SortField::Date, &SortOrder::Ascending,
+    );
+    // Only the pre-existing BVAL_EXISTING payment should appear.
+    assert_eq!(payer_page.total, 1);
+}

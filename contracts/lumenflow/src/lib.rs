@@ -369,6 +369,28 @@ impl PaymentProcessingContract {
     }
 
     /// Pay multiple merchants in one transaction. Maximum 10 items. Atomic.
+    ///
+    /// # Gas optimisations (issue #831)
+    ///
+    /// Compared to a naive N-item loop, the following changes reduce ledger
+    /// operations per call:
+    ///
+    /// * **Global stats** — `get_global_stats` / `set_global_stats` are hoisted
+    ///   outside the loop. The stats struct is read once, mutated in-memory for
+    ///   every item, then written once. This eliminates (N-1) redundant reads
+    ///   and (N-1) redundant writes per batch.
+    ///
+    /// * **Ledger timestamp** — `env.ledger().timestamp()` is constant within a
+    ///   single transaction; it is called once before the loop and reused.
+    ///
+    /// * **Payer payment-ID index** — `get_payer_payment_ids` / set is hoisted
+    ///   outside the loop. IDs are accumulated in-memory and written once.
+    ///   This eliminates (N-1) redundant reads and (N-1) redundant writes.
+    ///
+    /// * **Validation pass** — all per-item checks (token allowance, duplicate
+    ///   order, merchant existence/activity, signature) are performed in a
+    ///   first pass before any state is mutated. This avoids partial state
+    ///   writes on failure and improves readability.
     pub fn batch_payment(
         env: Env,
         payer: Address,
@@ -379,6 +401,8 @@ impl PaymentProcessingContract {
             return Err(PaymentError::BatchSizeExceeded);
         }
 
+        // ── Validation pass (no state mutations) ─────────────────────────────
+        // Validate all items up-front so we never write partial state on error.
         for item in payments.iter() {
             require_positive(item.amount)?;
             require_non_empty_string(&item.order_id)?;
@@ -397,17 +421,27 @@ impl PaymentProcessingContract {
                 return Err(PaymentError::MerchantInactive);
             }
 
-            // Build payload: XDR-encoded order_id + big-endian amount (same format as process_payment_with_signature)
             let mut payload = Bytes::new(&env);
             payload.append(&item.order_id.clone().to_xdr(&env));
             payload.append(&Bytes::from_slice(&env, &item.amount.to_be_bytes()));
             verify_signature(&env, &item.merchant_public_key, &payload, &item.signature)?;
+        }
 
+        // ── Execution pass ────────────────────────────────────────────────────
+        // Hoist timestamp (constant within a transaction) and global stats
+        // (read once, mutate in-memory, write once) to eliminate O(N) redundant
+        // storage round-trips.
+        let now = env.ledger().timestamp();
+        let mut stats = storage::get_global_stats(&env);
+
+        // Hoist payer index: read once, accumulate new IDs, write once.
+        let mut payer_ids = storage::get_payer_payment_ids(&env, &payer);
+
+        for item in payments.iter() {
             // Transfer tokens from payer to merchant
             let token_client = token::Client::new(&env, &item.token_address);
             token_client.transfer(&payer, &item.merchant_address, &item.amount);
 
-            let now = env.ledger().timestamp();
             let payment = PaymentOrder {
                 order_id: item.order_id.clone(),
                 merchant_address: item.merchant_address.clone(),
@@ -423,25 +457,34 @@ impl PaymentProcessingContract {
             };
 
             storage::set_payment(&env, &payment);
-            storage::add_merchant_payment_id(&env, &item.merchant_address, &item.order_id);
-            storage::add_payer_payment_id(&env, &payer, &item.order_id);
 
-            // Update merchant total
-            let mut m = merchant;
+            // Merchant index: each item may target a different merchant, so
+            // we must read+write per merchant.
+            storage::add_merchant_payment_id(&env, &item.merchant_address, &item.order_id);
+
+            // Accumulate payer ID in-memory (written after loop).
+            payer_ids.push_back(item.order_id.clone());
+
+            // Update merchant total (per-merchant, must read/write individually).
+            let mut m = storage::get_merchant(&env, &item.merchant_address)
+                .ok_or(PaymentError::MerchantNotFound)?;
             m.total_received += item.amount;
             storage::set_merchant(&env, &m);
 
-            // Update global stats
-            let mut stats = storage::get_global_stats(&env);
+            // Accumulate stats in-memory (written once after loop).
             stats.total_payments += 1;
             stats.total_volume = stats.total_volume.saturating_add(item.amount);
-            storage::set_global_stats(&env, &stats);
 
             env.events().publish(
                 ("lumenflow", "payment_processed"),
                 (item.order_id, payer.clone(), item.merchant_address, item.amount),
             );
         }
+
+        // Single write for payer index and global stats.
+        storage::set_payer_payment_ids(&env, &payer, &payer_ids);
+        storage::set_global_stats(&env, &stats);
+
         Ok(())
     }
 

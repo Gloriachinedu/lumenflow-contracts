@@ -163,6 +163,15 @@ pub fn add_payer_payment_id(env: &Env, payer: &Address, order_id: &String) {
         .set(&DataKey::PayerPayments(payer.clone()), &ids);
 }
 
+/// Write the full payer payment-ID list in one operation.
+/// Use this when multiple IDs have been accumulated in-memory (e.g. batch_payment)
+/// to avoid O(N) redundant get+set round-trips.
+pub fn set_payer_payment_ids(env: &Env, payer: &Address, ids: &Vec<String>) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::PayerPayments(payer.clone()), ids);
+}
+
 pub fn remove_merchant_payment_id(env: &Env, merchant: &Address, order_id: &String) {
     let ids = get_merchant_payment_ids(env, merchant);
     let mut new_ids: Vec<String> = Vec::new(env);
