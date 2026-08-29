@@ -1,0 +1,150 @@
+name: Nightly CLI Builds
+
+on:
+  schedule:
+    # Run at 02:00 UTC every day
+    - cron: "0 2 * * *"
+  # Allow manual trigger for testing
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    name: Build CLI — ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            binary: lumenflow-cli
+            archive: tar.gz
+
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            binary: lumenflow-cli
+            archive: tar.gz
+
+          - target: x86_64-pc-windows-gnu
+            os: ubuntu-latest
+            binary: lumenflow-cli.exe
+            archive: zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.87.0
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Windows target)
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-nightly-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-nightly-${{ matrix.target }}-
+            ${{ runner.os }}-cargo-nightly-
+
+      - name: Build CLI binary
+        run: |
+          cargo build \
+            --locked \
+            --release \
+            --package lumenflow-cli \
+            --target ${{ matrix.target }}
+
+      - name: Determine build date and short SHA
+        id: meta
+        shell: bash
+        run: |
+          echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+          echo "sha=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+
+      - name: Package binary (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          BINARY_PATH="target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          ARCHIVE="lumenflow-cli-nightly-${{ steps.meta.outputs.date }}-${{ steps.meta.outputs.sha }}-${{ matrix.target }}.tar.gz"
+          tar -czf "$ARCHIVE" -C "$(dirname "$BINARY_PATH")" "${{ matrix.binary }}"
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
+
+      - name: Package binary (zip)
+        if: matrix.archive == 'zip'
+        shell: bash
+        run: |
+          BINARY_PATH="target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          ARCHIVE="lumenflow-cli-nightly-${{ steps.meta.outputs.date }}-${{ steps.meta.outputs.sha }}-${{ matrix.target }}.zip"
+          zip -j "$ARCHIVE" "$BINARY_PATH"
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
+
+      - name: Upload artifact (7-day retention)
+        uses: actions/upload-artifact@v4
+        with:
+          name: lumenflow-cli-nightly-${{ matrix.target }}
+          path: |
+            ${{ env.ARCHIVE }}
+            ${{ env.ARCHIVE }}.sha256
+          retention-days: 7
+
+      - name: Upload to S3 (optional — requires AWS_ACCESS_KEY_ID secret)
+        if: env.AWS_ACCESS_KEY_ID != ''
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+        run: |
+          aws s3 cp "${{ env.ARCHIVE }}" \
+            "s3://lumenflow-artifacts-prod/nightly/${{ steps.meta.outputs.date }}/${{ env.ARCHIVE }}"
+          aws s3 cp "${{ env.ARCHIVE }}.sha256" \
+            "s3://lumenflow-artifacts-prod/nightly/${{ steps.meta.outputs.date }}/${{ env.ARCHIVE }}.sha256"
+
+  notify-failure:
+    name: Notify Slack on Failure
+    runs-on: ubuntu-latest
+    needs: build
+    if: failure()
+    steps:
+      - name: Post to #ci-alerts Slack channel
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "❌ *Nightly CLI build failed*",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "❌ *Nightly CLI build failed*\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>\n\nDate: `${{ github.run_id }}`\nCommit: `${{ github.sha }}`"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_CI_ALERTS_WEBHOOK }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
