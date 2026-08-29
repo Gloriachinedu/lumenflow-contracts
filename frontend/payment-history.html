@@ -54,7 +54,7 @@
       cursor: pointer;
       transition: opacity 0.15s;
     }
-    .btn:hover { opacity: 0.85; }
+    .btn:hover:not(:disabled) { opacity: 0.85; }
     .btn-primary { background: #6c47ff; color: #fff; }
     .btn-outline {
       background: #fff;
@@ -171,11 +171,12 @@
     }
     .page-info { font-size: 0.85rem; color: #555; }
 
-    /* ── Empty state ───────────────────────────────────────────────────── */
-    .empty {
+    /* ── Loading state ─────────────────────────────────────────────────── */
+    #loading-state {
+      display: none;
       text-align: center;
-      padding: 3rem 1rem;
-      color: #999;
+      padding: 3.5rem 1rem;
+      color: #6c47ff;
       font-size: 0.9rem;
     }
     .empty .empty-title { font-size: 1rem; font-weight: 700; color: #444; margin: 0.75rem 0 0.35rem; }
@@ -183,6 +184,88 @@
     /* ── Copy button ─────────────────────────────────────────────────────── */
     .lf-copy-btn:hover { background: #f0ecff !important; color: #6c47ff !important; border-color: #6c47ff !important; }
     .lf-copyable { display: inline-flex; align-items: center; }
+
+    .spinner {
+      display: inline-block;
+      width: 2rem;
+      height: 2rem;
+      border: 3px solid #e0d9ff;
+      border-top-color: #6c47ff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 0.75rem;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .loading-text {
+      display: block;
+      font-weight: 600;
+    }
+
+    /* ── Empty state ───────────────────────────────────────────────────── */
+    #empty-state {
+      display: none;
+      text-align: center;
+      padding: 3.5rem 1rem;
+      color: #888;
+    }
+
+    .empty-icon {
+      font-size: 2.5rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .empty-title {
+      font-size: 1rem;
+      font-weight: 700;
+      color: #555;
+      margin-bottom: 0.4rem;
+    }
+
+    .empty-desc {
+      font-size: 0.85rem;
+    }
+
+    /* ── Error state ───────────────────────────────────────────────────── */
+    #error-state {
+      display: none;
+      text-align: center;
+      padding: 3.5rem 1rem;
+      color: #c0392b;
+    }
+
+    .error-icon {
+      font-size: 2.5rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .error-title {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 0.4rem;
+    }
+
+    #error-message {
+      font-size: 0.85rem;
+      color: #666;
+      margin-bottom: 1rem;
+    }
+
+    .btn-retry {
+      padding: 0.5rem 1.2rem;
+      border: 1.5px solid #c0392b;
+      border-radius: 8px;
+      background: #fff;
+      color: #c0392b;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn-retry:hover { background: #fce8e8; }
 
     /* ── Responsive breakpoint ─────────────────────────────────────────── */
     @media (max-width: 640px) {
@@ -240,6 +323,8 @@
 
 <main id="payment-history-main">
 
+<a href="#main-content" class="skip-link">Skip to payment history</a>
+
 <h1>Payment History</h1>
 <p class="subtitle">View and filter your past transactions.</p>
 
@@ -269,14 +354,12 @@
         <th scope="col" onclick="sortBy('paid_at')">Date <span class="sort-icon" aria-hidden="true">↕</span></th>
       </tr>
     </thead>
-    <tbody id="table-body">
-      <tr><td colspan="5" class="empty">Loading…</td></tr>
-    </tbody>
+    <tbody id="table-body"></tbody>
   </table>
 </div>
 
 <!-- Mobile cards -->
-<div class="cards-list" id="cards-list"></div>
+<div class="cards-list" id="cards-list" aria-label="Payment history cards"></div>
 
 <!-- Pagination -->
 <nav class="pagination" aria-label="Payment history pagination">
