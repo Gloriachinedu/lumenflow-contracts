@@ -270,50 +270,37 @@
   </div>
 </div>
 
+<script src="store.js"></script>
 <script>
-  // ── State Management ────────────────────────────────────────────────────────
-  
-  const filters = {
-    date_start: '',
-    date_end: '',
-    amount_min: '',
-    amount_max: '',
-    token: '',
-    status: 'Any'
-  };
+  // ── Use Shared Application Store (issue #784) ───────────────────────────────
+  // All filter state is now owned by LumenFlowStore instead of a local object.
+
+  const store = window.LumenFlowStore;
 
   // ── Initialize from URL ─────────────────────────────────────────────────────
-  
-  function initFromUrl() {
-    const params = new URLSearchParams(window.location.search);
-    for (const key in filters) {
-      if (params.has(key)) {
-        filters[key] = params.get(key);
-        const el = document.getElementById(key.replace('_', '-').replace('selector', 'selector'));
-        if (el) el.value = filters[key];
-      }
-    }
-    // Specific ID fixes for range inputs
-    if (params.has('date_start')) document.getElementById('date-start').value = params.get('date_start');
-    if (params.has('date_end'))   document.getElementById('date-end').value   = params.get('date_end');
-    if (params.has('amount_min')) document.getElementById('amount-min').value = params.get('amount_min');
-    if (params.has('amount_max')) document.getElementById('amount-max').value = params.get('amount_max');
-    if (params.has('token'))      document.getElementById('token-selector').value = params.get('token');
-    if (params.has('status'))     document.getElementById('status-selector').value = params.get('status');
 
+  function initFromUrl() {
+    store.initFiltersFromUrl();
+    syncInputsFromStore();
     renderActiveFilters();
     updateResults();
   }
 
-  function updateUrl() {
-    const params = new URLSearchParams();
-    for (const key in filters) {
-      if (filters[key] && filters[key] !== 'Any') {
-        params.set(key, filters[key]);
-      }
-    }
-    const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
-    window.history.pushState({}, '', newUrl);
+  /** Push current store filter values back into the form inputs. */
+  function syncInputsFromStore() {
+    const { filters } = store.get();
+    const inputMap = {
+      'date_start':  'date-start',
+      'date_end':    'date-end',
+      'amount_min':  'amount-min',
+      'amount_max':  'amount-max',
+      'token':       'token-selector',
+      'status':      'status-selector',
+    };
+    Object.keys(inputMap).forEach(key => {
+      const el = document.getElementById(inputMap[key]);
+      if (el && filters[key] !== undefined) el.value = filters[key];
+    });
   }
 
   // ── Render Helpers ──────────────────────────────────────────────────────────
@@ -324,53 +311,45 @@
 
     const labels = {
       date_start: 'From ',
-      date_end: 'To ',
+      date_end:   'To ',
       amount_min: 'Min ',
       amount_max: 'Max ',
-      token: 'Token: ',
-      status: 'Status: '
+      token:      'Token: ',
+      status:     'Status: ',
     };
 
-    for (const key in filters) {
-      const val = filters[key];
-      if (val && val !== 'Any') {
-        const chip = document.createElement('div');
-        chip.className = 'chip';
-        chip.innerHTML = `
-          <span>${labels[key]}${val}</span>
-          <button onclick="removeFilter('${key}')" aria-label="Remove filter ${labels[key]}${val}">&times;</button>
-        `;
-        container.appendChild(chip);
-      }
-    }
+    store.getActiveFilters().forEach(({ key, value }) => {
+      const chip = document.createElement('div');
+      chip.className = 'chip';
+      chip.innerHTML = `
+        <span>${labels[key] || key + ': '}${value}</span>
+        <button onclick="removeFilter('${key}')" aria-label="Remove filter ${labels[key] || ''}${value}">&times;</button>
+      `;
+      container.appendChild(chip);
+    });
   }
 
   function removeFilter(key) {
-    filters[key] = key === 'status' ? 'Any' : '';
-    const id = key.replace('_', '-');
-    const el = document.getElementById(id) || document.getElementById(id + '-selector');
-    if (el) el.value = filters[key];
-    
-    updateUrl();
+    store.removeFilter(key);
+    store.pushFiltersToUrl();
+    syncInputsFromStore();
     renderActiveFilters();
     updateResults();
   }
 
   // ── Mock Results ────────────────────────────────────────────────────────────
-  
+
   const mockData = [
-    { date: '2026-05-28 14:22', id: 'ORD-9921', recipient: 'Amazon', amount: '124.50 XLM', status: 'Completed' },
-    { date: '2026-05-27 09:15', id: 'ORD-8832', recipient: 'Starbucks', amount: '12.00 XLM', status: 'Completed' },
-    { date: '2026-05-25 18:40', id: 'ORD-7712', recipient: 'Netflix', amount: '15.99 XLM', status: 'PartiallyRefunded' },
+    { date: '2026-05-28 14:22', id: 'ORD-9921', recipient: 'Amazon',    amount: '124.50 XLM', status: 'Completed'         },
+    { date: '2026-05-27 09:15', id: 'ORD-8832', recipient: 'Starbucks', amount: '12.00 XLM',  status: 'Completed'         },
+    { date: '2026-05-25 18:40', id: 'ORD-7712', recipient: 'Netflix',   amount: '15.99 XLM',  status: 'PartiallyRefunded' },
   ];
 
   function updateResults() {
-    const body = document.getElementById('history-body');
+    const body  = document.getElementById('history-body');
     const empty = document.getElementById('empty-state');
-    
-    // In a real app, we would fetch from Soroban here using the filters.
-    // For this UI component, we'll just show the mock data.
-    
+
+    // In a real app, fetch from Soroban here using store.get().filters.
     body.innerHTML = '';
     if (mockData.length === 0) {
       empty.style.display = 'block';
@@ -392,25 +371,25 @@
 
   // ── Event Listeners ─────────────────────────────────────────────────────────
 
-  const inputs = [
-    { id: 'date-start', key: 'date_start' },
-    { id: 'date-end', key: 'date_end' },
-    { id: 'amount-min', key: 'amount_min' },
-    { id: 'amount-max', key: 'amount_max' },
-    { id: 'token-selector', key: 'token' },
-    { id: 'status-selector', key: 'status' }
+  const inputBindings = [
+    { id: 'date-start',      key: 'date_start' },
+    { id: 'date-end',        key: 'date_end'   },
+    { id: 'amount-min',      key: 'amount_min' },
+    { id: 'amount-max',      key: 'amount_max' },
+    { id: 'token-selector',  key: 'token'      },
+    { id: 'status-selector', key: 'status'     },
   ];
 
-  inputs.forEach(({ id, key }) => {
-    document.getElementById(id).addEventListener('change', (e) => {
-      filters[key] = e.target.value;
-      updateUrl();
+  inputBindings.forEach(({ id, key }) => {
+    document.getElementById(id).addEventListener('change', e => {
+      store.setFilters({ [key]: e.target.value });
+      store.pushFiltersToUrl();
       renderActiveFilters();
       updateResults();
     });
   });
 
-  // Init
+  // Re-sync when navigating via browser back/forward
   window.addEventListener('popstate', initFromUrl);
   initFromUrl();
 

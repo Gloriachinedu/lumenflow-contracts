@@ -170,10 +170,11 @@
   </div>
 </div>
 
+<script src="store.js"></script>
 <script>
-  // ── State ──────────────────────────────────────────────────────────────────
-
-  let state = null; // { paymentId, merchantAddress, tokenAddress, amount, signers, required, signatures: Set }
+  // ── State (delegated to shared store, issue #784) ──────────────────────────
+  // Access via: window.LumenFlowStore.get().multisig
+  const store = window.LumenFlowStore;
 
   // ── Signer management ──────────────────────────────────────────────────────
 
@@ -307,10 +308,9 @@
     return ok;
   }
 
-  // ── Contract interaction ───────────────────────────────────────────────────
-
-  const CONTRACT_ID = window.LUMENFLOW_CONTRACT_ID || '';
-  const RPC_URL     = window.LUMENFLOW_RPC_URL     || 'https://soroban-testnet.stellar.org';
+  // ── Contract config (from shared store) ───────────────────────────────────
+  const CONTRACT_ID = store.get().config.contractId;
+  const RPC_URL     = store.get().config.rpcUrl;
 
   async function callInitiateMultisig({ paymentId, merchantAddress, tokenAddress, amount, signers, required }) {
     if (!CONTRACT_ID) {
@@ -375,8 +375,8 @@
       return;
     }
 
-    // Store state and show progress panel
-    state = { paymentId, merchantAddress, tokenAddress, amount, signers, required, signatures: new Set() };
+    // Store state in shared app store and show progress panel
+    store.set({ multisig: { paymentId, merchantAddress, tokenAddress, amount, signers, required, signatures: new Set() } });
     document.getElementById('form-panel').style.display = 'none';
     renderProgress();
     document.getElementById('progress-panel').style.display = 'block';
@@ -385,7 +385,7 @@
   // ── Progress ───────────────────────────────────────────────────────────────
 
   function renderProgress() {
-    const { signers, required, signatures } = state;
+    const { signers, required, signatures } = store.get().multisig;
     const signed = signatures.size;
     const pct    = Math.round((signed / signers.length) * 100);
 
@@ -420,10 +420,10 @@
       .find(b => b.closest('li').querySelector('.sig-addr').textContent === signerAddress);
     if (btn) { btn.disabled = true; btn.textContent = 'Signing…'; }
 
-    const result = await callSignMultisig(state.paymentId, signerAddress);
+    const result = await callSignMultisig(store.get().multisig.paymentId, signerAddress);
 
     if (result.success) {
-      state.signatures.add(signerAddress);
+      store.get().multisig.signatures.add(signerAddress);
       renderProgress();
     } else {
       if (btn) { btn.disabled = false; btn.textContent = 'Sign'; }
@@ -436,7 +436,7 @@
     btn.disabled = true;
     btn.textContent = 'Executing…';
 
-    const result = await callExecuteMultisig(state.paymentId);
+    const result = await callExecuteMultisig(store.get().multisig.paymentId);
 
     if (result.success) {
       showExecuteAlert('✔ Payment executed successfully!', true);
