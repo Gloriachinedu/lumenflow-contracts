@@ -3,11 +3,20 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://horizon.stellar.org; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none';" />
   <title>Payment History – LumenFlow</title>
   <meta name="description" content="View and filter your complete LumenFlow payment history, sorted and paginated for easy browsing." />
   <meta property="og:title" content="Payment History – LumenFlow" />
   <meta property="og:description" content="View and filter your complete LumenFlow payment history, sorted and paginated for easy browsing." />
   <meta name="twitter:card" content="summary" />
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#6c47ff" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="LumenFlow" />
+  <link rel="apple-touch-icon" href="icons/icon.svg" />
+  <link rel="stylesheet" href="styles.css" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -88,6 +97,13 @@
 
     .range-inputs input { width: 100%; }
 
+    .filter-group input.input-error { border-color: #c0392b; }
+    .filter-err {
+      display: none;
+      font-size: 0.75rem;
+      color: #c0392b;
+    }
+
     /* ── Active Filters (Chips) ──────────────────────────────────────────────── */
     .active-filters {
       display: flex;
@@ -157,6 +173,59 @@
 
     tr:last-child td { border-bottom: none; }
 
+    /* ── Mobile Responsive ───────────────────────────────────────────────────── */
+    @media (max-width: 767px) {
+      body { padding: 1rem 0.5rem; }
+
+      .filter-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .range-inputs {
+        flex-wrap: wrap;
+      }
+      .range-inputs input { width: calc(50% - 1rem); }
+
+      /* Hide table, show card layout instead */
+      .results-card { overflow-x: hidden; }
+
+      table thead { display: none; }
+
+      table, tbody, tr, td {
+        display: block;
+        width: 100%;
+      }
+
+      tr {
+        border: 1px solid #eee;
+        border-radius: 8px;
+        margin-bottom: 0.75rem;
+        padding: 0.75rem;
+        background: #fff;
+      }
+      tr:last-child { margin-bottom: 0; }
+
+      td {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.35rem 0;
+        border-bottom: none;
+        font-size: 0.85rem;
+      }
+
+      td::before {
+        content: attr(data-label);
+        font-size: 0.72rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #888;
+        flex-shrink: 0;
+        margin-right: 0.5rem;
+      }
+    }
+
     .amount-cell { font-weight: 600; color: #1a1a2e; }
     .status-badge {
       font-size: 0.75rem;
@@ -164,14 +233,57 @@
       padding: 0.2rem 0.5rem;
       border-radius: 4px;
     }
-    .status-completed { background: #e6f9f0; color: #1a9e5c; }
-    .status-refunded  { background: #fff3e0; color: #e07b00; }
+    .status-completed          { background: #e6f9f0; color: #1a9e5c; }
+    .status-partiallyrefunded  { background: #fff3e0; color: #e07b00; }
+    .status-fullyrefunded      { background: #fce8e8; color: #c0392b; }
+    .status-unknown            { background: #f0f0f0; color: #666; }
 
+    /* ── Empty state ─────────────────────────────────────────────────────────── */
     .empty-state {
       padding: 4rem 2rem;
       text-align: center;
       color: #888;
     }
+    .empty-state .empty-svg { margin-bottom: 1.25rem; }
+    .empty-state .empty-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: #444;
+      margin-bottom: 0.4rem;
+    }
+    .empty-state .empty-sub { font-size: 0.875rem; color: #888; }
+
+    /* ── Copy button ──────────────────────────────────────────────────────────── */
+    .lf-copy-btn:hover { background: #f0ecff !important; color: #6c47ff !important; border-color: #6c47ff !important; }
+    .lf-copyable { display: inline-flex; align-items: center; }
+
+    /* ── Skeleton loading rows ────────────────────────────────────────────────── */
+    .skeleton-body tr td {
+      padding: 1rem;
+      border-bottom: 1px solid #f9f9f9;
+    }
+
+    .skeleton-cell {
+      display: inline-block;
+      border-radius: 4px;
+      background: linear-gradient(90deg, #e8e8e8 25%, #f5f5f5 50%, #e8e8e8 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+      height: 14px;
+      vertical-align: middle;
+    }
+
+    @keyframes shimmer {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    /* Vary widths so columns look realistic */
+    .skeleton-cell.w-date   { width: 120px; }
+    .skeleton-cell.w-id     { width: 90px; }
+    .skeleton-cell.w-addr   { width: 110px; }
+    .skeleton-cell.w-amount { width: 80px; }
+    .skeleton-cell.w-status { width: 70px; }
 
     /* ── Accessibility ────────────────────────────────────────────────────────── */
     .sr-only {
@@ -185,14 +297,52 @@
       border: 0;
     }
 
-    button:focus-visible, input:focus-visible, select:focus-visible {
-      outline: 2px solid #6c47ff;
+    /* WCAG 2.1 AA focus ring: #6c47ff on white = 5.4:1 contrast ratio,
+       exceeds the 3:1 minimum for non-text focus indicators (SC 1.4.11). */
+    button:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    a:focus-visible {
+      outline: 3px solid #6c47ff;
       outline-offset: 2px;
+      border-radius: 3px;
     }
+
+    /* ── Verified Badge ───────────────────────────────────────────────────────── */
+    .verified-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      font-size: 0.7rem;
+      color: #1a9e5c;
+      font-weight: 600;
+    }
+
+    /* ── Skip link ───────────────────────────────────────────────────────── */
+    .skip-link {
+      position: absolute;
+      top: -100%;
+      left: 0;
+      background: #6c47ff;
+      color: #fff;
+      padding: 0.5rem 1rem;
+      font-weight: 700;
+      border-radius: 0 0 6px 0;
+      z-index: 9999;
+      text-decoration: none;
+    }
+    .skip-link:focus { top: 0; }
   </style>
 </head>
 <body>
+<a href="#history-main" class="skip-link">Skip to main content</a>
 
+<nav class="lf-nav" aria-label="LumenFlow navigation">
+  <span class="lf-nav__brand">⚡ LumenFlow</span>
+  <div id="wallet-status-container"></div>
+</nav>
+
+<main id="history-main">
 <div class="container">
   <header>
     <h1>Payment History</h1>
@@ -202,6 +352,13 @@
     <h2 id="filter-heading" class="sr-only">Filters</h2>
     
     <div class="filter-grid">
+      <!-- Merchant Address -->
+      <div class="filter-group" style="grid-column: 1 / -1;">
+        <label for="merchant-address">Merchant Address</label>
+        <input type="text" id="merchant-address" placeholder="G… your Stellar address" autocomplete="off" aria-describedby="merchant-address-err">
+        <div class="filter-err" id="merchant-address-err" role="alert" aria-live="polite"></div>
+      </div>
+
       <!-- Date Range -->
       <div class="filter-group">
         <label for="date-start">Date Range</label>
@@ -216,10 +373,12 @@
       <div class="filter-group">
         <label for="amount-min">Amount Range (XLM)</label>
         <div class="range-inputs">
-          <input type="number" id="amount-min" placeholder="Min" min="0" step="0.1">
+          <input type="number" id="amount-min" placeholder="Min" min="0" step="0.1" aria-describedby="amount-min-err">
           <span>to</span>
-          <input type="number" id="amount-max" placeholder="Max" min="0" step="0.1">
+          <input type="number" id="amount-max" placeholder="Max" min="0" step="0.1" aria-describedby="amount-max-err">
         </div>
+        <div class="filter-err" id="amount-min-err" role="alert" aria-live="polite"></div>
+        <div class="filter-err" id="amount-max-err" role="alert" aria-live="polite"></div>
       </div>
 
       <!-- Token -->
@@ -242,6 +401,19 @@
           <option value="FullyRefunded">Fully Refunded</option>
         </select>
       </div>
+
+      <!-- Currency display toggle -->
+      <div class="filter-group">
+        <label for="currency-display-toggle">Display Amounts As</label>
+        <select id="currency-display-toggle" aria-label="Currency display format">
+          <option value="native">Native Token</option>
+          <option value="xlm">XLM Equivalent</option>
+        </select>
+      </div>
+    </div>
+
+    <div style="display:flex;justify-content:flex-end;margin-top:0.75rem;">
+      <button id="reset-filters-btn" onclick="resetFilters()" style="padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:6px;background:#fff;color:#6c47ff;font-weight:600;font-size:0.85rem;cursor:pointer;transition:background 0.15s,color 0.15s;" aria-label="Reset all filters and clear saved preferences">Reset filters</button>
     </div>
 
     <div id="active-filters" class="active-filters" aria-live="polite">
@@ -249,7 +421,21 @@
     </div>
   </section>
 
-  <div class="results-card">
+  <div class="results-card" id="results-region" aria-live="polite" aria-atomic="false" aria-label="Payment history results">
+    <!-- Loading state -->
+    <div id="loading-state" style="display:none;padding:3rem;text-align:center;color:#888;" role="status" aria-live="polite" aria-label="Loading payments">
+      ⏳ Loading payments…
+    </div>
+
+    <!-- Error state -->
+    <div id="error-state" style="display:none;padding:3rem;text-align:center;color:#c0392b;" role="alert" aria-live="assertive">
+      <div style="font-size:1.5rem;margin-bottom:0.5rem">⚠</div>
+      <strong id="error-msg">Failed to load payments.</strong>
+      <div style="margin-top:0.75rem">
+        <button onclick="retryFetch()" style="padding:0.4rem 1rem;border:1.5px solid #c0392b;border-radius:6px;background:#fff;color:#c0392b;font-weight:600;cursor:pointer">Retry</button>
+      </div>
+    </div>
+
     <table id="history-table">
       <thead>
         <tr>
@@ -257,6 +443,7 @@
           <th>Order ID</th>
           <th>Recipient</th>
           <th>Amount</th>
+          <th>Tags</th>
           <th>Status</th>
         </tr>
       </thead>
@@ -264,157 +451,25 @@
         <!-- Rows will be rendered here -->
       </tbody>
     </table>
-    <div id="empty-state" class="empty-state" style="display:none">
-      No payments found matching your filters.
+    <div id="empty-state" class="empty-state" style="display:none" role="status" aria-label="No payments found matching your filters" aria-live="polite">
+      <svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+        <circle cx="60" cy="60" r="54" fill="#f0ecff"/>
+        <rect x="30" y="42" width="60" height="42" rx="7" fill="#e0d9ff"/>
+        <rect x="38" y="52" width="28" height="5" rx="2.5" fill="#b8a9f5"/>
+        <rect x="38" y="62" width="44" height="5" rx="2.5" fill="#c5bafc"/>
+        <rect x="38" y="72" width="20" height="5" rx="2.5" fill="#d8d1fe"/>
+        <circle cx="84" cy="36" r="14" fill="#fff" stroke="#b8a9f5" stroke-width="2.5"/>
+        <line x1="80" y1="36" x2="88" y2="36" stroke="#b8a9f5" stroke-width="2.5" stroke-linecap="round"/>
+        <line x1="84" y1="32" x2="84" y2="40" stroke="#b8a9f5" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      <p style="margin-top:1rem;font-weight:600;color:#1a1a2e;font-size:1rem">No payments yet</p>
+      <p style="margin-top:0.4rem;color:#888;font-size:0.85rem">Payments will appear here once transactions are made.</p>
     </div>
   </div>
 </div>
 
-<script>
-  // ── State Management ────────────────────────────────────────────────────────
-  
-  const filters = {
-    date_start: '',
-    date_end: '',
-    amount_min: '',
-    amount_max: '',
-    token: '',
-    status: 'Any'
-  };
+<script type="module" src="history.js"></script>
 
-  // ── Initialize from URL ─────────────────────────────────────────────────────
-  
-  function initFromUrl() {
-    const params = new URLSearchParams(window.location.search);
-    for (const key in filters) {
-      if (params.has(key)) {
-        filters[key] = params.get(key);
-        const el = document.getElementById(key.replace('_', '-').replace('selector', 'selector'));
-        if (el) el.value = filters[key];
-      }
-    }
-    // Specific ID fixes for range inputs
-    if (params.has('date_start')) document.getElementById('date-start').value = params.get('date_start');
-    if (params.has('date_end'))   document.getElementById('date-end').value   = params.get('date_end');
-    if (params.has('amount_min')) document.getElementById('amount-min').value = params.get('amount_min');
-    if (params.has('amount_max')) document.getElementById('amount-max').value = params.get('amount_max');
-    if (params.has('token'))      document.getElementById('token-selector').value = params.get('token');
-    if (params.has('status'))     document.getElementById('status-selector').value = params.get('status');
-
-    renderActiveFilters();
-    updateResults();
-  }
-
-  function updateUrl() {
-    const params = new URLSearchParams();
-    for (const key in filters) {
-      if (filters[key] && filters[key] !== 'Any') {
-        params.set(key, filters[key]);
-      }
-    }
-    const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
-    window.history.pushState({}, '', newUrl);
-  }
-
-  // ── Render Helpers ──────────────────────────────────────────────────────────
-
-  function renderActiveFilters() {
-    const container = document.getElementById('active-filters');
-    container.innerHTML = '';
-
-    const labels = {
-      date_start: 'From ',
-      date_end: 'To ',
-      amount_min: 'Min ',
-      amount_max: 'Max ',
-      token: 'Token: ',
-      status: 'Status: '
-    };
-
-    for (const key in filters) {
-      const val = filters[key];
-      if (val && val !== 'Any') {
-        const chip = document.createElement('div');
-        chip.className = 'chip';
-        chip.innerHTML = `
-          <span>${labels[key]}${val}</span>
-          <button onclick="removeFilter('${key}')" aria-label="Remove filter ${labels[key]}${val}">&times;</button>
-        `;
-        container.appendChild(chip);
-      }
-    }
-  }
-
-  function removeFilter(key) {
-    filters[key] = key === 'status' ? 'Any' : '';
-    const id = key.replace('_', '-');
-    const el = document.getElementById(id) || document.getElementById(id + '-selector');
-    if (el) el.value = filters[key];
-    
-    updateUrl();
-    renderActiveFilters();
-    updateResults();
-  }
-
-  // ── Mock Results ────────────────────────────────────────────────────────────
-  
-  const mockData = [
-    { date: '2026-05-28 14:22', id: 'ORD-9921', recipient: 'Amazon', amount: '124.50 XLM', status: 'Completed' },
-    { date: '2026-05-27 09:15', id: 'ORD-8832', recipient: 'Starbucks', amount: '12.00 XLM', status: 'Completed' },
-    { date: '2026-05-25 18:40', id: 'ORD-7712', recipient: 'Netflix', amount: '15.99 XLM', status: 'PartiallyRefunded' },
-  ];
-
-  function updateResults() {
-    const body = document.getElementById('history-body');
-    const empty = document.getElementById('empty-state');
-    
-    // In a real app, we would fetch from Soroban here using the filters.
-    // For this UI component, we'll just show the mock data.
-    
-    body.innerHTML = '';
-    if (mockData.length === 0) {
-      empty.style.display = 'block';
-    } else {
-      empty.style.display = 'none';
-      mockData.forEach(item => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td>${item.date}</td>
-          <td><code>${item.id}</code></td>
-          <td>${item.recipient}</td>
-          <td class="amount-cell">${item.amount}</td>
-          <td><span class="status-badge ${item.status === 'Completed' ? 'status-completed' : 'status-refunded'}">${item.status}</span></td>
-        `;
-        body.appendChild(tr);
-      });
-    }
-  }
-
-  // ── Event Listeners ─────────────────────────────────────────────────────────
-
-  const inputs = [
-    { id: 'date-start', key: 'date_start' },
-    { id: 'date-end', key: 'date_end' },
-    { id: 'amount-min', key: 'amount_min' },
-    { id: 'amount-max', key: 'amount_max' },
-    { id: 'token-selector', key: 'token' },
-    { id: 'status-selector', key: 'status' }
-  ];
-
-  inputs.forEach(({ id, key }) => {
-    document.getElementById(id).addEventListener('change', (e) => {
-      filters[key] = e.target.value;
-      updateUrl();
-      renderActiveFilters();
-      updateResults();
-    });
-  });
-
-  // Init
-  window.addEventListener('popstate', initFromUrl);
-  initFromUrl();
-
-</script>
-
+</main>
 </body>
 </html>

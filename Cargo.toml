@@ -1,7 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["cli/lumenflow-cli",
+members = [
+    "cli/lumenflow-cli",
     "contracts/lumenflow",
+    "contracts/router",
 ]
 
 [profile.release]

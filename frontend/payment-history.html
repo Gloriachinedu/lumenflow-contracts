@@ -3,7 +3,16 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://horizon.stellar.org; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none';" />
   <title>Payment History – LumenFlow</title>
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#6c47ff" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="LumenFlow" />
+  <link rel="apple-touch-icon" href="icons/icon.svg" />
+  <link rel="stylesheet" href="styles.css" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -169,6 +178,11 @@
       color: #999;
       font-size: 0.9rem;
     }
+    .empty .empty-title { font-size: 1rem; font-weight: 700; color: #444; margin: 0.75rem 0 0.35rem; }
+    .empty .empty-sub { font-size: 0.875rem; color: #888; }
+    /* ── Copy button ─────────────────────────────────────────────────────── */
+    .lf-copy-btn:hover { background: #f0ecff !important; color: #6c47ff !important; border-color: #6c47ff !important; }
+    .lf-copyable { display: inline-flex; align-items: center; }
 
     /* ── Responsive breakpoint ─────────────────────────────────────────── */
     @media (max-width: 640px) {
@@ -176,66 +190,83 @@
       .cards-list { display: block; }
     }
 
-    /* ── Accessibility ─────────────────────────────────────────────────── */
+    /* ── Skip link ───────────────────────────────────────────────────────── */
+    .skip-link {
+      position: absolute;
+      top: -100%;
+      left: 0;
+      background: #6c47ff;
+      color: #fff;
+      padding: 0.5rem 1rem;
+      font-weight: 700;
+      border-radius: 0 0 6px 0;
+      z-index: 9999;
+      text-decoration: none;
+    }
+    .skip-link:focus { top: 0; }
+
+    /* ── Accessibility: visible toolbar labels ───────────────────────────── */
+    .toolbar-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #666;
+      white-space: nowrap;
+    }
+
     .sr-only {
       position: absolute;
-      width: 1px;
-      height: 1px;
-      padding: 0;
-      margin: -1px;
+      width: 1px; height: 1px;
+      padding: 0; margin: -1px;
       overflow: hidden;
       clip: rect(0,0,0,0);
       border: 0;
     }
-    button:focus-visible, select:focus-visible, input:focus-visible, [tabindex]:focus-visible {
+
+    button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible {
       outline: 2px solid #6c47ff;
       outline-offset: 2px;
     }
   </style>
 </head>
 <body>
+<a href="#payment-history-main" class="skip-link">Skip to main content</a>
+
+<nav class="lf-nav" aria-label="LumenFlow navigation">
+  <span class="lf-nav__brand">⚡ LumenFlow</span>
+  <div id="wallet-status-container"></div>
+</nav>
+
+<main id="payment-history-main">
 
 <h1>Payment History</h1>
 <p class="subtitle">View and filter your past transactions.</p>
 
-<div class="toolbar" role="search" aria-label="Payment filters">
-  <label for="search" class="sr-only">Search order ID or merchant</label>
-  <input type="text" id="search" placeholder="Search order ID…" oninput="applyFilters()" aria-label="Search order ID or merchant" />
+<div class="toolbar" role="search" aria-label="Filter payments">
+  <label for="search" class="sr-only">Search by order ID or merchant</label>
+  <input type="search" id="search" placeholder="Search order ID…" oninput="applyFilters()" aria-label="Search by order ID or merchant" />
   <label for="status-filter" class="sr-only">Filter by status</label>
-  <select id="status-filter" onchange="applyFilters()" aria-label="Filter by status">
+  <select id="status-filter" onchange="applyFilters()" aria-label="Filter by payment status">
     <option value="">All statuses</option>
     <option value="Completed">Completed</option>
     <option value="PartiallyRefunded">Partially Refunded</option>
     <option value="FullyRefunded">Fully Refunded</option>
   </select>
-  <button class="btn btn-outline" onclick="resetFilters()" aria-label="Reset all filters">Reset</button>
+  <button class="btn btn-outline" onclick="resetFilters()">Reset filters</button>
 </div>
 
 <!-- Desktop table -->
 <div class="table-wrap">
-  <table id="history-table">
+  <table id="history-table" aria-label="Payment history">
+    <caption class="sr-only">Payment history records, sortable by column</caption>
     <thead>
       <tr>
-        <th onclick="sortBy('order_id')" onkeydown="if(event.key==='Enter'||event.key===' ')sortBy('order_id')"
-            tabindex="0" role="columnheader" aria-sort="none" id="th-order-id">
-          Order ID <span class="sort-icon" aria-hidden="true">↕</span>
-        </th>
-        <th onclick="sortBy('merchant_address')" onkeydown="if(event.key==='Enter'||event.key===' ')sortBy('merchant_address')"
-            tabindex="0" role="columnheader" aria-sort="none" id="th-merchant">
-          Merchant <span class="sort-icon" aria-hidden="true">↕</span>
-        </th>
-        <th onclick="sortBy('amount')" onkeydown="if(event.key==='Enter'||event.key===' ')sortBy('amount')"
-            tabindex="0" role="columnheader" aria-sort="none" id="th-amount">
-          Amount <span class="sort-icon" aria-hidden="true">↕</span>
-        </th>
-        <th onclick="sortBy('status')" onkeydown="if(event.key==='Enter'||event.key===' ')sortBy('status')"
-            tabindex="0" role="columnheader" aria-sort="none" id="th-status">
-          Status <span class="sort-icon" aria-hidden="true">↕</span>
-        </th>
-        <th onclick="sortBy('paid_at')" onkeydown="if(event.key==='Enter'||event.key===' ')sortBy('paid_at')"
-            tabindex="0" role="columnheader" aria-sort="none" id="th-paid-at">
-          Date <span class="sort-icon" aria-hidden="true">↕</span>
-        </th>
+        <th scope="col" onclick="sortBy('order_id')">Order ID <span class="sort-icon" aria-hidden="true">↕</span></th>
+        <th scope="col" onclick="sortBy('merchant_address')">Merchant <span class="sort-icon" aria-hidden="true">↕</span></th>
+        <th scope="col" onclick="sortBy('amount')">Amount <span class="sort-icon" aria-hidden="true">↕</span></th>
+        <th scope="col" onclick="sortBy('status')">Status <span class="sort-icon" aria-hidden="true">↕</span></th>
+        <th scope="col" onclick="sortBy('paid_at')">Date <span class="sort-icon" aria-hidden="true">↕</span></th>
       </tr>
     </thead>
     <tbody id="table-body">
@@ -248,177 +279,21 @@
 <div class="cards-list" id="cards-list"></div>
 
 <!-- Pagination -->
-<div class="pagination">
+<nav class="pagination" aria-label="Payment history pagination">
   <button class="btn btn-outline" id="prev-btn" onclick="prevPage()" disabled aria-label="Go to previous page">← Prev</button>
   <span class="page-info" id="page-info" aria-live="polite" aria-atomic="true"></span>
   <button class="btn btn-outline" id="next-btn" onclick="nextPage()" disabled aria-label="Go to next page">Next →</button>
-</div>
+</nav>
 
+<script src="payment-history.js"></script>
 <script>
-  // ── Mock data (replace with contract call) ─────────────────────────────────
-  const MOCK_PAYMENTS = [
-    { order_id: 'ORDER_001', merchant_address: 'GDUT...XZ1A', amount: 1000, status: 'Completed',          paid_at: '2026-06-01' },
-    { order_id: 'ORDER_002', merchant_address: 'GCMR...Y9KP', amount: 4500, status: 'PartiallyRefunded',  paid_at: '2026-06-05' },
-    { order_id: 'ORDER_003', merchant_address: 'GDUT...XZ1A', amount: 750,  status: 'Completed',          paid_at: '2026-06-08' },
-    { order_id: 'ORDER_004', merchant_address: 'GCMR...Y9KP', amount: 200,  status: 'FullyRefunded',      paid_at: '2026-06-10' },
-    { order_id: 'ORDER_005', merchant_address: 'GDUT...XZ1A', amount: 3200, status: 'Completed',          paid_at: '2026-06-12' },
-    { order_id: 'ORDER_006', merchant_address: 'GCMR...Y9KP', amount: 600,  status: 'Completed',          paid_at: '2026-06-14' },
-    { order_id: 'ORDER_007', merchant_address: 'GDUT...XZ1A', amount: 980,  status: 'PartiallyRefunded',  paid_at: '2026-06-15' },
-    { order_id: 'ORDER_008', merchant_address: 'GCMR...Y9KP', amount: 120,  status: 'Completed',          paid_at: '2026-06-17' },
-    { order_id: 'ORDER_009', merchant_address: 'GDUT...XZ1A', amount: 8750, status: 'Completed',          paid_at: '2026-06-18' },
-    { order_id: 'ORDER_010', merchant_address: 'GCMR...Y9KP', amount: 310,  status: 'FullyRefunded',      paid_at: '2026-06-20' },
-    { order_id: 'ORDER_011', merchant_address: 'GDUT...XZ1A', amount: 2200, status: 'Completed',          paid_at: '2026-06-21' },
-    { order_id: 'ORDER_012', merchant_address: 'GCMR...Y9KP', amount: 540,  status: 'Completed',          paid_at: '2026-06-23' },
-  ];
-
-  const PAGE_SIZE = 5;
-  let currentPage = 1;
-  let sortField = 'paid_at';
-  let sortAsc = false;
-  let filtered = [...MOCK_PAYMENTS];
-
-  // ── Filtering ──────────────────────────────────────────────────────────────
-  function applyFilters() {
-    const search = document.getElementById('search').value.trim().toLowerCase();
-    const status = document.getElementById('status-filter').value;
-
-    filtered = MOCK_PAYMENTS.filter(p => {
-      const matchSearch = !search || p.order_id.toLowerCase().includes(search) ||
-                          p.merchant_address.toLowerCase().includes(search);
-      const matchStatus = !status || p.status === status;
-      return matchSearch && matchStatus;
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker
+        .register('./sw.js', { scope: './' })
+        .catch((err) => console.warn('[PWA] Service worker registration failed:', err));
     });
-
-    currentPage = 1;
-    sortAndRender();
   }
-
-  function resetFilters() {
-    document.getElementById('search').value = '';
-    document.getElementById('status-filter').value = '';
-    filtered = [...MOCK_PAYMENTS];
-    currentPage = 1;
-    sortAndRender();
-  }
-
-  // ── Sorting ────────────────────────────────────────────────────────────────
-  const SORT_TH_MAP = {
-    order_id:         'th-order-id',
-    merchant_address: 'th-merchant',
-    amount:           'th-amount',
-    status:           'th-status',
-    paid_at:          'th-paid-at',
-  };
-
-  function sortBy(field) {
-    if (sortField === field) {
-      sortAsc = !sortAsc;
-    } else {
-      sortField = field;
-      sortAsc = true;
-    }
-
-    // Update aria-sort on all column headers
-    Object.entries(SORT_TH_MAP).forEach(([f, id]) => {
-      const th = document.getElementById(id);
-      if (!th) return;
-      th.classList.remove('active');
-      th.setAttribute('aria-sort', 'none');
-      th.querySelector('.sort-icon').textContent = '↕';
-    });
-
-    const activeTh = document.getElementById(SORT_TH_MAP[field]);
-    if (activeTh) {
-      activeTh.classList.add('active');
-      activeTh.setAttribute('aria-sort', sortAsc ? 'ascending' : 'descending');
-      activeTh.querySelector('.sort-icon').textContent = sortAsc ? '↑' : '↓';
-    }
-
-    sortAndRender();
-  }
-
-  function sortAndRender() {
-    const sorted = [...filtered].sort((a, b) => {
-      const av = a[sortField], bv = b[sortField];
-      if (av < bv) return sortAsc ? -1 : 1;
-      if (av > bv) return sortAsc ? 1 : -1;
-      return 0;
-    });
-    renderPage(sorted);
-  }
-
-  // ── Rendering ──────────────────────────────────────────────────────────────
-  function statusBadge(status) {
-    const map = {
-      Completed:          ['badge-completed',      'Completed'],
-      PartiallyRefunded:  ['badge-partial',         'Partial Refund'],
-      FullyRefunded:      ['badge-fully-refunded',  'Fully Refunded'],
-    };
-    const [cls, label] = map[status] || ['', status];
-    return `<span class="badge ${cls}">${label}</span>`;
-  }
-
-  function renderPage(sorted) {
-    const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
-    if (currentPage > totalPages) currentPage = totalPages;
-
-    const start = (currentPage - 1) * PAGE_SIZE;
-    const page  = sorted.slice(start, start + PAGE_SIZE);
-
-    // Table rows
-    const tbody = document.getElementById('table-body');
-    if (page.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" class="empty">No payments found.</td></tr>';
-    } else {
-      tbody.innerHTML = page.map(p => `
-        <tr>
-          <td><span class="order-id">${p.order_id}</span></td>
-          <td>${p.merchant_address}</td>
-          <td class="amount">${p.amount.toLocaleString()} XLM</td>
-          <td>${statusBadge(p.status)}</td>
-          <td>${p.paid_at}</td>
-        </tr>`).join('');
-    }
-
-    // Cards
-    const cardsList = document.getElementById('cards-list');
-    if (page.length === 0) {
-      cardsList.innerHTML = '<div class="empty">No payments found.</div>';
-    } else {
-      cardsList.innerHTML = page.map(p => `
-        <div class="payment-card">
-          <div class="card-header">
-            <span class="card-order-id">${p.order_id}</span>
-            <span class="card-amount">${p.amount.toLocaleString()} XLM</span>
-          </div>
-          <div class="card-row">
-            <span class="card-label">Merchant</span>
-            <span>${p.merchant_address}</span>
-          </div>
-          <div class="card-row">
-            <span class="card-label">Status</span>
-            <span>${statusBadge(p.status)}</span>
-          </div>
-          <div class="card-row">
-            <span class="card-label">Date</span>
-            <span>${p.paid_at}</span>
-          </div>
-        </div>`).join('');
-    }
-
-    // Pagination controls
-    document.getElementById('page-info').textContent =
-      sorted.length === 0 ? 'No results' : `Page ${currentPage} of ${totalPages} (${sorted.length} records)`;
-    document.getElementById('prev-btn').disabled = currentPage <= 1;
-    document.getElementById('next-btn').disabled = currentPage >= totalPages;
-  }
-
-  // ── Pagination ─────────────────────────────────────────────────────────────
-  function prevPage() { if (currentPage > 1) { currentPage--; sortAndRender(); } }
-  function nextPage() { currentPage++; sortAndRender(); }
-
-  // ── Init ───────────────────────────────────────────────────────────────────
-  sortAndRender();
 </script>
 </body>
 </html>
