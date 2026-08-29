@@ -1001,6 +1001,45 @@ fn test_batch_payment_size_exceeded() {
 }
 
 #[test]
+fn test_batch_payment_exactly_max_size_succeeds() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let mut payments = Vec::new(&env);
+    // MAX_BATCH_SIZE is 10; all 10 items must succeed
+    for i in 0..10u32 {
+        let id = format!("MAXB_{i}");
+        payments.push_back(BatchPaymentItem {
+            order_id: str(&env, &id),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 10,
+            memo: str(&env, ""),
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        });
+    }
+    client.batch_payment(&payer, &payments);
+}
+
+#[test]
+fn test_batch_payment_serialized_payload_too_large() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    // Build a very long order_id (>1024 bytes when serialized) to trigger the guard
+    let long_id: std::string::String = "A".repeat(900);
+    let mut payments = Vec::new(&env);
+    payments.push_back(BatchPaymentItem {
+        order_id: str(&env, &long_id),
+        merchant_address: merchant.clone(),
+        token_address: token.clone(),
+        amount: 100,
+        memo: str(&env, ""),
+        signature: bytes(&env, &[0u8; 64]),
+        merchant_public_key: bytes(&env, &[0u8; 32]),
+    });
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::SerializedPayloadTooLarge)));
+}
+
+#[test]
 fn test_batch_payment_atomic_failure() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
 

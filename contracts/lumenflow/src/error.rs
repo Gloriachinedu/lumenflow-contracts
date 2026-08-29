@@ -100,6 +100,8 @@ pub enum PaymentError {
     BatchSizeExceeded = 52,
     /// The provided tags exceed length or count limits. Remediation: Ensure tags are within the allowed limits (e.g., max 5 tags, max 20 chars per tag).
     InvalidTags = 53,
+    /// The serialized payload for a batch item exceeds the maximum allowed size. Remediation: Reduce the size of memo, order_id, or other string fields.
+    SerializedPayloadTooLarge = 54,
 
     // Referral
     /// The referral address is invalid: either it does not belong to a registered merchant or

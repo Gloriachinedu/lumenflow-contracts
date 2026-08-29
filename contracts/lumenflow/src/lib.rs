@@ -1166,6 +1166,7 @@ impl PaymentProcessingContract {
     ///
     /// # Errors
     /// * [`PaymentError::BatchSizeExceeded`] — more than 10 items provided.
+    /// * [`PaymentError::SerializedPayloadTooLarge`] — an item's serialized payload exceeds 1 024 bytes.
     /// * [`PaymentError::InvalidAmount`] — any item has a non-positive amount.
     /// * [`PaymentError::InvalidInput`] — any item has an empty `order_id` or invalid tags.
     /// * [`PaymentError::TokenNotAllowed`] — any item's token is not on the allow-list.
@@ -1181,7 +1182,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         require_not_paused(&env)?;
         payer.require_auth();
-        if payments.len() > 10 {
+        if payments.len() > MAX_BATCH_SIZE {
             return Err(PaymentError::BatchSizeExceeded);
         }
 
@@ -1230,13 +1231,19 @@ impl PaymentProcessingContract {
             }
             storage::increment_rate_limit_counter(&env, &item.merchant_address, window_start);
 
-            // Build payload: order_id bytes + amount bytes
+            // Build payload: network_id + contract address + order_id + amount
             let mut payload = Bytes::new(&env);
             let network_id_bytes: Bytes = env.ledger().network_id().into();
             payload.append(&network_id_bytes);
             payload.append(&env.current_contract_address().to_xdr(&env));
             payload.append(&item.order_id.clone().to_xdr(&env));
             payload.append(&Bytes::from_slice(&env, &item.amount.to_be_bytes()));
+
+            // Guard against excessively large serialized payloads
+            if payload.len() > MAX_SERIALIZED_PAYLOAD_BYTES {
+                return Err(PaymentError::SerializedPayloadTooLarge);
+            }
+
             verify_signature(&env, &item.merchant_public_key, &payload, &item.signature)?;
         }
 
