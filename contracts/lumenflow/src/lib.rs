@@ -504,6 +504,36 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Set the maximum number of payments a merchant may receive within one
+    /// rate-limit window.  Admin only.  Default: 100.
+    pub fn set_payment_rate_limit(
+        env: Env,
+        admin: Address,
+        limit: u32,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        if limit == 0 {
+            return Err(PaymentError::InvalidInput);
+        }
+        storage::set_payment_rate_limit(&env, limit);
+        Ok(())
+    }
+
+    /// Set the duration of the rate-limit window in seconds.  Admin only.
+    /// Default: 3600 (1 hour).
+    pub fn set_payment_rate_window(
+        env: Env,
+        admin: Address,
+        window_secs: u64,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        if window_secs == 0 {
+            return Err(PaymentError::InvalidInput);
+        }
+        storage::set_payment_rate_window(&env, window_secs);
+        Ok(())
+    }
+
     // ── Merchant management ───────────────────────────────────────────────────
 
     /// Register a new merchant.
