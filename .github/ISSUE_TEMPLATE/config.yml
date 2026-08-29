@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/Gloriachinedu/lumenflow-contracts/blob/main/SECURITY.md
+    about: Do NOT open a public issue. Email security@lumenflow.dev — see SECURITY.md and docs/security/vulnerability-disclosure-and-incident-response.md.
   - name: 🙋 Q&A (Questions & Answers)
     url: https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/q-a
     about: Ask the community any question about LumenFlow.

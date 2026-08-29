@@ -53,15 +53,26 @@ let suspicious_event = events.iter().find(|e| {
 assert!(suspicious_event.is_some());
 ```
 
-## API contract tests (generated from OpenAPI)
+## Frontend unit tests
 
-`tests/contract/` generates assertions from `docs/openapi.yaml` and cross-checks
-them against `contracts/lumenflow/src/lib.rs`: every operation must be
-well-formed, every `x-soroban-contract-method` must be a real `pub fn`, and a
-validator built from each request schema must accept a conforming body and
-reject missing-required / wrong-typed / bad-enum bodies. Run with
-`cd tests/contract && npm test` (uses `node --test`, no dependencies). See
-`tests/contract/README.md`.
+The static frontend ships pure helper modules (e.g. `frontend/validation.js`)
+that are unit-tested with the Node.js built-in test runner — no extra
+dependencies:
+
+```bash
+cd frontend
+npm run test:unit        # runs tests/unit/*.test.mjs
+```
+
+Tests live in `frontend/tests/unit/` as ESM (`*.test.mjs`) and import the module
+under test directly. Keep them focused on logic that does not need a DOM;
+DOM-driven form behavior is covered by the Playwright specs under
+`frontend/tests/` and `tests/playwright/`.
+
+`frontend/tests/unit/validation.test.mjs` covers the shared form validators,
+including edge cases: non-string input, length boundaries (`ORDER_ID_MAX_LENGTH`
+and one over), whitespace trimming, base32-alphabet enforcement for Stellar
+keys, and the `integer` / `allowZero` / `required` / `prefixes` option flags.
 
 ## Common pitfalls
 
