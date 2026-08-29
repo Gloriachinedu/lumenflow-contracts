@@ -117,6 +117,34 @@ Restricted (caller must auth + identity check):
 
 ---
 
+## Merchant Isolation
+
+The identity checks above also guarantee **merchant isolation**: a merchant can
+only read or act on its *own* payments, refunds, profile, and statistics. A
+merchant that targets another merchant's resource is rejected with
+`PaymentError::Unauthorized` (or a Soroban host auth failure for the
+`require_auth`-guarded reads).
+
+This is exercised by the integration suite
+[`contracts/lumenflow/tests/merchant_isolation.rs`](../contracts/lumenflow/tests/merchant_isolation.rs):
+
+| Scenario | Expected |
+|---|---|
+| Merchant B approves / rejects Merchant A's refund | `Unauthorized` |
+| Merchant B initiates a refund for Merchant A's payment | `Unauthorized` |
+| Merchant B reads Merchant A's payment via `get_payment_by_id` | `Unauthorized` |
+| Merchant B calls `update_payment_status` on Merchant A's payment | `Unauthorized` |
+| Merchant B calls `deactivate_merchant` on Merchant A | `Unauthorized` |
+| `get_merchant_stats` for a merchant with no activity | all-zero, no cross-merchant totals |
+
+Run it with:
+
+```bash
+cargo test --package lumenflow --test merchant_isolation
+```
+
+---
+
 ## Related Documents
 
 - [`docs/auth-model.md`](auth-model.md) — Complete auth table for all contract functions
