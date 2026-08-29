@@ -20,4 +20,4 @@ export * from "./idempotency";
 export * from "./signPaymentPayload";
 export * from "./wallet";
 export * from "./idempotency";
-export * from "./webhookRelay";
+export * from "./eventCatalog";

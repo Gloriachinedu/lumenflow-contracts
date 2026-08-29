@@ -6,7 +6,9 @@
     "test:playwright": "playwright test tests/playwright/",
     "test:e2e": "playwright test",
     "lint:html": "htmlhint \"frontend/**/*.html\" --config .htmlhintrc",
-    "lint:js": "eslint \"frontend/**/*.js\" \"tests/**/*.js\""
+    "lint:js": "eslint \"frontend/**/*.js\" \"tests/**/*.js\"",
+    "check:roadmap": "node scripts/check-roadmap-tracking.mjs",
+    "test:roadmap": "node --test \"scripts/*.test.mjs\""
   },
   "devDependencies": {
     "@playwright/test": "^1.62.0"

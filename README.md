@@ -1061,6 +1061,13 @@ We maintain localized versions of the README to support Spanish and Portuguese r
 
 See [SECURITY.md](SECURITY.md) for responsible disclosure instructions.
 
+| Topic | Document |
+|-------|----------|
+| Reporting policy | [SECURITY.md](SECURITY.md) · [`.well-known/security.txt`](.well-known/security.txt) |
+| Disclosure & incident-response workflow | [docs/security/vulnerability-disclosure-and-incident-response.md](docs/security/vulnerability-disclosure-and-incident-response.md) |
+| Incident response runbook | [docs/runbooks/incident-response-runbook.md](docs/runbooks/incident-response-runbook.md) |
+| Security regression catalogue | [docs/security/regression-catalog.md](docs/security/regression-catalog.md) (`scripts/security-regression-check.sh`) |
+
 ## Security Audit
 
 [![Audit: Pending](https://img.shields.io/badge/Audit-Pending-orange)](docs/audit/audit-report-v1.0.md)
@@ -1069,10 +1076,11 @@ A formal third-party security audit of the LumenFlow smart contract is in progre
 
 | Item | Detail |
 |------|--------|
+| Engagement plan | [docs/audit/audit-engagement-plan.md](docs/audit/audit-engagement-plan.md) |
 | Audit report | [docs/audit/audit-report-v1.0.md](docs/audit/audit-report-v1.0.md) |
 | Audit scope | All public contract functions, storage layout, signature verification, access control |
 | Status | 🔴 Pending — audit in progress |
-| Mainnet deployment | Blocked until all Critical and High findings are resolved |
+| Mainnet deployment | Blocked until all Critical and High findings are resolved (`scripts/audit-readiness-check.sh --mainnet`) |
 
 All Critical findings will have remediation PRs before mainnet deployment. A re-audit is scheduled after any Critical finding remediation.
 
