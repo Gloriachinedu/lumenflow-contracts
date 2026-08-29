@@ -1,0 +1,20 @@
+# cargo-audit configuration
+# See: https://github.com/rustsec/rustsec/tree/main/cargo-audit#configuration
+
+[advisories]
+# Fail the build when advisories with these severity levels are found.
+# "high" covers HIGH and CRITICAL vulnerabilities.
+deny = ["high", "critical"]
+
+# Warn (but don't fail) on advisories with these severity levels.
+warn = ["medium"]
+
+# List advisory IDs to ignore. Only use this when a finding is a confirmed
+# false positive or has an accepted risk entry in the security runbook.
+# Example:
+#   ignore = ["RUSTSEC-2020-0001"]
+ignore = []
+
+[output]
+# Print a human-readable summary of findings.
+quiet = false
