@@ -3,36 +3,160 @@ name: Deploy to Testnet
 on:
   push:
     branches: [develop]
+  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   deploy:
+    name: Deploy + Smoke Test
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Rust
-        uses: actions-rs/toolchain@16499b5e05bf2e26879000db0c1d13f7e13fa3af  # v1.0.7
+        uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: stable
-          override: true
+          toolchain: 1.87.0
+          targets: wasm32-unknown-unknown
 
-      - name: Deploy to testnet
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-deploy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-deploy-
+
+      - name: Install Stellar CLI
+        run: |
+          curl -fsSL \
+            https://github.com/stellar/stellar-cli/releases/download/v22.8.1/stellar-cli-22.8.1-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /usr/local/bin stellar
+
+      # ── Deploy ────────────────────────────────────────────────────────────
+      - name: Deploy contract to testnet
         id: deploy
+        env:
+          NETWORK: testnet
+          SOURCE_ACCOUNT: ${{ secrets.TESTNET_DEPLOYER_KEY }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/deploy.sh
+          CONTRACT_ID=$(bash scripts/deploy.sh)
+
+          if [ -z "$CONTRACT_ID" ]; then
+            echo "::error::Deploy script did not output a contract ID"
+            exit 1
+          fi
+
+          echo "contract_id=$CONTRACT_ID" >> "$GITHUB_OUTPUT"
+          echo "## ✅ Deployed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Contract ID: \`$CONTRACT_ID\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Deployed contract: $CONTRACT_ID"
+
+      # ── Smoke Test ────────────────────────────────────────────────────────
+      - name: Run smoke test
+        id: smoke
+        env:
+          CONTRACT_ID: ${{ steps.deploy.outputs.contract_id }}
+          ADMIN_KEY: ${{ secrets.TESTNET_ADMIN_KEY }}
+          MERCHANT_KEY: ${{ secrets.TESTNET_MERCHANT_KEY }}
+          PAYER_KEY: ${{ secrets.TESTNET_PAYER_KEY }}
+          TOKEN_ADDRESS: ${{ secrets.TESTNET_TOKEN_ADDRESS }}
+          ADMIN_ADDRESS: ${{ secrets.TESTNET_ADMIN_ADDRESS }}
+          MERCHANT_ADDRESS: ${{ secrets.TESTNET_MERCHANT_ADDRESS }}
+          PAYER_ADDRESS: ${{ secrets.TESTNET_PAYER_ADDRESS }}
+          NETWORK: testnet
+        run: |
+          set -euo pipefail
+          chmod +x scripts/smoke_test.sh
+
+          # Capture output to a log file for the artifact
+          mkdir -p smoke-results
+          if bash scripts/smoke_test.sh 2>&1 | tee smoke-results/smoke-test.log; then
+            echo "result=passed" >> "$GITHUB_OUTPUT"
+            echo "## ✅ Smoke test passed" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "result=failed" >> "$GITHUB_OUTPUT"
+            echo "## ❌ Smoke test failed" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      # ── Upload smoke test results ─────────────────────────────────────────
+      - name: Upload smoke test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-results-${{ github.run_id }}
+          path: smoke-results/
+          retention-days: 14
+
+      # ── Notify success ────────────────────────────────────────────────────
+      - name: Notify Slack — deploy succeeded
+        if: success()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "✅ *Testnet deploy succeeded*",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "✅ *Testnet deploy + smoke test passed*\n*Contract:* `${{ steps.deploy.outputs.contract_id }}`\n*Branch:* `${{ github.ref_name }}`\n*Commit:* `${{ github.sha }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      # ── Rollback + Notify failure ─────────────────────────────────────────
+      - name: Rollback on smoke test failure
+        if: failure() && steps.deploy.outputs.contract_id != ''
         env:
           TESTNET_SOURCE_ACCOUNT: ${{ secrets.TESTNET_SOURCE_ACCOUNT }}
         run: |
-          set -euo pipefail
-          # Run deploy script — it should print the deployed contract ID
-          CONTRACT_ID=$(bash scripts/deploy.sh)
-          echo "Deployed contract: $CONTRACT_ID" >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning::Smoke test failed — attempting rollback to previous deployment"
+          # Pause the newly deployed contract to prevent it from accepting traffic
+          stellar contract invoke \
+            --id "${{ steps.deploy.outputs.contract_id }}" \
+            --network testnet \
+            --source-account "$TESTNET_SOURCE_ACCOUNT" \
+            -- pause_contract \
+            --admin "${{ secrets.TESTNET_ADMIN_ADDRESS }}" \
+            || echo "::warning::Pause failed — manual intervention may be required"
 
-      - name: Run smoke tests
+          echo "## ⏸ Contract paused (rollback)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Contract \`${{ steps.deploy.outputs.contract_id }}\` has been paused pending investigation." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Notify Slack — deploy failed
+        if: failure()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "❌ *Testnet deploy or smoke test FAILED*",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "❌ *Testnet deploy failed*\n*Contract:* `${{ steps.deploy.outputs.contract_id || 'not deployed' }}`\n*Branch:* `${{ github.ref_name }}`\n*Commit:* `${{ github.sha }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run — check smoke test logs>"
+                  }
+                }
+              ]
+            }
         env:
-          CONTRACT_ID: ${{ steps.deploy.outputs.contract_id || '' }}
-        run: |
-          set -euo pipefail
-          bash scripts/test.sh
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

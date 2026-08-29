@@ -1,0 +1,17 @@
+# LumenFlow security contact information (RFC 9116)
+# https://www.rfc-editor.org/rfc/rfc9116
+#
+# When deployed to a website, serve this file at:
+#   https://<domain>/.well-known/security.txt
+
+Contact: mailto:security@lumenflow.dev
+Expires: 2027-08-28T00:00:00.000Z
+Encryption: https://lumenflow.dev/pgp-key.txt
+Preferred-Languages: en
+Canonical: https://lumenflow.dev/.well-known/security.txt
+Policy: https://github.com/Gloriachinedu/lumenflow-contracts/blob/main/SECURITY.md
+Acknowledgments: https://github.com/Gloriachinedu/lumenflow-contracts/blob/main/SECURITY.md#hall-of-fame
+Hiring: https://github.com/Gloriachinedu/lumenflow-contracts/blob/main/CONTRIBUTING.md
+
+# Full disclosure & incident-response workflow:
+# https://github.com/Gloriachinedu/lumenflow-contracts/blob/main/docs/security/vulnerability-disclosure-and-incident-response.md
