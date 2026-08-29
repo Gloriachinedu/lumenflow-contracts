@@ -1,12 +1,29 @@
 # @lumenflow/sdk
 
-The LumenFlow TypeScript SDK provides a convenient wrapper around the LumenFlow smart contract on Soroban.
+TypeScript SDK for the LumenFlow Soroban smart contract on Stellar.
 
 ## Installation
 
 ```bash
 npm install @lumenflow/sdk
 ```
+
+## Quality & Testing
+
+### Differential Testing
+
+The SDK is **differentially tested** against the raw `@stellar/stellar-sdk` library on every PR and weekly on Mondays. Differential tests call each SDK method _and_ the equivalent direct `stellar-sdk` invocation, then compare the results byte-for-byte. Any discrepancy — wrong XDR encoding, wrong field name, off-by-one in serialization — causes the test to fail with a descriptive diff showing exactly which bytes differ.
+
+The differential test suite lives in `sdk/src/tests/differential.test.ts` and is tagged `@differential`. Run it locally:
+
+```bash
+cd sdk
+npm test -- --testPathPattern="differential" --verbose
+```
+
+The CI workflow `.github/workflows/differential-tests.yml` runs the full suite weekly (Monday 08:00 UTC) and on every pull request. Test results and coverage are uploaded as build artifacts.
+
+---
 
 ## Quick Start
 
@@ -20,103 +37,1106 @@ const client = new LumenFlowClient({
   networkPassphrase: 'Test SDF Network ; September 2015',
 });
 
-// Setup a signer for state-changing operations
-const secretKey = 'S...';
-const keypair = Keypair.fromSecret(secretKey);
-
+const keypair = Keypair.fromSecret('S...');
 client.setSigner(async (tx) => {
   tx.sign(keypair);
   return tx;
 });
+```
 
-// Register a merchant
+---
+
+## API Reference
+
+### Configuration
+
+#### `new LumenFlowClient(config: ClientConfig)`
+
+| Parameter | Type | Description |
+|---|---|---|
+| `contractId` | `string` | Deployed contract address |
+| `rpcUrl` | `string` | Soroban RPC endpoint URL |
+| `networkPassphrase` | `string` | Stellar network passphrase |
+| `signer` | `Signer?` | Optional transaction signing function |
+
+#### `client.setSigner(signer: Signer): void`
+
+Set or replace the signing function. Required for all state-changing operations.
+
+```typescript
+client.setSigner(async (tx) => {
+  tx.sign(keypair);
+  return tx;
+});
+```
+
+---
+
+### Admin
+
+#### `setAdmin(admin: string): Promise<void>`
+
+One-time admin initialisation. Fails if an admin is already set.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `admin` | `string` | Address to designate as contract administrator |
+
+```typescript
+await client.setAdmin(keypair.publicKey());
+```
+
+#### `transferAdmin(currentAdmin: string, newAdmin: string): Promise<void>`
+
+Transfer admin rights to a new address.
+
+```typescript
+await client.transferAdmin(currentAdmin, newAdmin);
+```
+
+#### `setPaymentCleanupPeriod(admin: string, period: bigint): Promise<void>`
+
+Set minimum age (seconds) before a payment is eligible for cleanup.
+
+```typescript
+await client.setPaymentCleanupPeriod(adminAddress, 7776000n); // 90 days
+```
+
+#### `setLargePaymentThreshold(admin: string, threshold: bigint): Promise<void>`
+
+Set the threshold (in stroops) above which a payment triggers a suspicious-activity event.
+
+```typescript
+await client.setLargePaymentThreshold(adminAddress, 100_000_000n);
+```
+
+#### `setMaxRefundsPerOrder(admin: string, max: number): Promise<void>`
+
+Set the maximum number of refunds allowed per order.
+
+```typescript
+await client.setMaxRefundsPerOrder(adminAddress, 5);
+```
+
+---
+
+### MerchantCategory
+
+`MerchantCategory` is a tagged union type that mirrors the Rust contract's enum.
+Simple variants are plain string literals; the `Custom` variant carries an
+arbitrary label (1–32 characters).
+
+```typescript
+// Simple variants — use the string literal directly or the namespace helper
+const category: MerchantCategory = "Retail";        // plain string
+const category: MerchantCategory = MerchantCategory.Food; // namespace helper
+
+// Custom variant — use an object with a Custom key
+const category: MerchantCategory = { Custom: "Handmade" };
+
+// Or use the namespace helper for Custom
+const category: MerchantCategory = MerchantCategory.custom("Handmade");
+```
+
+Available simple variants: `"Retail"` | `"Food"` | `"Services"` | `"Digital"` | `"Other"`
+
+The `Custom` label must be non-empty and at most 32 characters. Passing an empty
+string or a string longer than 32 characters throws synchronously before any RPC
+call is made.
+
+---
+
+### Merchant Management
+
+#### `registerMerchant(merchantAddress, name, description, contactInfo, category): Promise<void>`
+
+Register a new merchant. The caller must be the merchant address.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `merchantAddress` | `string` | Merchant's Stellar address |
+| `name` | `string` | Display name |
+| `description` | `string` | Business description |
+| `contactInfo` | `string` | Contact email or URL |
+| `category` | `MerchantCategory` | A simple variant string or `{ Custom: string }` for a custom category |
+
+```typescript
+// Register with a standard category
 await client.registerMerchant(
   keypair.publicKey(),
-  'My Shop',
-  'The best shop',
-  'contact@example.com',
-  MerchantCategory.Retail
+  'My Store',
+  'Best prices in town',
+  'support@mystore.com',
+  MerchantCategory.Retail,
 );
 
-// Get merchant info
-const merchant = await client.getMerchant(keypair.publicKey());
-console.log(`Merchant ${merchant.name} registered at ${merchant.registeredAt}`);
+// Register with a custom category
+await client.registerMerchant(
+  keypair.publicKey(),
+  'Artisan Goods',
+  'Handcrafted items from local artisans',
+  'hello@artisan.com',
+  { Custom: 'Handmade' },
+);
+```
 
-// Process a payment
-await client.processPaymentWithNonce(
-  payerAddress,
-  'ORDER-123',
+#### `updateMerchant(merchantAddress, name, description, contactInfo, category): Promise<void>`
+
+Update an existing merchant profile. The caller must be the merchant address.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `merchantAddress` | `string` | Merchant's Stellar address |
+| `name` | `string` | Updated display name |
+| `description` | `string` | Updated business description |
+| `contactInfo` | `string` | Updated contact email or URL |
+| `category` | `MerchantCategory` | Updated category — any simple variant or `{ Custom: string }` |
+
+```typescript
+// Update to a custom category
+await client.updateMerchant(
+  keypair.publicKey(),
+  'Artisan Goods',
+  'Handcrafted & vintage items',
+  'hello@artisan.com',
+  { Custom: 'Handmade' },
+);
+
+// Update back to a standard category
+await client.updateMerchant(
+  keypair.publicKey(),
+  'Artisan Goods',
+  'Online marketplace',
+  'hello@artisan.com',
+  MerchantCategory.Digital,
+);
+```
+
+#### `getMerchant(merchantAddress: string): Promise<Merchant>`
+
+Retrieve merchant profile.
+
+```typescript
+const merchant = await client.getMerchant(merchantAddress);
+console.log(merchant.name, merchant.verified, merchant.totalReceived);
+```
+
+**Returns:** [`Merchant`](#merchant)
+
+#### `isRegistered(merchantAddress: string): Promise<boolean>`
+
+Check whether an address has a registered merchant profile.
+
+```typescript
+const registered = await client.isRegistered(address);
+```
+
+#### `deactivateMerchant(admin: string, merchantAddress: string): Promise<void>`
+
+Deactivate a merchant (admin only).
+
+```typescript
+await client.deactivateMerchant(adminAddress, merchantAddress);
+```
+
+#### `verifyMerchant(admin: string, merchantAddress: string): Promise<void>`
+
+Mark a merchant as verified (admin only).
+
+```typescript
+await client.verifyMerchant(adminAddress, merchantAddress);
+```
+
+#### `unverifyMerchant(admin: string, merchantAddress: string): Promise<void>`
+
+Remove merchant verification (admin only).
+
+```typescript
+await client.unverifyMerchant(adminAddress, merchantAddress);
+```
+
+---
+
+### Payment Processing
+
+#### `processPaymentWithSignature(payer, orderId, merchantAddress, tokenAddress, amount, memo, tags, signature, merchantPublicKey): Promise<void>`
+
+Process a payment verified by an ed25519 merchant signature.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `payer` | `string` | Payer's Stellar address |
+| `orderId` | `string` | Unique order identifier |
+| `merchantAddress` | `string` | Merchant's Stellar address |
+| `tokenAddress` | `string` | SAC token contract address |
+| `amount` | `bigint` | Amount in stroops |
+| `memo` | `string` | Payment memo |
+| `tags` | `string[] \| null` | Optional tags |
+| `signature` | `Buffer` | 64-byte ed25519 signature |
+| `merchantPublicKey` | `Buffer` | 32-byte ed25519 public key |
+
+```typescript
+import { signPaymentPayload } from '@lumenflow/sdk';
+
+const { signature, publicKey } = signPaymentPayload(
+  merchantKeypair,
+  orderId,
   merchantAddress,
   tokenAddress,
-  10000000n, // 1.0 unit (assuming 7 decimals)
-  'Payment for coffee',
-  ['coffee', 'morning'],
-  0n // nonce
+  amount,
 );
+
+await client.processPaymentWithSignature(
+  payerAddress,
+  'ORDER-001',
+  merchantAddress,
+  tokenAddress,
+  10_000_000n,
+  'Invoice #001',
+  ['retail'],
+  signature,
+  publicKey,
+);
+```
+
+#### `processPaymentWithNonce(payer, orderId, merchantAddress, tokenAddress, amount, memo, tags, nonce): Promise<void>`
+
+Process a payment using a sequential nonce for replay protection.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `payer` | `string` | Payer's Stellar address |
+| `orderId` | `string` | Unique order identifier |
+| `merchantAddress` | `string` | Merchant's Stellar address |
+| `tokenAddress` | `string` | SAC token contract address |
+| `amount` | `bigint` | Amount in stroops |
+| `memo` | `string` | Payment memo |
+| `tags` | `string[] \| null` | Optional tags |
+| `nonce` | `bigint` | Sequential nonce starting at `0`. Increment by 1 for each payment from this payer. Reuse is rejected with `InvalidNonce`. |
+
+```typescript
+// First payment: nonce = 0n
+await client.processPaymentWithNonce(
+  payerAddress,
+  'ORDER-002',
+  merchantAddress,
+  tokenAddress,
+  5_000_000n,
+  'Coffee',
+  null,
+  0n,
+);
+
+// Second payment: nonce = 1n
+await client.processPaymentWithNonce(
+  payerAddress,
+  'ORDER-003',
+  merchantAddress,
+  tokenAddress,
+  5_000_000n,
+  'Tea',
+  null,
+  1n,
+);
+```
+
+## Requirements
+
+| Tool | Version |
+|------|---------|
+| Node.js | ≥ 18 |
+| TypeScript | ≥ 5.0 |
+
+## Installation
+
+```bash
+# npm
+npm install @lumenflow/sdk
+
+# yarn
+yarn add @lumenflow/sdk
+
+# pnpm
+pnpm add @lumenflow/sdk
+```
+
+## Build
+
+```bash
+# Install dev dependencies first
+npm install
+
+Execute up to 10 signature-verified payments atomically. All succeed or all fail.
+
+```typescript
+await client.batchPayment(payerAddress, [
+  {
+    orderId: 'ORDER-010',
+    merchantAddress,
+    tokenAddress,
+    amount: 1_000_000n,
+    memo: 'Item A',
+    signature: sig1,
+    merchantPublicKey: pubKey,
+  },
+  {
+    orderId: 'ORDER-011',
+    merchantAddress,
+    tokenAddress,
+    amount: 2_000_000n,
+    memo: 'Item B',
+    signature: sig2,
+    merchantPublicKey: pubKey,
+  },
+]);
+```
+
+#### `getPaymentById(caller: string, orderId: string): Promise<PaymentOrder>`
+
+Retrieve full payment details. Caller must be the payer, merchant, or admin.
+
+```typescript
+const payment = await client.getPaymentById(callerAddress, 'ORDER-001');
+console.log(payment.status, payment.amount, payment.refundedAmount);
+```
+
+**Returns:** [`PaymentOrder`](#paymentorder)
+
+#### `getPaymentSummary(orderId: string): Promise<PaymentSummary>`
+
+Retrieve a public summary of a payment (no auth required).
+
+```typescript
+const summary = await client.getPaymentSummary('ORDER-001');
+```
+
+**Returns:** [`PaymentSummary`](#paymentsummary)
+
+#### `updatePaymentStatus(caller: string, orderId: string, refundedAmount: bigint): Promise<void>`
+
+Update the refunded amount on a payment record. Caller must be merchant or admin.
+
+```typescript
+await client.updatePaymentStatus(merchantAddress, 'ORDER-001', 500_000n);
+```
+
+#### `archivePaymentRecord(admin: string, orderId: string): Promise<void>`
+
+Remove a payment record from storage (admin only).
+
+```typescript
+await client.archivePaymentRecord(adminAddress, 'ORDER-001');
+```
+
+#### `cleanupExpiredPayments(admin: string): Promise<number>`
+
+Delete all payment records older than the configured cleanup period. Returns the count removed.
+
+```typescript
+const removed = await client.cleanupExpiredPayments(adminAddress);
+```
+
+---
+
+### Payment History Queries
+
+#### `getMerchantPaymentHistory(merchant, cursor, limit, filter, sortField, sortOrder): Promise<PaymentPage>`
+
+Retrieve paginated payment history for a merchant.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `merchant` | `string` | Merchant address |
+| `cursor` | `string \| null` | Order ID to start from, or `null` for first page |
+| `limit` | `number` | Max results (1–100) |
+| `filter` | `PaymentFilter \| null` | Optional filter criteria |
+| `sortField` | `SortField` | `Date` or `Amount` |
+| `sortOrder` | `SortOrder` | `Ascending` or `Descending` |
+
+```typescript
+const page = await client.getMerchantPaymentHistory(
+  merchantAddress,
+  null,
+  20,
+  { status: StatusFilter.Completed },
+  SortField.Date,
+  SortOrder.Descending,
+);
+
+for (const p of page.payments) {
+  console.log(p.orderId, p.amount);
+}
+
+// Fetch next page
+if (page.nextCursor) {
+  const next = await client.getMerchantPaymentHistory(
+    merchantAddress,
+    page.nextCursor,
+    20,
+    null,
+    SortField.Date,
+    SortOrder.Descending,
+  );
+}
+```
+
+**Returns:** [`PaymentPage`](#paymentpage)
+
+#### `getPayerPaymentHistory(payer, cursor, limit, filter, sortField, sortOrder): Promise<PaymentPage>`
+
+Retrieve paginated payment history for a payer. Same signature as `getMerchantPaymentHistory`.
+
+```typescript
+const page = await client.getPayerPaymentHistory(
+  payerAddress,
+  null,
+  10,
+  { amountMin: 1_000_000n, status: StatusFilter.Any },
+  SortField.Amount,
+  SortOrder.Ascending,
+);
+```
+
+#### `getGlobalPaymentStats(admin, dateStart?, dateEnd?): Promise<GlobalStats>`
+
+Retrieve platform-wide statistics (admin only).
+
+```typescript
+const stats = await client.getGlobalPaymentStats(
+  adminAddress,
+  1_700_000_000n, // optional Unix timestamp range
+  1_720_000_000n,
+);
+console.log(stats.totalPayments, stats.totalVolume);
+```
+
+**Returns:** [`GlobalStats`](#globalstats)
+
+---
+
+### Refunds
+
+#### `initiateRefund(caller, refundId, orderId, amount, reason): Promise<void>`
+
+Open a refund request. Caller must be the payer or merchant.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `caller` | `string` | Payer or merchant address |
+| `refundId` | `string` | Unique refund identifier |
+| `orderId` | `string` | Order to refund |
+| `amount` | `bigint` | Refund amount (≥ min refund amount, cumulative ≤ original amount) |
+| `reason` | `string` | Reason for refund |
+
+```typescript
+await client.initiateRefund(
+  payerAddress,
+  'REFUND-001',
+  'ORDER-001',
+  5_000_000n,
+  'Item not as described',
+);
+```
+
+#### `approveRefund(caller: string, refundId: string): Promise<void>`
+
+Approve a pending refund. Caller must be the merchant or admin.
+
+```typescript
+await client.approveRefund(merchantAddress, 'REFUND-001');
+```
+
+#### `rejectRefund(caller: string, refundId: string): Promise<void>`
+
+Reject a pending refund. Caller must be the merchant or admin.
+
+```typescript
+await client.rejectRefund(merchantAddress, 'REFUND-001');
+```
+
+#### `executeRefund(refundId: string): Promise<void>`
+
+Execute an approved refund (transfers tokens back to payer). Caller must be the merchant.
+
+```typescript
+await client.executeRefund('REFUND-001');
+```
+
+#### `getRefund(refundId: string): Promise<RefundRecord>`
+
+Retrieve refund details.
+
+```typescript
+const refund = await client.getRefund('REFUND-001');
+console.log(refund.status, refund.amount);
+```
+
+**Returns:** [`RefundRecord`](#refundrecord)
+
+#### `disputeRefund(payer: string, refundId: string, evidence: string): Promise<void>`
+
+Open a dispute on a rejected refund.
+
+```typescript
+await client.disputeRefund(payerAddress, 'REFUND-001', 'Proof of non-delivery attached');
+```
+
+#### `resolveDispute(admin: string, refundId: string, outcome: DisputeOutcome): Promise<void>`
+
+Resolve a disputed refund (admin only).
+
+```typescript
+await client.resolveDispute(adminAddress, 'REFUND-001', DisputeOutcome.FavorPayer);
+```
+
+---
+
+### Multi-Signature Payments
+
+#### `initiateMultisigPayment(initiator, paymentId, merchantAddress, tokenAddress, amount, signers, requiredSignatures): Promise<void>`
+
+Create a multisig payment requiring threshold approval before execution.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `initiator` | `string` | Address creating the payment |
+| `paymentId` | `string` | Unique payment identifier |
+| `merchantAddress` | `string` | Merchant to receive funds |
+| `tokenAddress` | `string` | SAC token address |
+| `amount` | `bigint` | Amount in stroops |
+| `signers` | `string[]` | Authorised signer addresses (no duplicates) |
+| `requiredSignatures` | `number` | Minimum signatures to execute |
+
+```typescript
+await client.initiateMultisigPayment(
+  initiatorAddress,
+  'MS-001',
+  merchantAddress,
+  tokenAddress,
+  50_000_000n,
+  [signer1, signer2, signer3],
+  2, // 2-of-3
+);
+```
+
+#### `signMultisigPayment(signer: string, paymentId: string, signature: Buffer): Promise<void>`
+
+Add a signature to a pending multisig payment.
+
+```typescript
+await client.signMultisigPayment(signer1Address, 'MS-001', signatureBuffer);
+```
+
+#### `executeMultisigPayment(payer: string, paymentId: string): Promise<void>`
+
+Execute a multisig payment once the signature threshold is met.
+
+```typescript
+await client.executeMultisigPayment(payerAddress, 'MS-001');
+```
+
+---
+
+### Payment Requests
+
+#### `createPaymentRequest(merchant, requestId, token, amount, memo, ttl): Promise<void>`
+
+Create a time-limited payment request that a payer can fulfil.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `merchant` | `string` | Merchant address |
+| `requestId` | `string` | Unique request identifier |
+| `token` | `string` | SAC token address |
+| `amount` | `bigint` | Amount in stroops |
+| `memo` | `string` | Payment memo |
+| `ttl` | `bigint` | Time-to-live in seconds |
+
+```typescript
+await client.createPaymentRequest(
+  merchantAddress,
+  'REQ-001',
+  tokenAddress,
+  25_000_000n,
+  'Invoice #42',
+  86400n, // 24 hours
+);
+```
+
+#### `payPaymentRequest(payer: string, requestId: string): Promise<void>`
+
+Fulfil a payment request.
+
+```typescript
+await client.payPaymentRequest(payerAddress, 'REQ-001');
+```
+
+---
+
+### Subscriptions
+
+#### `createSubscriptionPlan(merchant, planId, token, amount, intervalSecs, maxCycles): Promise<void>`
+
+Create a recurring payment plan (merchant only).
+
+```typescript
+await client.createSubscriptionPlan(
+  merchantAddress,
+  'PLAN-MONTHLY',
+  tokenAddress,
+  10_000_000n,
+  2_592_000n, // 30 days
+  12,         // up to 12 charges
+);
+```
+
+#### `subscribe(subscriber, subscriptionId, planId): Promise<void>`
+
+Subscribe to a plan.
+
+```typescript
+await client.subscribe(subscriberAddress, 'SUB-001', 'PLAN-MONTHLY');
+```
+
+#### `chargeSubscription(subscriptionId: string): Promise<void>`
+
+Trigger a charge cycle for a subscription (callable by anyone when the interval has elapsed).
+
+```typescript
+await client.chargeSubscription('SUB-001');
+```
+
+#### `cancelSubscription(subscriber: string, subscriptionId: string): Promise<void>`
+
+Cancel an active subscription.
+
+```typescript
+await client.cancelSubscription(subscriberAddress, 'SUB-001');
+```
+
+---
+
+### Utility: `signPaymentPayload`
+
+Helper to build and sign the ed25519 payload expected by `processPaymentWithSignature`.
+
+```typescript
+import { signPaymentPayload } from '@lumenflow/sdk';
+import { Keypair } from '@stellar/stellar-sdk';
+
+const keypair = Keypair.fromSecret('S...');
+const { signature, publicKey } = signPaymentPayload(
+  keypair,
+  orderId,
+  merchantAddress,
+  tokenAddress,
+  amount,
+);
+```
+
+---
+
+## Types
+
+### `Merchant`
+
+```typescript
+interface Merchant {
+  address: string;
+  name: string;
+  description: string;
+  contactInfo: string;
+  category: MerchantCategory;
+  active: boolean;
+  verified: boolean;
+  registeredAt: bigint;
+  totalReceived: bigint;
+}
+```
+
+### `PaymentOrder`
+
+```typescript
+interface PaymentOrder {
+  orderId: string;
+  merchantAddress: string;
+  payer: string;
+  token: string;
+  amount: bigint;
+  status: PaymentStatus;   // Completed | PartiallyRefunded | FullyRefunded
+  paidAt: bigint;          // Unix timestamp
+  refundedAmount: bigint;
+  memo: string;
+  tags?: string[];
+  note?: string;
+}
+```
+
+### `PaymentSummary`
+
+```typescript
+interface PaymentSummary {
+  orderId: string;
+  merchantAddress: string;
+  amount: bigint;
+  token: string;
+  status: PaymentStatus;
+  paidAt: bigint;
+}
+```
+
+### `PaymentPage`
+
+```typescript
+interface PaymentPage {
+  payments: PaymentOrder[];
+  nextCursor?: string;  // null when no more pages
+  total: number;        // total matching records before limit
+}
+```
+
+### `PaymentFilter`
+
+```typescript
+interface PaymentFilter {
+  dateStart?: bigint;   // Unix timestamp
+  dateEnd?: bigint;
+  amountMin?: bigint;
+  amountMax?: bigint;
+  token?: string;
+  status: StatusFilter; // Any | Completed | PartiallyRefunded | FullyRefunded
+  tag?: string;
+}
+```
+
+### `RefundRecord`
+
+```typescript
+interface RefundRecord {
+  refundId: string;
+  orderId: string;
+  initiator: string;
+  amount: bigint;
+  reason: string;
+  status: RefundStatus; // Pending | Approved | Rejected | Completed | Disputed
+  createdAt: bigint;
+}
+```
+
+### `MultisigPayment`
+
+```typescript
+interface MultisigPayment {
+  paymentId: string;
+  merchantAddress: string;
+  token: string;
+  amount: bigint;
+  requiredSignatures: number;
+  signers: string[];
+  signatures: Buffer[];
+  signedBy: string[];
+  executed: boolean;
+  createdAt: bigint;
+}
+```
+
+### `GlobalStats`
+
+```typescript
+interface GlobalStats {
+  totalPayments: number;
+  totalVolume: bigint;
+  totalRefunds: number;
+  totalRefundVolume: bigint;
+  activeMerchants: number;
+}
+```
+
+---
+
+## Installation
+
+```bash
+npm install @lumenflow/sdk
+```
+
+## Development
+
+To build the SDK from source:
+
+```bash
+cd sdk
+npm install
+npm run build
+npm test
 ```
 
 ## Error Handling
 
-The SDK maps numeric contract error codes to human-readable messages and provides a typed `LumenFlowError` object.
+Contract errors surface as `LumenFlowError` with a typed `code` property:
 
 ```typescript
-import { LumenFlowClient, NETWORKS } from "@lumenflow/sdk";
-import { Keypair } from "@stellar/stellar-sdk";
-
-const client = new LumenFlowClient({
-  contractId: process.env.CONTRACT_ID!,
-  ...NETWORKS.testnet,
-});
-
-const source = Keypair.fromSecret(process.env.SOURCE_SECRET!);
-
-await client.registerMerchant(
-  source,
-  source.publicKey(),
-  "My Store",
-  "A great store",
-  "contact@store.com",
-  "Retail"
-);
-```
-
-## Error Handling
-
-Contract errors are surfaced as `LumenFlowError` with a typed `code` property:
-
-```typescript
-import { LumenFlowError, PaymentErrorCode } from "@lumenflow/sdk";
+import { LumenFlowError, PaymentErrorCode } from '@lumenflow/sdk';
 
 try {
-  await client.registerMerchant(...);
-} catch (error) {
-  if (error instanceof LumenFlowError) {
-    console.error(`Error ${error.code}: ${error.message}`);
-    // e.g., "Error 11: This address is already registered as a merchant."
+  await client.processPaymentWithNonce(/* ... */);
+} catch (err) {
+  if (err instanceof LumenFlowError) {
+    switch (err.code) {
+      case PaymentErrorCode.InvalidNonce:
+        console.error('Nonce mismatch — fetch current nonce and increment by 1');
+        break;
+      case PaymentErrorCode.OrderAlreadyExists:
+        console.error('Duplicate order ID');
+        break;
+      default:
+        console.error(`Contract error ${err.code}: ${err.message}`);
+    }
   }
 }
 ```
 
-## Features
+See [`src/errors.ts`](src/errors.ts) for the full list of error codes.
 
-- **Full Coverage:** Supports all 39 contract functions including Admin, Merchant, Payment, Refunds, Multisig, and Subscriptions.
-- **Type Safety:** Fully typed interfaces for all contract data structures.
-- **Automatic XDR Handling:** Converts between JS types (bigint, number, string) and Soroban ScVal automatically.
-- **Error Mapping:** Direct mapping from Soroban contract errors to descriptive SDK errors.
-- **Utility Functions:** Includes helpers for signing payment payloads off-chain.
+### Error shape and serialization
+
+Every `LumenFlowError` exposes:
+
+| Member | Description |
+|---|---|
+| `code` | Numeric `PaymentErrorCode`. Unknown codes are preserved as-is. |
+| `codeName` | Enum name (e.g. `"InvalidSignature"`), or `"Unknown"`. |
+| `message` | Catalogue message for the code, or an "unknown error" fallback. |
+| `messageKey` | Localization key (e.g. `"error.invalidsignature"`, `"error.unknown"`). |
+| `details` | Optional extra context (the raw RPC message, an object, etc.). |
+| `toJSON()` | Plain, JSON-safe object — used automatically by `JSON.stringify`. |
+
+Because `LumenFlowError` implements `toJSON()`, it survives being logged or sent
+across a process / network boundary (a bare `Error` would `JSON.stringify` to
+`{}`):
+
+```typescript
+JSON.stringify(err);
+// {"name":"LumenFlowError","code":23,"codeName":"InvalidSignature",
+//  "message":"The provided signature is invalid or does not match the public key.",
+//  "messageKey":"error.invalidsignature"}
+```
+
+Raw contract / RPC failures are normalized to a `LumenFlowError` internally
+(`normalizeContractError`): a recognised numeric `code` maps to its
+`PaymentErrorCode`; anything else becomes `PaymentErrorCode.InvalidInput` with the
+original text kept in `details`.
+
+---
+
+## Rate Limiting
+
+The LumenFlow SDK communicates with Stellar Horizon and Soroban RPC endpoints. Both are subject to rate limits. The SDF public Horizon instance allows **3 600 requests per hour per IP** in standard REST mode, and up to **100 events/second** on Server-Sent Events streaming connections.
+
+When a limit is exceeded Horizon responds with **HTTP 429 Too Many Requests** and a `Retry-After` header indicating how many seconds to wait before retrying.
+
+### Built-in retry logic
+
+The SDK includes a production-ready exponential backoff helper in [`src/retry.ts`](src/retry.ts) that is applied automatically to all RPC read operations performed through `LumenFlowClient`. The default policy retries up to **3 attempts** with a base delay of **200 ms**, capped at **5 000 ms**, and **20% jitter** to avoid thundering-herd behaviour.
+
+You can override the retry policy per call:
+
+```typescript
+const merchant = await client.getMerchant(address, {
+  maxAttempts: 5,
+  baseDelayMs: 500,
+  maxDelayMs: 15_000,
+  jitter: 0.3,
+});
+```
+
+The `withRetry` helper can also be used directly for custom Horizon queries:
+
+```typescript
+import { withRetry } from '@lumenflow/sdk/retry';
+
+const stats = await withRetry(
+  () => fetch('https://horizon-testnet.stellar.org/fee_stats').then(r => r.json()),
+  { maxAttempts: 4, baseDelayMs: 300 }
+);
+```
+
+Errors that are automatically retried: `TypeError` (network failure), HTTP 408, 429, 500, 502, 503, 504. `LumenFlowError` contract errors are **not** retried and propagate immediately.
+
+For full documentation on Horizon rate limits, `Retry-After` header handling, and a standalone exponential backoff implementation, see **[docs/api-rate-limits.md](../docs/api-rate-limits.md)**.
 
 ## Development
 
-### Build
 ```bash
+# Build
 npm run build
-```
 
-### Test
-```bash
+# Test
 npm test
 ```
 
-## Error Codes
+---
 
-See [`src/errors.ts`](src/errors.ts) for the full list of `PaymentErrorCode` values and their human-readable messages.
+## Real-Time Payment Notifications
+
+`subscribeToPayments` opens a Horizon [Server-Sent Events](https://developers.stellar.org/docs/data/horizon/api-reference/resources/operations/object/payment) (SSE) stream for a merchant address and delivers strongly-typed `PaymentEvent` objects to a callback in real time.
+
+- Lower latency than HTTP polling
+- Automatic reconnection after 30 seconds of inactivity
+- Cleanly closable via `unsubscribe()`
+
+### Basic usage
+
+```typescript
+import { subscribeToPayments } from '@lumenflow/sdk';
+
+const subscription = subscribeToPayments(
+  'GABC...merchantAddress',           // Stellar merchant account
+  (event) => {
+    console.log('Payment received!');
+    console.log('  From:    ', event.payer);
+    console.log('  Amount:  ', event.amount.toString(), 'stroops');
+    console.log('  Token:   ', event.token);
+    console.log('  Order ID:', event.order_id);
+  },
+  {
+    horizonUrl: 'https://horizon-testnet.stellar.org', // default: testnet
+  },
+);
+
+// When you no longer need the subscription:
+subscription.unsubscribe();
+```
+
+### Options
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `horizonUrl` | `string` | testnet URL | Horizon base URL |
+| `inactivityTimeoutMs` | `number` | `30_000` | Reconnect after N ms of silence |
+| `eventSourceFactory` | `EventSourceFactory` | Global `EventSource` | Override in tests or custom environments |
+
+### PaymentEvent shape
+
+```typescript
+interface PaymentEvent {
+  type: string;             // e.g. "payment"
+  order_id: string;         // Horizon operation ID
+  merchant_address: string; // "to" address
+  payer: string;            // "from" address
+  token: string;            // asset code or "native"
+  amount: bigint;           // in stroops (1 XLM = 10_000_000 stroops)
+  timestamp: bigint;        // Unix seconds
+  raw: Record<string, unknown>; // full Horizon payload
+}
+```
+
+### Testnet vs mainnet
+
+```typescript
+// Testnet
+const sub = subscribeToPayments(merchant, callback, {
+  horizonUrl: 'https://horizon-testnet.stellar.org',
+});
+
+// Mainnet
+const sub = subscribeToPayments(merchant, callback, {
+  horizonUrl: 'https://horizon.stellar.org',
+});
+```
+
+## Address Validation
+
+For frontend applications, the SDK provides utilities to validate Stellar addresses:
+
+```typescript
+import { isValidStellarAddress, isValidStellarContractId } from '@lumenflow/sdk';
+
+// Validate a Stellar public key (G-address)
+const isValid = isValidStellarAddress('GD6WUVRX7XJ6E5Q5K2L2K3K4K5K6K7K8K9K0K1K2K3K4K5K6K7K8K9K0K1K2');
+console.log(isValid); // true
+
+// Validate a Stellar contract ID (C-address)
+const isContractValid = isValidStellarContractId('CD6WUVRX7XJ6E5Q5K2L2K3K4K5K6K7K8K9K0K1K2K3K4K5K6K7K8K9K0K1K2');
+console.log(isContractValid); // true
+```
+
+### Validation Rules
+
+- **Stellar Public Keys (G-address)**: Must start with 'G', be exactly 56 characters, and use valid base32 encoding
+- **Stellar Contract IDs (C-address)**: Must start with 'C', be exactly 56 characters, and use valid base32 encoding
+
+**Note**: The validation functions perform lightweight format checking. For production use with full checksum validation, consider using `@stellar/stellar-sdk`'s `StrKey` utilities:
+
+```typescript
+import { StrKey } from '@stellar/stellar-sdk';
+
+try {
+  StrKey.decodeEd25519PublicKey(address);
+  // Valid address
+} catch {
+  // Invalid address
+}
+```
+
+## Retry Configuration
+
+The SDK provides automatic retry logic for transient HTTP errors (429, 503, 504, network failures) when using the `Client` class.
+
+### Default Retry Configuration
+
+```typescript
+import { DEFAULT_RETRY_CONFIG } from '@lumenflow/sdk';
+
+console.log(DEFAULT_RETRY_CONFIG);
+// {
+//   maxAttempts: 5,
+//   initialDelayMs: 100,
+//   maxDelayMs: 10000,
+//   backoffMultiplier: 2,
+//   jitterFactor: 0.1,
+//   retryableStatusCodes: [429, 503, 504],
+// }
+```
+
+### Using the Client with Custom Retry Config
+
+```typescript
+import { Client, ClientConfig } from '@lumenflow/sdk';
+
+const config: ClientConfig = {
+  rpcUrl: 'https://soroban-testnet.stellar.org',
+  contractId: 'your-contract-id',
+  retryConfig: {
+    maxAttempts: 10,           // Increase max attempts
+    initialDelayMs: 200,       // Start with longer delay
+    maxDelayMs: 30000,          // Allow longer max delay
+  },
+};
+
+const client = new Client(config);
+```
+
+### Retry Behavior
+
+- **Transient errors** (429, 503, 504, network failures) are automatically retried with exponential backoff and jitter
+- **Business logic errors** (`LumenFlowError`) are not retried and propagate immediately
+- **Non-retryable HTTP errors** (400, 401, 403, etc.) are not retried
+
+### Manual Retry
+
+You can also use the `withRetry` utility directly:
+
+```typescript
+import { withRetry, RetryConfig } from '@lumenflow/sdk';
+
+const config: Partial<RetryConfig> = {
+  maxAttempts: 3,
+  initialDelayMs: 100,
+};
+
+await withRetry(async () => {
+  // Your async operation here
+  await someApiCall();
+}, config);
+```

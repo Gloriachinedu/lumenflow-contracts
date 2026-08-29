@@ -27,6 +27,7 @@ export enum PaymentErrorCode {
   MultisigAlreadySigned = 41,
   MultisigAlreadyExecuted = 42,
   InsufficientSignatures = 43,
+  MultisigAlreadyCancelled = 44,
   InvalidInput = 50,
   PaginationLimitExceeded = 51,
   BatchSizeExceeded = 52,
@@ -69,6 +70,7 @@ export const ERROR_MESSAGES: Record<PaymentErrorCode, string> = {
   [PaymentErrorCode.MultisigAlreadySigned]: "This signer has already signed this payment.",
   [PaymentErrorCode.MultisigAlreadyExecuted]: "This multi-signature payment has already been executed.",
   [PaymentErrorCode.InsufficientSignatures]: "The payment does not have enough signatures to meet the threshold.",
+  [PaymentErrorCode.MultisigAlreadyCancelled]: "This multi-signature payment has been cancelled.",
   [PaymentErrorCode.InvalidInput]: "One or more input fields are invalid or empty.",
   [PaymentErrorCode.PaginationLimitExceeded]: "The requested page size exceeds the maximum limit.",
   [PaymentErrorCode.BatchSizeExceeded]: "The payment batch exceeds the maximum size (10 items).",
@@ -95,9 +97,50 @@ export class LumenFlowError extends Error {
   }
 
   /**
-   * Localization-ready message key.
+   * Human-readable name of the error code (e.g. `"InvalidSignature"`), or
+   * `"Unknown"` when the code is not a known {@link PaymentErrorCode}.
+   */
+  get codeName(): string {
+    return PaymentErrorCode[this.code] ?? "Unknown";
+  }
+
+  /**
+   * Localization-ready message key, e.g. `"error.invalidsignature"`.
+   * Falls back to `"error.unknown"` for unrecognised codes.
    */
   get messageKey(): string {
-    return `error.${PaymentErrorCode[this.code].toLowerCase()}`;
+    return `error.${this.codeName.toLowerCase()}`;
+  }
+
+  /**
+   * Plain, JSON-safe representation of the error. Used by `JSON.stringify`
+   * and when forwarding errors across process / network boundaries.
+   */
+  toJSON(): {
+    name: string;
+    code: PaymentErrorCode;
+    codeName: string;
+    message: string;
+    messageKey: string;
+    details?: unknown;
+  } {
+    const json: {
+      name: string;
+      code: PaymentErrorCode;
+      codeName: string;
+      message: string;
+      messageKey: string;
+      details?: unknown;
+    } = {
+      name: this.name,
+      code: this.code,
+      codeName: this.codeName,
+      message: this.message,
+      messageKey: this.messageKey,
+    };
+    if (this.details !== undefined) {
+      json.details = this.details;
+    }
+    return json;
   }
 }
