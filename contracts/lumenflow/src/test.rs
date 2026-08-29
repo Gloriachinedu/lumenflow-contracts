@@ -1082,3 +1082,90 @@ fn test_auth_sign_multisig_requires_listed_signer() {
     let result = client.try_sign_multisig_payment(&stranger, &str(&env, "AUTH_MS"), &bytes(&env, &[0u8; 64]));
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
+
+// ── Event payload schema validation tests (#834) ──────────────────────────────
+
+#[test]
+fn test_payment_processed_event_schema() {
+    use crate::types::PaymentProcessedEvent;
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "SCHEMA_P_1"),
+        &merchant,
+        &token,
+        &1_500,
+        &str(&env, "schema test"),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    let events = env.events().all();
+    let evt = events.iter().find(|e| {
+        e.topics.get(1).unwrap() == soroban_sdk::Symbol::new(&env, "payment_processed")
+    });
+    assert!(evt.is_some());
+    // Decode data field as the canonical PaymentProcessedEvent struct.
+    let data: PaymentProcessedEvent =
+        soroban_sdk::Val::try_into_val(&evt.unwrap().data, &env).unwrap();
+    assert_eq!(data.order_id, str(&env, "SCHEMA_P_1"));
+    assert_eq!(data.payer, payer);
+    assert_eq!(data.merchant, merchant);
+    assert_eq!(data.amount, 1_500i128);
+}
+
+#[test]
+fn test_refund_initiated_event_schema() {
+    use crate::types::RefundInitiatedEvent;
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "SCHEMA_RI_1", 1_000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "SCHEMA_RF_1"),
+        &str(&env, "SCHEMA_RI_1"),
+        &250,
+        &str(&env, "schema"),
+    );
+    let events = env.events().all();
+    let evt = events.iter().find(|e| {
+        e.topics.get(1).unwrap() == soroban_sdk::Symbol::new(&env, "refund_initiated")
+    });
+    assert!(evt.is_some());
+    let data: RefundInitiatedEvent =
+        soroban_sdk::Val::try_into_val(&evt.unwrap().data, &env).unwrap();
+    assert_eq!(data.refund_id, str(&env, "SCHEMA_RF_1"));
+    assert_eq!(data.order_id, str(&env, "SCHEMA_RI_1"));
+    assert_eq!(data.initiator, payer);
+    assert_eq!(data.amount, 250i128);
+}
+
+#[test]
+fn test_refund_executed_event_schema() {
+    use crate::types::RefundExecutedEvent;
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "SCHEMA_RE_1", 1_000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "SCHEMA_RERF_1"),
+        &str(&env, "SCHEMA_RE_1"),
+        &400,
+        &str(&env, "schema"),
+    );
+    client.approve_refund(&merchant, &str(&env, "SCHEMA_RERF_1"));
+    client.execute_refund(&str(&env, "SCHEMA_RERF_1"));
+    let events = env.events().all();
+    let evt = events.iter().find(|e| {
+        e.topics.get(1).unwrap() == soroban_sdk::Symbol::new(&env, "refund_executed")
+    });
+    assert!(evt.is_some());
+    let data: RefundExecutedEvent =
+        soroban_sdk::Val::try_into_val(&evt.unwrap().data, &env).unwrap();
+    assert_eq!(data.refund_id, str(&env, "SCHEMA_RERF_1"));
+    assert_eq!(data.order_id, str(&env, "SCHEMA_RE_1"));
+    assert_eq!(data.payer, payer);
+    assert_eq!(data.merchant, merchant);
+    assert_eq!(data.amount, 400i128);
+    assert_eq!(data.token, token);
+}

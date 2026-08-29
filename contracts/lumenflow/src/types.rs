@@ -249,3 +249,104 @@ pub struct Subscription {
     pub status: SubscriptionStatus,
     pub created_at: u64,
 }
+
+// ── Event payload types ───────────────────────────────────────────────────────
+//
+// Each struct below is the canonical schema for a contract event's data field.
+// Using `#[contracttype]` ensures the XDR encoding is stable and can be decoded
+// off-chain against generated SDK bindings.
+
+/// Data payload for `lumenflow/payment_processed`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaymentProcessedEvent {
+    pub order_id: String,
+    pub payer: Address,
+    pub merchant: Address,
+    pub amount: i128,
+}
+
+/// Data payload for `lumenflow/refund_initiated`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefundInitiatedEvent {
+    pub refund_id: String,
+    pub order_id: String,
+    pub initiator: Address,
+    pub amount: i128,
+}
+
+/// Data payload for `lumenflow/refund_approved`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefundApprovedEvent {
+    pub refund_id: String,
+    pub order_id: String,
+    pub merchant: Address,
+    pub amount: i128,
+}
+
+/// Data payload for `lumenflow/refund_rejected`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefundRejectedEvent {
+    pub refund_id: String,
+    pub order_id: String,
+    pub merchant: Address,
+    pub amount: i128,
+}
+
+/// Data payload for `lumenflow/refund_executed`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefundExecutedEvent {
+    pub refund_id: String,
+    pub order_id: String,
+    pub payer: Address,
+    pub merchant: Address,
+    pub amount: i128,
+    pub token: Address,
+}
+
+/// Data payload for `lumenflow/multisig_initiated`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MultisigInitiatedEvent {
+    pub payment_id: String,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub required_signatures: u32,
+}
+
+/// Data payload for `lumenflow/multisig_executed`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MultisigExecutedEvent {
+    pub payment_id: String,
+    pub payer: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+}
+
+/// Data payload for `lumenflow/payment_request_paid`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaymentRequestPaidEvent {
+    pub request_id: String,
+    pub payer: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+}
+
+/// Data payload for `lumenflow/payment_status_updated`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaymentStatusUpdatedEvent {
+    pub order_id: String,
+    pub status: PaymentStatus,
+    pub refunded_amount: i128,
+    pub original_amount: i128,
+}
