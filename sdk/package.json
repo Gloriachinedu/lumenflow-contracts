@@ -21,7 +21,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@stellar/stellar-sdk": "^16.1.0",
+    "@stellar/stellar-sdk": "^16.2.0",
     "tweetnacl": "1.0.3"
   },
   "devDependencies": {
