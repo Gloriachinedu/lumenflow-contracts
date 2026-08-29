@@ -123,3 +123,48 @@ npm audit
 ```
 
 Only **critical** vulnerabilities fail CI. To investigate a specific advisory, use `npm audit --json` for machine-readable output.
+
+## Coverage thresholds by subsystem
+
+Overall project coverage must stay at or above **80%** (`codecov.yml`). In
+addition, each subsystem has its own published target that is scored
+independently via Codecov `component_management`, so a regression in one area is
+visible even when the aggregate number still passes:
+
+| Subsystem | Paths | Target |
+|---|---|---|
+| Soroban contracts | `contracts/**` | 85% |
+| TypeScript SDK | `sdk/src/**` | 80% |
+| Web frontend | `frontend/**` | 70% |
+| Merchant dashboard | `dashboard/**` | 70% |
+
+Raise a target as coverage improves; never lower one silently.
+
+## Fuzz tests for malformed signatures and payloads
+
+`sdk/src/tests/signatureFuzz.test.ts` feeds large volumes of randomised and
+adversarial input (a seeded PRNG keeps failures reproducible) into the payload
+builders and ed25519 verification. It asserts that malformed field
+combinations, corrupt contract IDs, random / bit-flipped / truncated signatures,
+and tampered payloads are all rejected deterministically rather than crashing or
+silently accepting a bad signature.
+
+## Failure-injection tests for upstream Horizon outages
+
+`sdk/src/tests/horizonOutage.test.ts` injects Horizon SSE connection errors and
+Soroban RPC transient failures (503/504, timeouts, `ECONNRESET`). It verifies
+the event stream reconnects with capped exponential backoff, stops cleanly when
+unsubscribed mid-outage, resumes delivery once the outage clears, and that
+`withRetry` retries transient errors but surfaces permanent ones immediately.
+
+## Restore drills
+
+A backup that has never been restored is untested. `scripts/restore-drill.mjs`
+performs a full round trip — snapshot → serialize → restore → byte-for-byte
+compare — and fails loudly on corruption, truncation, or silent tampering.
+
+```bash
+node scripts/restore-drill.mjs                       # drill critical repo config
+node scripts/restore-drill.mjs codecov.yml Makefile  # drill specific files
+npm run test:roadmap                                 # runs scripts/*.test.mjs, incl. the drill tests
+```
