@@ -1082,3 +1082,157 @@ fn test_auth_sign_multisig_requires_listed_signer() {
     let result = client.try_sign_multisig_payment(&stranger, &str(&env, "AUTH_MS"), &bytes(&env, &[0u8; 64]));
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
+
+// ── Budget regression tests ───────────────────────────────────────────────────
+//
+// These tests assert that key entry points stay within the CPU and memory
+// instruction budgets documented in docs/budget-thresholds.md.
+//
+// Thresholds are set at ≤ 80 % of Soroban testnet limits to provide headroom
+// for native host overhead that the test harness does not charge.
+//
+// To update a threshold after a deliberate feature addition:
+//   1. Run `cargo test --all-features budget_regression -- --nocapture`
+//   2. Update the constant AND the table in docs/budget-thresholds.md.
+//   3. Add a CHANGELOG entry.
+
+mod budget_regression {
+    use super::*;
+
+    // ── CPU instruction limits ────────────────────────────────────────────────
+    const CPU_PROCESS_PAYMENT: u64 = 5_000_000;
+    const CPU_INITIATE_REFUND: u64 = 3_000_000;
+    const CPU_APPROVE_REFUND: u64 = 2_000_000;
+    const CPU_EXECUTE_REFUND: u64 = 4_000_000;
+    const CPU_REGISTER_MERCHANT: u64 = 2_000_000;
+    const CPU_BATCH_PAYMENT_10: u64 = 40_000_000;
+
+    // ── Memory byte limits ────────────────────────────────────────────────────
+    const MEM_PROCESS_PAYMENT: u64 = 2_000_000;
+    const MEM_INITIATE_REFUND: u64 = 1_500_000;
+    const MEM_APPROVE_REFUND: u64 = 1_000_000;
+    const MEM_EXECUTE_REFUND: u64 = 2_000_000;
+    const MEM_REGISTER_MERCHANT: u64 = 1_000_000;
+    const MEM_BATCH_PAYMENT_10: u64 = 10_000_000;
+
+    fn reset(env: &Env) {
+        env.budget().reset_default();
+    }
+
+    fn check(env: &Env, label: &str, cpu_limit: u64, mem_limit: u64) {
+        let cpu = env.budget().cpu_instruction_cost();
+        let mem = env.budget().memory_bytes_cost();
+        println!("[budget] {label}: cpu={cpu}, mem={mem}");
+        assert!(
+            cpu <= cpu_limit,
+            "{label}: cpu {cpu} exceeded limit {cpu_limit}"
+        );
+        assert!(
+            mem <= mem_limit,
+            "{label}: mem {mem} exceeded limit {mem_limit}"
+        );
+    }
+
+    #[test]
+    fn budget_regression_process_payment_with_signature() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        let pub_key = bytes(&env, &[0u8; 32]);
+        let sig = bytes(&env, &[0u8; 64]);
+
+        reset(&env);
+        client.process_payment_with_signature(
+            &payer,
+            &str(&env, "BUD_PAY_001"),
+            &merchant,
+            &token,
+            &1_000,
+            &str(&env, "budget test"),
+            &None,
+            &sig,
+            &pub_key,
+        );
+        check(&env, "process_payment_with_signature", CPU_PROCESS_PAYMENT, MEM_PROCESS_PAYMENT);
+    }
+
+    #[test]
+    fn budget_regression_register_merchant() {
+        let (env, client) = setup();
+        let merchant = Address::generate(&env);
+
+        reset(&env);
+        client.register_merchant(
+            &merchant,
+            &str(&env, "Budget Store"),
+            &str(&env, "desc"),
+            &str(&env, "contact@budget.com"),
+            &MerchantCategory::Retail,
+        );
+        check(&env, "register_merchant", CPU_REGISTER_MERCHANT, MEM_REGISTER_MERCHANT);
+    }
+
+    #[test]
+    fn budget_regression_initiate_refund() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        make_payment(&env, &client, &merchant, &payer, &token, "BUD_R_PAY", 1_000);
+
+        reset(&env);
+        client.initiate_refund(
+            &payer,
+            &str(&env, "BUD_REFUND_1"),
+            &str(&env, "BUD_R_PAY"),
+            &300,
+            &str(&env, "budget check"),
+        );
+        check(&env, "initiate_refund", CPU_INITIATE_REFUND, MEM_INITIATE_REFUND);
+    }
+
+    #[test]
+    fn budget_regression_approve_refund() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        make_payment(&env, &client, &merchant, &payer, &token, "BUD_AR_PAY", 1_000);
+        client.initiate_refund(&payer, &str(&env, "BUD_REFUND_2"), &str(&env, "BUD_AR_PAY"), &300, &str(&env, "r"));
+
+        reset(&env);
+        client.approve_refund(&merchant, &str(&env, "BUD_REFUND_2"));
+        check(&env, "approve_refund", CPU_APPROVE_REFUND, MEM_APPROVE_REFUND);
+    }
+
+    #[test]
+    fn budget_regression_execute_refund() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        make_payment(&env, &client, &merchant, &payer, &token, "BUD_ER_PAY", 1_000);
+        client.initiate_refund(&payer, &str(&env, "BUD_REFUND_3"), &str(&env, "BUD_ER_PAY"), &300, &str(&env, "r"));
+        client.approve_refund(&merchant, &str(&env, "BUD_REFUND_3"));
+
+        reset(&env);
+        client.execute_refund(&str(&env, "BUD_REFUND_3"));
+        check(&env, "execute_refund", CPU_EXECUTE_REFUND, MEM_EXECUTE_REFUND);
+    }
+
+    #[test]
+    fn budget_regression_batch_payment_10_items() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+        let order_ids = [
+            "BUD_B0", "BUD_B1", "BUD_B2", "BUD_B3", "BUD_B4",
+            "BUD_B5", "BUD_B6", "BUD_B7", "BUD_B8", "BUD_B9",
+        ];
+
+        let mut payments = Vec::new(&env);
+        for id_str in order_ids {
+            payments.push_back(BatchPaymentItem {
+                order_id: str(&env, id_str),
+                merchant_address: merchant.clone(),
+                token_address: token.clone(),
+                amount: 10,
+                memo: str(&env, ""),
+                signature: bytes(&env, &[0u8; 64]),
+                merchant_public_key: bytes(&env, &[0u8; 32]),
+            });
+        }
+
+        reset(&env);
+        client.batch_payment(&payer, &payments);
+        check(&env, "batch_payment_10_items", CPU_BATCH_PAYMENT_10, MEM_BATCH_PAYMENT_10);
+    }
+}
