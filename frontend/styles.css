@@ -62,13 +62,37 @@ h1 { font-size: 1.4rem; font-weight: 700; color: #6c47ff; margin-bottom: 0.25rem
 }
 
 .field input:focus, .field select:focus { border-color: #6c47ff; }
-.field input.error { border-color: #e53e3e; }
+
+/* Error state – driven by .error class AND aria-invalid for robustness */
+.field input.error,
+.field select.error,
+.field input[aria-invalid="true"],
+.field select[aria-invalid="true"] {
+  border-color: #e53e3e;
+  background-color: #fff8f8;
+}
+
+/* Valid state – shown after user interaction when field is clean */
+.field input[aria-invalid="false"]:not(:placeholder-shown) {
+  border-color: #1a9e5c;
+}
 
 .field .hint { font-size: 0.75rem; color: #888; margin-top: 0.25rem; }
 .field .help-text { font-size: 0.78rem; color: #666; margin-top: 0.3rem; }
 
-.field .err-msg { font-size: 0.75rem; color: #e53e3e; margin-top: 0.25rem; display: none; }
+/* Error message – inline, placed immediately after the input it describes */
+.field .err-msg {
+  font-size: 0.75rem;
+  color: #e53e3e;
+  margin-top: 0.3rem;
+  display: none;
+  /* Icon prefix so the error is distinguishable without colour alone */
+}
 .field .err-msg.visible { display: block; }
+.field .err-msg.visible::before {
+  content: '⚠ ';
+  font-style: normal;
+}
 
 /* ── Buttons ────────────────────────────────────────────────────────────────── */
 .btn {
