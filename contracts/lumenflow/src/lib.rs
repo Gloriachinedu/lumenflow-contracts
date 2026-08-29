@@ -433,6 +433,77 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    // ── Token and issuer allowlist management ─────────────────────────────────
+
+    /// Add a Stellar token address to the contract allowlist (admin only).
+    ///
+    /// `issuer` — optional issuer address for the token.  When the admin has
+    /// registered at least one allowed issuer via `add_allowed_issuer`, this
+    /// argument is mandatory and must match a registered issuer; otherwise the
+    /// call is rejected with `InvalidIssuer`.  When no issuers have been
+    /// registered the argument is ignored and any valid token may be added.
+    pub fn add_allowed_token(
+        env: Env,
+        admin: Address,
+        token: Address,
+        issuer: Option<Address>,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+
+        // If an issuer is supplied, verify it is on the approved-issuer list.
+        if let Some(ref iss) = issuer {
+            if !storage::is_issuer_allowed(&env, iss) {
+                return Err(PaymentError::InvalidIssuer);
+            }
+        }
+
+        storage::set_token_allowed(&env, &token, true);
+        env.events().publish(("lumenflow", "token_allowed"), token);
+        Ok(())
+    }
+
+    /// Remove a Stellar token address from the contract allowlist (admin only).
+    ///
+    /// Payments for a removed token will be rejected with `TokenNotAllowed`.
+    /// Existing completed payments are not affected.
+    pub fn remove_allowed_token(
+        env: Env,
+        admin: Address,
+        token: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_token_allowed(&env, &token, false);
+        env.events().publish(("lumenflow", "token_disallowed"), token);
+        Ok(())
+    }
+
+    /// Register an issuer address as an approved token issuer (admin only).
+    ///
+    /// Once at least one issuer is registered, `add_allowed_token` validates
+    /// that every new token's issuer is on this list before whitelisting.
+    pub fn add_allowed_issuer(
+        env: Env,
+        admin: Address,
+        issuer: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_issuer_allowed(&env, &issuer, true);
+        env.events().publish(("lumenflow", "issuer_allowed"), issuer);
+        Ok(())
+    }
+
+    /// Remove an issuer address from the approved-issuer list (admin only).
+    pub fn remove_allowed_issuer(
+        env: Env,
+        admin: Address,
+        issuer: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_issuer_allowed(&env, &issuer, false);
+        env.events().publish(("lumenflow", "issuer_disallowed"), issuer);
+        Ok(())
+    }
+
     // ── Merchant management ───────────────────────────────────────────────────
 
     /// Register a new merchant.

@@ -1015,3 +1015,19 @@ pub fn record_auth_failure(env: &Env, address: &Address) -> bool {
         false
     }
 }
+
+// ── Allowed Issuers ───────────────────────────────────────────────────────────
+
+/// Returns true if the issuer has been registered as an approved token issuer.
+pub fn is_issuer_allowed(env: &Env, issuer: &Address) -> bool {
+    env.storage().instance().has(&DataKey::AllowedIssuer(issuer.clone()))
+}
+
+/// Register or deregister an issuer address.
+pub fn set_issuer_allowed(env: &Env, issuer: &Address, allowed: bool) {
+    if allowed {
+        env.storage().instance().set(&DataKey::AllowedIssuer(issuer.clone()), &());
+    } else {
+        env.storage().instance().remove(&DataKey::AllowedIssuer(issuer.clone()));
+    }
+}
