@@ -37,6 +37,9 @@ jobs:
       - name: Reproducibility check
         run: cargo update --locked
 
+      # Cache key is scoped to the lint job to prevent cross-job cache contamination.
+      # hashFiles('rust-toolchain.toml') busts the cache when the toolchain changes,
+      # and hashFiles('**/Cargo.lock') busts it when dependencies change.
       - name: Cache cargo registry
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
@@ -78,6 +81,9 @@ jobs:
       - name: Verify toolchain version
         run: rustc --version | grep "1.87.0"
 
+      # Cache key is scoped to the test job to prevent cross-job cache contamination.
+      # hashFiles('rust-toolchain.toml') busts the cache when the toolchain changes,
+      # and hashFiles('**/Cargo.lock') busts it when dependencies change.
       - name: Cache cargo registry
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
@@ -109,6 +115,9 @@ jobs:
           toolchain: 1.87.0
           targets: wasm32-unknown-unknown
 
+      # Cache key is scoped to the auth-tests job to prevent cross-job cache contamination.
+      # hashFiles('rust-toolchain.toml') busts the cache when the toolchain changes,
+      # and hashFiles('**/Cargo.lock') busts it when dependencies change.
       - name: Cache cargo registry
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
@@ -302,6 +311,9 @@ jobs:
       - name: Verify toolchain version
         run: rustc --version | grep "1.87.0"
 
+      # Cache key is scoped to the build job (wasm prefix) to prevent cross-job cache contamination.
+      # hashFiles('rust-toolchain.toml') busts the cache when the toolchain changes,
+      # and hashFiles('**/Cargo.lock') busts it when dependencies change.
       - name: Cache cargo registry
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
