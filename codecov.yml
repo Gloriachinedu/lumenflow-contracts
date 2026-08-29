@@ -14,8 +14,54 @@ coverage:
         if_no_uploads: error
         if_not_found: success
 
+# Published per-subsystem coverage thresholds.
+#
+# Each component below is scored independently in the Codecov PR comment and
+# status checks, so a regression in one subsystem is visible even when the
+# overall project number still passes. Targets reflect the current maturity of
+# each subsystem; raise them as coverage improves, never lower them silently.
+component_management:
+  default_rules:
+    statuses:
+      - type: project
+        target: 80%
+        threshold: 1%
+  individual_components:
+    - component_id: contracts
+      name: Soroban contracts
+      paths:
+        - "contracts/**"
+      statuses:
+        - type: project
+          target: 85%
+          threshold: 1%
+    - component_id: sdk
+      name: TypeScript SDK
+      paths:
+        - "sdk/src/**"
+      statuses:
+        - type: project
+          target: 80%
+          threshold: 1%
+    - component_id: frontend
+      name: Web frontend
+      paths:
+        - "frontend/**"
+      statuses:
+        - type: project
+          target: 70%
+          threshold: 2%
+    - component_id: dashboard
+      name: Merchant dashboard
+      paths:
+        - "dashboard/**"
+      statuses:
+        - type: project
+          target: 70%
+          threshold: 2%
+
 comment:
-  layout: "reach,diff,flags,files"
+  layout: "reach,diff,flags,components,files"
   behavior: default
   require_changes: false   # always post a comment on PRs
   require_base: false
