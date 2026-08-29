@@ -1,13 +1,214 @@
 /* LumenFlow Design System — shared across all frontend pages */
 
+/* ── CSS Custom Properties (Light mode defaults) ────────────────────────────── */
+:root {
+  /* Backgrounds */
+  --color-bg:            #f5f7fa;
+  --color-surface:       #ffffff;
+  --color-surface-2:     #fafbfc;
+  --color-input-bg:      #ffffff;
+  --color-hover-primary: #f0ecff;
+
+  /* Text */
+  --color-text:          #1a1a2e;
+  --color-text-muted:    #595959;
+  --color-text-subtle:   #767676;
+  --color-text-hint:     #888888;
+
+  /* Brand / Primary */
+  --color-primary:       #5a3fd6;
+  --color-primary-alt:   #6c47ff;
+  --color-primary-text:  #ffffff;
+
+  /* Borders */
+  --color-border:        #dde1e7;
+  --color-border-light:  #eeeeee;
+  --color-border-faint:  #e0e0e0;
+  --color-border-rule:   #f0f0f0;
+
+  /* Shadows */
+  --color-shadow:        rgba(0, 0, 0, 0.08);
+  --color-shadow-strong: rgba(0, 0, 0, 0.12);
+
+  /* Status badges */
+  --color-badge-completed-bg:   #e6f9f0;
+  --color-badge-completed-text: #0e7a45;
+  --color-badge-refunded-bg:    #fff3e0;
+  --color-badge-refunded-text:  #b45309;
+  --color-badge-partial-bg:     #fff8e1;
+  --color-badge-partial-text:   #92600a;
+  --color-badge-unknown-bg:     #f0f0f0;
+  --color-badge-unknown-text:   #595959;
+
+  /* Alerts */
+  --color-alert-success-bg:   #e6f9f0;
+  --color-alert-success-text: #0e7a45;
+  --color-alert-error-bg:     #fff0f0;
+  --color-alert-error-text:   #c0392b;
+  --color-alert-info-bg:      #eff4ff;
+  --color-alert-info-text:    #1e3fad;
+
+  /* Skeleton loader */
+  --color-skeleton-from: #e8e8e8;
+  --color-skeleton-to:   #f5f5f5;
+
+  /* Dark mode toggle button */
+  --dm-toggle-bg:   #e8e8e8;
+  --dm-toggle-icon: "🌙";
+}
+
+/* ── Dark mode via system preference ────────────────────────────────────────── */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg:            #0f0f1a;
+    --color-surface:       #1a1a2e;
+    --color-surface-2:     #232340;
+    --color-input-bg:      #1e1e36;
+    --color-hover-primary: #2a2050;
+
+    --color-text:          #e8e8f0;
+    --color-text-muted:    #a0a0b8;
+    --color-text-subtle:   #8888a0;
+    --color-text-hint:     #6b6b85;
+
+    --color-primary:       #7c5fff;
+    --color-primary-alt:   #8a67ff;
+    --color-primary-text:  #ffffff;
+
+    --color-border:        #2e2e50;
+    --color-border-light:  #252545;
+    --color-border-faint:  #2a2a48;
+    --color-border-rule:   #222240;
+
+    --color-shadow:        rgba(0, 0, 0, 0.4);
+    --color-shadow-strong: rgba(0, 0, 0, 0.6);
+
+    --color-badge-completed-bg:   #0a2e1e;
+    --color-badge-completed-text: #34d48a;
+    --color-badge-refunded-bg:    #2e1a00;
+    --color-badge-refunded-text:  #f59e0b;
+    --color-badge-partial-bg:     #2e2200;
+    --color-badge-partial-text:   #d4a017;
+    --color-badge-unknown-bg:     #2a2a40;
+    --color-badge-unknown-text:   #a0a0b8;
+
+    --color-alert-success-bg:   #0a2e1e;
+    --color-alert-success-text: #34d48a;
+    --color-alert-error-bg:     #2e0a0a;
+    --color-alert-error-text:   #ff6b6b;
+    --color-alert-info-bg:      #0a1230;
+    --color-alert-info-text:    #6b8fff;
+
+    --color-skeleton-from: #252545;
+    --color-skeleton-to:   #1e1e3a;
+
+    --dm-toggle-bg:   #3a3a5a;
+    --dm-toggle-icon: "☀️";
+  }
+}
+
+/* ── Dark mode via manual [data-theme="dark"] override ──────────────────────── */
+[data-theme="dark"] {
+  --color-bg:            #0f0f1a;
+  --color-surface:       #1a1a2e;
+  --color-surface-2:     #232340;
+  --color-input-bg:      #1e1e36;
+  --color-hover-primary: #2a2050;
+
+  --color-text:          #e8e8f0;
+  --color-text-muted:    #a0a0b8;
+  --color-text-subtle:   #8888a0;
+  --color-text-hint:     #6b6b85;
+
+  --color-primary:       #7c5fff;
+  --color-primary-alt:   #8a67ff;
+  --color-primary-text:  #ffffff;
+
+  --color-border:        #2e2e50;
+  --color-border-light:  #252545;
+  --color-border-faint:  #2a2a48;
+  --color-border-rule:   #222240;
+
+  --color-shadow:        rgba(0, 0, 0, 0.4);
+  --color-shadow-strong: rgba(0, 0, 0, 0.6);
+
+  --color-badge-completed-bg:   #0a2e1e;
+  --color-badge-completed-text: #34d48a;
+  --color-badge-refunded-bg:    #2e1a00;
+  --color-badge-refunded-text:  #f59e0b;
+  --color-badge-partial-bg:     #2e2200;
+  --color-badge-partial-text:   #d4a017;
+  --color-badge-unknown-bg:     #2a2a40;
+  --color-badge-unknown-text:   #a0a0b8;
+
+  --color-alert-success-bg:   #0a2e1e;
+  --color-alert-success-text: #34d48a;
+  --color-alert-error-bg:     #2e0a0a;
+  --color-alert-error-text:   #ff6b6b;
+  --color-alert-info-bg:      #0a1230;
+  --color-alert-info-text:    #6b8fff;
+
+  --color-skeleton-from: #252545;
+  --color-skeleton-to:   #1e1e3a;
+
+  --dm-toggle-bg:   #3a3a5a;
+}
+
+/* ── Light mode override when system is dark but user prefers light ────────── */
+[data-theme="light"] {
+  --color-bg:            #f5f7fa;
+  --color-surface:       #ffffff;
+  --color-surface-2:     #fafbfc;
+  --color-input-bg:      #ffffff;
+  --color-hover-primary: #f0ecff;
+
+  --color-text:          #1a1a2e;
+  --color-text-muted:    #595959;
+  --color-text-subtle:   #767676;
+  --color-text-hint:     #888888;
+
+  --color-primary:       #5a3fd6;
+  --color-primary-alt:   #6c47ff;
+  --color-primary-text:  #ffffff;
+
+  --color-border:        #dde1e7;
+  --color-border-light:  #eeeeee;
+  --color-border-faint:  #e0e0e0;
+  --color-border-rule:   #f0f0f0;
+
+  --color-shadow:        rgba(0, 0, 0, 0.08);
+  --color-shadow-strong: rgba(0, 0, 0, 0.12);
+
+  --color-badge-completed-bg:   #e6f9f0;
+  --color-badge-completed-text: #0e7a45;
+  --color-badge-refunded-bg:    #fff3e0;
+  --color-badge-refunded-text:  #b45309;
+  --color-badge-partial-bg:     #fff8e1;
+  --color-badge-partial-text:   #92600a;
+  --color-badge-unknown-bg:     #f0f0f0;
+  --color-badge-unknown-text:   #595959;
+
+  --color-alert-success-bg:   #e6f9f0;
+  --color-alert-success-text: #0e7a45;
+  --color-alert-error-bg:     #fff0f0;
+  --color-alert-error-text:   #c0392b;
+  --color-alert-info-bg:      #eff4ff;
+  --color-alert-info-text:    #1e3fad;
+
+  --color-skeleton-from: #e8e8e8;
+  --color-skeleton-to:   #f5f5f5;
+
+  --dm-toggle-bg: #e8e8e8;
+}
+
 /* ── Reset ─────────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 /* ── Base ───────────────────────────────────────────────────────────────────── */
 body {
   font-family: system-ui, -apple-system, sans-serif;
-  background: #f5f7fa;
-  color: #1a1a2e;
+  background: var(--color-bg);
+  color: var(--color-text);
   min-height: 100vh;
   display: flex;
   flex-direction: column;
@@ -17,9 +218,9 @@ body {
 
 /* ── Card ───────────────────────────────────────────────────────────────────── */
 .card {
-  background: #fff;
+  background: var(--color-surface);
   border-radius: 12px;
-  box-shadow: 0 2px 16px rgba(0,0,0,0.08);
+  box-shadow: 0 2px 16px var(--color-shadow);
   max-width: 600px;
   width: 100%;
   padding: 2rem;
@@ -31,63 +232,46 @@ body {
   font-weight: 700;
   margin-bottom: 1.25rem;
   padding-bottom: 0.5rem;
-  border-bottom: 1px solid #eee;
+  border-bottom: 1px solid var(--color-border-light);
 }
 
 /* ── Typography ─────────────────────────────────────────────────────────────── */
-h1 { font-size: 1.4rem; font-weight: 700; color: #6c47ff; margin-bottom: 0.25rem; }
-.subtitle { color: #666; font-size: 0.875rem; margin-bottom: 1.5rem; }
+h1 { font-size: 1.4rem; font-weight: 700; color: var(--color-primary); margin-bottom: 0.25rem; }
+.subtitle { color: var(--color-text-muted); font-size: 0.875rem; margin-bottom: 1.5rem; }
 
 /* ── Form fields ────────────────────────────────────────────────────────────── */
 .field { margin-bottom: 1rem; }
 
 .field label {
   display: block;
-  font-size: 0.78rem;
+  font-size: 0.75rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: #555;
+  color: var(--color-text-muted);
   margin-bottom: 0.3rem;
 }
 
+/* min-height: 44px satisfies WCAG 2.5.5 target size */
 .field input, .field select {
   width: 100%;
-  padding: 0.55rem 0.75rem;
-  border: 1.5px solid #dde1e7;
+  min-height: 44px;
+  padding: 0.65rem 0.75rem;
+  border: 1.5px solid var(--color-border);
   border-radius: 8px;
-  font-size: 0.9rem;
+  font-size: 1rem;
   outline: none;
   transition: border-color 0.15s;
+  background: var(--color-input-bg);
+  color: var(--color-text);
 }
 
-.field input:focus, .field select:focus { border-color: #6c47ff; }
+.field input:focus, .field select:focus { border-color: var(--color-primary); }
+.field input.error { border-color: var(--color-alert-error-text); }
 
-/* Error state – driven by .error class AND aria-invalid for robustness */
-.field input.error,
-.field select.error,
-.field input[aria-invalid="true"],
-.field select[aria-invalid="true"] {
-  border-color: #e53e3e;
-  background-color: #fff8f8;
-}
-
-/* Valid state – shown after user interaction when field is clean */
-.field input[aria-invalid="false"]:not(:placeholder-shown) {
-  border-color: #1a9e5c;
-}
-
-.field .hint { font-size: 0.75rem; color: #888; margin-top: 0.25rem; }
-.field .help-text { font-size: 0.78rem; color: #666; margin-top: 0.3rem; }
-
-/* Error message – inline, placed immediately after the input it describes */
-.field .err-msg {
-  font-size: 0.75rem;
-  color: #e53e3e;
-  margin-top: 0.3rem;
-  display: none;
-  /* Icon prefix so the error is distinguishable without colour alone */
-}
+.field .hint      { font-size: 0.75rem; color: var(--color-text-subtle); margin-top: 0.25rem; }
+.field .help-text { font-size: 0.75rem; color: var(--color-text-muted); margin-top: 0.3rem; }
+.field .err-msg   { font-size: 0.75rem; color: var(--color-alert-error-text); margin-top: 0.25rem; display: none; }
 .field .err-msg.visible { display: block; }
 .field .err-msg.visible::before {
   content: '⚠ ';
@@ -96,48 +280,61 @@ h1 { font-size: 1.4rem; font-weight: 700; color: #6c47ff; margin-bottom: 0.25rem
 
 /* ── Buttons ────────────────────────────────────────────────────────────────── */
 .btn {
-  padding: 0.6rem 1rem;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0.65rem 1.25rem;
   border: none;
   border-radius: 8px;
-  font-size: 0.875rem;
+  font-size: 1rem;
   font-weight: 600;
   cursor: pointer;
-  transition: opacity 0.15s;
+  transition: opacity 0.15s, box-shadow 0.12s;
 }
 .btn:hover { opacity: 0.85; }
 .btn:disabled { cursor: not-allowed; opacity: 0.5; }
 
-.btn-primary { background: #6c47ff; color: #fff; }
-.btn-primary:disabled { background: #b0a0e8; opacity: 1; }
-.btn-outline { background: #fff; color: #6c47ff; border: 1.5px solid #6c47ff; }
-.btn-full { width: 100%; padding: 0.7rem; font-size: 0.95rem; font-weight: 700; margin-top: 0.5rem; }
+button, input, textarea, select { min-height: 44px; min-width: 44px; }
+
+.btn-primary { background: var(--color-primary); color: var(--color-primary-text); }
+.btn-primary:disabled { background: var(--color-primary); opacity: 0.5; }
+.btn-outline { background: var(--color-surface); color: var(--color-primary); border: 1.5px solid var(--color-primary); }
+.btn-full { width: 100%; padding: 0.75rem; font-size: 1rem; font-weight: 700; margin-top: 0.5rem; }
 
 .btn-icon {
   background: none;
-  border: 1.5px solid #dde1e7;
+  border: 1.5px solid var(--color-border);
   border-radius: 8px;
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   cursor: pointer;
   font-size: 1rem;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: background 0.15s;
+  transition: background 0.15s, box-shadow 0.12s;
 }
-.btn-icon:hover { background: #f0ecff; border-color: #6c47ff; }
+.btn-icon:hover { background: var(--color-hover-primary); border-color: var(--color-primary); }
 
 .btn-link {
-  font-size: 0.82rem;
-  color: #6c47ff;
+  font-size: 0.875rem;
+  color: var(--color-primary);
   background: none;
   border: none;
   cursor: pointer;
   font-weight: 600;
   padding: 0.25rem 0;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
 }
 .btn-link:hover { text-decoration: underline; }
+
+/* Focus styles for keyboard users — 3:1 contrast ratio (WCAG 1.4.11) */
+.btn:focus, .btn-icon:focus, .btn-link:focus, input:focus, select:focus, textarea:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(90, 63, 214, 0.25);
+}
 
 /* ── Badges ─────────────────────────────────────────────────────────────────── */
 .badge {
@@ -149,36 +346,37 @@ h1 { font-size: 1.4rem; font-weight: 700; color: #6c47ff; margin-bottom: 0.25rem
   padding: 0.25rem 0.6rem;
   border-radius: 999px;
 }
-.badge-completed { background: #e6f9f0; color: #1a9e5c; }
-.badge-refunded  { background: #fff3e0; color: #e07b00; }
-.badge-partial   { background: #fff8e1; color: #c68000; }
+.badge-completed { background: var(--color-badge-completed-bg); color: var(--color-badge-completed-text); }
+.badge-refunded  { background: var(--color-badge-refunded-bg);  color: var(--color-badge-refunded-text);  }
+.badge-partial   { background: var(--color-badge-partial-bg);   color: var(--color-badge-partial-text);   }
+.badge-unknown   { background: var(--color-badge-unknown-bg);   color: var(--color-badge-unknown-text);   }
 
 /* ── Alerts ─────────────────────────────────────────────────────────────────── */
 .alert {
   padding: 0.75rem 1rem;
   border-radius: 8px;
-  font-size: 0.85rem;
+  font-size: 0.875rem;
   margin-bottom: 1rem;
 }
-.alert-success { background: #e6f9f0; color: #1a9e5c; }
-.alert-error   { background: #fff0f0; color: #e53e3e; }
-.alert-info    { background: #eff4ff; color: #3b5bdb; }
+.alert-success { background: var(--color-alert-success-bg); color: var(--color-alert-success-text); }
+.alert-error   { background: var(--color-alert-error-bg);   color: var(--color-alert-error-text);   }
+.alert-info    { background: var(--color-alert-info-bg);    color: var(--color-alert-info-text);    }
 
 /* ── Validation message ─────────────────────────────────────────────────────── */
 .validation-msg {
-  font-size: 0.8rem;
+  font-size: 0.875rem;
   padding: 0.4rem 0.6rem;
   border-radius: 6px;
   margin-top: 0.5rem;
   display: none;
 }
-.validation-msg.ok  { background: #e6f9f0; color: #1a9e5c; display: block; }
-.validation-msg.bad { background: #fff0f0; color: #e53e3e; display: block; }
+.validation-msg.ok  { background: var(--color-alert-success-bg); color: var(--color-alert-success-text); display: block; }
+.validation-msg.bad { background: var(--color-alert-error-bg);   color: var(--color-alert-error-text);   display: block; }
 
 /* ── Divider ────────────────────────────────────────────────────────────────── */
 .divider {
   border: none;
-  border-top: 1px dashed #e0e0e0;
+  border-top: 1px dashed var(--color-border-faint);
   margin: 1.25rem 0;
 }
 
@@ -189,15 +387,41 @@ h1 { font-size: 1.4rem; font-weight: 700; color: #6c47ff; margin-bottom: 0.25rem
 }
 .state-box .icon { font-size: 3rem; margin-bottom: 1rem; }
 .state-box h2 { font-size: 1.2rem; margin-bottom: 0.5rem; }
-.state-box p  { color: #666; font-size: 0.9rem; }
+.state-box p  { color: var(--color-text-muted); font-size: 0.9rem; }
 .state-box .next-steps {
   margin-top: 1rem;
-  font-size: 0.85rem;
-  color: #555;
-  background: #f5f7fa;
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+  background: var(--color-bg);
   border-radius: 8px;
   padding: 0.75rem 1rem;
   text-align: left;
+}
+
+/* ── Dark Mode Toggle Button ─────────────────────────────────────────────────── */
+#lf-dark-toggle {
+  position: fixed;
+  bottom: 1.25rem;
+  right: 1.25rem;
+  z-index: 9000;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1.5px solid var(--color-border);
+  background: var(--dm-toggle-bg, var(--color-surface));
+  color: var(--color-text);
+  font-size: 1.1rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px var(--color-shadow);
+  transition: background 0.2s, border-color 0.2s, transform 0.15s;
+}
+#lf-dark-toggle:hover { transform: scale(1.1); }
+#lf-dark-toggle:focus-visible {
+  outline: 3px solid var(--color-primary);
+  outline-offset: 2px;
 }
 
 /* ── Print ──────────────────────────────────────────────────────────────────── */
@@ -205,4 +429,5 @@ h1 { font-size: 1.4rem; font-weight: 700; color: #6c47ff; margin-bottom: 0.25rem
   body { background: #fff; padding: 0; }
   .card { box-shadow: none; border-radius: 0; max-width: 100%; }
   .actions { display: none; }
+  #lf-dark-toggle { display: none; }
 }

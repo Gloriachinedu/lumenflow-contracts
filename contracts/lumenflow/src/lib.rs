@@ -2,30 +2,35 @@
 
 extern crate alloc;
 
-mod error;
+pub mod error;
 mod helper;
 mod storage;
-mod types;
+pub mod types;
 
 #[cfg(test)]
 mod test;
+#[cfg(test)]
+mod test_error_codes;
 
 use soroban_sdk::{contract, contractimpl, token, xdr::ToXdr, Address, Bytes, Env, String, Vec};
 
 use error::PaymentError;
 use helper::{
-    require_admin, require_admin_or, require_min_refund_amount, require_non_empty_string,
-    require_not_paused, require_positive, require_valid_id, require_valid_limit,
-    validate_merchant_category, validate_tags, verify_signature,
+    require_admin, require_admin_or, require_admin_rate_limited, require_min_refund_amount,
+    require_non_empty_string, require_not_paused, require_positive, require_valid_id,
+    require_valid_limit, validate_merchant_category, validate_tags, verify_signature,
 };
 use types::{
-    BatchPaymentItem, GlobalStats, Merchant, MerchantCategory, MerchantPage, MerchantStats,
-    MultisigPayment, PaymentFilter, PaymentOrder, PaymentPage, PaymentRequest, PaymentStatus,
-    PaymentSummary, RefundRecord, RefundStatus, SortField, SortOrder, StatusFilter,
+    BatchPaymentItem, EscrowRecord, EscrowStatus, GlobalStats, Merchant, MerchantCategory,
+    MerchantPage, MerchantStats, MultisigPayment, PaymentFilter, PaymentOrder, PaymentPage,
+    PaymentRequest, PaymentStatus, PaymentSummary, RefundRecord, RefundStatus, SignatureEntry,
+    SortField, SortOrder, StatusFilter, Subscription, SubscriptionPlan, SubscriptionStatus,
     SuspiciousActivityReason,
 };
 
 // ── Contract ──────────────────────────────────────────────────────────────────
+
+const MAX_REFUNDS_PER_PAYMENT: usize = 10;
 
 #[contract]
 pub struct PaymentProcessingContract;
@@ -57,21 +62,6 @@ impl PaymentProcessingContract {
             return Err(PaymentError::AdminAlreadySet);
         }
 
-        // Note: Issue #83 - contract address validation requires SDK method access
-        // if admin.contract_id().is_some() {
-        //     return Err(PaymentError::InvalidAdminAddress);
-        // }
-
-        // Reject zero account address — XDR-encoded public key must not be all zeros
-        {
-            use soroban_sdk::xdr::ToXdr;
-            let raw = admin.clone().to_xdr(&env);
-            let all_zero = raw.iter().all(|b| b == 0);
-            if all_zero {
-                return Err(PaymentError::InvalidAdminAddress);
-            }
-        }
-
         admin.require_auth();
         storage::set_admin(&env, &admin);
         env.events().publish(("lumenflow", "admin_set"), admin);
@@ -79,12 +69,40 @@ impl PaymentProcessingContract {
     }
 
     /// Transfer admin rights to a new address.
+    ///
+    /// # Arguments
+    /// * `current_admin` - Must be the currently configured administrator. Must sign the call.
+    /// * `new_admin` - The address to receive admin rights. Must differ from `current_admin`
+    ///   and must not be the zero/all-zeros address.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `current_admin` is not the configured administrator.
+    /// * [`PaymentError::InvalidAdminAddress`] — `new_admin` is the zero address or is the
+    ///   same address as `current_admin` (self-transfer).
     pub fn transfer_admin(
         env: Env,
         current_admin: Address,
         new_admin: Address,
     ) -> Result<(), PaymentError> {
         require_admin(&env, &current_admin)?;
+
+        if new_admin == current_admin {
+            return Err(PaymentError::InvalidAdminAddress);
+        }
+
+        // Block zero address: an all-zeros XDR-encoded public key would permanently
+        // lock the contract with no valid admin able to authenticate.
+        {
+            use soroban_sdk::xdr::ToXdr;
+            let raw = new_admin.clone().to_xdr(&env);
+            if raw.iter().all(|b| b == 0) {
+                return Err(PaymentError::InvalidAdminAddress);
+            }
+        }
+
         storage::set_admin(&env, &new_admin);
         env.events()
             .publish(("lumenflow", "admin_transferred"), (current_admin, new_admin));
@@ -108,7 +126,7 @@ impl PaymentProcessingContract {
         admin: Address,
         period: u64,
     ) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         storage::set_cleanup_period(&env, period);
         Ok(())
     }
@@ -121,7 +139,10 @@ impl PaymentProcessingContract {
         fee_bps: u32,
         fee_recipient: Address,
     ) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
+        if fee_bps > storage::MAX_PLATFORM_FEE_BPS {
+            return Err(PaymentError::InvalidInput);
+        }
         storage::set_platform_fee_bps(&env, fee_bps);
         storage::set_fee_recipient(&env, &fee_recipient);
         Ok(())
@@ -147,7 +168,7 @@ impl PaymentProcessingContract {
         admin: Address,
         threshold: i128,
     ) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         require_positive(threshold)?;
         storage::set_large_payment_threshold(&env, threshold);
         Ok(())
@@ -155,7 +176,7 @@ impl PaymentProcessingContract {
 
     /// Add a token to the whitelist (admin only).
     pub fn add_allowed_token(env: Env, admin: Address, token: Address) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         storage::set_token_allowed(&env, &token, true);
         env.events().publish(("lumenflow", "token_allowed"), token);
         Ok(())
@@ -167,7 +188,7 @@ impl PaymentProcessingContract {
         admin: Address,
         token: Address,
     ) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         storage::set_token_allowed(&env, &token, false);
         env.events().publish(("lumenflow", "token_removed"), token);
         Ok(())
@@ -179,7 +200,7 @@ impl PaymentProcessingContract {
         admin: Address,
         duration: u64,
     ) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         if duration == 0 {
             return Err(PaymentError::InvalidInput);
         }
@@ -193,7 +214,10 @@ impl PaymentProcessingContract {
         admin: Address,
         window_secs: u64,
     ) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
+        if window_secs < storage::MIN_REFUND_WINDOW_SECS {
+            return Err(PaymentError::InvalidInput);
+        }
         storage::set_refund_window(&env, window_secs);
         env.events().publish(("lumenflow", "refund_window_set"), window_secs);
         Ok(())
@@ -201,17 +225,134 @@ impl PaymentProcessingContract {
 
     /// Pause the contract. All state-mutating functions will return ContractPaused. Admin only.
     pub fn pause_contract(env: Env, admin: Address) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         storage::set_paused(&env, true);
         env.events().publish(("lumenflow", "contract_paused"), ());
         Ok(())
     }
 
-    /// Unpause the contract. Admin only.
+    /// Unpause the contract. Admin only. Subject to a 7-day timelock when paused via pause_with_reason.
     pub fn unpause_contract(env: Env, admin: Address) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
+        // Check timelock
+        if let Some(lock_until) = storage::get_unpause_lock_until(&env) {
+            if env.ledger().timestamp() < lock_until {
+                return Err(PaymentError::TimelockActive);
+            }
+        }
+        // Clear pause state
+        storage::clear_unpause_lock_until(&env);
+        storage::clear_pause_reason(&env);
+        storage::clear_early_unpause_approvals(&env);
         storage::set_paused(&env, false);
         env.events().publish(("lumenflow", "contract_unpaused"), ());
+        Ok(())
+    }
+
+    /// Pause the contract with a recorded reason and a 7-day unpause timelock.
+    ///
+    /// Unlike `pause_contract`, this function stores the human-readable `reason`
+    /// on-chain and sets a timelock: `unpause_contract` will be blocked until
+    /// 7 days after this call unless overridden by the 3-of-5 multisig guardian
+    /// mechanism via `approve_early_unpause`.
+    ///
+    /// The reason and timelock expiry are emitted in the `contract_paused` event
+    /// so that off-chain monitors can surface the pause context immediately.
+    ///
+    /// # Arguments
+    /// * `admin` - Contract administrator. Must sign.
+    /// * `reason` - Non-empty human-readable description of the pause cause.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — caller is not the admin.
+    /// * [`PaymentError::InvalidInput`] — reason is empty.
+    pub fn pause_with_reason(env: Env, admin: Address, reason: String) -> Result<(), PaymentError> {
+        require_admin_rate_limited(&env, &admin)?;
+        require_non_empty_string(&reason)?;
+        storage::set_paused(&env, true);
+        storage::set_pause_reason(&env, &reason);
+        let lock_until = env.ledger().timestamp() + PAUSE_TIMELOCK_SECS;
+        storage::set_unpause_lock_until(&env, lock_until);
+        storage::clear_early_unpause_approvals(&env);
+        env.events()
+            .publish(("lumenflow", "contract_paused"), (reason, lock_until));
+        Ok(())
+    }
+
+    /// Register the 5 authorized pause guardians who can vote for early unpause.
+    ///
+    /// Exactly 5 guardian addresses must be supplied. Replaces any previous
+    /// guardian list. Admin only.
+    ///
+    /// # Arguments
+    /// * `admin` - Contract administrator. Must sign.
+    /// * `guardians` - Exactly 5 unique guardian `Address` values.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — caller is not the admin.
+    /// * [`PaymentError::InvalidInput`] — list is not exactly 5 addresses.
+    pub fn set_pause_guardians(
+        env: Env,
+        admin: Address,
+        guardians: Vec<Address>,
+    ) -> Result<(), PaymentError> {
+        require_admin_rate_limited(&env, &admin)?;
+        if guardians.len() != 5 {
+            return Err(PaymentError::InvalidInput);
+        }
+        storage::set_pause_guardians(&env, &guardians);
+        Ok(())
+    }
+
+    /// Vote to approve an early (pre-timelock) unpause of the contract.
+    ///
+    /// Each registered pause guardian may call this once per pause event. When
+    /// the approval count reaches `EARLY_UNPAUSE_THRESHOLD` (3), the contract is
+    /// automatically unpaused and the timelock, reason, and approval list are
+    /// cleared.
+    ///
+    /// # Arguments
+    /// * `guardian` - A registered pause guardian. Must sign.
+    ///
+    /// # Errors
+    /// * [`PaymentError::NotAPauseGuardian`] — caller is not in the guardian list.
+    /// * [`PaymentError::AlreadyApprovedUnpause`] — caller already voted.
+    pub fn approve_early_unpause(env: Env, guardian: Address) -> Result<(), PaymentError> {
+        guardian.require_auth();
+
+        // Verify this caller is a registered guardian
+        let guardians = storage::get_pause_guardians(&env);
+        let mut is_guardian = false;
+        for g in guardians.iter() {
+            if g == guardian {
+                is_guardian = true;
+                break;
+            }
+        }
+        if !is_guardian {
+            return Err(PaymentError::NotAPauseGuardian);
+        }
+
+        // Check for duplicate approval
+        let mut approvals = storage::get_early_unpause_approvals(&env);
+        for a in approvals.iter() {
+            if a == guardian {
+                return Err(PaymentError::AlreadyApprovedUnpause);
+            }
+        }
+
+        approvals.push_back(guardian.clone());
+        storage::set_early_unpause_approvals(&env, &approvals);
+
+        // If threshold reached, auto-unpause
+        if approvals.len() >= EARLY_UNPAUSE_THRESHOLD {
+            storage::set_paused(&env, false);
+            storage::clear_unpause_lock_until(&env);
+            storage::clear_pause_reason(&env);
+            storage::clear_early_unpause_approvals(&env);
+            env.events()
+                .publish(("lumenflow", "contract_unpaused"), ("multisig_override",));
+        }
         Ok(())
     }
 
@@ -221,23 +362,74 @@ impl PaymentProcessingContract {
         admin: Address,
         amount: i128,
     ) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         require_positive(amount)?;
         storage::set_min_refund_amount(&env, amount);
         Ok(())
     }
 
-    /// Add a token to the payment whitelist. Admin only.
-    pub fn add_allowed_token(env: Env, admin: Address, token: Address) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
-        storage::set_token_allowed(&env, &token, true);
+    /// Reset the auth failure lockout for a specific address (admin only).
+    ///
+    /// Clears both the failure counter and the lockout expiry for `address`.
+    /// This allows an admin to manually intervene when a legitimate user is
+    /// accidentally locked out, or to clear the lockout for an address after
+    /// investigation.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator address.
+    /// * `address` - The address whose lockout and failure counter should be cleared.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    ///
+    /// # Example
+    /// ```ignore
+    /// stellar contract invoke \
+    ///   --id $CONTRACT_ID \
+    ///   --source-account $ADMIN_KEY \
+    ///   --network testnet \
+    ///   -- reset_auth_lockout \
+    ///   --admin $ADMIN_ADDRESS \
+    ///   --address $LOCKED_ADDRESS
+    /// ```
+    pub fn reset_auth_lockout(
+        env: Env,
+        admin: Address,
+        address: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin_rate_limited(&env, &admin)?;
+        storage::clear_auth_lockout(&env, &address);
+        env.events().publish(("lumenflow", "auth_lockout_reset"), address);
         Ok(())
     }
 
-    /// Remove a token from the payment whitelist. Admin only.
-    pub fn remove_allowed_token(env: Env, admin: Address, token: Address) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
-        storage::set_token_allowed(&env, &token, false);
+    /// Set the per-merchant payment rate limit (max payments per 300-ledger window). Admin only.
+    ///
+    /// The rolling-window counter resets every 300 ledgers (~25 minutes). Once a
+    /// merchant reaches the limit within a window all further `process_payment_with_signature`
+    /// and `batch_payment` calls for that merchant are rejected with
+    /// [`PaymentError::RateLimitExceeded`] until the next window begins.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator address.
+    /// * `limit` - Maximum number of payments accepted per merchant per window. Must be > 0.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    /// * [`PaymentError::InvalidInput`] — `limit` is zero.
+    pub fn set_rate_limit(env: Env, admin: Address, limit: u32) -> Result<(), PaymentError> {
+        require_admin_rate_limited(&env, &admin)?;
+        if limit == 0 {
+            return Err(PaymentError::InvalidInput);
+        }
+        storage::set_rate_limit_per_window(&env, limit);
+        env.events().publish(("lumenflow", "rate_limit_set"), limit);
         Ok(())
     }
 
@@ -251,6 +443,9 @@ impl PaymentProcessingContract {
     /// * `description` - Free-text description of the merchant's business.
     /// * `contact_info` - Contact details (email, URL, etc.).
     /// * `category` - Business category from [`MerchantCategory`].
+    /// * `referral_id` - Optional address of the referring merchant. When provided,
+    ///   the referrer's `referral_count` is incremented and a
+    ///   `lumenflow/merchant_referred` event is emitted.
     ///
     /// # Returns
     /// `Ok(())` on success.
@@ -258,6 +453,8 @@ impl PaymentProcessingContract {
     /// # Errors
     /// * [`PaymentError::MerchantAlreadyRegistered`] — the address is already registered.
     /// * [`PaymentError::InvalidInput`] — `name` is empty.
+    /// * [`PaymentError::InvalidReferral`] — `referral_id` is the same as `merchant_address`
+    ///   (self-referral) or does not belong to a registered merchant.
     pub fn register_merchant(
         env: Env,
         merchant_address: Address,
@@ -265,6 +462,7 @@ impl PaymentProcessingContract {
         description: String,
         contact_info: String,
         category: MerchantCategory,
+        referral_id: Option<Address>,
     ) -> Result<(), PaymentError> {
         require_not_paused(&env)?;
         merchant_address.require_auth();
@@ -273,6 +471,16 @@ impl PaymentProcessingContract {
 
         if storage::get_merchant(&env, &merchant_address).is_some() {
             return Err(PaymentError::MerchantAlreadyRegistered);
+        }
+
+        // Validate referral_id before any writes so we never commit a partial state.
+        if let Some(ref ref_addr) = referral_id {
+            if *ref_addr == merchant_address {
+                return Err(PaymentError::InvalidReferral);
+            }
+            if storage::get_merchant(&env, ref_addr).is_none() {
+                return Err(PaymentError::InvalidReferral);
+            }
         }
 
         let merchant = Merchant {
@@ -285,6 +493,7 @@ impl PaymentProcessingContract {
             verified: false,
             registered_at: env.ledger().timestamp(),
             total_received: 0,
+            referral_count: 0,
         };
 
         storage::set_merchant(&env, &merchant);
@@ -293,6 +502,18 @@ impl PaymentProcessingContract {
         let mut stats = storage::get_global_stats(&env);
         stats.active_merchants += 1;
         storage::set_global_stats(&env, &stats);
+
+        // Update referrer's count and emit event (referral already validated above).
+        if let Some(ref_addr) = referral_id {
+            let mut referrer = storage::get_merchant(&env, &ref_addr)
+                .ok_or(PaymentError::InvalidReferral)?;
+            referrer.referral_count += 1;
+            storage::set_merchant(&env, &referrer);
+            env.events().publish(
+                ("lumenflow", "merchant_referred"),
+                (merchant_address.clone(), ref_addr),
+            );
+        }
 
         env.events()
             .publish(("lumenflow", "merchant_registered"), merchant_address);
@@ -351,7 +572,7 @@ impl PaymentProcessingContract {
         merchant_address: Address,
     ) -> Result<(), PaymentError> {
         require_not_paused(&env)?;
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         let mut merchant =
             storage::get_merchant(&env, &merchant_address).ok_or(PaymentError::MerchantNotFound)?;
         merchant.active = false;
@@ -375,7 +596,7 @@ impl PaymentProcessingContract {
         merchant_address: Address,
     ) -> Result<(), PaymentError> {
         require_not_paused(&env)?;
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         let mut merchant = storage::get_merchant(&env, &merchant_address)
             .ok_or(PaymentError::MerchantNotFound)?;
         if merchant.active {
@@ -413,7 +634,7 @@ impl PaymentProcessingContract {
         admin: Address,
         merchant_address: Address,
     ) -> Result<(), PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         let mut merchant =
             storage::get_merchant(&env, &merchant_address).ok_or(PaymentError::MerchantNotFound)?;
         merchant.verified = true;
@@ -444,7 +665,7 @@ impl PaymentProcessingContract {
         merchant_address: Address,
     ) -> Result<(), PaymentError> {
         require_not_paused(&env)?;
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         let mut merchant =
             storage::get_merchant(&env, &merchant_address).ok_or(PaymentError::MerchantNotFound)?;
         merchant.verified = false;
@@ -485,8 +706,10 @@ impl PaymentProcessingContract {
     ///
     /// Transfers `amount` tokens from `payer` to `merchant_address` after verifying
     /// the merchant's ed25519 signature over the canonical payload
-    /// (`XDR(order_id) || amount_be_i128`). See the inline comment for the exact
-    /// byte layout.
+    /// (`network_id || contract_address_xdr || nonce_be_u64 || order_id_xdr || amount_be_i128`).
+    /// The `nonce` field must equal `current_merchant_nonce + 1`; on success the
+    /// merchant's nonce counter is incremented, permanently invalidating any
+    /// previously intercepted signature.
     ///
     /// # Arguments
     /// * `payer` - Address funding the payment. Must sign the call.
@@ -496,6 +719,7 @@ impl PaymentProcessingContract {
     /// * `amount` - Positive token amount (in the token's smallest unit).
     /// * `memo` - Optional free-text note; maximum 256 characters.
     /// * `tags` - Optional list of string tags; each tag ≤ 32 characters, max 10 tags.
+    /// * `nonce` - Must equal `get_merchant_nonce(merchant_address) + 1`. Prevents replay.
     /// * `signature` - 64-byte ed25519 signature produced by the merchant's private key.
     /// * `merchant_public_key` - 32-byte ed25519 public key corresponding to the signature.
     ///
@@ -510,6 +734,7 @@ impl PaymentProcessingContract {
     /// * [`PaymentError::PaymentAlreadyExists`] — a payment with `order_id` already exists.
     /// * [`PaymentError::MerchantNotFound`] — no merchant registered at `merchant_address`.
     /// * [`PaymentError::MerchantInactive`] — the merchant has been deactivated.
+    /// * [`PaymentError::InvalidNonce`] — `nonce` does not equal current merchant nonce + 1.
     /// * [`PaymentError::InvalidSignature`] — the ed25519 signature verification failed.
     pub fn process_payment_with_signature(
         env: Env,
@@ -520,6 +745,7 @@ impl PaymentProcessingContract {
         amount: i128,
         memo: String,
         tags: Option<Vec<String>>,
+        nonce: u64,
         signature: Bytes,
         merchant_public_key: Bytes,
     ) -> Result<(), PaymentError> {
@@ -543,14 +769,39 @@ impl PaymentProcessingContract {
             return Err(PaymentError::MerchantInactive);
         }
 
-        // Build payload: order_id bytes + amount bytes
+        // Replay protection: nonce must be exactly current_merchant_nonce + 1
+        let expected_nonce = storage::get_merchant_nonce(&env, &merchant_address)
+            .saturating_add(1);
+        if nonce != expected_nonce {
+            return Err(PaymentError::InvalidNonce);
+        }
+
+        // Reject disallowed tokens
+        if !storage::is_token_allowed(&env, &token_address) {
+            return Err(PaymentError::TokenNotAllowed);
+        }
+
+        // Build payload: network_id || contract_address || nonce || order_id || amount
         let mut payload = Bytes::new(&env);
         let network_id_bytes: Bytes = env.ledger().network_id().into();
         payload.append(&network_id_bytes);
         payload.append(&env.current_contract_address().to_xdr(&env));
+        payload.append(&Bytes::from_slice(&env, &nonce.to_be_bytes()));
         payload.append(&order_id.clone().to_xdr(&env));
         payload.append(&Bytes::from_slice(&env, &amount.to_be_bytes()));
         verify_signature(&env, &merchant_public_key, &payload, &signature)?;
+
+        // Advance merchant nonce before any external calls (checks-effects-interactions)
+        storage::increment_merchant_nonce(&env, &merchant_address);
+
+        // Rate-limit: reject if merchant has exceeded the window limit
+        let window_start = storage::current_window_start(&env);
+        let current_count = storage::get_rate_limit_counter(&env, &merchant_address, window_start);
+        let rate_limit = storage::get_rate_limit_per_window(&env);
+        if current_count >= rate_limit {
+            return Err(PaymentError::RateLimitExceeded);
+        }
+        storage::increment_rate_limit_counter(&env, &merchant_address, window_start);
 
         // Transfer tokens from payer to merchant (minus platform fee)
         let token_client = token::Client::new(&env, &token_address);
@@ -618,21 +869,195 @@ impl PaymentProcessingContract {
         }
 
         env.events().publish(
-            ("lumenflow", "payment_processed"),
-            (order_id, payer, merchant_address, amount),
+            ("lumenflow", "payment_processed", merchant_address.clone()),
+            (order_id, payer, amount),
         );
         Ok(())
     }
 
+    /// Process a payment using a per-payer sequential nonce for replay protection.
+    ///
+    /// The contract stores the next expected nonce for each payer. A payment is
+    /// accepted only when the supplied `nonce` equals the stored value, after which
+    /// the stored nonce is incremented. Any other value (replayed or skipped) is
+    /// rejected with [`PaymentError::InvalidNonce`].
+    ///
+    /// # Arguments
+    /// * `payer` - Address funding the payment. Must sign the call.
+    /// * `order_id` - Unique order identifier.
+    /// * `merchant_address` - Registered, active merchant to receive funds.
+    /// * `token_address` - Allowed token contract address.
+    /// * `amount` - Positive token amount in stroops.
+    /// * `memo` - Payment description (max 256 chars).
+    /// * `tags` - Optional payment tags.
+    /// * `nonce` - Must equal the payer's current stored nonce (starts at 0).
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::InvalidAmount`] — `amount` is not positive.
+    /// * [`PaymentError::InvalidInput`] — `order_id` is empty or tags are invalid.
+    /// * [`PaymentError::TokenNotAllowed`] — `token_address` is not on the allow-list.
+    /// * [`PaymentError::PaymentAlreadyExists`] — a payment with `order_id` already exists.
+    /// * [`PaymentError::MerchantNotFound`] — no merchant registered at `merchant_address`.
+    /// * [`PaymentError::MerchantInactive`] — the merchant has been deactivated.
+    /// * [`PaymentError::InvalidNonce`] — `nonce` does not match the expected value.
+    pub fn process_payment_with_nonce(
+        env: Env,
+        payer: Address,
+        order_id: String,
+        merchant_address: Address,
+        token_address: Address,
+        amount: i128,
+        memo: String,
+        tags: Option<Vec<String>>,
+        nonce: u64,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        payer.require_auth();
+        require_positive(amount)?;
+        require_valid_id(&order_id)?;
+        validate_tags(&tags)?;
+
+        // Replay-protection: nonce must equal the stored value
+        let expected = storage::get_nonce(&env, &payer);
+        if nonce != expected {
+            return Err(PaymentError::InvalidNonce);
+        }
+
+        if !storage::is_token_allowed(&env, &token_address) {
+            return Err(PaymentError::TokenNotAllowed);
+        }
+
+        if storage::get_payment(&env, &order_id).is_some() {
+            return Err(PaymentError::PaymentAlreadyExists);
+        }
+
+        let merchant =
+            storage::get_merchant(&env, &merchant_address).ok_or(PaymentError::MerchantNotFound)?;
+        if !merchant.active {
+            return Err(PaymentError::MerchantInactive);
+        }
+
+        // Advance nonce before any external calls
+        storage::increment_nonce(&env, &payer);
+
+        // Transfer tokens from payer to merchant (minus platform fee)
+        let token_client = token::Client::new(&env, &token_address);
+        let fee_bps = storage::get_platform_fee_bps(&env);
+        let platform_fee: i128 = if fee_bps > 0 {
+            amount * (fee_bps as i128) / 10_000
+        } else {
+            0
+        };
+        let merchant_amount = amount - platform_fee;
+        token_client.transfer(&payer, &merchant_address, &merchant_amount);
+        if platform_fee > 0 {
+            if let Some(recipient) = storage::get_fee_recipient(&env) {
+                token_client.transfer(&payer, &recipient, &platform_fee);
+            }
+        }
+
+        let now = env.ledger().timestamp();
+        let payment = PaymentOrder {
+            order_id: order_id.clone(),
+            merchant_address: merchant_address.clone(),
+            payer: payer.clone(),
+            token: token_address,
+            amount,
+            status: PaymentStatus::Completed,
+            paid_at: now,
+            refunded_amount: 0,
+            memo,
+            tags,
+            platform_fee,
+        };
+
+        storage::set_payment(&env, &payment);
+        storage::add_merchant_payment_id(&env, &merchant_address, &order_id)?;
+        storage::add_payer_payment_id(&env, &payer, &order_id)?;
+
+        // Update merchant total
+        let mut m = merchant;
+        m.total_received += amount;
+        storage::set_merchant(&env, &m);
+
+        // Update merchant stats
+        let mut merchant_stats = storage::get_merchant_stats(&env, &merchant_address);
+        merchant_stats.total_payments += 1;
+        merchant_stats.total_volume = merchant_stats.total_volume.saturating_add(amount);
+        storage::set_merchant_stats(&env, &merchant_address, &merchant_stats);
+
+        // Update global stats
+        let mut stats = storage::get_global_stats(&env);
+        stats.total_payments += 1;
+        stats.total_volume = stats.total_volume.saturating_add(amount);
+        storage::set_global_stats(&env, &stats);
+
+        // Check for suspicious activity
+        let threshold = storage::get_large_payment_threshold(&env);
+        if amount >= threshold {
+            env.events().publish(
+                ("lumenflow", "suspicious_activity"),
+                (
+                    SuspiciousActivityReason::LargePayment,
+                    payer.clone(),
+                    amount,
+                ),
+            );
+        }
+
+        env.events().publish(
+            ("lumenflow", "payment_processed", merchant_address.clone()),
+            (order_id, payer, amount),
+        );
+        Ok(())
+    }
+
+    /// Return the current (next expected) nonce for `payer`.
+    ///
+    /// Payers should call this before constructing a `process_payment_with_nonce`
+    /// transaction to obtain the exact nonce value the contract expects. The nonce
+    /// starts at 0 for new accounts and increments by 1 on every accepted call.
+    ///
+    /// # Arguments
+    /// * `payer` - The address whose nonce is queried.
+    ///
+    /// # Returns
+    /// The u64 nonce value. Returns 0 if the payer has never submitted a nonce payment.
+    pub fn get_payer_nonce(env: Env, payer: Address) -> u64 {
+        storage::get_nonce(&env, &payer)
+    }
+
+    /// Return the current nonce for `merchant_address`.
+    ///
+    /// The nonce is embedded in the signature payload to prevent signature replay
+    /// across different order IDs. The expected nonce for the next payment is
+    /// `get_merchant_nonce(...) + 1`. Starts at 0 for newly registered merchants.
+    ///
+    /// # Arguments
+    /// * `merchant_address` - The merchant address whose nonce is queried.
+    ///
+    /// # Returns
+    /// The current u64 nonce value.
+    pub fn get_merchant_nonce(env: Env, merchant_address: Address) -> u64 {
+        storage::get_merchant_nonce(&env, &merchant_address)
+    }
+
     /// Pay multiple merchants in one transaction. Maximum 10 items. Atomic.
     ///
-    /// All items are validated and transferred atomically — if any item fails the
-    /// entire batch is rolled back.
+    /// All items are validated and signatures verified in a first pass before any
+    /// token transfer occurs. Transfers are then **grouped by `(token_address,
+    /// merchant_address)` pair**: when multiple items share the same token and
+    /// merchant, their amounts are summed and only **one `token.transfer` call**
+    /// is made for that pair, reducing the total number of cross-contract calls
+    /// from N (one per item) to M (one per unique token+merchant combination).
     ///
     /// # Arguments
     /// * `payer` - Address funding all payments. Must sign the call.
     /// * `payments` - List of up to 10 [`BatchPaymentItem`] entries, each containing
-    ///   `order_id`, `merchant_address`, `token_address`, `amount`, `memo`,
+    ///   `order_id`, `merchant_address`, `token_address`, `amount`, `memo`, `tags`,
     ///   `signature`, and `merchant_public_key`.
     ///
     /// # Returns
@@ -641,9 +1066,10 @@ impl PaymentProcessingContract {
     /// # Errors
     /// * [`PaymentError::BatchSizeExceeded`] — more than 10 items provided.
     /// * [`PaymentError::InvalidAmount`] — any item has a non-positive amount.
-    /// * [`PaymentError::InvalidInput`] — any item has an empty `order_id`.
+    /// * [`PaymentError::InvalidInput`] — any item has an empty `order_id` or invalid tags.
     /// * [`PaymentError::TokenNotAllowed`] — any item's token is not on the allow-list.
-    /// * [`PaymentError::PaymentAlreadyExists`] — any item's `order_id` already exists.
+    /// * [`PaymentError::PaymentAlreadyExists`] — any item's `order_id` already exists
+    ///   on-chain or appears more than once within this batch.
     /// * [`PaymentError::MerchantNotFound`] — any item's merchant is not registered.
     /// * [`PaymentError::MerchantInactive`] — any item's merchant is deactivated.
     /// * [`PaymentError::InvalidSignature`] — any item's signature verification fails.
@@ -658,12 +1084,28 @@ impl PaymentProcessingContract {
             return Err(PaymentError::BatchSizeExceeded);
         }
 
-        // Check for intra-batch duplicate order IDs before doing any work
-        let mut seen: Vec<String> = Vec::new(&env);
+        // ── Phase 1: Validate ALL items first — fail fast before any state change ──
+        //
+        // We also track intra-batch duplicate order IDs with a linear scan (no_std
+        // environment: no HashMap/BTreeMap available, only soroban_sdk::Vec).
+        let mut seen_ids: Vec<String> = Vec::new(&env);
         for item in payments.iter() {
             require_positive(item.amount)?;
             require_valid_id(&item.order_id)?;
+            validate_tags(&item.tags)?;
 
+            // Intra-batch duplicate check (linear scan — max 10 iterations)
+            for seen in seen_ids.iter() {
+                if seen == item.order_id {
+                    return Err(PaymentError::PaymentAlreadyExists);
+                }
+            }
+            seen_ids.push_back(item.order_id.clone());
+
+            // Whitelist check: each item's token_address must be in the allowed list.
+            // If any item uses a disallowed token the entire batch is rejected atomically
+            // (no partial payments are made). One storage read per item; callers can
+            // reduce cost by grouping items that share the same token.
             if !storage::is_token_allowed(&env, &item.token_address) {
                 return Err(PaymentError::TokenNotAllowed);
             }
@@ -678,6 +1120,15 @@ impl PaymentProcessingContract {
                 return Err(PaymentError::MerchantInactive);
             }
 
+            // Rate-limit check per merchant
+            let window_start = storage::current_window_start(&env);
+            let current_count = storage::get_rate_limit_counter(&env, &item.merchant_address, window_start);
+            let rate_limit = storage::get_rate_limit_per_window(&env);
+            if current_count >= rate_limit {
+                return Err(PaymentError::RateLimitExceeded);
+            }
+            storage::increment_rate_limit_counter(&env, &item.merchant_address, window_start);
+
             // Build payload: order_id bytes + amount bytes
             let mut payload = Bytes::new(&env);
             let network_id_bytes: Bytes = env.ledger().network_id().into();
@@ -686,12 +1137,52 @@ impl PaymentProcessingContract {
             payload.append(&item.order_id.clone().to_xdr(&env));
             payload.append(&Bytes::from_slice(&env, &item.amount.to_be_bytes()));
             verify_signature(&env, &item.merchant_public_key, &payload, &item.signature)?;
+        }
 
-            // Transfer tokens from payer to merchant
-            let token_client = token::Client::new(&env, &item.token_address);
-            token_client.transfer(&payer, &item.merchant_address, &item.amount);
+        // ── Phase 2: Group amounts by (token_address, merchant_address) ──
+        //
+        // We use a Vec of (token, merchant, total_amount) tuples and a linear scan
+        // to accumulate sums.  With at most 10 items this is O(n²) in the worst
+        // case but n ≤ 10, so it is effectively constant and avoids any std
+        // collection type.
+        //
+        // Each entry is (token_address, merchant_address, grouped_total).
+        let mut groups: Vec<(Address, Address, i128)> = Vec::new(&env);
 
-            let now = env.ledger().timestamp();
+        for item in payments.iter() {
+            let mut found = false;
+            // Rebuild a new vec accumulating updated entries — soroban_sdk::Vec
+            // does not support in-place mutation of interior values.
+            let mut updated_groups: Vec<(Address, Address, i128)> = Vec::new(&env);
+            for (tok, merch, total) in groups.iter() {
+                if tok == item.token_address && merch == item.merchant_address {
+                    updated_groups.push_back((tok, merch, total + item.amount));
+                    found = true;
+                } else {
+                    updated_groups.push_back((tok, merch, total));
+                }
+            }
+            if !found {
+                updated_groups.push_back((
+                    item.token_address.clone(),
+                    item.merchant_address.clone(),
+                    item.amount,
+                ));
+            }
+            groups = updated_groups;
+        }
+
+        // ── Phase 3: Execute one token.transfer per unique (token, merchant) group ──
+        for (tok, merch, grouped_total) in groups.iter() {
+            let token_client = token::Client::new(&env, &tok);
+            token_client.transfer(&payer, &merch, &grouped_total);
+        }
+
+        // ── Phase 4: Store payment records and update stats for all items ──
+        let now = env.ledger().timestamp();
+        let mut global_stats = storage::get_global_stats(&env);
+
+        for item in payments.iter() {
             let payment = PaymentOrder {
                 order_id: item.order_id.clone(),
                 merchant_address: item.merchant_address.clone(),
@@ -702,7 +1193,7 @@ impl PaymentProcessingContract {
                 paid_at: now,
                 refunded_amount: 0,
                 memo: item.memo.clone(),
-                tags: None,
+                tags: item.tags.clone(),
                 platform_fee: 0,
             };
 
@@ -710,33 +1201,38 @@ impl PaymentProcessingContract {
             storage::add_merchant_payment_id(&env, &item.merchant_address, &item.order_id)?;
             storage::add_payer_payment_id(&env, &payer, &item.order_id)?;
 
-            // Update merchant total
-            let mut m = merchant;
-            m.total_received += item.amount;
-            storage::set_merchant(&env, &m);
+            // Update merchant total_received
+            if let Some(mut m) = storage::get_merchant(&env, &item.merchant_address) {
+                m.total_received += item.amount;
+                storage::set_merchant(&env, &m);
+            }
 
-            // Update merchant stats
+            // Update per-merchant stats
             let mut merchant_stats = storage::get_merchant_stats(&env, &item.merchant_address);
             merchant_stats.total_payments += 1;
             merchant_stats.total_volume = merchant_stats.total_volume.saturating_add(item.amount);
             storage::set_merchant_stats(&env, &item.merchant_address, &merchant_stats);
 
-            // Update global stats
-            let mut stats = storage::get_global_stats(&env);
-            stats.total_payments += 1;
-            stats.total_volume = stats.total_volume.saturating_add(item.amount);
-            storage::set_global_stats(&env, &stats);
+            // Accumulate into a single global stats update (written once after the loop)
+            global_stats.total_payments += 1;
+            global_stats.total_volume = global_stats.total_volume.saturating_add(item.amount);
+        }
 
+        // Write the accumulated global stats once
+        storage::set_global_stats(&env, &global_stats);
+
+        // ── Phase 5: Emit per-item payment_processed events ──
+        for item in payments.iter() {
             env.events().publish(
-                ("lumenflow", "payment_processed"),
+                ("lumenflow", "payment_processed", item.merchant_address.clone()),
                 (
                     item.order_id,
                     payer.clone(),
-                    item.merchant_address,
                     item.amount,
                 ),
             );
         }
+
         Ok(())
     }
 
@@ -803,6 +1299,7 @@ impl PaymentProcessingContract {
         order_id: String,
         refunded_amount: i128,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         let mut payment =
             storage::get_payment(&env, &order_id).ok_or(PaymentError::PaymentNotFound)?;
 
@@ -839,7 +1336,7 @@ impl PaymentProcessingContract {
         order_id: String,
     ) -> Result<(), PaymentError> {
         require_not_paused(&env)?;
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         if storage::get_payment(&env, &order_id).is_none() {
             return Err(PaymentError::PaymentNotFound);
         }
@@ -865,7 +1362,7 @@ impl PaymentProcessingContract {
     /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
     pub fn cleanup_expired_payments(env: Env, admin: Address) -> Result<u32, PaymentError> {
         require_not_paused(&env)?;
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         let cutoff = env
             .ledger()
             .timestamp()
@@ -985,7 +1482,7 @@ impl PaymentProcessingContract {
         date_start: Option<u64>,
         date_end: Option<u64>,
     ) -> Result<GlobalStats, PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
 
         // Validate bounds when both are present.
         if let (Some(start), Some(end)) = (date_start, date_end) {
@@ -1038,6 +1535,14 @@ impl PaymentProcessingContract {
         Ok(storage::get_merchant_stats(&env, &merchant))
     }
 
+    /// Returns the current payment-ID index count for `address`, as either a
+    /// merchant or a payer — whichever is higher, since each index independently
+    /// enforces `storage::MAX_PAYMENT_IDS_PER_ACCOUNT`.
+    pub fn get_account_payment_count(env: Env, address: Address) -> u32 {
+        storage::get_merchant_payment_count(&env, &address)
+            .max(storage::get_payer_payment_count(&env, &address))
+    }
+
     // ── Refunds ───────────────────────────────────────────────────────────────
 
     /// Initiate a refund request.
@@ -1065,7 +1570,7 @@ impl PaymentProcessingContract {
     /// * [`PaymentError::RefundWindowExpired`] — more than 30 days have passed since payment.
     /// * [`PaymentError::RefundExceedsOriginal`] — cumulative refund would exceed the
     ///   original payment amount.
-    /// * [`PaymentError::TooManyRefunds`] — the per-order refund limit has been reached.
+    /// * [`PaymentError::RefundLimitExceeded`] — the per-order refund limit has been reached.
     pub fn initiate_refund(
         env: Env,
         caller: Address,
@@ -1085,6 +1590,11 @@ impl PaymentProcessingContract {
         }
 
         let payment = storage::get_payment(&env, &order_id).ok_or(PaymentError::PaymentNotFound)?;
+
+        let existing_refund_ids = storage::get_order_refund_ids(&env, &order_id);
+        if existing_refund_ids.len() as usize >= MAX_REFUNDS_PER_PAYMENT {
+            return Err(PaymentError::RefundLimitExceeded);
+        }
 
         // Only payer or merchant may initiate
         if caller != payment.payer && caller != payment.merchant_address {
@@ -1121,8 +1631,10 @@ impl PaymentProcessingContract {
         storage::set_refund(&env, &refund);
         storage::add_order_refund_id(&env, &order_id, &refund_id);
 
-        env.events()
-            .publish(("lumenflow", "refund_initiated"), refund_id);
+        env.events().publish(
+            ("lumenflow", "refund_initiated", payment.merchant_address.clone()),
+            (refund_id.clone(), order_id.clone()),
+        );
         Ok(())
     }
 
@@ -1173,6 +1685,7 @@ impl PaymentProcessingContract {
         caller: Address,
         refund_id: String,
     ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         let refund = storage::get_refund(&env, &refund_id).ok_or(PaymentError::RefundNotFound)?;
         let payment =
             storage::get_payment(&env, &refund.order_id).ok_or(PaymentError::PaymentNotFound)?;
@@ -1187,13 +1700,16 @@ impl PaymentProcessingContract {
         r.status = RefundStatus::Approved;
         storage::set_refund(&env, &r);
 
-        env.events()
-            .publish(("lumenflow", "refund_approved"), refund_id);
+        env.events().publish(
+            ("lumenflow", "refund_approved", payment.merchant_address.clone()),
+            (refund_id.clone(), r.order_id.clone()),
+        );
         Ok(())
     }
 
     /// Reject a refund. Merchant or admin only.
     pub fn reject_refund(env: Env, caller: Address, refund_id: String) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         let refund = storage::get_refund(&env, &refund_id).ok_or(PaymentError::RefundNotFound)?;
         let payment =
             storage::get_payment(&env, &refund.order_id).ok_or(PaymentError::PaymentNotFound)?;
@@ -1208,8 +1724,10 @@ impl PaymentProcessingContract {
         r.status = RefundStatus::Rejected;
         storage::set_refund(&env, &r);
 
-        env.events()
-            .publish(("lumenflow", "refund_rejected"), refund_id);
+        env.events().publish(
+            ("lumenflow", "refund_rejected", payment.merchant_address.clone()),
+            (refund_id.clone(), r.order_id.clone()),
+        );
         Ok(())
     }
 
@@ -1230,6 +1748,7 @@ impl PaymentProcessingContract {
     /// * [`PaymentError::RefundNotApproved`] — the refund is not in `Approved` state.
     /// * [`PaymentError::PaymentNotFound`] — the associated payment no longer exists.
     pub fn execute_refund(env: Env, refund_id: String) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
         let refund = storage::get_refund(&env, &refund_id).ok_or(PaymentError::RefundNotFound)?;
 
         if !matches!(refund.status, RefundStatus::Approved) {
@@ -1272,8 +1791,10 @@ impl PaymentProcessingContract {
         let token_client = token::Client::new(&env, &payment.token);
         token_client.transfer(&payment.merchant_address, &payment.payer, &refund_amount);
 
-        env.events()
-            .publish(("lumenflow", "refund_executed"), refund_id);
+        env.events().publish(
+            ("lumenflow", "refund_executed", payment.merchant_address.clone()),
+            (refund_id, r.order_id.clone()),
+        );
         Ok(())
     }
 
@@ -1289,6 +1810,194 @@ impl PaymentProcessingContract {
     /// * [`PaymentError::RefundNotFound`] — no refund exists with `refund_id`.
     pub fn get_refund(env: Env, refund_id: String) -> Result<RefundRecord, PaymentError> {
         storage::get_refund(&env, &refund_id).ok_or(PaymentError::RefundNotFound)
+    }
+
+    // ── Dispute resolution ────────────────────────────────────────────────────
+
+    /// Raise a dispute against a rejected refund (payer only).
+    ///
+    /// Creates a [`DisputeRecord`] in `Open` state linked to the rejected refund.
+    /// The dispute can be resolved by an admin via [`resolve_dispute`].
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the payer of the original payment. Must sign the call.
+    /// * `dispute_id` - Unique, non-empty identifier for this dispute (max 64 chars).
+    /// * `refund_id` - The refund that was rejected and is being disputed.
+    /// * `reason` - Human-readable reason for the dispute; maximum 256 characters.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::InvalidInput`] — `dispute_id` empty/too long or `reason` > 256 chars.
+    /// * [`PaymentError::DisputeAlreadyExists`] — a dispute with `dispute_id` already exists.
+    /// * [`PaymentError::RefundNotFound`] — no refund exists with `refund_id`.
+    /// * [`PaymentError::DisputeRefundNotRejected`] — the refund is not in `Rejected` state.
+    /// * [`PaymentError::PaymentNotFound`] — the associated payment no longer exists.
+    /// * [`PaymentError::Unauthorized`] — `caller` is not the payer of the original payment.
+    pub fn raise_dispute(
+        env: Env,
+        caller: Address,
+        dispute_id: String,
+        refund_id: String,
+        reason: String,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        caller.require_auth();
+        require_valid_id(&dispute_id)?;
+
+        if reason.len() > 256 {
+            return Err(PaymentError::InvalidInput);
+        }
+
+        if storage::get_dispute(&env, &dispute_id).is_some() {
+            return Err(PaymentError::DisputeAlreadyExists);
+        }
+
+        let refund = storage::get_refund(&env, &refund_id).ok_or(PaymentError::RefundNotFound)?;
+
+        // Dispute can only be raised on a rejected refund
+        if !matches!(refund.status, RefundStatus::Rejected) {
+            return Err(PaymentError::DisputeRefundNotRejected);
+        }
+
+        let payment =
+            storage::get_payment(&env, &refund.order_id).ok_or(PaymentError::PaymentNotFound)?;
+
+        // Only the payer of the original payment can raise a dispute
+        if caller != payment.payer {
+            return Err(PaymentError::Unauthorized);
+        }
+
+        let now = env.ledger().timestamp();
+        let dispute = types::DisputeRecord {
+            dispute_id: dispute_id.clone(),
+            refund_id: refund_id.clone(),
+            order_id: refund.order_id.clone(),
+            initiator: caller,
+            reason,
+            status: types::DisputeStatus::Open,
+            resolution: None,
+            created_at: now,
+        };
+        storage::set_dispute(&env, &dispute);
+
+        env.events().publish(
+            ("lumenflow", "dispute_raised"),
+            (dispute_id, refund_id, refund.order_id),
+        );
+        Ok(())
+    }
+
+    /// Resolve a dispute (admin only).
+    ///
+    /// Marks the dispute resolved. If `force_refund` is `true`, immediately
+    /// transfers the refund amount from the merchant to the payer, bypassing
+    /// merchant approval.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator. Must sign the call.
+    /// * `dispute_id` - The dispute to resolve.
+    /// * `resolution` - Admin's resolution notes (1–256 characters, required).
+    /// * `force_refund` - If `true`, execute the refund immediately.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    /// * [`PaymentError::DisputeNotFound`] — no dispute exists with `dispute_id`.
+    /// * [`PaymentError::DisputeAlreadyResolved`] — the dispute is already resolved.
+    /// * [`PaymentError::RefundNotFound`] — the referenced refund no longer exists (force_refund only).
+    /// * [`PaymentError::PaymentNotFound`] — the referenced payment no longer exists (force_refund only).
+    pub fn resolve_dispute(
+        env: Env,
+        admin: Address,
+        dispute_id: String,
+        resolution: String,
+        force_refund: bool,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        require_admin_rate_limited(&env, &admin)?;
+
+        if resolution.len() == 0 || resolution.len() > 256 {
+            return Err(PaymentError::InvalidInput);
+        }
+
+        let mut dispute =
+            storage::get_dispute(&env, &dispute_id).ok_or(PaymentError::DisputeNotFound)?;
+
+        if matches!(dispute.status, types::DisputeStatus::Resolved) {
+            return Err(PaymentError::DisputeAlreadyResolved);
+        }
+
+        // Effects: update dispute state before any external calls
+        dispute.status = types::DisputeStatus::Resolved;
+        dispute.resolution = Some(resolution.clone());
+        storage::set_dispute(&env, &dispute);
+
+        if force_refund {
+            let refund = storage::get_refund(&env, &dispute.refund_id)
+                .ok_or(PaymentError::RefundNotFound)?;
+            let mut payment = storage::get_payment(&env, &refund.order_id)
+                .ok_or(PaymentError::PaymentNotFound)?;
+
+            let refund_amount = refund.amount;
+
+            // Update payment state before external call (checks-effects-interactions)
+            payment.refunded_amount += refund_amount;
+            payment.status = if payment.refunded_amount >= payment.amount {
+                PaymentStatus::FullyRefunded
+            } else {
+                PaymentStatus::PartiallyRefunded
+            };
+            storage::set_payment(&env, &payment);
+
+            // Transition refund to Completed
+            let mut r = refund;
+            r.status = RefundStatus::Completed;
+            storage::set_refund(&env, &r);
+
+            // Update global stats
+            let mut stats = storage::get_global_stats(&env);
+            stats.total_refunds += 1;
+            stats.total_refund_volume = stats.total_refund_volume.saturating_add(refund_amount);
+            storage::set_global_stats(&env, &stats);
+
+            // Update merchant stats
+            let mut merchant_stats = storage::get_merchant_stats(&env, &payment.merchant_address);
+            merchant_stats.total_refunds += 1;
+            merchant_stats.total_refund_volume =
+                merchant_stats.total_refund_volume.saturating_add(refund_amount);
+            storage::set_merchant_stats(&env, &payment.merchant_address, &merchant_stats);
+
+            // Interaction: forced token transfer from merchant to payer
+            let token_client = token::Client::new(&env, &payment.token);
+            token_client.transfer(&payment.merchant_address, &payment.payer, &refund_amount);
+        }
+
+        env.events().publish(
+            ("lumenflow", "dispute_resolved"),
+            (dispute_id, resolution, force_refund),
+        );
+        Ok(())
+    }
+
+    /// Get a dispute record by ID.
+    ///
+    /// # Arguments
+    /// * `dispute_id` - The dispute identifier to look up.
+    ///
+    /// # Returns
+    /// The [`DisputeRecord`] on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::DisputeNotFound`] — no dispute exists with `dispute_id`.
+    pub fn get_dispute(
+        env: Env,
+        dispute_id: String,
+    ) -> Result<types::DisputeRecord, PaymentError> {
+        storage::get_dispute(&env, &dispute_id).ok_or(PaymentError::DisputeNotFound)
     }
 
     // ── Multi-signature payments ──────────────────────────────────────────────
@@ -1368,6 +2077,7 @@ impl PaymentProcessingContract {
 
         let ms = MultisigPayment {
             payment_id: payment_id.clone(),
+            initiator: initiator.clone(),
             merchant_address,
             token: token_address,
             amount,
@@ -1376,7 +2086,6 @@ impl PaymentProcessingContract {
             collected: Vec::new(&env),
             executed: false,
             cancelled: false,
-            initiator,
             created_at: now,
             expires_at: resolved_expires_at,
         };
@@ -1418,6 +2127,14 @@ impl PaymentProcessingContract {
 
         if ms.executed {
             return Err(PaymentError::MultisigAlreadyExecuted);
+        }
+
+        if ms.cancelled {
+            return Err(PaymentError::MultisigCancelled);
+        }
+
+        if env.ledger().timestamp() >= ms.expires_at.unwrap_or(u64::MAX) {
+            return Err(PaymentError::MultisigExpired);
         }
 
         // Verify signer is in the allowed list
@@ -1519,7 +2236,7 @@ impl PaymentProcessingContract {
             }
         }
 
-        if ms.signatures.len() < ms.required_signatures {
+        if ms.collected.len() < ms.required_signatures {
             return Err(PaymentError::InsufficientSignatures);
         }
 
@@ -1558,6 +2275,80 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    // ── Versioning ────────────────────────────────────────────────────────────
+
+    /// Admin: record the current binary version on-chain (call once after deploy/upgrade).
+    pub fn set_contract_version(env: Env, admin: Address) -> Result<(), PaymentError> {
+        require_admin_rate_limited(&env, &admin)?;
+        let version = String::from_str(&env, env!("CARGO_PKG_VERSION"));
+        storage::set_stored_version(&env, &version);
+        Ok(())
+    }
+
+    /// One-time storage migration from v1 verbose key names to v2 short codes.
+    ///
+    /// Call this function **once** immediately after upgrading to the version
+    /// that introduces the shortened `DataKey` variant names (#566). It remaps
+    /// all instance-storage singleton keys (e.g. `CleanupPeriod` → `CP`,
+    /// `LargePaymentThreshold` → `LPT`) to their new compact representations.
+    ///
+    /// The migration is idempotent — calling it again after the keys have
+    /// already been migrated is safe and has no effect.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — caller is not the admin.
+    pub fn migrate_storage_keys(env: Env, admin: Address) -> Result<(), PaymentError> {
+        require_admin_rate_limited(&env, &admin)?;
+        storage::migrate_storage_keys(&env);
+        Ok(())
+    }
+
+    /// Admin guard: returns error if stored on-chain version does not match binary version.
+    pub fn assert_version_matches(env: Env, admin: Address) -> Result<(), PaymentError> {
+        require_admin_rate_limited(&env, &admin)?;
+        let current = String::from_str(&env, env!("CARGO_PKG_VERSION"));
+        if let Some(stored) = storage::get_stored_version(&env) {
+            if stored != current {
+                return Err(PaymentError::VersionMismatch);
+            }
+        }
+        Ok(())
+    }
+
+    /// Upgrade the contract WASM to a new hash (admin only).
+    ///
+    /// Replaces the deployed contract binary with the WASM identified by
+    /// `new_wasm_hash`. The hash must have been uploaded to the network with
+    /// `stellar contract upload` before this call. The function:
+    ///   1. Verifies the caller is the stored admin.
+    ///   2. Calls `env.deployer().update_current_contract_wasm(new_wasm_hash)`.
+    ///   3. Emits a `lumenflow/contract_upgraded` event with the new WASM hash.
+    ///
+    /// After the upgrade, call `set_contract_version` to record the new version
+    /// on-chain, then `assert_version_matches` to confirm the stored version
+    /// aligns with the binary. A mismatch returns [`PaymentError::VersionMismatch`].
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator address.
+    /// * `new_wasm_hash` - 32-byte SHA-256 hash of the new WASM binary.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    pub fn upgrade(
+        env: Env,
+        admin: Address,
+        new_wasm_hash: soroban_sdk::BytesN<32>,
+    ) -> Result<(), PaymentError> {
+        require_admin_rate_limited(&env, &admin)?;
+        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+        env.events()
+            .publish(("lumenflow", "contract_upgraded"), new_wasm_hash);
+        Ok(())
+    }
+
     // ── Internal helpers ──────────────────────────────────────────────────────
 
     /// List merchants with cursor-based pagination. Admin only.
@@ -1567,7 +2358,7 @@ impl PaymentProcessingContract {
         cursor: Option<Address>,
         limit: u32,
     ) -> Result<MerchantPage, PaymentError> {
-        require_admin(&env, &admin)?;
+        require_admin_rate_limited(&env, &admin)?;
         require_valid_limit(limit)?;
         let addresses = storage::get_merchant_list(&env);
         Self::build_merchant_page(&env, addresses, cursor, limit)
@@ -1667,15 +2458,25 @@ impl PaymentProcessingContract {
         let total_matching = sorted.len();
         let mut result: Vec<PaymentOrder> = Vec::new(env);
         let mut next_cursor: Option<String> = None;
-        let mut last_included_id: Option<String> = None;
 
-        for (i, p) in sorted.iter().enumerate() {
-            if i as u32 >= limit {
-                next_cursor = last_included_id;
+        // Apply cursor: skip all entries up to and including the cursor record
+        let start_idx = if let Some(ref cursor_id) = cursor {
+            sorted.iter().position(|p| p.order_id == *cursor_id)
+                .map(|pos| pos + 1)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
+        for (count, i) in (start_idx..sorted.len() as usize).enumerate() {
+            if count as u32 >= limit {
+                // There are more results — set next_cursor to the last included id
+                next_cursor = result.last().map(|p| p.order_id.clone());
                 break;
             }
-            last_included_id = Some(p.order_id.clone());
-            result.push_back(p);
+            if let Some(p) = sorted.get(i as u32) {
+                result.push_back(p);
+            }
         }
 
         Ok(PaymentPage {
@@ -1781,7 +2582,7 @@ impl PaymentProcessingContract {
         require_not_paused(&env)?;
         merchant.require_auth();
         require_positive(amount)?;
-        require_non_empty_string(&request_id)?;
+        require_bounded_string(&request_id, 1, 64)?;
 
         if !storage::is_token_allowed(&env, &token) {
             return Err(PaymentError::TokenNotAllowed);
@@ -1879,5 +2680,576 @@ impl PaymentProcessingContract {
         env.events()
             .publish(("lumenflow", "payment_request_paid"), request_id);
         Ok(())
+    }
+
+    // -- Subscriptions ---------------------------------------------------------
+
+    /// Create a subscription plan that subscribers can later subscribe to.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator address. Must sign the call.
+    /// * `plan_id` - Unique, non-empty identifier for the plan (max 64 chars).
+    /// * `token` - Allowed token contract address used for recurring charges.
+    /// * `amount` - Positive token amount charged per billing cycle.
+    /// * `interval_secs` - Seconds that must elapse between charges. Must be non-zero.
+    /// * `max_cycles` - Maximum number of charges. Must be non-zero.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] - `admin` is not the configured administrator.
+    /// * [`PaymentError::InvalidInput`] - `plan_id` is empty or too long, or
+    ///   `interval_secs` or `max_cycles` is zero.
+    /// * [`PaymentError::InvalidAmount`] - `amount` is not positive.
+    /// * [`PaymentError::TokenNotAllowed`] - `token` is not on the allow-list.
+    /// * [`PaymentError::SubscriptionPlanAlreadyExists`] - a plan with `plan_id`
+    ///   already exists.
+    pub fn create_subscription_plan(
+        env: Env,
+        admin: Address,
+        plan_id: String,
+        token: Address,
+        amount: i128,
+        interval_secs: u64,
+        max_cycles: u32,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        require_admin_rate_limited(&env, &admin)?;
+        require_valid_id(&plan_id)?;
+        require_positive(amount)?;
+        if interval_secs == 0 || max_cycles == 0 {
+            return Err(PaymentError::InvalidInput);
+        }
+        if !storage::is_token_allowed(&env, &token) {
+            return Err(PaymentError::TokenNotAllowed);
+        }
+        if storage::get_subscription_plan(&env, &plan_id).is_some() {
+            return Err(PaymentError::SubscriptionPlanAlreadyExists);
+        }
+
+        let plan = SubscriptionPlan {
+            plan_id: plan_id.clone(),
+            token,
+            amount,
+            interval_secs,
+            max_cycles,
+            created_at: env.ledger().timestamp(),
+        };
+        storage::set_subscription_plan(&env, &plan);
+
+        env.events()
+            .publish(("lumenflow", "subscription_plan_created"), plan_id);
+        Ok(())
+    }
+
+    /// Subscribe `subscriber` to an existing plan, billed to `merchant`.
+    ///
+    /// The subscriber grants the contract a token allowance up front covering
+    /// every remaining cycle of this and any other of their active
+    /// subscriptions in the plan's token, so charges normally need no further
+    /// subscriber signature. The allowance expiry is capped by the network's
+    /// maximum entry TTL, which can be shorter than a long subscription's
+    /// lifetime; the subscriber refreshes it with
+    /// [`Self::renew_subscription_allowance`]. The first charge becomes due one
+    /// full interval after subscribing.
+    ///
+    /// # Arguments
+    /// * `merchant` - Registered, active merchant that will receive the charges.
+    /// * `subscriber` - Address to be charged each cycle. Must sign the call.
+    /// * `plan_id` - Identifier of an existing subscription plan.
+    /// * `subscription_id` - Unique, non-empty identifier for this subscription.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::InvalidInput`] - `subscription_id` is empty or too long.
+    /// * [`PaymentError::SubscriptionPlanNotFound`] - no plan exists with `plan_id`.
+    /// * [`PaymentError::SubscriptionAlreadyExists`] - a subscription with
+    ///   `subscription_id` already exists.
+    /// * [`PaymentError::MerchantNotFound`] - no merchant registered at `merchant`.
+    /// * [`PaymentError::MerchantInactive`] - the merchant has been deactivated.
+    pub fn subscribe(
+        env: Env,
+        merchant: Address,
+        subscriber: Address,
+        plan_id: String,
+        subscription_id: String,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        subscriber.require_auth();
+        require_valid_id(&subscription_id)?;
+
+        let plan = storage::get_subscription_plan(&env, &plan_id)
+            .ok_or(PaymentError::SubscriptionPlanNotFound)?;
+        if storage::get_subscription(&env, &subscription_id).is_some() {
+            return Err(PaymentError::SubscriptionAlreadyExists);
+        }
+
+        let m = storage::get_merchant(&env, &merchant).ok_or(PaymentError::MerchantNotFound)?;
+        if !m.active {
+            return Err(PaymentError::MerchantInactive);
+        }
+
+        let now = env.ledger().timestamp();
+        let sub = Subscription {
+            subscription_id: subscription_id.clone(),
+            plan_id,
+            merchant: merchant.clone(),
+            subscriber: subscriber.clone(),
+            status: SubscriptionStatus::Active,
+            cycles_charged: 0,
+            last_charged_at: now,
+            created_at: now,
+        };
+        storage::set_subscription(&env, &sub);
+
+        // SEP-41 approve SETS the (from, spender) allowance rather than adding
+        // to it, so the approved amount must cover the combined remaining
+        // cycles of every active subscription the subscriber has in this token.
+        // That running total is tracked in the reserve key.
+        let total = plan.amount.saturating_mul(plan.max_cycles as i128);
+        let reserve =
+            storage::get_subscription_reserve(&env, &subscriber, &plan.token).saturating_add(total);
+        storage::set_subscription_reserve(&env, &subscriber, &plan.token, reserve);
+        let token_client = token::Client::new(&env, &plan.token);
+        token_client.approve(
+            &subscriber,
+            &env.current_contract_address(),
+            &reserve,
+            &env.ledger().max_live_until_ledger(),
+        );
+
+        env.events().publish(
+            ("lumenflow", "subscription_created"),
+            (subscription_id, subscriber, merchant),
+        );
+        Ok(())
+    }
+
+    /// Charge one billing cycle of an active subscription.
+    ///
+    /// Transfers the plan amount from the subscriber to the merchant only if the
+    /// billing interval has elapsed since the last charge (or since subscribing)
+    /// and the subscription has cycles remaining. The transfer draws on the
+    /// allowance granted at subscribe time. Reaching `max_cycles` marks the
+    /// subscription `Completed`.
+    ///
+    /// # Arguments
+    /// * `merchant` - Must be the merchant on the subscription. Must sign the call.
+    /// * `subscription_id` - Identifier of the subscription to charge.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::SubscriptionNotFound`] - no subscription exists with
+    ///   `subscription_id`.
+    /// * [`PaymentError::Unauthorized`] - `merchant` is not the subscription's merchant.
+    /// * [`PaymentError::SubscriptionNotActive`] - the subscription was cancelled.
+    /// * [`PaymentError::SubscriptionPlanNotFound`] - the underlying plan record
+    ///   no longer exists.
+    /// * [`PaymentError::TokenNotAllowed`] - the plan's token has since been
+    ///   removed from the allow-list.
+    /// * [`PaymentError::MerchantNotFound`] - the merchant record no longer exists.
+    /// * [`PaymentError::MerchantInactive`] - the merchant has been deactivated.
+    /// * [`PaymentError::SubscriptionMaxCyclesReached`] - all cycles have been charged.
+    /// * [`PaymentError::SubscriptionIntervalNotElapsed`] - the billing interval
+    ///   has not yet elapsed.
+    pub fn charge_subscription(
+        env: Env,
+        merchant: Address,
+        subscription_id: String,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        merchant.require_auth();
+
+        let mut sub = storage::get_subscription(&env, &subscription_id)
+            .ok_or(PaymentError::SubscriptionNotFound)?;
+        if merchant != sub.merchant {
+            return Err(PaymentError::Unauthorized);
+        }
+        if matches!(sub.status, SubscriptionStatus::Cancelled) {
+            return Err(PaymentError::SubscriptionNotActive);
+        }
+
+        let plan = storage::get_subscription_plan(&env, &sub.plan_id)
+            .ok_or(PaymentError::SubscriptionPlanNotFound)?;
+
+        // Re-checked at charge time, matching the one-off payment paths: an
+        // admin deactivating the merchant or delisting the token must also
+        // stop recurring charges.
+        if !storage::is_token_allowed(&env, &plan.token) {
+            return Err(PaymentError::TokenNotAllowed);
+        }
+        let m = storage::get_merchant(&env, &sub.merchant).ok_or(PaymentError::MerchantNotFound)?;
+        if !m.active {
+            return Err(PaymentError::MerchantInactive);
+        }
+
+        // Checked before the Completed status so an exhausted subscription
+        // reports MaxCyclesReached rather than the generic NotActive.
+        if sub.cycles_charged >= plan.max_cycles {
+            return Err(PaymentError::SubscriptionMaxCyclesReached);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < sub.last_charged_at.saturating_add(plan.interval_secs) {
+            return Err(PaymentError::SubscriptionIntervalNotElapsed);
+        }
+
+        // Effects before interaction (checks-effects-interactions)
+        sub.cycles_charged += 1;
+        sub.last_charged_at = now;
+        if sub.cycles_charged >= plan.max_cycles {
+            sub.status = SubscriptionStatus::Completed;
+        }
+        storage::set_subscription(&env, &sub);
+
+        // transfer_from consumes the allowance; keep the reserve in step
+        let reserve = storage::get_subscription_reserve(&env, &sub.subscriber, &plan.token)
+            .saturating_sub(plan.amount);
+        storage::set_subscription_reserve(&env, &sub.subscriber, &plan.token, reserve);
+
+        let token_client = token::Client::new(&env, &plan.token);
+        token_client.transfer_from(
+            &env.current_contract_address(),
+            &sub.subscriber,
+            &sub.merchant,
+            &plan.amount,
+        );
+
+        env.events().publish(
+            ("lumenflow", "subscription_charged"),
+            (subscription_id, sub.cycles_charged, plan.amount),
+        );
+        Ok(())
+    }
+
+    /// Cancel an active subscription. No further charges are possible.
+    ///
+    /// The uncharged cycles are released from the subscriber's tracked reserve.
+    /// When the subscriber is the caller, the token allowance is also
+    /// re-approved down to the reserve still backing their other active
+    /// subscriptions (zero if none). A merchant-initiated cancel cannot shrink
+    /// the allowance (approve needs the subscriber's auth); the subscriber
+    /// clears the residual with [`Self::renew_subscription_allowance`].
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the subscription's merchant or subscriber. Must sign
+    ///   the call.
+    /// * `subscription_id` - Identifier of the subscription to cancel.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::SubscriptionNotFound`] - no subscription exists with
+    ///   `subscription_id`.
+    /// * [`PaymentError::Unauthorized`] - `caller` is neither the merchant nor
+    ///   the subscriber.
+    /// * [`PaymentError::SubscriptionNotActive`] - the subscription is already
+    ///   cancelled or completed.
+    /// * [`PaymentError::SubscriptionPlanNotFound`] - the underlying plan record
+    ///   no longer exists.
+    pub fn cancel_subscription(
+        env: Env,
+        caller: Address,
+        subscription_id: String,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        caller.require_auth();
+
+        let mut sub = storage::get_subscription(&env, &subscription_id)
+            .ok_or(PaymentError::SubscriptionNotFound)?;
+        if caller != sub.merchant && caller != sub.subscriber {
+            return Err(PaymentError::Unauthorized);
+        }
+        if !matches!(sub.status, SubscriptionStatus::Active) {
+            return Err(PaymentError::SubscriptionNotActive);
+        }
+
+        let plan = storage::get_subscription_plan(&env, &sub.plan_id)
+            .ok_or(PaymentError::SubscriptionPlanNotFound)?;
+
+        sub.status = SubscriptionStatus::Cancelled;
+        storage::set_subscription(&env, &sub);
+
+        let remaining = plan
+            .amount
+            .saturating_mul((plan.max_cycles - sub.cycles_charged) as i128);
+        let reserve = storage::get_subscription_reserve(&env, &sub.subscriber, &plan.token)
+            .saturating_sub(remaining);
+        storage::set_subscription_reserve(&env, &sub.subscriber, &plan.token, reserve);
+
+        // Shrinking the allowance needs the subscriber's auth, so it can only
+        // happen on subscriber-initiated cancels.
+        if caller == sub.subscriber {
+            token::Client::new(&env, &plan.token).approve(
+                &sub.subscriber,
+                &env.current_contract_address(),
+                &reserve,
+                &env.ledger().max_live_until_ledger(),
+            );
+        }
+
+        env.events().publish(
+            ("lumenflow", "subscription_cancelled"),
+            (subscription_id, caller),
+        );
+        Ok(())
+    }
+
+    /// Re-approve the contract's token allowance to exactly the reserve backing
+    /// `subscriber`'s active subscriptions in `token` (zero if none).
+    ///
+    /// Two uses: refreshing the allowance expiry, which is capped by the
+    /// network's maximum entry TTL and can lapse before a long subscription
+    /// finishes, and clearing residual allowance left behind by a
+    /// merchant-initiated cancel.
+    ///
+    /// # Arguments
+    /// * `subscriber` - Owner of the allowance. Must sign the call.
+    /// * `token` - Token contract the allowance is held in.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    pub fn renew_subscription_allowance(
+        env: Env,
+        subscriber: Address,
+        token: Address,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        subscriber.require_auth();
+
+        let reserve = storage::get_subscription_reserve(&env, &subscriber, &token);
+        token::Client::new(&env, &token).approve(
+            &subscriber,
+            &env.current_contract_address(),
+            &reserve,
+            &env.ledger().max_live_until_ledger(),
+        );
+        Ok(())
+    }
+
+    /// Get a subscription plan by ID.
+    ///
+    /// # Errors
+    /// * [`PaymentError::SubscriptionPlanNotFound`] - no plan exists with `plan_id`.
+    pub fn get_subscription_plan(
+        env: Env,
+        plan_id: String,
+    ) -> Result<SubscriptionPlan, PaymentError> {
+        storage::get_subscription_plan(&env, &plan_id).ok_or(PaymentError::SubscriptionPlanNotFound)
+    }
+
+    /// Get a subscription by ID.
+    ///
+    /// # Errors
+    /// * [`PaymentError::SubscriptionNotFound`] - no subscription exists with
+    ///   `subscription_id`.
+    pub fn get_subscription(
+        env: Env,
+        subscription_id: String,
+    ) -> Result<Subscription, PaymentError> {
+        storage::get_subscription(&env, &subscription_id).ok_or(PaymentError::SubscriptionNotFound)
+    }
+
+    // ── Escrow ────────────────────────────────────────────────────────────────
+
+    /// Lock funds in a time-locked escrow.
+    ///
+    /// Transfers `amount` tokens from `payer` into the contract's own address
+    /// where they remain frozen until `unlock_at`. The payer may cancel before
+    /// `unlock_at`; the merchant may release after it.
+    ///
+    /// # Arguments
+    /// * `payer` - Address funding the escrow. Must sign the call.
+    /// * `merchant` - Registered, active merchant that will receive funds on release.
+    /// * `amount` - Positive token amount to lock.
+    /// * `token` - Allowed token contract address.
+    /// * `unlock_at` - Unix timestamp after which the escrow can be released.
+    /// * `order_id` - Unique, non-empty identifier for this escrow.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::InvalidAmount`] — `amount` is not positive.
+    /// * [`PaymentError::InvalidInput`] — `order_id` is empty or `unlock_at` is in the past.
+    /// * [`PaymentError::TokenNotAllowed`] — `token` is not on the allow-list.
+    /// * [`PaymentError::EscrowAlreadyExists`] — an escrow with `order_id` already exists.
+    /// * [`PaymentError::MerchantNotFound`] — no merchant registered at `merchant`.
+    /// * [`PaymentError::MerchantInactive`] — the merchant has been deactivated.
+    pub fn create_escrow(
+        env: Env,
+        payer: Address,
+        merchant: Address,
+        amount: i128,
+        token: Address,
+        unlock_at: u64,
+        order_id: String,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        payer.require_auth();
+        require_positive(amount)?;
+        require_valid_id(&order_id)?;
+
+        let now = env.ledger().timestamp();
+        if unlock_at <= now {
+            return Err(PaymentError::InvalidInput);
+        }
+
+        if !storage::is_token_allowed(&env, &token) {
+            return Err(PaymentError::TokenNotAllowed);
+        }
+
+        if storage::get_escrow(&env, &order_id).is_some() {
+            return Err(PaymentError::EscrowAlreadyExists);
+        }
+
+        let m = storage::get_merchant(&env, &merchant).ok_or(PaymentError::MerchantNotFound)?;
+        if !m.active {
+            return Err(PaymentError::MerchantInactive);
+        }
+
+        // Lock funds: transfer from payer into this contract
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&payer, &env.current_contract_address(), &amount);
+
+        let escrow = EscrowRecord {
+            order_id: order_id.clone(),
+            payer,
+            merchant,
+            token,
+            amount,
+            unlock_at,
+            status: EscrowStatus::Locked,
+            created_at: now,
+        };
+        storage::set_escrow(&env, &escrow);
+
+        env.events()
+            .publish(("lumenflow", "escrow_created"), (order_id, amount));
+        Ok(())
+    }
+
+    /// Release escrowed funds to the merchant after the unlock time.
+    ///
+    /// Can be called by anyone once `unlock_at` has passed; funds go to the merchant.
+    ///
+    /// # Arguments
+    /// * `order_id` - The escrow to release.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::EscrowNotFound`] — no escrow exists with `order_id`.
+    /// * [`PaymentError::EscrowAlreadyFinalised`] — escrow is not in `Locked` state.
+    /// * [`PaymentError::EscrowNotUnlocked`] — `unlock_at` timestamp has not yet passed.
+    pub fn release_escrow(env: Env, order_id: String) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+
+        let mut escrow =
+            storage::get_escrow(&env, &order_id).ok_or(PaymentError::EscrowNotFound)?;
+
+        if !matches!(escrow.status, EscrowStatus::Locked) {
+            return Err(PaymentError::EscrowAlreadyFinalised);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < escrow.unlock_at {
+            return Err(PaymentError::EscrowNotUnlocked);
+        }
+
+        // Effects before interaction
+        escrow.status = EscrowStatus::Released;
+        storage::set_escrow(&env, &escrow);
+
+        // Transfer funds from contract to merchant
+        let token_client = token::Client::new(&env, &escrow.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &escrow.merchant,
+            &escrow.amount,
+        );
+
+        env.events()
+            .publish(("lumenflow", "escrow_released"), (order_id, escrow.amount));
+        Ok(())
+    }
+
+    /// Cancel an escrow and return funds to the payer — only before the unlock time.
+    ///
+    /// Only the original payer may cancel. After `unlock_at` has passed the
+    /// escrow can no longer be cancelled; call `release_escrow` instead.
+    ///
+    /// # Arguments
+    /// * `payer` - Must be the payer who created the escrow. Must sign the call.
+    /// * `order_id` - The escrow to cancel.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::EscrowNotFound`] — no escrow exists with `order_id`.
+    /// * [`PaymentError::EscrowAlreadyFinalised`] — escrow is not in `Locked` state.
+    /// * [`PaymentError::EscrowUnauthorised`] — caller is not the escrow payer.
+    /// * [`PaymentError::EscrowLockExpired`] — `unlock_at` has already passed.
+    pub fn cancel_escrow_before_lock(
+        env: Env,
+        payer: Address,
+        order_id: String,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        payer.require_auth();
+
+        let mut escrow =
+            storage::get_escrow(&env, &order_id).ok_or(PaymentError::EscrowNotFound)?;
+
+        if !matches!(escrow.status, EscrowStatus::Locked) {
+            return Err(PaymentError::EscrowAlreadyFinalised);
+        }
+
+        if escrow.payer != payer {
+            return Err(PaymentError::EscrowUnauthorised);
+        }
+
+        let now = env.ledger().timestamp();
+        if now >= escrow.unlock_at {
+            return Err(PaymentError::EscrowLockExpired);
+        }
+
+        // Effects before interaction
+        escrow.status = EscrowStatus::Cancelled;
+        storage::set_escrow(&env, &escrow);
+
+        // Return funds to payer
+        let token_client = token::Client::new(&env, &escrow.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &escrow.payer,
+            &escrow.amount,
+        );
+
+        env.events()
+            .publish(("lumenflow", "escrow_cancelled"), (order_id, escrow.amount));
+        Ok(())
+    }
+
+    /// Retrieve an escrow record by order ID.
+    ///
+    /// # Arguments
+    /// * `order_id` - The unique escrow identifier.
+    ///
+    /// # Returns
+    /// The [`EscrowRecord`] on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::EscrowNotFound`] — no escrow exists with `order_id`.
+    pub fn get_escrow(env: Env, order_id: String) -> Result<EscrowRecord, PaymentError> {
+        storage::get_escrow(&env, &order_id).ok_or(PaymentError::EscrowNotFound)
     }
 }

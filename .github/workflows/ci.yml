@@ -5,6 +5,9 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  schedule:
+    # Weekly full security audit every Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
 
 env:
   CARGO_TERM_COLOR: always
@@ -22,7 +25,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # master
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c  # master
         with:
           toolchain: 1.87.0
           targets: wasm32-unknown-unknown
@@ -35,7 +38,7 @@ jobs:
         run: cargo update --locked
 
       - name: Cache cargo registry
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -66,16 +69,17 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # master
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c  # master
         with:
           toolchain: 1.87.0
           targets: wasm32-unknown-unknown
+          components: llvm-tools-preview
 
       - name: Verify toolchain version
         run: rustc --version | grep "1.87.0"
 
       - name: Cache cargo registry
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -100,13 +104,13 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # master
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c  # master
         with:
           toolchain: 1.87.0
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo registry
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -121,7 +125,7 @@ jobs:
         run: cargo test --all-features auth
 
   frontend-lint:
-    name: Frontend Lint (HTML/JS)
+    name: Frontend Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
@@ -129,7 +133,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: 'npm'
@@ -137,27 +141,16 @@ jobs:
       - name: Install lint dependencies
         run: npm ci
 
-      - name: Lint HTML
+      - name: Lint HTML (npm script)
         run: npm run lint:html
 
-      - name: Lint JS
+      - name: Lint JS (ESLint)
         run: npm run lint:js
 
-  frontend-lint:
-    name: Frontend HTML/CSS Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Lint HTML files
+      - name: Lint HTML files (htmlhint direct)
         run: npx --yes htmlhint "frontend/**/*.html" --config .htmlhintrc
 
-      - name: Lint CSS files
+      - name: Lint CSS files (stylelint)
         run: npx --yes stylelint "frontend/**/*.css" --config '{"rules":{"block-no-empty":true,"color-no-invalid-hex":true,"no-duplicate-selectors":true}}'
 
   test-cli:
@@ -175,7 +168,7 @@ jobs:
         run: rustc --version | grep "1.87.0"
 
       - name: Cache Cargo registry and git sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -186,6 +179,108 @@ jobs:
 
       - name: Run CLI unit and integration tests
         run: cargo test --package lumenflow-cli --all-features
+
+  fuzz:
+    name: Property-based fuzz tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.87.0
+          targets: wasm32-unknown-unknown
+
+      - name: Verify toolchain version
+        run: rustc --version | grep "1.87.0"
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Run proptest fuzz suite (100 000 iterations)
+        env:
+          PROPTEST_CASES: "100000"
+        run: cargo test --package lumenflow --all-features prop_
+
+  # ---------------------------------------------------------------------------
+  # Security: dependency vulnerability scan (cargo-audit)
+  # ---------------------------------------------------------------------------
+  security-audit:
+    name: Security Audit (cargo-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.87.0
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-audit-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-audit-
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo-audit
+        run: cargo audit --config audit.toml
+        # Fails the job on any known CVE; ignores listed in audit.toml
+
+      - name: Open issue on scheduled audit failure
+        if: failure() && github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = `🔒 Scheduled dependency audit failed – ${new Date().toISOString().slice(0,10)}`;
+            const body = [
+              '## Automated Dependency Audit Failure',
+              '',
+              'The weekly `cargo-audit` run detected one or more advisories.',
+              '',
+              '**Action required:** review the [workflow run](' +
+                `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}` +
+              ') and either:',
+              '- Upgrade the affected crate(s), or',
+              '- Add a justified, time-limited ignore entry to `audit.toml`.',
+              '',
+              '_This issue was opened automatically by the CI security audit job._',
+            ].join('\n');
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ['security', 'dependencies'],
+            });
+
+  # ---------------------------------------------------------------------------
+  # Security: licence / duplicate / yanked crate check (cargo-deny)
+  # ---------------------------------------------------------------------------
+  security-deny:
+    name: Security Deny (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --config deny.toml all
 
   build:
     name: Build WASM
@@ -199,7 +294,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # master
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c  # master
         with:
           toolchain: 1.87.0
           targets: wasm32-unknown-unknown
@@ -208,7 +303,7 @@ jobs:
         run: rustc --version | grep "1.87.0"
 
       - name: Cache cargo registry
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -219,12 +314,26 @@ jobs:
             ${{ runner.os }}-cargo-wasm-
             ${{ runner.os }}-cargo-
 
-      - name: Build WASM
+      - name: Build WASM (locked)
         run: |
           cargo build --locked \
             --target wasm32-unknown-unknown \
             --release \
-            --package lumenflow
+            --package lumenflow \
+            --locked
+
+      - name: Compute WASM SHA-256
+        id: wasm_hash
+        run: |
+          HASH=$(sha256sum target/wasm32-unknown-unknown/release/lumenflow.wasm | awk '{print $1}')
+          echo "sha256=$HASH" >> "$GITHUB_OUTPUT"
+          echo "WASM SHA-256: $HASH"
+
+      - name: Verify WASM hash against published hash (release tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          chmod +x scripts/verify-build.sh
+          VERSION="${{ github.ref_name }}" ./scripts/verify-build.sh
 
       - name: Check WASM size
         run: |
@@ -257,7 +366,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: 'npm'
@@ -270,3 +379,65 @@ jobs:
       - name: Build SDK
         working-directory: sdk
         run: npm run build --if-present
+
+  cargo-audit:
+    name: Cargo Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c  # master
+        with:
+          toolchain: 1.87.0
+
+      - name: Cache cargo registry
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-audit-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-audit-
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo-audit
+        run: cargo audit --config audit.toml
+
+  npm-audit:
+    name: npm Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      - name: Audit root dependencies (Playwright)
+        # --audit-level=high fails the job on high or critical vulnerabilities
+        run: npm audit --audit-level=high --omit=dev || npm audit --audit-level=high
+        continue-on-error: false
+
+      - name: Install SDK dependencies
+        working-directory: sdk
+        run: npm ci --ignore-scripts
+
+      - name: Audit SDK dependencies
+        working-directory: sdk
+        run: npm audit --audit-level=high --omit=dev || npm audit --audit-level=high
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --ignore-scripts
+
+      - name: Audit frontend dependencies
+        working-directory: frontend
+        run: npm audit --audit-level=high --omit=dev || npm audit --audit-level=high
