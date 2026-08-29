@@ -21,3 +21,4 @@ export * from "./signPaymentPayload";
 export * from "./wallet";
 export * from "./idempotency";
 export * from "./eventCatalog";
+export * from "./security";
