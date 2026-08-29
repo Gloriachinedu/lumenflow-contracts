@@ -763,14 +763,28 @@ feat/sdk-rpc-retry-integration
     }
   }
 
+  // ── Submission guard (issue #787) ──────────────────────────────────────────
+  // Tracks whether a submission is in-flight to prevent duplicate submissions
+  // while the wallet confirmation dialog is open or the RPC call is pending.
+  let _submitting = false;
+
   // ── Submit ─────────────────────────────────────────────────────────────────
 
   async function submitForm() {
     if (!validateForm()) return;
 
+    // Idempotency guard: reject any concurrent submission attempt.
+    if (_submitting) return;
+    _submitting = true;
+
     const btn = document.getElementById('submit-btn');
     btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
     btn.textContent = 'Initiating…';
+
+    // Clear any previous alert
+    const alertEl = document.getElementById('form-alert');
+    alertEl.style.display = 'none';
 
     const paymentId      = document.getElementById('payment-id').value.trim();
     const merchantAddress = document.getElementById('merchant-address').value.trim();
@@ -794,12 +808,6 @@ feat/sdk-rpc-retry-integration
       btn.textContent = 'Initiate Payment';
       return;
     }
-
-    // Store state and show progress panel
-    state = { paymentId, merchantAddress, tokenAddress, amount, signers, required, signatures: new Set() };
-    document.getElementById('form-panel').style.display = 'none';
-    renderProgress();
-    document.getElementById('progress-panel').style.display = 'block';
   }
 
   // ── Progress ───────────────────────────────────────────────────────────────
@@ -850,6 +858,7 @@ feat/sdk-rpc-retry-integration
   }
 
   async function signPayment(signerAddress) {
+    // Prevent re-entrant signing while wallet dialog is open
     const btn = [...document.querySelectorAll('.sign-btn')]
       .find(b => b.onclick && b.onclick.toString().includes(signerAddress));
     if (btn) { btn.disabled = true; btn.textContent = 'Signing…'; }
@@ -868,9 +877,16 @@ feat/sdk-rpc-retry-integration
     }
   }
 
+  // Tracks whether an execute is in-flight
+  let _executing = false;
+
   async function executePayment() {
+    if (_executing) return;
+    _executing = true;
+
     const btn = document.getElementById('execute-btn');
     btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
     btn.textContent = 'Executing…';
 
     showLoadingOverlay('Waiting for transaction confirmation…');
