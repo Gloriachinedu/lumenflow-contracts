@@ -577,14 +577,28 @@
     }
   }
 
+  // ── Submission guard (issue #787) ──────────────────────────────────────────
+  // Tracks whether a submission is in-flight to prevent duplicate submissions
+  // while the wallet confirmation dialog is open or the RPC call is pending.
+  let _submitting = false;
+
   // ── Submit ─────────────────────────────────────────────────────────────────
 
   async function submitForm() {
     if (!validateForm()) return;
 
+    // Idempotency guard: reject any concurrent submission attempt.
+    if (_submitting) return;
+    _submitting = true;
+
     const btn = document.getElementById('submit-btn');
     btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
     btn.textContent = 'Initiating…';
+
+    // Clear any previous alert
+    const alertEl = document.getElementById('form-alert');
+    alertEl.style.display = 'none';
 
     const paymentId      = document.getElementById('payment-id').value.trim();
     const merchantAddress = document.getElementById('merchant-address').value.trim();
@@ -593,23 +607,29 @@
     const signers        = getSignerValues();
     const required       = parseInt(document.getElementById('required-sigs').value, 10);
 
-    const result = await callInitiateMultisig({ paymentId, merchantAddress, tokenAddress, amount, signers, required });
+    try {
+      const result = await callInitiateMultisig({ paymentId, merchantAddress, tokenAddress, amount, signers, required });
 
-    if (!result.success) {
-      const alert = document.getElementById('form-alert');
-      alert.textContent = result.error || 'Failed to initiate payment.';
-      alert.className   = 'alert alert-error';
-      alert.style.display = 'block';
-      btn.disabled = false;
-      btn.textContent = 'Initiate Payment';
-      return;
+      if (!result.success) {
+        alertEl.textContent = result.error || 'Failed to initiate payment.';
+        alertEl.className   = 'alert alert-error';
+        alertEl.style.display = 'block';
+        btn.disabled = false;
+        btn.removeAttribute('aria-busy');
+        btn.textContent = 'Initiate Payment';
+        return;
+      }
+
+      // Store state and show progress panel
+      state = { paymentId, merchantAddress, tokenAddress, amount, signers, required, signatures: new Set() };
+      document.getElementById('form-panel').style.display = 'none';
+      renderProgress();
+      document.getElementById('progress-panel').style.display = 'block';
+    } finally {
+      // Always release the guard, even if an unhandled error occurs.
+      _submitting = false;
+      btn.removeAttribute('aria-busy');
     }
-
-    // Store state and show progress panel
-    state = { paymentId, merchantAddress, tokenAddress, amount, signers, required, signatures: new Set() };
-    document.getElementById('form-panel').style.display = 'none';
-    renderProgress();
-    document.getElementById('progress-panel').style.display = 'block';
   }
 
   // ── Progress ───────────────────────────────────────────────────────────────
@@ -646,8 +666,10 @@
   }
 
   async function signPayment(signerAddress) {
+    // Prevent re-entrant signing while wallet dialog is open
     const btn = [...document.querySelectorAll('.sign-btn')]
       .find(b => b.closest('li').querySelector('.sig-addr').textContent === signerAddress);
+    if (btn && btn.disabled) return;
     if (btn) { btn.disabled = true; btn.textContent = 'Signing…'; }
 
     const result = await callSignMultisig(state.paymentId, signerAddress);
@@ -661,20 +683,32 @@
     }
   }
 
+  // Tracks whether an execute is in-flight
+  let _executing = false;
+
   async function executePayment() {
+    if (_executing) return;
+    _executing = true;
+
     const btn = document.getElementById('execute-btn');
     btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
     btn.textContent = 'Executing…';
 
-    const result = await callExecuteMultisig(state.paymentId);
+    try {
+      const result = await callExecuteMultisig(state.paymentId);
 
-    if (result.success) {
-      showExecuteAlert('✔ Payment executed successfully!', true);
-      btn.textContent = 'Executed';
-    } else {
-      btn.disabled = false;
-      btn.textContent = 'Execute Payment';
-      showExecuteAlert(result.error || 'Execution failed.', false);
+      if (result.success) {
+        showExecuteAlert('✔ Payment executed successfully!', true);
+        btn.textContent = 'Executed';
+      } else {
+        btn.disabled = false;
+        btn.textContent = 'Execute Payment';
+        showExecuteAlert(result.error || 'Execution failed.', false);
+      }
+    } finally {
+      _executing = false;
+      btn.removeAttribute('aria-busy');
     }
   }
 
@@ -695,6 +729,7 @@
   window.submitForm      = submitForm;
   window.signPayment     = signPayment;
   window.executePayment  = executePayment;
+  window.connectWallet   = connectWallet;
 
   document.getElementById('required-sigs').addEventListener('input', validateThreshold);
   renderModeBanner();
