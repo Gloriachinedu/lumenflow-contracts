@@ -32,6 +32,9 @@ jobs:
       - name: Reproducibility check
         run: cargo update --locked
 
+      # Cache key is scoped to the lint job to prevent cross-job cache contamination.
+      # hashFiles('rust-toolchain.toml') busts the cache when the toolchain changes,
+      # and hashFiles('**/Cargo.lock') busts it when dependencies change.
       - name: Cache cargo registry
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
@@ -39,8 +42,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-lint-${{ hashFiles('rust-toolchain.toml') }}-
+            ${{ runner.os }}-cargo-lint-
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -65,6 +70,9 @@ jobs:
       - name: Verify toolchain version
         run: rustc --version | grep "1.87.0"
 
+      # Cache key is scoped to the test job to prevent cross-job cache contamination.
+      # hashFiles('rust-toolchain.toml') busts the cache when the toolchain changes,
+      # and hashFiles('**/Cargo.lock') busts it when dependencies change.
       - name: Cache cargo registry
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
@@ -72,8 +80,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-${{ hashFiles('rust-toolchain.toml') }}-
+            ${{ runner.os }}-cargo-test-
 
       - name: Run tests
         run: cargo test --locked --all-features
@@ -92,6 +102,9 @@ jobs:
           toolchain: 1.87.0
           targets: wasm32-unknown-unknown
 
+      # Cache key is scoped to the auth-tests job to prevent cross-job cache contamination.
+      # hashFiles('rust-toolchain.toml') busts the cache when the toolchain changes,
+      # and hashFiles('**/Cargo.lock') busts it when dependencies change.
       - name: Cache cargo registry
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
@@ -99,8 +112,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-auth-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-auth-${{ hashFiles('rust-toolchain.toml') }}-
+            ${{ runner.os }}-cargo-auth-
 
       - name: Run auth tests
         run: cargo test --all-features auth
@@ -123,6 +138,9 @@ jobs:
       - name: Verify toolchain version
         run: rustc --version | grep "1.87.0"
 
+      # Cache key is scoped to the build job (wasm prefix) to prevent cross-job cache contamination.
+      # hashFiles('rust-toolchain.toml') busts the cache when the toolchain changes,
+      # and hashFiles('**/Cargo.lock') busts it when dependencies change.
       - name: Cache cargo registry
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
@@ -130,8 +148,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-wasm-
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-${{ hashFiles('rust-toolchain.toml') }}-
+            ${{ runner.os }}-cargo-wasm-
 
       - name: Build WASM
         run: |
