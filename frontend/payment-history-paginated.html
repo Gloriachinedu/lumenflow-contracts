@@ -148,7 +148,7 @@
 
 <!-- Pagination controls -->
 <div class="pagination-bar" id="pagination-bar">
-  <div class="page-meta" id="page-meta"></div>
+  <div class="page-meta" id="page-meta" aria-live="polite" aria-atomic="true"></div>
 
   <div class="page-controls">
     <button class="btn" id="prev-btn" onclick="prevPage()" disabled aria-label="Previous page">
@@ -169,6 +169,7 @@
   </div>
 </div>
 
+<script src="focus-management.js"></script>
 <script>
   // ── Pagination state ───────────────────────────────────────────────────────
   // cursor stack: index 0 = first page (null cursor), each push = next-page cursor
@@ -267,7 +268,22 @@
     // Update button states
     document.getElementById('prev-btn').disabled = currentIdx === 0;
     document.getElementById('next-btn').disabled = !next_cursor;
+
+    // ── Focus management (issue #790) ──────────────────────────────────────
+    // On pagination navigation (not initial load), move focus to the table
+    // caption / first cell so screen readers re-read the updated content.
+    if (_focusMgmtInitialized && payments.length > 0) {
+      const firstCell = document.querySelector('#table-body td');
+      if (firstCell) {
+        if (!firstCell.hasAttribute('tabindex')) firstCell.setAttribute('tabindex', '-1');
+        firstCell.focus();
+      }
+    }
+    _focusMgmtInitialized = true;
   }
+
+  // Track whether the initial load has completed (we don't move focus on first load)
+  let _focusMgmtInitialized = false;
 
   // ── Navigation ─────────────────────────────────────────────────────────────
   function prevPage() {

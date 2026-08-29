@@ -208,6 +208,7 @@
   </div>
 </div>
 
+<script src="focus-management.js"></script>
 <script>
   // ── Routing ────────────────────────────────────────────────────────────────
   // Supports both:
@@ -375,10 +376,23 @@
     document.getElementById('loading').style.display = 'none';
 
     if (!data) {
+      const notFound = document.getElementById('not-found');
       document.getElementById('missing-id').textContent = orderId;
-      document.getElementById('not-found').style.display = 'block';
+      notFound.style.display = 'block';
+      // Move focus to not-found heading (issue #790)
+      const heading = notFound.querySelector('h2');
+      if (heading) {
+        if (!heading.hasAttribute('tabindex')) heading.setAttribute('tabindex', '-1');
+        heading.focus();
+      }
     } else {
       renderReceipt(data);
+      // Move focus to receipt heading after async load (issue #790)
+      const heading = document.querySelector('#receipt-content h1');
+      if (heading) {
+        if (!heading.hasAttribute('tabindex')) heading.setAttribute('tabindex', '-1');
+        heading.focus();
+      }
     }
   })();
 </script>

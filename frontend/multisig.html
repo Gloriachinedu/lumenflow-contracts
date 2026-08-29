@@ -170,6 +170,7 @@
   </div>
 </div>
 
+<script src="focus-management.js"></script>
 <script>
   // ── State ──────────────────────────────────────────────────────────────────
 
@@ -378,8 +379,23 @@
     // Store state and show progress panel
     state = { paymentId, merchantAddress, tokenAddress, amount, signers, required, signatures: new Set() };
     document.getElementById('form-panel').style.display = 'none';
+
+    const progressPanel = document.getElementById('progress-panel');
+    progressPanel.style.display = 'block';
     renderProgress();
-    document.getElementById('progress-panel').style.display = 'block';
+
+    // ── Focus management (issue #790) ──────────────────────────────────────
+    // Move focus to the progress panel heading so screen readers announce the
+    // panel change. We defer by one frame to ensure the panel is fully visible.
+    requestAnimationFrame(() => {
+      const heading = progressPanel.querySelector('h2');
+      if (heading) {
+        if (!heading.hasAttribute('tabindex')) heading.setAttribute('tabindex', '-1');
+        heading.focus();
+      } else {
+        window.LumenFocus && LumenFocus.moveFocusTo(progressPanel);
+      }
+    });
   }
 
   // ── Progress ───────────────────────────────────────────────────────────────
@@ -441,10 +457,13 @@
     if (result.success) {
       showExecuteAlert('✔ Payment executed successfully!', true);
       btn.textContent = 'Executed';
+      // Also announce via accessible toast (issue #790)
+      window.LumenFocus && LumenFocus.toast.show('Payment executed successfully!', 'success');
     } else {
       btn.disabled = false;
       btn.textContent = 'Execute Payment';
       showExecuteAlert(result.error || 'Execution failed.', false);
+      window.LumenFocus && LumenFocus.toast.show(result.error || 'Execution failed.', 'error');
     }
   }
 
