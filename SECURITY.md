@@ -8,6 +8,15 @@
 
 ## Reporting a Vulnerability
 
+> **Team-facing workflow:** the operational process behind this policy — intake,
+> triage, roles, incident lifecycle, advisory publication, and post-incident
+> review — is documented in
+> [docs/security/vulnerability-disclosure-and-incident-response.md](docs/security/vulnerability-disclosure-and-incident-response.md).
+> A machine-readable pointer for researchers lives at
+> [`.well-known/security.txt`](.well-known/security.txt), and the step-by-step
+> operator guide is the
+> [Incident Response Runbook](docs/runbooks/incident-response-runbook.md).
+
 **Do not open a public GitHub issue for security vulnerabilities.**
 
 Please report security issues by emailing **security@lumenflow.dev** with:
@@ -118,6 +127,10 @@ The contract admin key controls all privileged operations. A documented rotation
 - Post-rotation verification checklist
 
 ## Incident Response Playbook
+
+> Full workflow with roles, incident lifecycle phases, and failure/boundary
+> handling: [docs/security/vulnerability-disclosure-and-incident-response.md](docs/security/vulnerability-disclosure-and-incident-response.md).
+> Copy-paste operator steps: [docs/runbooks/incident-response-runbook.md](docs/runbooks/incident-response-runbook.md).
 
 ### Critical Vulnerability (Severity: Critical)
 
