@@ -43,4 +43,11 @@ pub enum PaymentError {
     PaginationLimitExceeded = 51,
     BatchSizeExceeded = 52,
     InvalidTags = 53,
+
+    // Upgrade / storage compatibility
+    /// The storage schema version on-chain is newer than this binary supports.
+    StorageVersionTooNew = 60,
+    /// The storage schema version on-chain requires a migration step that has
+    /// not been run yet (binary is too new for the current data layout).
+    StorageMigrationRequired = 61,
 }

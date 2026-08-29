@@ -20,7 +20,17 @@ pub enum DataKey {
     LargePaymentThreshold,
     MaxRefundsPerOrder,
     OrderRefundCount(String),
+    /// Current persistent-storage schema version, incremented on every breaking
+    /// layout change.  Checked at upgrade time to prevent incompatible data from
+    /// being silently misread.
+    StorageVersion,
 }
+
+/// The schema version this binary was compiled against.
+/// Bump this constant whenever a `#[contracttype]` struct or enum is changed in
+/// a way that is not backwards-compatible (field added without `Option`, variant
+/// reordered, type changed, etc.).
+pub const CURRENT_STORAGE_VERSION: u32 = 1;
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
 
@@ -271,4 +281,22 @@ pub fn set_token_allowed(env: &Env, token: &Address, allowed: bool) {
     } else {
         env.storage().instance().remove(&DataKey::AllowedToken(token.clone()));
     }
+}
+
+// ── Storage version / upgrade compatibility ───────────────────────────────────
+
+/// Return the schema version written into storage, or 0 if it has never been
+/// written (i.e. the contract was deployed before versioning was introduced).
+pub fn get_storage_version(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::StorageVersion)
+        .unwrap_or(0)
+}
+
+/// Persist the supplied schema version.
+pub fn set_storage_version(env: &Env, version: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::StorageVersion, &version);
 }

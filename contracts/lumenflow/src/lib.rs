@@ -1151,6 +1151,61 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    // ── Upgrade / storage compatibility ───────────────────────────────────────
+
+    /// Initialise (or upgrade) the on-chain storage schema version.
+    ///
+    /// Call this **once** immediately after deploying a new binary:
+    /// 1. If the stored version equals `CURRENT_STORAGE_VERSION` this is a
+    ///    no-op (safe to call repeatedly).
+    /// 2. If the stored version is less than `CURRENT_STORAGE_VERSION` the
+    ///    migration is accepted and the version is bumped.
+    /// 3. If the stored version is *greater* than `CURRENT_STORAGE_VERSION` the
+    ///    binary is too old for the data on-chain — the call is rejected with
+    ///    `StorageVersionTooNew`.
+    ///
+    /// Admin only.
+    pub fn migrate(env: Env, admin: Address) -> Result<u32, PaymentError> {
+        require_admin(&env, &admin)?;
+
+        let on_chain = storage::get_storage_version(&env);
+        let current = storage::CURRENT_STORAGE_VERSION;
+
+        if on_chain > current {
+            // The stored data was written by a *newer* binary.  Refusing to run
+            // prevents silent data corruption from field misalignment.
+            return Err(PaymentError::StorageVersionTooNew);
+        }
+
+        // Accept the migration (including the initial 0 → 1 write-in).
+        storage::set_storage_version(&env, current);
+
+        env.events().publish(
+            ("lumenflow", "storage_migrated"),
+            (on_chain, current),
+        );
+        Ok(current)
+    }
+
+    /// Read-only check used by off-chain tooling or upgrade scripts to verify
+    /// that the binary and the on-chain data are compatible before executing
+    /// `migrate`.
+    ///
+    /// Returns `Ok(version)` when the stored version matches the compiled-in
+    /// `CURRENT_STORAGE_VERSION`.  Returns an error otherwise.
+    pub fn check_upgrade_compatibility(env: Env) -> Result<u32, PaymentError> {
+        let on_chain = storage::get_storage_version(&env);
+        let current = storage::CURRENT_STORAGE_VERSION;
+
+        if on_chain > current {
+            return Err(PaymentError::StorageVersionTooNew);
+        }
+        if on_chain < current {
+            return Err(PaymentError::StorageMigrationRequired);
+        }
+        Ok(current)
+    }
+
     // ── Internal helpers ──────────────────────────────────────────────────────
 
     fn build_page(

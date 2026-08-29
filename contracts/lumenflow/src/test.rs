@@ -1082,3 +1082,76 @@ fn test_auth_sign_multisig_requires_listed_signer() {
     let result = client.try_sign_multisig_payment(&stranger, &str(&env, "AUTH_MS"), &bytes(&env, &[0u8; 64]));
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
+
+// ── Upgrade / storage compatibility tests ────────────────────────────────────
+
+#[test]
+fn test_migrate_initialises_version() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    // Before any migration the on-chain version is 0.
+    let result = client.try_check_upgrade_compatibility();
+    // Version 0 < CURRENT(1) → migration required.
+    assert_eq!(result, Err(Ok(PaymentError::StorageMigrationRequired)));
+
+    // Running migrate should succeed and return CURRENT_STORAGE_VERSION.
+    let version = client.migrate(&admin);
+    assert_eq!(version, storage::CURRENT_STORAGE_VERSION);
+
+    // Now the compatibility check should pass.
+    let compat = client.check_upgrade_compatibility();
+    assert_eq!(compat, storage::CURRENT_STORAGE_VERSION);
+}
+
+#[test]
+fn test_migrate_idempotent() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    // First migration.
+    client.migrate(&admin);
+
+    // A second call with the same version is a no-op and must not error.
+    let version = client.migrate(&admin);
+    assert_eq!(version, storage::CURRENT_STORAGE_VERSION);
+}
+
+#[test]
+fn test_migrate_rejects_old_binary() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    // Simulate a future binary having written version 999 into storage.
+    storage::set_storage_version(&env, 999);
+
+    // Current binary (version 1) must refuse to run.
+    let result = client.try_migrate(&admin);
+    assert_eq!(result, Err(Ok(PaymentError::StorageVersionTooNew)));
+}
+
+#[test]
+fn test_migrate_requires_admin() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_migrate(&stranger);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_check_upgrade_compatibility_version_too_new() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    storage::set_storage_version(&env, 999);
+
+    let result = client.try_check_upgrade_compatibility();
+    assert_eq!(result, Err(Ok(PaymentError::StorageVersionTooNew)));
+}
