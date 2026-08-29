@@ -26,3 +26,10 @@ identity/
 
 # Logs
 *.log
+node_modules/
+
+# Test coverage output
+coverage/
+
+# Smoke test: ephemeral npm cache for generate_smoke_keypair.sh
+scripts/.smoke_node_modules/
