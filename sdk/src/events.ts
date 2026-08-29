@@ -1,249 +1,98 @@
 /**
- * @file events.ts
+ * LumenFlow SDK — Horizon event streaming
  *
- * Canonical TypeScript types for every LumenFlow contract event payload.
- *
- * Each interface mirrors the `#[contracttype]` struct published as the *data*
- * field of the corresponding Soroban event.  Field names and types are kept in
- * 1-to-1 correspondence with the Rust definitions in `contracts/lumenflow/src/types.rs`
- * so that generated bindings (e.g. `stellar contract bindings typescript`) can
- * be validated against these interfaces at build time.
- *
- * Topic tuple for all events: `["lumenflow", "<event_name>"]`
+ * Works in both Node.js (via the global `EventSource` polyfill or native fetch)
+ * and the browser (native EventSource).
  */
 
-// ---------------------------------------------------------------------------
-// Shared value types (mirrors Soroban XDR scalar types used in events)
-// ---------------------------------------------------------------------------
+const HORIZON_MAINNET = 'https://horizon.stellar.org';
+const HORIZON_TESTNET = 'https://horizon-testnet.stellar.org';
 
-/** Stellar account or contract address encoded as a string (StrKey). */
-export type StellarAddress = string;
+export type EventFilter = {
+  /** Filter by event name, e.g. "refund_approved". Matches the second topic. */
+  eventName?: string;
+};
 
-/** i128 value represented as a JavaScript bigint (Soroban i128 → JS BigInt). */
-export type I128 = bigint;
+export type LumenFlowEvent = {
+  id: string;
+  type: string;
+  topics: string[];
+  value: string;
+};
 
-// ---------------------------------------------------------------------------
-// Payment status (mirrors PaymentStatus enum in types.rs)
-// ---------------------------------------------------------------------------
+export type UnsubscribeFn = () => void;
 
-export enum PaymentStatus {
-  Completed = "Completed",
-  PartiallyRefunded = "PartiallyRefunded",
-  FullyRefunded = "FullyRefunded",
-}
-
-// ---------------------------------------------------------------------------
-// Event payload interfaces
-// ---------------------------------------------------------------------------
+type SubscribeOptions = {
+  /** Horizon base URL. Defaults to testnet. */
+  horizonUrl?: string;
+  /** Cursor to resume from. Defaults to "now". */
+  cursor?: string;
+};
 
 /**
- * `lumenflow/payment_processed`
+ * Subscribe to contract events from Horizon SSE.
  *
- * Emitted by:
- *   - `process_payment_with_signature`
- *   - `process_payment_with_nonce`
- *   - individual items in `batch_payment`
+ * @param contractId  - Soroban contract ID to watch
+ * @param filter      - Optional filter (by event name)
+ * @param callback    - Called for each matching event
+ * @param options     - Horizon URL and cursor options
+ * @returns           - Unsubscribe function
  */
-export interface PaymentProcessedEvent {
-  /** Unique order identifier. */
-  order_id: string;
-  /** Wallet address of the payer. */
-  payer: StellarAddress;
-  /** Registered merchant address. */
-  merchant: StellarAddress;
-  /** Token amount transferred (in the token's base unit). */
-  amount: I128;
-}
+export function subscribe(
+  contractId: string,
+  filter: EventFilter,
+  callback: (event: LumenFlowEvent) => void,
+  options: SubscribeOptions = {},
+): UnsubscribeFn {
+  const base = options.horizonUrl ?? HORIZON_TESTNET;
+  const cursor = options.cursor ?? 'now';
+  const url = `${base}/contract_events?contract_id=${encodeURIComponent(contractId)}&cursor=${cursor}`;
 
-/**
- * `lumenflow/refund_initiated`
- *
- * Emitted by `initiate_refund`.
- */
-export interface RefundInitiatedEvent {
-  refund_id: string;
-  order_id: string;
-  /** Address that opened the refund request (payer or merchant). */
-  initiator: StellarAddress;
-  amount: I128;
-}
+  let es: EventSource | null = null;
+  let stopped = false;
+  let retryDelay = 1_000; // ms, doubles on each failure up to 30s
 
-/**
- * `lumenflow/refund_approved`
- *
- * Emitted by `approve_refund`.
- */
-export interface RefundApprovedEvent {
-  refund_id: string;
-  order_id: string;
-  /** Merchant address whose approval authorised the refund. */
-  merchant: StellarAddress;
-  amount: I128;
-}
+  function connect() {
+    if (stopped) return;
 
-/**
- * `lumenflow/refund_rejected`
- *
- * Emitted by `reject_refund`.
- */
-export interface RefundRejectedEvent {
-  refund_id: string;
-  order_id: string;
-  merchant: StellarAddress;
-  amount: I128;
-}
+    es = new EventSource(url);
 
-/**
- * `lumenflow/refund_executed`
- *
- * Emitted by `execute_refund` after the token transfer completes.
- */
-export interface RefundExecutedEvent {
-  refund_id: string;
-  order_id: string;
-  payer: StellarAddress;
-  merchant: StellarAddress;
-  amount: I128;
-  /** SAC/token contract address used for the refund transfer. */
-  token: StellarAddress;
-}
+    es.onmessage = (msg: MessageEvent) => {
+      retryDelay = 1_000; // reset on success
+      try {
+        const raw = JSON.parse(msg.data as string);
+        const event: LumenFlowEvent = {
+          id: raw.id ?? '',
+          type: raw.type ?? '',
+          topics: raw.topic ?? [],
+          value: raw.value ?? '',
+        };
+        // Apply filter: second topic encodes the event name
+        if (filter.eventName && event.topics[1] !== filter.eventName) return;
+        callback(event);
+      } catch {
+        // ignore malformed messages
+      }
+    };
 
-/**
- * `lumenflow/multisig_initiated`
- *
- * Emitted by `initiate_multisig_payment`.
- */
-export interface MultisigInitiatedEvent {
-  payment_id: string;
-  merchant: StellarAddress;
-  token: StellarAddress;
-  amount: I128;
-  required_signatures: number;
-}
-
-/**
- * `lumenflow/multisig_executed`
- *
- * Emitted by `execute_multisig_payment` after the threshold is met and
- * tokens are transferred.
- */
-export interface MultisigExecutedEvent {
-  payment_id: string;
-  payer: StellarAddress;
-  merchant: StellarAddress;
-  token: StellarAddress;
-  amount: I128;
-}
-
-/**
- * `lumenflow/payment_request_paid`
- *
- * Emitted by `pay_payment_request`.
- */
-export interface PaymentRequestPaidEvent {
-  request_id: string;
-  payer: StellarAddress;
-  merchant: StellarAddress;
-  token: StellarAddress;
-  amount: I128;
-}
-
-/**
- * `lumenflow/payment_status_updated`
- *
- * Emitted by `update_payment_status`.
- */
-export interface PaymentStatusUpdatedEvent {
-  order_id: string;
-  status: PaymentStatus;
-  refunded_amount: I128;
-  original_amount: I128;
-}
-
-// ---------------------------------------------------------------------------
-// Discriminated union for type-safe event handling
-// ---------------------------------------------------------------------------
-
-export type LumenFlowEvent =
-  | { name: "payment_processed";       data: PaymentProcessedEvent }
-  | { name: "refund_initiated";        data: RefundInitiatedEvent }
-  | { name: "refund_approved";         data: RefundApprovedEvent }
-  | { name: "refund_rejected";         data: RefundRejectedEvent }
-  | { name: "refund_executed";         data: RefundExecutedEvent }
-  | { name: "multisig_initiated";      data: MultisigInitiatedEvent }
-  | { name: "multisig_executed";       data: MultisigExecutedEvent }
-  | { name: "payment_request_paid";    data: PaymentRequestPaidEvent }
-  | { name: "payment_status_updated";  data: PaymentStatusUpdatedEvent };
-
-// ---------------------------------------------------------------------------
-// Schema validation helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Validates that a raw decoded event object has all required fields for the
- * given event name.  Throws a descriptive `Error` if the schema does not match.
- *
- * This is intended for use in indexers, webhook processors, and integration
- * tests where raw XDR-decoded data is deserialized before further processing.
- *
- * @param name  The second element of the event topic tuple, e.g. "refund_executed".
- * @param data  The decoded data object from the Soroban event stream.
- * @returns The validated (narrowed) event payload.
- */
-export function validateEventPayload(name: string, data: unknown): LumenFlowEvent {
-  switch (name) {
-    case "payment_processed":
-      assertFields(name, data, ["order_id", "payer", "merchant", "amount"]);
-      return { name, data: data as PaymentProcessedEvent };
-
-    case "refund_initiated":
-      assertFields(name, data, ["refund_id", "order_id", "initiator", "amount"]);
-      return { name, data: data as RefundInitiatedEvent };
-
-    case "refund_approved":
-      assertFields(name, data, ["refund_id", "order_id", "merchant", "amount"]);
-      return { name, data: data as RefundApprovedEvent };
-
-    case "refund_rejected":
-      assertFields(name, data, ["refund_id", "order_id", "merchant", "amount"]);
-      return { name, data: data as RefundRejectedEvent };
-
-    case "refund_executed":
-      assertFields(name, data, ["refund_id", "order_id", "payer", "merchant", "amount", "token"]);
-      return { name, data: data as RefundExecutedEvent };
-
-    case "multisig_initiated":
-      assertFields(name, data, ["payment_id", "merchant", "token", "amount", "required_signatures"]);
-      return { name, data: data as MultisigInitiatedEvent };
-
-    case "multisig_executed":
-      assertFields(name, data, ["payment_id", "payer", "merchant", "token", "amount"]);
-      return { name, data: data as MultisigExecutedEvent };
-
-    case "payment_request_paid":
-      assertFields(name, data, ["request_id", "payer", "merchant", "token", "amount"]);
-      return { name, data: data as PaymentRequestPaidEvent };
-
-    case "payment_status_updated":
-      assertFields(name, data, ["order_id", "status", "refunded_amount", "original_amount"]);
-      return { name, data: data as PaymentStatusUpdatedEvent };
-
-    default:
-      throw new Error(`validateEventPayload: unknown event name "${name}"`);
+    es.onerror = () => {
+      es?.close();
+      es = null;
+      if (!stopped) {
+        setTimeout(connect, retryDelay);
+        retryDelay = Math.min(retryDelay * 2, 30_000);
+      }
+    };
   }
+
+  connect();
+
+  return () => {
+    stopped = true;
+    es?.close();
+    es = null;
+  };
 }
 
-/** Asserts that every required field key is present and non-null in `obj`. */
-function assertFields(eventName: string, obj: unknown, fields: string[]): void {
-  if (typeof obj !== "object" || obj === null) {
-    throw new Error(`Event "${eventName}": expected an object payload, got ${typeof obj}`);
-  }
-  const record = obj as Record<string, unknown>;
-  for (const field of fields) {
-    if (!(field in record) || record[field] === undefined || record[field] === null) {
-      throw new Error(
-        `Event "${eventName}": required field "${field}" is missing or null`
-      );
-    }
-  }
-}
+/** Convenience namespace so callers can write `sdk.events.subscribe(...)`. */
+export const events = { subscribe };
