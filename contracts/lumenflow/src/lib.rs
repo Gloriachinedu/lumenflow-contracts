@@ -522,6 +522,10 @@ impl PaymentProcessingContract {
             PaymentStatus::PartiallyRefunded
         };
         storage::set_payment(&env, &payment);
+        env.events().publish(
+            ("lumenflow", "payment_status_updated"),
+            (order_id, payment.status, payment.refunded_amount, payment.amount),
+        );
         Ok(())
     }
 
@@ -671,10 +675,12 @@ impl PaymentProcessingContract {
             created_at: now,
         };
         storage::set_refund(&env, &refund);
-        storage::increment_order_refund_count(&env, &order_id);
+        storage::increment_order_refund_count(&env, &refund.order_id);
 
-        env.events()
-            .publish(("lumenflow", "refund_initiated"), refund_id);
+        env.events().publish(
+            ("lumenflow", "refund_initiated"),
+            (refund.refund_id, refund.order_id, refund.initiator, refund.amount),
+        );
         Ok(())
     }
 
@@ -699,8 +705,10 @@ impl PaymentProcessingContract {
         r.status = RefundStatus::Approved;
         storage::set_refund(&env, &r);
 
-        env.events()
-            .publish(("lumenflow", "refund_approved"), refund_id);
+        env.events().publish(
+            ("lumenflow", "refund_approved"),
+            (refund_id, r.order_id, payment.merchant_address, r.amount),
+        );
         Ok(())
     }
 
@@ -725,8 +733,10 @@ impl PaymentProcessingContract {
         r.status = RefundStatus::Rejected;
         storage::set_refund(&env, &r);
 
-        env.events()
-            .publish(("lumenflow", "refund_rejected"), refund_id);
+        env.events().publish(
+            ("lumenflow", "refund_rejected"),
+            (refund_id, r.order_id, payment.merchant_address, r.amount),
+        );
         Ok(())
     }
 
@@ -765,8 +775,10 @@ impl PaymentProcessingContract {
         stats.total_refund_volume = stats.total_refund_volume.saturating_add(r.amount);
         storage::set_global_stats(&env, &stats);
 
-        env.events()
-            .publish(("lumenflow", "refund_executed"), refund_id);
+        env.events().publish(
+            ("lumenflow", "refund_executed"),
+            (refund_id, r.order_id, payment.payer, payment.merchant_address, r.amount, payment.token),
+        );
         Ok(())
     }
 
@@ -925,8 +937,10 @@ impl PaymentProcessingContract {
         };
         storage::set_multisig(&env, &ms);
 
-        env.events()
-            .publish(("lumenflow", "multisig_initiated"), payment_id);
+        env.events().publish(
+            ("lumenflow", "multisig_initiated"),
+            (payment_id, ms.merchant_address, ms.token, ms.amount, ms.required_signatures),
+        );
         Ok(())
     }
 
@@ -1013,8 +1027,10 @@ impl PaymentProcessingContract {
         stats.total_volume = stats.total_volume.saturating_add(ms.amount);
         storage::set_global_stats(&env, &stats);
 
-        env.events()
-            .publish(("lumenflow", "multisig_executed"), payment_id);
+        env.events().publish(
+            ("lumenflow", "multisig_executed"),
+            (payment_id, payer, ms.merchant_address, ms.token, ms.amount),
+        );
         Ok(())
     }
 
@@ -1385,7 +1401,10 @@ impl PaymentProcessingContract {
         // Remove the request as it's paid
         storage::remove_payment_request(&env, &request_id);
 
-        env.events().publish(("lumenflow", "payment_request_paid"), request_id);
+        env.events().publish(
+            ("lumenflow", "payment_request_paid"),
+            (request_id, payer, pr.merchant, pr.token, pr.amount),
+        );
         Ok(())
     }
 }

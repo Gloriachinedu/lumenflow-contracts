@@ -1082,3 +1082,151 @@ fn test_auth_sign_multisig_requires_listed_signer() {
     let result = client.try_sign_multisig_payment(&stranger, &str(&env, "AUTH_MS"), &bytes(&env, &[0u8; 64]));
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
+
+// ── Complete event payload tests (#833) ──────────────────────────────────────
+
+#[test]
+fn test_refund_initiated_event_has_full_payload() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EVT_PAY_1", 1_000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "EVT_RF_1"),
+        &str(&env, "EVT_PAY_1"),
+        &200,
+        &str(&env, "event test"),
+    );
+    let events = env.events().all();
+    let evt = events.iter().find(|e| {
+        e.topics.get(1).unwrap() == soroban_sdk::Symbol::new(&env, "refund_initiated")
+    });
+    assert!(evt.is_some(), "refund_initiated event not found");
+    // Data tuple: (refund_id, order_id, initiator, amount)
+    let data: (soroban_sdk::String, soroban_sdk::String, Address, i128) =
+        soroban_sdk::Val::try_into_val(&evt.unwrap().data, &env).unwrap();
+    assert_eq!(data.0, str(&env, "EVT_RF_1"));
+    assert_eq!(data.1, str(&env, "EVT_PAY_1"));
+    assert_eq!(data.2, payer);
+    assert_eq!(data.3, 200i128);
+}
+
+#[test]
+fn test_refund_approved_event_has_full_payload() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EVT_PAY_2", 1_000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "EVT_RF_2"),
+        &str(&env, "EVT_PAY_2"),
+        &300,
+        &str(&env, "r"),
+    );
+    client.approve_refund(&merchant, &str(&env, "EVT_RF_2"));
+    let events = env.events().all();
+    let evt = events.iter().find(|e| {
+        e.topics.get(1).unwrap() == soroban_sdk::Symbol::new(&env, "refund_approved")
+    });
+    assert!(evt.is_some(), "refund_approved event not found");
+    let data: (soroban_sdk::String, soroban_sdk::String, Address, i128) =
+        soroban_sdk::Val::try_into_val(&evt.unwrap().data, &env).unwrap();
+    assert_eq!(data.0, str(&env, "EVT_RF_2"));
+    assert_eq!(data.1, str(&env, "EVT_PAY_2"));
+    assert_eq!(data.2, merchant);
+    assert_eq!(data.3, 300i128);
+}
+
+#[test]
+fn test_refund_rejected_event_has_full_payload() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EVT_PAY_3", 1_000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "EVT_RF_3"),
+        &str(&env, "EVT_PAY_3"),
+        &100,
+        &str(&env, "r"),
+    );
+    client.reject_refund(&merchant, &str(&env, "EVT_RF_3"));
+    let events = env.events().all();
+    let evt = events.iter().find(|e| {
+        e.topics.get(1).unwrap() == soroban_sdk::Symbol::new(&env, "refund_rejected")
+    });
+    assert!(evt.is_some(), "refund_rejected event not found");
+    let data: (soroban_sdk::String, soroban_sdk::String, Address, i128) =
+        soroban_sdk::Val::try_into_val(&evt.unwrap().data, &env).unwrap();
+    assert_eq!(data.0, str(&env, "EVT_RF_3"));
+    assert_eq!(data.1, str(&env, "EVT_PAY_3"));
+    assert_eq!(data.2, merchant);
+    assert_eq!(data.3, 100i128);
+}
+
+#[test]
+fn test_refund_executed_event_has_full_payload() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EVT_PAY_4", 1_000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "EVT_RF_4"),
+        &str(&env, "EVT_PAY_4"),
+        &400,
+        &str(&env, "r"),
+    );
+    client.approve_refund(&merchant, &str(&env, "EVT_RF_4"));
+    client.execute_refund(&str(&env, "EVT_RF_4"));
+    let events = env.events().all();
+    let evt = events.iter().find(|e| {
+        e.topics.get(1).unwrap() == soroban_sdk::Symbol::new(&env, "refund_executed")
+    });
+    assert!(evt.is_some(), "refund_executed event not found");
+    // (refund_id, order_id, payer, merchant, amount, token)
+    let data: (soroban_sdk::String, soroban_sdk::String, Address, Address, i128, Address) =
+        soroban_sdk::Val::try_into_val(&evt.unwrap().data, &env).unwrap();
+    assert_eq!(data.0, str(&env, "EVT_RF_4"));
+    assert_eq!(data.1, str(&env, "EVT_PAY_4"));
+    assert_eq!(data.2, payer);
+    assert_eq!(data.3, merchant);
+    assert_eq!(data.4, 400i128);
+    assert_eq!(data.5, token);
+}
+
+#[test]
+fn test_multisig_initiated_event_has_full_payload() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "EVT_MS_1"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+    );
+    let events = env.events().all();
+    let evt = events.iter().find(|e| {
+        e.topics.get(1).unwrap() == soroban_sdk::Symbol::new(&env, "multisig_initiated")
+    });
+    assert!(evt.is_some(), "multisig_initiated event not found");
+    // (payment_id, merchant, token, amount, required_signatures)
+    let data: (soroban_sdk::String, Address, Address, i128, u32) =
+        soroban_sdk::Val::try_into_val(&evt.unwrap().data, &env).unwrap();
+    assert_eq!(data.0, str(&env, "EVT_MS_1"));
+    assert_eq!(data.1, merchant);
+    assert_eq!(data.2, token);
+    assert_eq!(data.3, 500i128);
+    assert_eq!(data.4, 1u32);
+}
+
+#[test]
+fn test_payment_status_updated_event_emitted() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EVT_STATUS_1", 1_000);
+    client.update_payment_status(&admin, &str(&env, "EVT_STATUS_1"), &500);
+    let events = env.events().all();
+    let evt = events.iter().find(|e| {
+        e.topics.get(1).unwrap() == soroban_sdk::Symbol::new(&env, "payment_status_updated")
+    });
+    assert!(evt.is_some(), "payment_status_updated event not found");
+}
