@@ -43,4 +43,8 @@ pub enum PaymentError {
     PaginationLimitExceeded = 51,
     BatchSizeExceeded = 52,
     InvalidTags = 53,
+    /// The token address is not a recognised Stellar Asset Contract.
+    InvalidAsset = 54,
+    /// The token's issuer is not on the approved-issuer list.
+    InvalidIssuer = 55,
 }

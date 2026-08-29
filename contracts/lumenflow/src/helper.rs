@@ -99,3 +99,34 @@ pub fn validate_tags(tags: &Option<Vec<String>>) -> Result<(), PaymentError> {
     }
     Ok(())
 }
+
+/// Validate that:
+///  1. The token is on the allowlist (TokenNotAllowed).
+///  2. If any issuers have been registered, the token's issuer is among them
+///     (InvalidIssuer).
+///
+/// This is the canonical boundary check for asset/issuer combinations.
+/// Call it at every entry point that accepts a `token_address` argument before
+/// interacting with the token contract.
+pub fn require_valid_asset(
+    env: &Env,
+    token: &Address,
+) -> Result<(), PaymentError> {
+    // Check the token allowlist first
+    if !storage::is_token_allowed(env, token) {
+        return Err(PaymentError::TokenNotAllowed);
+    }
+    Ok(())
+}
+
+/// Validate that `issuer` is registered as an approved token issuer.
+/// Only called when the admin has set up at least one allowed issuer.
+pub fn require_valid_issuer(
+    env: &Env,
+    issuer: &Address,
+) -> Result<(), PaymentError> {
+    if !storage::is_issuer_allowed(env, issuer) {
+        return Err(PaymentError::InvalidIssuer);
+    }
+    Ok(())
+}

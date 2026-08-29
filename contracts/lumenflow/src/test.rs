@@ -180,7 +180,7 @@ fn setup_payment_env() -> (
     let token = create_token(&env, &token_admin);
 
     client.set_admin(&admin);
-    client.add_allowed_token(&admin, &token);
+    client.add_allowed_token(&admin, &token, &None);
     client.register_merchant(
         &merchant,
         &str(&env, "Shop"),
@@ -1080,5 +1080,130 @@ fn test_auth_sign_multisig_requires_listed_signer() {
     client.initiate_multisig_payment(&payer, &str(&env, "AUTH_MS"), &merchant, &token, &500, &signers, &1);
     let stranger = Address::generate(&env);
     let result = client.try_sign_multisig_payment(&stranger, &str(&env, "AUTH_MS"), &bytes(&env, &[0u8; 64]));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+// ── Asset / issuer boundary tests (#841) ──────────────────────────────────────
+
+#[test]
+fn test_add_allowed_token_without_issuer_succeeds() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+
+    client.set_admin(&admin);
+    // No issuers registered — adding a token without an issuer should succeed
+    client.add_allowed_token(&admin, &token, &None);
+
+    // Payment should now work with this token
+    let merchant = Address::generate(&env);
+    let payer = Address::generate(&env);
+    mint(&env, &token, &token_admin, &payer, 1_000);
+    client.register_merchant(&merchant, &str(&env, "S"), &str(&env, ""), &str(&env, ""), &MerchantCategory::Other);
+
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+    client.process_payment_with_signature(&payer, &str(&env, "T_ORDER"), &merchant, &token, &100, &str(&env, ""), &None, &sig, &pub_key);
+}
+
+#[test]
+fn test_payment_with_unallowed_token_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+    let merchant = Address::generate(&env);
+    let payer = Address::generate(&env);
+
+    client.set_admin(&admin);
+    // Do NOT add the token to the allowlist
+    client.register_merchant(&merchant, &str(&env, "M"), &str(&env, ""), &str(&env, ""), &MerchantCategory::Other);
+    mint(&env, &token, &token_admin, &payer, 1_000);
+
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+    let result = client.try_process_payment_with_signature(
+        &payer, &str(&env, "DISALLOWED"), &merchant, &token, &100,
+        &str(&env, ""), &None, &sig, &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+}
+
+#[test]
+fn test_add_allowed_token_with_valid_issuer_succeeds() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+
+    client.set_admin(&admin);
+    // Register the token_admin as an approved issuer
+    client.add_allowed_issuer(&admin, &token_admin);
+    // Adding the token with the registered issuer should succeed
+    client.add_allowed_token(&admin, &token, &Some(token_admin.clone()));
+}
+
+#[test]
+fn test_add_allowed_token_with_invalid_issuer_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let bad_issuer = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+
+    client.set_admin(&admin);
+    // Register a *different* issuer — not the token's actual admin
+    client.add_allowed_issuer(&admin, &token_admin);
+    // Attempt to add token with an issuer that is NOT in the allowlist
+    let result = client.try_add_allowed_token(&admin, &token, &Some(bad_issuer));
+    assert_eq!(result, Err(Ok(PaymentError::InvalidIssuer)));
+}
+
+#[test]
+fn test_remove_allowed_token_blocks_new_payments() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // First payment succeeds
+    client.process_payment_with_signature(
+        &payer, &str(&env, "RM_PAY1"), &merchant, &token, &100,
+        &str(&env, ""), &None, &sig, &pub_key,
+    );
+
+    // Admin removes the token
+    client.remove_allowed_token(&admin, &token);
+
+    // Second payment with same token should now be rejected
+    let result = client.try_process_payment_with_signature(
+        &payer, &str(&env, "RM_PAY2"), &merchant, &token, &100,
+        &str(&env, ""), &None, &sig, &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
+}
+
+#[test]
+fn test_non_admin_cannot_add_allowed_token() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+
+    client.set_admin(&admin);
+    let result = client.try_add_allowed_token(&attacker, &token, &None);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_non_admin_cannot_add_allowed_issuer() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let issuer = Address::generate(&env);
+
+    client.set_admin(&admin);
+    let result = client.try_add_allowed_issuer(&attacker, &issuer);
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }

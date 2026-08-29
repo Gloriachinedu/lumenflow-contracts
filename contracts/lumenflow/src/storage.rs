@@ -20,6 +20,12 @@ pub enum DataKey {
     LargePaymentThreshold,
     MaxRefundsPerOrder,
     OrderRefundCount(String),
+    /// Allowlist entry for a Stellar token address. Stored as a unit value —
+    /// presence of the key means the token is permitted at contract boundaries.
+    AllowedToken(Address),
+    /// Approved issuer address. When set, `add_allowed_token` validates that
+    /// the token's reported issuer is on this list before whitelisting.
+    AllowedIssuer(Address),
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -270,5 +276,21 @@ pub fn set_token_allowed(env: &Env, token: &Address, allowed: bool) {
         env.storage().instance().set(&DataKey::AllowedToken(token.clone()), &());
     } else {
         env.storage().instance().remove(&DataKey::AllowedToken(token.clone()));
+    }
+}
+
+// ── Allowed Issuers ───────────────────────────────────────────────────────────
+
+/// Returns true if the issuer has been registered as an approved token issuer.
+pub fn is_issuer_allowed(env: &Env, issuer: &Address) -> bool {
+    env.storage().instance().has(&DataKey::AllowedIssuer(issuer.clone()))
+}
+
+/// Register or deregister an issuer address.
+pub fn set_issuer_allowed(env: &Env, issuer: &Address, allowed: bool) {
+    if allowed {
+        env.storage().instance().set(&DataKey::AllowedIssuer(issuer.clone()), &());
+    } else {
+        env.storage().instance().remove(&DataKey::AllowedIssuer(issuer.clone()));
     }
 }
