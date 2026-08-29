@@ -898,6 +898,35 @@ try {
 
 See [`src/errors.ts`](src/errors.ts) for the full list of error codes.
 
+### Error shape and serialization
+
+Every `LumenFlowError` exposes:
+
+| Member | Description |
+|---|---|
+| `code` | Numeric `PaymentErrorCode`. Unknown codes are preserved as-is. |
+| `codeName` | Enum name (e.g. `"InvalidSignature"`), or `"Unknown"`. |
+| `message` | Catalogue message for the code, or an "unknown error" fallback. |
+| `messageKey` | Localization key (e.g. `"error.invalidsignature"`, `"error.unknown"`). |
+| `details` | Optional extra context (the raw RPC message, an object, etc.). |
+| `toJSON()` | Plain, JSON-safe object — used automatically by `JSON.stringify`. |
+
+Because `LumenFlowError` implements `toJSON()`, it survives being logged or sent
+across a process / network boundary (a bare `Error` would `JSON.stringify` to
+`{}`):
+
+```typescript
+JSON.stringify(err);
+// {"name":"LumenFlowError","code":23,"codeName":"InvalidSignature",
+//  "message":"The provided signature is invalid or does not match the public key.",
+//  "messageKey":"error.invalidsignature"}
+```
+
+Raw contract / RPC failures are normalized to a `LumenFlowError` internally
+(`normalizeContractError`): a recognised numeric `code` maps to its
+`PaymentErrorCode`; anything else becomes `PaymentErrorCode.InvalidInput` with the
+original text kept in `details`.
+
 ---
 
 ## Rate Limiting

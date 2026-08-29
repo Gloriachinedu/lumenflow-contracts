@@ -436,7 +436,16 @@
 </div>
 
 <script type="module" src="toast.js"></script>
+<script src="onboarding-analytics.js"></script>
 <script>
+  // ── Funnel analytics ───────────────────────────────────────────────────────
+  // Silent no-op until a sink is configured (e.g. via a deployment-specific
+  // snippet that calls OnboardingAnalytics.configure(fn)). See
+  // docs/merchant-onboarding-metrics.md.
+  const analytics = (window.OnboardingAnalytics) || {
+    start() {}, track() {}, stepViewed() {}, stepCompleted() {}, elapsedMs() { return 0; },
+  };
+
   // ── State ──────────────────────────────────────────────────────────────────
   const form = {
     walletAddress: '',
@@ -500,6 +509,7 @@
 
   // ── Step navigation ────────────────────────────────────────────────────────
   function goToStep(n) {
+    const prev = currentStep;
     document.getElementById(`step-${currentStep}`).classList.remove('active');
     currentStep = n;
     document.getElementById(`step-${n}`).classList.add('active');
@@ -510,10 +520,21 @@
     // Persist to sessionStorage so refresh survives
     sessionStorage.setItem(SESSION_KEY, String(n));
 
+    // Funnel signals: forward navigation completes the previous stage; a lower
+    // step number is a "back" navigation.
+    if (n > prev) analytics.stepCompleted(prev);
+    else if (n < prev) analytics.track('onboarding_step_back', { from_step: prev, to_step: n });
+    analytics.stepViewed(n);
+
     if (n === 4) buildReview();
     if (n === 5) {
       document.getElementById('done-address').textContent =
         form.walletAddress || 'G…(demo address)';
+      analytics.stepCompleted(4);
+      analytics.track('onboarding_completed', {
+        duration_ms: analytics.elapsedMs(),
+        is_demo: form.isDemo,
+      });
       // Clear persisted step on completion so a new session starts fresh
       sessionStorage.removeItem(SESSION_KEY);
     }
@@ -529,6 +550,19 @@
     updateStepNodes(currentStep);
     updateProgressBar(currentStep);
 
+    analytics.start();
+    analytics.stepViewed(currentStep);
+
+    // Best-effort abandonment signal when the tab is closed mid-funnel.
+    window.addEventListener('pagehide', () => {
+      if (currentStep < TOTAL_STEPS) {
+        analytics.track('onboarding_abandoned', {
+          step: currentStep,
+          stage: analytics.FUNNEL_STAGES ? analytics.FUNNEL_STAGES[currentStep] : undefined,
+        });
+      }
+    }, { once: true });
+
     if (currentStep === 4) buildReview();
     if (currentStep === 5) {
       document.getElementById('done-address').textContent =
@@ -538,29 +572,37 @@
 
   // ── Wallet connect ─────────────────────────────────────────────────────────
   async function connectFreighter() {
+    analytics.track('wallet_connect_attempted', { provider: 'freighter' });
     if (window.freighter) {
       try {
         const resp = await window.freighter.getConnectedAccount();
         setWallet(resp.publicKey, 'btn-freighter');
+        analytics.track('wallet_connected', { provider: 'freighter', is_demo: false });
         showToast('Freighter wallet connected.', 'success');
       } catch {
+        analytics.track('wallet_connect_failed', { provider: 'freighter', reason: 'connection_rejected' });
         showToast('Freighter connection failed. Make sure the extension is installed and unlocked.', 'error');
       }
     } else {
+      analytics.track('wallet_connect_failed', { provider: 'freighter', reason: 'extension_not_found' });
       showToast('Freighter extension not found. Install it from https://www.freighter.app/', 'error');
     }
   }
 
   async function connectAlbedo() {
+    analytics.track('wallet_connect_attempted', { provider: 'albedo' });
     if (window.albedo) {
       try {
         const resp = await window.albedo.publicKey({});
         setWallet(resp.pubkey, 'btn-albedo');
+        analytics.track('wallet_connected', { provider: 'albedo', is_demo: false });
         showToast('Albedo wallet connected.', 'success');
       } catch {
+        analytics.track('wallet_connect_failed', { provider: 'albedo', reason: 'connection_rejected' });
         showToast('Albedo connection failed.', 'error');
       }
     } else {
+      analytics.track('wallet_connect_failed', { provider: 'albedo', reason: 'provider_unavailable' });
       showToast('Albedo not available. Visit https://albedo.link/', 'error');
     }
   }
@@ -575,6 +617,7 @@
   function useDemo() {
     form.isDemo = true;
     setWallet('GDEMO…LUMENFLOW1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'btn-freighter');
+    analytics.track('wallet_connected', { provider: 'demo', is_demo: true });
   }
 
   // ── Form validation (step 3) ───────────────────────────────────────────────
@@ -594,12 +637,21 @@
       if (show) valid = false;
     }
 
+    const failedFields = [];
     setError('err-biz-name',     'biz-name',     !name);
+    if (!name) failedFields.push('name');
     setError('err-biz-desc',     'biz-desc',      !desc);
-    setError('err-biz-email',    'biz-email',     !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
+    if (!desc) failedFields.push('description');
+    const emailBad = !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    setError('err-biz-email',    'biz-email',     emailBad);
+    if (emailBad) failedFields.push('email');
     setError('err-biz-category', 'biz-category',  !category);
+    if (!category) failedFields.push('category');
 
-    if (!valid) return;
+    if (!valid) {
+      analytics.track('business_details_validation_failed', { fields: failedFields });
+      return;
+    }
 
     form.name        = name;
     form.description = desc;
@@ -642,6 +694,9 @@
     status.className = 'tx-status pending';
     status.textContent = '⏳ Transaction pending — waiting for network confirmation…';
 
+    const submitStart = analytics.elapsedMs();
+    analytics.track('merchant_registration_submitted', { is_demo: form.isDemo });
+
     // Show blocking overlay while transaction is in-flight
     if (window.LF && window.LF.showLoadingOverlay) {
       window.LF.showLoadingOverlay('Waiting for transaction confirmation…');
@@ -655,7 +710,18 @@
       status.textContent = '✅ Registration confirmed! Your merchant profile is live.';
       btn.textContent = '✅ Registered';
 
+      analytics.track('merchant_registration_succeeded', {
+        is_demo: form.isDemo,
+        duration_ms: Math.max(0, analytics.elapsedMs() - submitStart),
+      });
+
       setTimeout(() => goToStep(5), 1000);
+    } catch (err) {
+      analytics.track('merchant_registration_failed', {
+        is_demo: form.isDemo,
+        reason: 'submit_error',
+      });
+      throw err;
     } finally {
       if (window.LF && window.LF.hideLoadingOverlay) {
         window.LF.hideLoadingOverlay();
