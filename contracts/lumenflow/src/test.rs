@@ -6771,3 +6771,256 @@ fn test_non_admin_cannot_add_allowed_issuer() {
     let result = client.try_add_allowed_issuer(&attacker, &issuer);
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
+
+// ── Ledger timestamp and sequence edge case tests (#840) ──────────────────────
+//
+// These tests verify contract behavior under extreme or boundary ledger states:
+//   - timestamp = 0 (chain genesis)
+//   - timestamp at the exact refund-window boundary (both sides)
+//   - timestamp near u64::MAX (saturation checks)
+//   - payment request TTL expiry boundary
+//   - sequence number set to non-default values
+
+mod ledger_edge_cases {
+    use super::*;
+    use soroban_sdk::testutils::Ledger;
+
+    /// Helper: set the ledger to a specific timestamp and sequence.
+    fn set_ledger(env: &Env, timestamp: u64, sequence: u32) {
+        env.ledger().with_mut(|l| {
+            l.timestamp = timestamp;
+            l.sequence_number = sequence;
+        });
+    }
+
+    // ── Timestamp = 0 ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_payment_at_genesis_timestamp() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        set_ledger(&env, 0, 1);
+
+        let pub_key = bytes(&env, &[0u8; 32]);
+        let sig = bytes(&env, &[0u8; 64]);
+        client.process_payment_with_signature(
+            &payer, &str(&env, "GEN_PAY"), &merchant, &token, &100,
+            &str(&env, "genesis"), &None, &sig, &pub_key,
+        );
+
+        let payment = client.get_payment_by_id(&payer, &str(&env, "GEN_PAY"));
+        assert_eq!(payment.paid_at, 0u64, "paid_at should match genesis timestamp");
+    }
+
+    #[test]
+    fn test_refund_window_at_genesis_timestamp() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        set_ledger(&env, 0, 1);
+
+        make_payment(&env, &client, &merchant, &payer, &token, "GEN_R_PAY", 1_000);
+
+        // A refund initiated at timestamp 0 should succeed (window not expired)
+        client.initiate_refund(
+            &payer, &str(&env, "GEN_REFUND"), &str(&env, "GEN_R_PAY"),
+            &100, &str(&env, "genesis refund"),
+        );
+        let refund = client.get_refund(&str(&env, "GEN_REFUND"));
+        assert!(matches!(refund.status, crate::types::RefundStatus::Pending));
+    }
+
+    // ── Refund window exact boundaries ────────────────────────────────────────
+
+    #[test]
+    fn test_refund_at_exactly_window_boundary_succeeds() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        let start = 1_000_000u64;
+        set_ledger(&env, start, 100);
+
+        make_payment(&env, &client, &merchant, &payer, &token, "BOUND_PAY", 1_000);
+
+        // Advance to exactly the last second within the 30-day window
+        let window = 30u64 * 24 * 3600; // 2 592 000 seconds
+        set_ledger(&env, start + window, 101);
+
+        client.initiate_refund(
+            &payer, &str(&env, "BOUND_REFUND"), &str(&env, "BOUND_PAY"),
+            &100, &str(&env, "boundary"),
+        );
+        let refund = client.get_refund(&str(&env, "BOUND_REFUND"));
+        assert!(matches!(refund.status, crate::types::RefundStatus::Pending));
+    }
+
+    #[test]
+    fn test_refund_one_second_past_window_fails() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        let start = 1_000_000u64;
+        set_ledger(&env, start, 100);
+
+        make_payment(&env, &client, &merchant, &payer, &token, "PAST_PAY", 1_000);
+
+        // Advance to exactly one second past the window
+        let window = 30u64 * 24 * 3600;
+        set_ledger(&env, start + window + 1, 101);
+
+        let result = client.try_initiate_refund(
+            &payer, &str(&env, "PAST_REFUND"), &str(&env, "PAST_PAY"),
+            &100, &str(&env, "past"),
+        );
+        assert_eq!(result, Err(Ok(PaymentError::RefundWindowExpired)));
+    }
+
+    // ── Near-max timestamp (saturation) ──────────────────────────────────────
+
+    #[test]
+    fn test_payment_near_max_timestamp_does_not_panic() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        // Use u64::MAX - 1 to avoid any off-by-one in the test itself
+        let max_ts = u64::MAX - 1;
+        set_ledger(&env, max_ts, u32::MAX);
+
+        let pub_key = bytes(&env, &[0u8; 32]);
+        let sig = bytes(&env, &[0u8; 64]);
+        client.process_payment_with_signature(
+            &payer, &str(&env, "MAX_PAY"), &merchant, &token, &1,
+            &str(&env, "near-max"), &None, &sig, &pub_key,
+        );
+
+        let payment = client.get_payment_by_id(&payer, &str(&env, "MAX_PAY"));
+        // paid_at should equal the ledger timestamp, not wrap around
+        assert_eq!(payment.paid_at, max_ts);
+    }
+
+    #[test]
+    fn test_refund_window_does_not_overflow_near_max_timestamp() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        // Payment at a timestamp where adding the refund window would overflow u64
+        let near_max = u64::MAX - 100;
+        set_ledger(&env, near_max, u32::MAX - 1);
+
+        make_payment(&env, &client, &merchant, &payer, &token, "OFLOW_PAY", 500);
+
+        // Trying to refund a tiny delta later — the window expiry uses saturating_add
+        // so it must not panic, but the expiry wraps to u64::MAX which is > near_max+1
+        // meaning the refund *should* still succeed (saturating keeps the expiry valid)
+        set_ledger(&env, near_max + 1, u32::MAX);
+        client.initiate_refund(
+            &payer, &str(&env, "OFLOW_REFUND"), &str(&env, "OFLOW_PAY"),
+            &100, &str(&env, "overflow check"),
+        );
+        let refund = client.get_refund(&str(&env, "OFLOW_REFUND"));
+        assert!(matches!(refund.status, crate::types::RefundStatus::Pending));
+    }
+
+    // ── Payment request expiry boundary ───────────────────────────────────────
+
+    #[test]
+    fn test_payment_request_paid_before_expiry() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        let now = 5_000u64;
+        set_ledger(&env, now, 10);
+
+        // Create a request with a 1000-second TTL
+        client.create_payment_request(
+            &merchant,
+            &str(&env, "PR_BEFORE"),
+            &token,
+            &200,
+            &str(&env, "memo"),
+            &1_000u64,
+        );
+
+        // Pay it just before expiry
+        set_ledger(&env, now + 999, 11);
+        client.pay_payment_request(&payer, &str(&env, "PR_BEFORE"));
+    }
+
+    #[test]
+    fn test_payment_request_expired_fails() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        let now = 5_000u64;
+        set_ledger(&env, now, 10);
+
+        client.create_payment_request(
+            &merchant,
+            &str(&env, "PR_EXPIRED"),
+            &token,
+            &200,
+            &str(&env, "memo"),
+            &1_000u64,
+        );
+
+        // Attempt to pay after TTL elapsed
+        set_ledger(&env, now + 1_001, 11);
+        let result = client.try_pay_payment_request(&payer, &str(&env, "PR_EXPIRED"));
+        assert_eq!(result, Err(Ok(PaymentError::PaymentExpired)));
+    }
+
+    #[test]
+    fn test_payment_request_expiry_at_exact_boundary() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        let now = 5_000u64;
+        let ttl = 1_000u64;
+        set_ledger(&env, now, 10);
+
+        client.create_payment_request(
+            &merchant,
+            &str(&env, "PR_EXACT"),
+            &token,
+            &200,
+            &str(&env, "memo"),
+            &ttl,
+        );
+
+        // expires_at = now + ttl = 6000
+        // Pay at exactly expires_at (timestamp == expires_at) should fail
+        // because the contract checks timestamp > expires_at for expiry
+        set_ledger(&env, now + ttl, 11);
+        // This should still succeed — contract only rejects when timestamp > expires_at
+        client.pay_payment_request(&payer, &str(&env, "PR_EXACT"));
+    }
+
+    // ── Sequence number edge cases ────────────────────────────────────────────
+
+    #[test]
+    fn test_payment_recorded_at_high_sequence_number() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        set_ledger(&env, 1_000_000, u32::MAX);
+
+        let pub_key = bytes(&env, &[0u8; 32]);
+        let sig = bytes(&env, &[0u8; 64]);
+        client.process_payment_with_signature(
+            &payer, &str(&env, "SEQ_MAX_PAY"), &merchant, &token, &50,
+            &str(&env, "max seq"), &None, &sig, &pub_key,
+        );
+
+        let payment = client.get_payment_by_id(&payer, &str(&env, "SEQ_MAX_PAY"));
+        assert_eq!(payment.amount, 50);
+    }
+
+    #[test]
+    fn test_multiple_payments_across_sequence_increments() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+        for i in 0u32..5 {
+            set_ledger(&env, 1_000u64 * (i as u64 + 1), i + 1);
+            let pub_key = bytes(&env, &[0u8; 32]);
+            let sig = bytes(&env, &[0u8; 64]);
+            let order_id = match i {
+                0 => str(&env, "SEQ_0"),
+                1 => str(&env, "SEQ_1"),
+                2 => str(&env, "SEQ_2"),
+                3 => str(&env, "SEQ_3"),
+                _ => str(&env, "SEQ_4"),
+            };
+            client.process_payment_with_signature(
+                &payer, &order_id, &merchant, &token, &10,
+                &str(&env, ""), &None, &sig, &pub_key,
+            );
+        }
+
+        // All 5 payments should be in merchant history
+        let page = client.get_merchant_payment_history(
+            &merchant, &None, &10, &None, &SortField::Date, &SortOrder::Ascending,
+        );
+        assert_eq!(page.total, 5);
+    }
+}
