@@ -1082,3 +1082,140 @@ fn test_auth_sign_multisig_requires_listed_signer() {
     let result = client.try_sign_multisig_payment(&stranger, &str(&env, "AUTH_MS"), &bytes(&env, &[0u8; 64]));
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
+
+// ── Denial / unauthorized tests ───────────────────────────────────────────────
+
+#[test]
+fn test_deactivate_merchant_unauthorized() {
+    let (env, client, _admin, merchant, payer, _token) = setup_payment_env();
+    // payer is not the admin — must be rejected
+    let result = client.try_deactivate_merchant(&payer, &merchant);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_archive_payment_unauthorized() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ARCH_UNAUTH", 100);
+    // payer is not the admin
+    let result = client.try_archive_payment_record(&payer, &str(&env, "ARCH_UNAUTH"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_get_global_stats_unauthorized() {
+    let (_env, client, _admin, _merchant, payer, _token) = setup_payment_env();
+    // payer is not the admin
+    let result = client.try_get_global_payment_stats(&payer, &None, &None);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_cleanup_expired_payments_unauthorized() {
+    let (_env, client, _admin, _merchant, payer, _token) = setup_payment_env();
+    // payer is not the admin
+    let result = client.try_cleanup_expired_payments(&payer);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_set_payment_cleanup_period_unauthorized() {
+    let (_env, client, _admin, _merchant, payer, _token) = setup_payment_env();
+    // payer is not the admin
+    let result = client.try_set_payment_cleanup_period(&payer, &86400u64);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_multisig_double_sign_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer1 = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer1.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_DSIGN"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+    );
+
+    // First sign succeeds
+    client.sign_multisig_payment(&signer1, &str(&env, "MS_DSIGN"), &bytes(&env, &[1u8; 64]));
+
+    // Second sign by same signer must fail
+    let result = client.try_sign_multisig_payment(
+        &signer1,
+        &str(&env, "MS_DSIGN"),
+        &bytes(&env, &[1u8; 64]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MultisigAlreadySigned)));
+}
+
+#[test]
+fn test_multisig_execute_twice_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer1 = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer1.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_DEXEC"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+    );
+
+    client.sign_multisig_payment(&signer1, &str(&env, "MS_DEXEC"), &bytes(&env, &[1u8; 64]));
+    client.execute_multisig_payment(&payer, &str(&env, "MS_DEXEC"));
+
+    // Executing again must fail
+    let result = client.try_execute_multisig_payment(&payer, &str(&env, "MS_DEXEC"));
+    assert_eq!(result, Err(Ok(PaymentError::MultisigAlreadyExecuted)));
+}
+
+#[test]
+fn test_multisig_non_signer_cannot_sign() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer1 = Address::generate(&env);
+    let outsider = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer1.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_OUTSIDER"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+    );
+
+    // outsider is not in the signers list
+    let result = client.try_sign_multisig_payment(
+        &outsider,
+        &str(&env, "MS_OUTSIDER"),
+        &bytes(&env, &[9u8; 64]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_multisig_not_found() {
+    let (env, client) = setup();
+    let signer = Address::generate(&env);
+    // No multisig payment was ever initiated
+    let result = client.try_sign_multisig_payment(
+        &signer,
+        &str(&env, "MS_GHOST"),
+        &bytes(&env, &[1u8; 64]),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MultisigNotFound)));
+}
