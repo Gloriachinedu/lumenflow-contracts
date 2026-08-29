@@ -291,8 +291,8 @@
 
   <!-- Signers -->
   <div class="field">
-    <label>Signer Addresses</label>
-    <div id="signers-list">
+    <label id="signers-label">Signer Addresses</label>
+    <div id="signers-list" aria-labelledby="signers-label">
       <div class="signer-row">
         <input type="text" placeholder="G… signer address" class="signer-input" aria-label="Signer address 1" aria-describedby="err-signers" oninput="onSignerInput()" />
         <button type="button" class="btn-icon" onclick="removeSigner(this)" aria-label="Remove signer 1">✕</button>
@@ -348,7 +348,14 @@
 
   let state = null; // { paymentId, merchantAddress, tokenAddress, amount, signers, required, signatures: Set }
 
-  // ── Signer management ──────────────────────────────────────────────────────
+  // ── Form validation helpers (issue #794) ──────────────────────────────────
+  //
+  // Standardized approach:
+  //   • setFieldError(inputId, errId, message) — single function that keeps
+  //     aria-invalid, .error CSS, and the error message div in sync.
+  //   • Validation runs on blur (inline feedback) AND on submit (final check).
+  //   • Error messages are only shown after the user has interacted with the
+  //     field (touched), preventing premature red errors on page load.
 
   function addSigner() {
     const list = document.getElementById('signers-list');
@@ -384,10 +391,13 @@
     if (focusTarget) focusTarget.focus();
   }
 
-  function getSignerValues() {
-    return Array.from(document.querySelectorAll('.signer-input'))
-      .map(i => i.value.trim())
-      .filter(Boolean);
+  // ── Per-field validators (called on blur AND on submit) ───────────────────
+
+  function validatePaymentId(reportError) {
+    const val = document.getElementById('payment-id').value.trim();
+    const msg = val ? '' : 'Payment ID is required.';
+    if (reportError) setFieldError('payment-id', 'err-payment-id', msg);
+    return !msg;
   }
 
   function updateThresholdLabel() {
@@ -404,26 +414,24 @@
  if (!required || required < 1) {
       msg.textContent = 'Required signatures must be at least 1.';
       msg.className   = 'validation-msg bad';
+      reqInput.setAttribute('aria-invalid', 'true');
       return false;
     }
     if (required > count) {
       msg.textContent = `Required (${required}) cannot exceed signer count (${count}).`;
       msg.className   = 'validation-msg bad';
+      reqInput.setAttribute('aria-invalid', 'true');
       return false;
     }
     msg.textContent = `✔ Valid: ${required} of ${count} signatures required.`;
     msg.className   = 'validation-msg ok';
+    reqInput.setAttribute('aria-invalid', 'false');
     return true;
   }
   // ── Form validation ────────────────────────────────────────────────────────
   // Field-level rules live in the shared validation.js module.
 
-  function setErr(id, message) {
-    const el = document.getElementById(id);
-    if (message) el.textContent = message;
-    el.style.display = message ? 'block' : 'none';
-    el.classList.toggle('visible', !!message);
-  }
+  // ── Signer number tracking for aria-labels ────────────────────────────────
 
  feat/sdk-rpc-retry-integration
   function validateForm() {

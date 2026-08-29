@@ -273,6 +273,10 @@ h1 { font-size: 1.4rem; font-weight: 700; color: var(--color-primary); margin-bo
 .field .help-text { font-size: 0.75rem; color: var(--color-text-muted); margin-top: 0.3rem; }
 .field .err-msg   { font-size: 0.75rem; color: var(--color-alert-error-text); margin-top: 0.25rem; display: none; }
 .field .err-msg.visible { display: block; }
+.field .err-msg.visible::before {
+  content: '⚠ ';
+  font-style: normal;
+}
 
 /* ── Buttons ────────────────────────────────────────────────────────────────── */
 .btn {
