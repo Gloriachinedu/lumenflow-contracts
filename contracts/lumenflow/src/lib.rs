@@ -8,6 +8,9 @@ mod types;
 #[cfg(test)]
 mod test;
 
+#[cfg(test)]
+mod invariant_escrow;
+
 use soroban_sdk::{
     contract, contractimpl, token, Address, Bytes, Env, String, Vec,
     xdr::ToXdr,
