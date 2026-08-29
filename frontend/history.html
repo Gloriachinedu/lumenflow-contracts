@@ -244,6 +244,104 @@
       outline: 2px solid #6c47ff;
       outline-offset: 2px;
     }
+
+    /* ── Export toolbar ──────────────────────────────────────────────────────── */
+    .export-toolbar {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .btn-export {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.45rem 1rem;
+      border: 1.5px solid #6c47ff;
+      border-radius: 8px;
+      background: #fff;
+      color: #6c47ff;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn-export:hover:not(:disabled) { background: #f0ecff; }
+    .btn-export:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    /* ── Export progress panel ───────────────────────────────────────────────── */
+    #export-status {
+      display: none;
+      padding: 0.75rem 1rem;
+      background: #fff;
+      border: 1px solid #e0d9ff;
+      border-radius: 8px;
+      margin-bottom: 0.75rem;
+      font-size: 0.875rem;
+    }
+
+    #export-status-header {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      margin-bottom: 0.5rem;
+      font-weight: 600;
+      color: #1a1a2e;
+    }
+
+    .export-spinner {
+      display: inline-block;
+      width: 1rem;
+      height: 1rem;
+      border: 2px solid #e0d9ff;
+      border-top-color: #6c47ff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* progress bar */
+    #export-progress-bar-wrap {
+      height: 6px;
+      background: #e0d9ff;
+      border-radius: 3px;
+      overflow: hidden;
+      margin-bottom: 0.4rem;
+    }
+
+    #export-progress-bar {
+      height: 100%;
+      background: #6c47ff;
+      border-radius: 3px;
+      width: 0%;
+      transition: width 0.15s ease;
+    }
+
+    #export-progress-text {
+      font-size: 0.8rem;
+      color: #666;
+    }
+
+    /* completion banner */
+    #export-complete {
+      display: none;
+      padding: 0.65rem 1rem;
+      background: #e6f9f0;
+      border: 1px solid #a0e4c2;
+      border-radius: 8px;
+      margin-bottom: 0.75rem;
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: #1a7a47;
+      display: none;
+      align-items: center;
+      gap: 0.5rem;
+    }
   </style>
 </head>
 <body>
@@ -311,6 +409,66 @@
   </section>
 
   <div class="results-card">
+    <!-- Export toolbar -->
+    <div class="export-toolbar">
+      <button
+        id="export-btn"
+        class="btn-export"
+        onclick="startExport()"
+        aria-label="Export payment history as CSV"
+        aria-describedby="export-sr-hint"
+      >
+        ⬇ Export CSV
+      </button>
+      <span id="export-sr-hint" class="sr-only">
+        Downloads all currently visible payments as a CSV file.
+        Progress and completion will be announced to screen readers.
+      </span>
+    </div>
+
+    <!-- Export progress panel (visible while export is running) -->
+    <!--
+      role="status" + aria-live="polite" lets screen readers announce progress
+      updates without interrupting other ongoing speech.
+    -->
+    <div
+      id="export-status"
+      role="status"
+      aria-live="polite"
+      aria-atomic="false"
+      aria-label="Export progress"
+    >
+      <div id="export-status-header">
+        <span class="export-spinner" aria-hidden="true"></span>
+        <span id="export-status-label">Preparing export…</span>
+      </div>
+      <div
+        id="export-progress-bar-wrap"
+        role="progressbar"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow="0"
+        aria-label="Export progress"
+      >
+        <div id="export-progress-bar"></div>
+      </div>
+      <div id="export-progress-text" aria-hidden="true">0 of 0 rows processed</div>
+    </div>
+
+    <!--
+      Export completion banner.
+      role="status" + aria-live="polite" announces the success message once
+      without requiring focus or interrupting other content.
+    -->
+    <div
+      id="export-complete"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
+      ✔ Export complete — <span id="export-complete-text">0 rows</span> downloaded.
+    </div>
+
     <!-- Loading state -->
     <div id="loading-state" style="display:none;padding:3rem;text-align:center;color:#888;" role="status" aria-live="polite">
       ⏳ Loading payments…
@@ -577,6 +735,179 @@
   window.addEventListener('popstate', initFromUrl);
   renderModeBanner();
   initFromUrl();
+
+  // ── Accessible data export ──────────────────────────────────────────────────
+  //
+  // Exports the currently rendered payment rows as a CSV file.
+  //
+  // Accessibility contract:
+  //   • Export button is disabled while an export is running to prevent
+  //     overlapping exports.
+  //   • A progress panel with role="status" / aria-live="polite" announces
+  //     batch progress to screen readers without interrupting speech.
+  //   • The progressbar element keeps aria-valuenow in sync so assistive
+  //     technologies that expose progress natively can reflect the value.
+  //   • A completion banner with role="status" / aria-live="polite" announces
+  //     success once the download is triggered.
+  //   • Both panels are shown/hidden with visibility transitions rather than
+  //     display:none toggles to avoid layout reflows that break live-region
+  //     announcements in some browsers.
+
+  /**
+   * Collect rows from the currently visible history table body.
+   * Returns an array of plain objects ready for CSV serialisation.
+   */
+  function collectVisibleRows() {
+    const rows = [];
+    const body = document.getElementById('history-body');
+    if (!body) return rows;
+    for (const tr of body.querySelectorAll('tr')) {
+      const cells = tr.querySelectorAll('td');
+      if (cells.length < 5) continue;
+      rows.push({
+        date:      cells[0].textContent.trim(),
+        order_id:  cells[1].textContent.trim(),
+        recipient: cells[2].textContent.trim(),
+        amount:    cells[3].textContent.trim(),
+        status:    cells[4].textContent.trim(),
+      });
+    }
+    return rows;
+  }
+
+  /**
+   * Escape a single CSV field value:
+   *   - wrap in double-quotes
+   *   - escape embedded double-quotes by doubling them
+   */
+  function csvField(value) {
+    const s = String(value ?? '');
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+
+  /**
+   * Build a CSV string from an array of row objects.
+   * @param {Array<{date,order_id,recipient,amount,status}>} rows
+   * @returns {string}
+   */
+  function buildCsv(rows) {
+    const header = ['Date', 'Order ID', 'Recipient', 'Amount', 'Status'].map(csvField).join(',');
+    const lines  = rows.map(r =>
+      [r.date, r.order_id, r.recipient, r.amount, r.status].map(csvField).join(',')
+    );
+    return [header, ...lines].join('\r\n');
+  }
+
+  /**
+   * Trigger a browser file download for the given CSV content.
+   * @param {string} csv
+   * @param {string} filename
+   */
+  function downloadCsv(csv, filename) {
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  /**
+   * Update the progress bar and aria attributes.
+   * @param {number} current - rows processed so far
+   * @param {number} total   - total rows to process
+   */
+  function setExportProgress(current, total) {
+    const pct  = total > 0 ? Math.round((current / total) * 100) : 0;
+    const bar  = document.getElementById('export-progress-bar');
+    const wrap = document.getElementById('export-progress-bar-wrap');
+    const text = document.getElementById('export-progress-text');
+    const lbl  = document.getElementById('export-status-label');
+
+    if (bar)  bar.style.width = `${pct}%`;
+    if (wrap) {
+      wrap.setAttribute('aria-valuenow', String(pct));
+      wrap.setAttribute('aria-valuetext', `${pct}% – ${current} of ${total} rows`);
+    }
+    if (text) text.textContent = `${current} of ${total} rows processed`;
+    if (lbl)  lbl.textContent  = `Exporting… ${pct}%`;
+  }
+
+  /**
+   * Main export handler. Called when the user clicks "Export CSV".
+   *
+   * Processing is broken into async microtask chunks (via setTimeout 0) so the
+   * browser has a chance to repaint and update aria-live regions between batches,
+   * giving screen readers a window to announce progress.
+   */
+  async function startExport() {
+    const btn            = document.getElementById('export-btn');
+    const statusEl       = document.getElementById('export-status');
+    const completeEl     = document.getElementById('export-complete');
+    const completeText   = document.getElementById('export-complete-text');
+
+    // Reset completion banner
+    completeEl.style.display = 'none';
+    completeEl.removeAttribute('aria-hidden');
+
+    // Show progress panel, disable button
+    statusEl.style.display = 'block';
+    if (btn) btn.disabled  = true;
+
+    const rows     = collectVisibleRows();
+    const total    = rows.length;
+    const CHUNK    = 50; // rows per async chunk
+    const csvLines = [['Date', 'Order ID', 'Recipient', 'Amount', 'Status'].map(csvField).join(',')];
+
+    setExportProgress(0, total);
+
+    // Yield to the browser so the progress panel renders before we start work
+    await new Promise(r => setTimeout(r, 0));
+
+    if (total === 0) {
+      // Nothing to export — show empty completion message
+      setExportProgress(0, 0);
+      statusEl.style.display   = 'none';
+      completeEl.style.display = 'flex';
+      if (completeText) completeText.textContent = '0 rows (no data)';
+      if (btn) btn.disabled = false;
+      return;
+    }
+
+    // Process rows in chunks, yielding between each so live-region updates fire
+    for (let i = 0; i < total; i += CHUNK) {
+      const slice = rows.slice(i, i + CHUNK);
+      for (const r of slice) {
+        csvLines.push([r.date, r.order_id, r.recipient, r.amount, r.status].map(csvField).join(','));
+      }
+      const done = Math.min(i + CHUNK, total);
+      setExportProgress(done, total);
+      // Yield between chunks
+      await new Promise(r => setTimeout(r, 0));
+    }
+
+    // Build final CSV and trigger download
+    const csv      = csvLines.join('\r\n');
+    const filename = `lumenflow-payments-${new Date().toISOString().slice(0, 10)}.csv`;
+    downloadCsv(csv, filename);
+
+    // Hide progress, show completion
+    statusEl.style.display   = 'none';
+    completeEl.style.display = 'flex';
+    if (completeText) completeText.textContent = `${total} row${total !== 1 ? 's' : ''}`;
+    if (btn) btn.disabled = false;
+
+    // Auto-dismiss completion banner after 6 s
+    setTimeout(() => {
+      completeEl.style.display = 'none';
+    }, 6000);
+  }
+
+  window.startExport = startExport;
 </script>
 
 </body>
