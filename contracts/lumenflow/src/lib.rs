@@ -8,6 +8,9 @@ mod types;
 #[cfg(test)]
 mod test;
 
+#[cfg(test)]
+mod rate_limit_tests;
+
 use soroban_sdk::{
     contract, contractimpl, token, Address, Bytes, Env, String, Vec,
     xdr::ToXdr,
@@ -15,6 +18,7 @@ use soroban_sdk::{
 
 use error::PaymentError;
 use helper::{
+    check_and_increment_payment_rate,
     require_admin, require_admin_or, require_non_empty_string, require_positive,
     require_valid_limit, validate_memo_length, validate_tags, verify_signature, REFUND_WINDOW_SECS,
 };
@@ -82,6 +86,36 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         require_admin(&env, &admin)?;
         storage::set_max_refunds_per_order(&env, max);
+        Ok(())
+    }
+
+    /// Set the maximum number of payments a merchant may receive within one
+    /// rate-limit window.  Admin only.  Default: 100.
+    pub fn set_payment_rate_limit(
+        env: Env,
+        admin: Address,
+        limit: u32,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        if limit == 0 {
+            return Err(PaymentError::InvalidInput);
+        }
+        storage::set_payment_rate_limit(&env, limit);
+        Ok(())
+    }
+
+    /// Set the duration of the rate-limit window in seconds.  Admin only.
+    /// Default: 3600 (1 hour).
+    pub fn set_payment_rate_window(
+        env: Env,
+        admin: Address,
+        window_secs: u64,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        if window_secs == 0 {
+            return Err(PaymentError::InvalidInput);
+        }
+        storage::set_payment_rate_window(&env, window_secs);
         Ok(())
     }
 
@@ -224,6 +258,9 @@ impl PaymentProcessingContract {
         if !merchant.active {
             return Err(PaymentError::MerchantInactive);
         }
+
+        // Enforce per-merchant payment rate limit before processing.
+        check_and_increment_payment_rate(&env, &merchant_address)?;
 
         // Build signature payload: XDR-encoded order_id followed by big-endian amount.
         //

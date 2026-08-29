@@ -99,3 +99,34 @@ pub fn validate_tags(tags: &Option<Vec<String>>) -> Result<(), PaymentError> {
     }
     Ok(())
 }
+
+/// Check and advance the per-merchant payment rate limit.
+///
+/// Uses a tumbling window: if the current timestamp is beyond
+/// `window_start + window_secs`, the counter resets and the new window begins.
+/// Returns `Err(PaymentError::RateLimitExceeded)` when the merchant has
+/// reached the configured payment cap within the current window.
+pub fn check_and_increment_payment_rate(
+    env: &Env,
+    merchant: &Address,
+) -> Result<(), PaymentError> {
+    let now = env.ledger().timestamp();
+    let window_secs = storage::get_payment_rate_window(env);
+    let limit = storage::get_payment_rate_limit(env);
+
+    let window_start = storage::get_merchant_window_start(env, merchant);
+    let count = if now >= window_start.saturating_add(window_secs) {
+        // Window has expired — start a fresh window.
+        storage::set_merchant_window_start(env, merchant, now);
+        0
+    } else {
+        storage::get_merchant_window_count(env, merchant)
+    };
+
+    if count >= limit {
+        return Err(PaymentError::RateLimitExceeded);
+    }
+
+    storage::set_merchant_window_count(env, merchant, count + 1);
+    Ok(())
+}

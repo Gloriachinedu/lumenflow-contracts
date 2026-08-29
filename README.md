@@ -26,6 +26,7 @@ LumenFlow is a production-grade payment processing smart contract for the [Stell
 - Audit plan and scope published in `docs/audit/audit-report.md`
 - Refund lifecycle state diagram available in `docs/refund-lifecycle.md`
 - Testing guidance available in `docs/testing-guide.md`
+- API rate limit reference available in `docs/rate-limits.md`
 
 ## Refund lifecycle overview
 
@@ -242,6 +243,14 @@ stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network 
 # Set payment cleanup period (seconds)
 stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
   -- set_payment_cleanup_period --admin <admin-address> --period 7776000
+
+# Set per-merchant payment rate limit (max payments per window, default 100)
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- set_payment_rate_limit --admin <admin-address> --limit 50
+
+# Set rate-limit window duration in seconds (default 3600 = 1 hour)
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- set_payment_rate_window --admin <admin-address> --window_secs 1800
 ```
 
 ### Merchant Management

@@ -20,6 +20,15 @@ pub enum DataKey {
     LargePaymentThreshold,
     MaxRefundsPerOrder,
     OrderRefundCount(String),
+    // Rate limiting
+    /// Max payments a single merchant may receive in one rate-limit window.
+    PaymentRateLimit,
+    /// Duration of the rate-limit window in seconds.
+    PaymentRateWindow,
+    /// Rolling window counter: (merchant, window_start) → count.
+    MerchantPaymentWindowCount(Address),
+    /// Timestamp of the start of the current window for this merchant.
+    MerchantPaymentWindowStart(Address),
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -271,4 +280,59 @@ pub fn set_token_allowed(env: &Env, token: &Address, allowed: bool) {
     } else {
         env.storage().instance().remove(&DataKey::AllowedToken(token.clone()));
     }
+}
+
+// ── Payment rate limiting ─────────────────────────────────────────────────────
+
+/// Maximum payments that any single merchant may receive within one window.
+/// Default: 100 payments per window (no effective limit out-of-the-box).
+pub fn get_payment_rate_limit(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::PaymentRateLimit)
+        .unwrap_or(100)
+}
+
+pub fn set_payment_rate_limit(env: &Env, limit: u32) {
+    env.storage().instance().set(&DataKey::PaymentRateLimit, &limit);
+}
+
+/// Duration of the rate-limit window in seconds. Default: 3600 (1 hour).
+pub fn get_payment_rate_window(env: &Env) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::PaymentRateWindow)
+        .unwrap_or(3600)
+}
+
+pub fn set_payment_rate_window(env: &Env, window_secs: u64) {
+    env.storage().instance().set(&DataKey::PaymentRateWindow, &window_secs);
+}
+
+/// Start timestamp of the current rate-limit window for `merchant`.
+pub fn get_merchant_window_start(env: &Env, merchant: &Address) -> u64 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::MerchantPaymentWindowStart(merchant.clone()))
+        .unwrap_or(0)
+}
+
+pub fn set_merchant_window_start(env: &Env, merchant: &Address, ts: u64) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::MerchantPaymentWindowStart(merchant.clone()), &ts);
+}
+
+/// Payment count within the current window for `merchant`.
+pub fn get_merchant_window_count(env: &Env, merchant: &Address) -> u32 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::MerchantPaymentWindowCount(merchant.clone()))
+        .unwrap_or(0)
+}
+
+pub fn set_merchant_window_count(env: &Env, merchant: &Address, count: u32) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::MerchantPaymentWindowCount(merchant.clone()), &count);
 }
