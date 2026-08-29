@@ -156,7 +156,7 @@
 
 <!-- Pagination controls -->
 <div class="pagination-bar" id="pagination-bar">
-  <div class="page-meta" id="page-meta"></div>
+  <div class="page-meta" id="page-meta" aria-live="polite" aria-atomic="true"></div>
 
   <div class="page-controls">
     <button class="btn" id="prev-btn" onclick="prevPage()" disabled aria-label="Previous page">
@@ -342,6 +342,9 @@
 
     isLoading = false;
   }
+
+  // Track whether the initial load has completed (we don't move focus on first load)
+  let _focusMgmtInitialized = false;
 
   // ── Navigation ─────────────────────────────────────────────────────────────
   function prevPage() {

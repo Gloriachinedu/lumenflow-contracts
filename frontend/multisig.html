@@ -904,6 +904,8 @@ feat/sdk-rpc-retry-integration
     if (result.success) {
       showExecuteAlert('✔ Payment executed successfully!', true);
       btn.textContent = 'Executed';
+      // Also announce via accessible toast (issue #790)
+      window.LumenFocus && LumenFocus.toast.show('Payment executed successfully!', 'success');
     } else {
       btn.disabled = false;
       btn.textContent = 'Execute Payment';
