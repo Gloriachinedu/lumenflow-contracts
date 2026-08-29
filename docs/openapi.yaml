@@ -1,0 +1,1756 @@
+openapi: 3.0.3
+info:
+  title: LumenFlow Soroban Contract API
+  version: 1.0.0
+  description: |
+    Interactive OpenAPI reference for the LumenFlow Soroban payment contract.
+    This document mirrors the public contract entrypoints exposed by the Rust contract
+    and is designed to be consumed by Swagger UI or similar tooling.
+
+    Soroban transactions are authenticated by transaction signatures rather than a
+    bearer token. Each operation below assumes that the caller has already signed the
+    transaction with the required source account and that the contract will enforce
+    authorization at the host level.
+servers:
+  - url: https://soroban.stellar.org
+    description: Soroban network endpoint for contract invocation
+paths:
+  /contract/get_contract_version:
+    post:
+      summary: Get the current contract version.
+      operationId: getContractVersion
+      x-soroban-contract-method: get_contract_version
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StringValue'
+  /contract/set_admin:
+    post:
+      summary: Initialise or replace the contract administrator.
+      operationId: setAdmin
+      x-soroban-contract-method: set_admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetAdminRequest'
+      responses:
+        '200':
+          description: Admin updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/transfer_admin:
+    post:
+      summary: Transfer admin permissions to a new address.
+      operationId: transferAdmin
+      x-soroban-contract-method: transfer_admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferAdminRequest'
+      responses:
+        '200':
+          description: Admin updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/set_payment_cleanup_period:
+    post:
+      summary: Set the cleanup period for expired records.
+      operationId: setPaymentCleanupPeriod
+      x-soroban-contract-method: set_payment_cleanup_period
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetPaymentCleanupPeriodRequest'
+      responses:
+        '200':
+          description: Cleanup period updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/set_platform_fee:
+    post:
+      summary: Set the platform fee configuration.
+      operationId: setPlatformFee
+      x-soroban-contract-method: set_platform_fee
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetPlatformFeeRequest'
+      responses:
+        '200':
+          description: Platform fee updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/set_large_payment_threshold:
+    post:
+      summary: Set the large-payment event threshold.
+      operationId: setLargePaymentThreshold
+      x-soroban-contract-method: set_large_payment_threshold
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetLargePaymentThresholdRequest'
+      responses:
+        '200':
+          description: Threshold updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/add_allowed_token:
+    post:
+      summary: Allow a token for payments.
+      operationId: addAllowedToken
+      x-soroban-contract-method: add_allowed_token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddAllowedTokenRequest'
+      responses:
+        '200':
+          description: Token allow-list updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/remove_allowed_token:
+    post:
+      summary: Remove a token from the allow-list.
+      operationId: removeAllowedToken
+      x-soroban-contract-method: remove_allowed_token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RemoveAllowedTokenRequest'
+      responses:
+        '200':
+          description: Token allow-list updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/set_multisig_expiry_duration:
+    post:
+      summary: Set the multisig payment expiry duration.
+      operationId: setMultisigExpiryDuration
+      x-soroban-contract-method: set_multisig_expiry_duration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetMultisigExpiryDurationRequest'
+      responses:
+        '200':
+          description: Multisig expiry updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/set_refund_window:
+    post:
+      summary: Set the refund window in seconds.
+      operationId: setRefundWindow
+      x-soroban-contract-method: set_refund_window
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetRefundWindowRequest'
+      responses:
+        '200':
+          description: Refund window updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/pause_contract:
+    post:
+      summary: Pause the contract.
+      operationId: pauseContract
+      x-soroban-contract-method: pause_contract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminOnlyRequest'
+      responses:
+        '200':
+          description: Contract paused.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/unpause_contract:
+    post:
+      summary: Resume the contract.
+      operationId: unpauseContract
+      x-soroban-contract-method: unpause_contract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminOnlyRequest'
+      responses:
+        '200':
+          description: Contract resumed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/set_min_refund_amount:
+    post:
+      summary: Set the minimum refund amount.
+      operationId: setMinRefundAmount
+      x-soroban-contract-method: set_min_refund_amount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetMinRefundAmountRequest'
+      responses:
+        '200':
+          description: Minimum refund amount updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/register_merchant:
+    post:
+      summary: Register a new merchant.
+      operationId: registerMerchant
+      x-soroban-contract-method: register_merchant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterMerchantRequest'
+      responses:
+        '200':
+          description: Merchant registered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/update_merchant:
+    post:
+      summary: Update an existing merchant profile.
+      operationId: updateMerchant
+      x-soroban-contract-method: update_merchant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMerchantRequest'
+      responses:
+        '200':
+          description: Merchant updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/deactivate_merchant:
+    post:
+      summary: Deactivate a merchant.
+      operationId: deactivateMerchant
+      x-soroban-contract-method: deactivate_merchant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddressRequest'
+      responses:
+        '200':
+          description: Merchant deactivated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/reactivate_merchant:
+    post:
+      summary: Reactivate a merchant.
+      operationId: reactivateMerchant
+      x-soroban-contract-method: reactivate_merchant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddressRequest'
+      responses:
+        '200':
+          description: Merchant reactivated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/verify_merchant:
+    post:
+      summary: Mark a merchant as verified.
+      operationId: verifyMerchant
+      x-soroban-contract-method: verify_merchant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddressRequest'
+      responses:
+        '200':
+          description: Merchant verified.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/unverify_merchant:
+    post:
+      summary: Remove a merchant verification flag.
+      operationId: unverifyMerchant
+      x-soroban-contract-method: unverify_merchant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddressRequest'
+      responses:
+        '200':
+          description: Merchant verification removed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/get_merchant:
+    post:
+      summary: Fetch a merchant profile.
+      operationId: getMerchant
+      x-soroban-contract-method: get_merchant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddressRequest'
+      responses:
+        '200':
+          description: Merchant profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Merchant'
+  /contract/is_registered:
+    post:
+      summary: Determine whether a merchant is registered.
+      operationId: isRegistered
+      x-soroban-contract-method: is_registered
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddressRequest'
+      responses:
+        '200':
+          description: Registration status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BooleanValue'
+  /contract/process_payment_with_signature:
+    post:
+      summary: Process a payment using a merchant signature.
+      operationId: processPaymentWithSignature
+      x-soroban-contract-method: process_payment_with_signature
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProcessPaymentWithSignatureRequest'
+      responses:
+        '200':
+          description: Payment processed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/process_payment_with_nonce:
+    post:
+      summary: Process a payment using a sequential nonce.
+      operationId: processPaymentWithNonce
+      x-soroban-contract-method: process_payment_with_nonce
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProcessPaymentWithNonceRequest'
+      responses:
+        '200':
+          description: Payment processed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/get_payer_nonce:
+    post:
+      summary: Get the next expected payer nonce.
+      operationId: getPayerNonce
+      x-soroban-contract-method: get_payer_nonce
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddressRequest'
+      responses:
+        '200':
+          description: Current nonce.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnsignedIntegerValue'
+  /contract/batch_payment:
+    post:
+      summary: Submit multiple payments atomically.
+      operationId: batchPayment
+      x-soroban-contract-method: batch_payment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchPaymentRequest'
+      responses:
+        '200':
+          description: Payments submitted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/get_payment_by_id:
+    post:
+      summary: Get a payment record by order ID.
+      operationId: getPaymentById
+      x-soroban-contract-method: get_payment_by_id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StringRequest'
+      responses:
+        '200':
+          description: Payment record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentOrder'
+  /contract/get_payment_summary:
+    post:
+      summary: Get a payment summary by order ID.
+      operationId: getPaymentSummary
+      x-soroban-contract-method: get_payment_summary
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StringRequest'
+      responses:
+        '200':
+          description: Payment summary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentSummary'
+  /contract/update_payment_status:
+    post:
+      summary: Update a payment status.
+      operationId: updatePaymentStatus
+      x-soroban-contract-method: update_payment_status
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePaymentStatusRequest'
+      responses:
+        '200':
+          description: Payment status updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/archive_payment_record:
+    post:
+      summary: Archive a payment record.
+      operationId: archivePaymentRecord
+      x-soroban-contract-method: archive_payment_record
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StringRequest'
+      responses:
+        '200':
+          description: Payment archived.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/cleanup_expired_payments:
+    post:
+      summary: Remove expired payment records.
+      operationId: cleanupExpiredPayments
+      x-soroban-contract-method: cleanup_expired_payments
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminOnlyRequest'
+      responses:
+        '200':
+          description: Number of records cleaned up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnsignedIntegerValue'
+  /contract/get_merchant_payment_history:
+    post:
+      summary: List a merchant's payment history.
+      operationId: getMerchantPaymentHistory
+      x-soroban-contract-method: get_merchant_payment_history
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetMerchantPaymentHistoryRequest'
+      responses:
+        '200':
+          description: Payment history page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentPage'
+  /contract/get_payer_payment_history:
+    post:
+      summary: List a payer's payment history.
+      operationId: getPayerPaymentHistory
+      x-soroban-contract-method: get_payer_payment_history
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetPayerPaymentHistoryRequest'
+      responses:
+        '200':
+          description: Payment history page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentPage'
+  /contract/get_global_payment_stats:
+    post:
+      summary: Get aggregate payment statistics.
+      operationId: getGlobalPaymentStats
+      x-soroban-contract-method: get_global_payment_stats
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetGlobalPaymentStatsRequest'
+      responses:
+        '200':
+          description: Global stats.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GlobalStats'
+  /contract/get_merchant_stats:
+    post:
+      summary: Get merchant-level statistics.
+      operationId: getMerchantStats
+      x-soroban-contract-method: get_merchant_stats
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddressRequest'
+      responses:
+        '200':
+          description: Merchant statistics.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MerchantStats'
+  /contract/initiate_refund:
+    post:
+      summary: Initiate a refund.
+      operationId: initiateRefund
+      x-soroban-contract-method: initiate_refund
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InitiateRefundRequest'
+      responses:
+        '200':
+          description: Refund initiated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/get_refunds_for_order:
+    post:
+      summary: List refunds for a payment order.
+      operationId: getRefundsForOrder
+      x-soroban-contract-method: get_refunds_for_order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StringRequest'
+      responses:
+        '200':
+          description: Refund list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundRecordsResponse'
+  /contract/approve_refund:
+    post:
+      summary: Approve a refund.
+      operationId: approveRefund
+      x-soroban-contract-method: approve_refund
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveRefundRequest'
+      responses:
+        '200':
+          description: Refund approved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/reject_refund:
+    post:
+      summary: Reject a refund.
+      operationId: rejectRefund
+      x-soroban-contract-method: reject_refund
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveRefundRequest'
+      responses:
+        '200':
+          description: Refund rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/execute_refund:
+    post:
+      summary: Execute a refund.
+      operationId: executeRefund
+      x-soroban-contract-method: execute_refund
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StringRequest'
+      responses:
+        '200':
+          description: Refund executed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/get_refund:
+    post:
+      summary: Fetch a refund record.
+      operationId: getRefund
+      x-soroban-contract-method: get_refund
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StringRequest'
+      responses:
+        '200':
+          description: Refund record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundRecord'
+  /contract/initiate_multisig_payment:
+    post:
+      summary: Start a multisig payment.
+      operationId: initiateMultisigPayment
+      x-soroban-contract-method: initiate_multisig_payment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InitiateMultisigPaymentRequest'
+      responses:
+        '200':
+          description: Multisig payment created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/sign_multisig_payment:
+    post:
+      summary: Sign a multisig payment.
+      operationId: signMultisigPayment
+      x-soroban-contract-method: sign_multisig_payment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignMultisigPaymentRequest'
+      responses:
+        '200':
+          description: Signature recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/cancel_multisig_payment:
+    post:
+      summary: Cancel a multisig payment.
+      operationId: cancelMultisigPayment
+      x-soroban-contract-method: cancel_multisig_payment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelMultisigPaymentRequest'
+      responses:
+        '200':
+          description: Multisig payment cancelled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/get_multisig_payment:
+    post:
+      summary: Fetch a multisig payment.
+      operationId: getMultisigPayment
+      x-soroban-contract-method: get_multisig_payment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StringRequest'
+      responses:
+        '200':
+          description: Multisig payment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MultisigPayment'
+  /contract/execute_multisig_payment:
+    post:
+      summary: Execute a multisig payment.
+      operationId: executeMultisigPayment
+      x-soroban-contract-method: execute_multisig_payment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StringRequest'
+      responses:
+        '200':
+          description: Multisig payment executed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/set_contract_version:
+    post:
+      summary: Attach a contract version marker.
+      operationId: setContractVersion
+      x-soroban-contract-method: set_contract_version
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminOnlyRequest'
+      responses:
+        '200':
+          description: Contract version updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/assert_version_matches:
+    post:
+      summary: Assert that the on-chain version matches the binary version.
+      operationId: assertVersionMatches
+      x-soroban-contract-method: assert_version_matches
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminOnlyRequest'
+      responses:
+        '200':
+          description: Version check passed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/get_merchants:
+    post:
+      summary: Get the merchant list.
+      operationId: getMerchants
+      x-soroban-contract-method: get_merchants
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetMerchantsRequest'
+      responses:
+        '200':
+          description: Merchant list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MerchantListResponse'
+  /contract/create_payment_request:
+    post:
+      summary: Create a payment request.
+      operationId: createPaymentRequest
+      x-soroban-contract-method: create_payment_request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePaymentRequestRequest'
+      responses:
+        '200':
+          description: Payment request created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/pay_payment_request:
+    post:
+      summary: Pay a payment request.
+      operationId: payPaymentRequest
+      x-soroban-contract-method: pay_payment_request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PayPaymentRequestRequest'
+      responses:
+        '200':
+          description: Payment request paid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/create_subscription_plan:
+    post:
+      summary: Create a subscription plan.
+      operationId: createSubscriptionPlan
+      x-soroban-contract-method: create_subscription_plan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSubscriptionPlanRequest'
+      responses:
+        '200':
+          description: Subscription plan created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/subscribe:
+    post:
+      summary: Subscribe to a plan.
+      operationId: subscribe
+      x-soroban-contract-method: subscribe
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubscribeRequest'
+      responses:
+        '200':
+          description: Subscription created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/charge_subscription:
+    post:
+      summary: Charge an active subscription.
+      operationId: chargeSubscription
+      x-soroban-contract-method: charge_subscription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChargeSubscriptionRequest'
+      responses:
+        '200':
+          description: Subscription charged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/cancel_subscription:
+    post:
+      summary: Cancel a subscription.
+      operationId: cancelSubscription
+      x-soroban-contract-method: cancel_subscription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelSubscriptionRequest'
+      responses:
+        '200':
+          description: Subscription cancelled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/renew_subscription_allowance:
+    post:
+      summary: Renew subscription allowances.
+      operationId: renewSubscriptionAllowance
+      x-soroban-contract-method: renew_subscription_allowance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenewSubscriptionAllowanceRequest'
+      responses:
+        '200':
+          description: Subscription allowance renewed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/get_subscription_plan:
+    post:
+      summary: Get a subscription plan.
+      operationId: getSubscriptionPlan
+      x-soroban-contract-method: get_subscription_plan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StringRequest'
+      responses:
+        '200':
+          description: Subscription plan.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionPlan'
+  /contract/get_subscription:
+    post:
+      summary: Get a subscription record.
+      operationId: getSubscription
+      x-soroban-contract-method: get_subscription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StringRequest'
+      responses:
+        '200':
+          description: Subscription record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Subscription'
+components:
+  schemas:
+    EmptyResponse:
+      type: object
+      nullable: true
+    BooleanValue:
+      type: boolean
+    StringValue:
+      type: string
+    UnsignedIntegerValue:
+      type: integer
+      format: int64
+    AddressRequest:
+      type: object
+      required:
+        - address
+      properties:
+        address:
+          type: string
+    StringRequest:
+      type: object
+      required:
+        - value
+      properties:
+        value:
+          type: string
+    AdminOnlyRequest:
+      type: object
+      required:
+        - admin
+      properties:
+        admin:
+          type: string
+    SetAdminRequest:
+      type: object
+      required:
+        - admin
+      properties:
+        admin:
+          type: string
+    TransferAdminRequest:
+      type: object
+      required:
+        - current_admin
+        - new_admin
+      properties:
+        current_admin:
+          type: string
+        new_admin:
+          type: string
+    SetPaymentCleanupPeriodRequest:
+      type: object
+      required:
+        - admin
+        - period
+      properties:
+        admin:
+          type: string
+        period:
+          type: integer
+          format: int64
+    SetPlatformFeeRequest:
+      type: object
+      required:
+        - admin
+        - fee_bps
+        - fee_recipient
+      properties:
+        admin:
+          type: string
+        fee_bps:
+          type: integer
+          format: int32
+        fee_recipient:
+          type: string
+    SetLargePaymentThresholdRequest:
+      type: object
+      required:
+        - admin
+        - threshold
+      properties:
+        admin:
+          type: string
+        threshold:
+          type: integer
+          format: int64
+    AddAllowedTokenRequest:
+      type: object
+      required:
+        - admin
+        - token
+      properties:
+        admin:
+          type: string
+        token:
+          type: string
+    RemoveAllowedTokenRequest:
+      type: object
+      required:
+        - admin
+        - token
+      properties:
+        admin:
+          type: string
+        token:
+          type: string
+    SetMultisigExpiryDurationRequest:
+      type: object
+      required:
+        - admin
+        - duration
+      properties:
+        admin:
+          type: string
+        duration:
+          type: integer
+          format: int64
+    SetRefundWindowRequest:
+      type: object
+      required:
+        - admin
+        - window_secs
+      properties:
+        admin:
+          type: string
+        window_secs:
+          type: integer
+          format: int64
+    SetMinRefundAmountRequest:
+      type: object
+      required:
+        - admin
+        - amount
+      properties:
+        admin:
+          type: string
+        amount:
+          type: integer
+          format: int64
+    RegisterMerchantRequest:
+      type: object
+      required:
+        - merchant_address
+        - name
+        - description
+        - contact_info
+        - category
+      properties:
+        merchant_address:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        contact_info:
+          type: string
+        category:
+          type: string
+          enum: [Retail, Food, Services, Digital, Other]
+    UpdateMerchantRequest:
+      type: object
+      required:
+        - merchant_address
+        - name
+        - description
+        - contact_info
+        - category
+      properties:
+        merchant_address:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        contact_info:
+          type: string
+        category:
+          type: string
+          enum: [Retail, Food, Services, Digital, Other]
+    ProcessPaymentWithSignatureRequest:
+      type: object
+      required:
+        - payer
+        - order_id
+        - merchant_address
+        - token_address
+        - amount
+        - memo
+        - signature
+        - merchant_public_key
+      properties:
+        payer:
+          type: string
+        order_id:
+          type: string
+        merchant_address:
+          type: string
+        token_address:
+          type: string
+        amount:
+          type: integer
+          format: int64
+        memo:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        signature:
+          type: string
+          format: byte
+        merchant_public_key:
+          type: string
+          format: byte
+    ProcessPaymentWithNonceRequest:
+      type: object
+      required:
+        - payer
+        - order_id
+        - merchant_address
+        - token_address
+        - amount
+        - memo
+        - nonce
+      properties:
+        payer:
+          type: string
+        order_id:
+          type: string
+        merchant_address:
+          type: string
+        token_address:
+          type: string
+        amount:
+          type: integer
+          format: int64
+        memo:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        nonce:
+          type: integer
+          format: int64
+    BatchPaymentRequest:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/BatchPaymentItem'
+    BatchPaymentItem:
+      type: object
+      required:
+        - order_id
+        - merchant_address
+        - token_address
+        - amount
+        - memo
+        - signature
+        - merchant_public_key
+      properties:
+        order_id:
+          type: string
+        merchant_address:
+          type: string
+        token_address:
+          type: string
+        amount:
+          type: integer
+          format: int64
+        memo:
+          type: string
+        signature:
+          type: string
+          format: byte
+        merchant_public_key:
+          type: string
+          format: byte
+    UpdatePaymentStatusRequest:
+      type: object
+      required:
+        - admin
+        - order_id
+        - status
+      properties:
+        admin:
+          type: string
+        order_id:
+          type: string
+        status:
+          type: string
+    GetMerchantPaymentHistoryRequest:
+      type: object
+      required:
+        - merchant_address
+        - limit
+      properties:
+        merchant_address:
+          type: string
+        limit:
+          type: integer
+          format: int64
+    GetPayerPaymentHistoryRequest:
+      type: object
+      required:
+        - payer
+        - limit
+      properties:
+        payer:
+          type: string
+        limit:
+          type: integer
+          format: int64
+    GetGlobalPaymentStatsRequest:
+      type: object
+      properties: {}
+    InitiateRefundRequest:
+      type: object
+      required:
+        - caller
+        - order_id
+        - amount
+        - reason
+      properties:
+        caller:
+          type: string
+        order_id:
+          type: string
+        amount:
+          type: integer
+          format: int64
+        reason:
+          type: string
+    ApproveRefundRequest:
+      type: object
+      required:
+        - caller
+        - refund_id
+      properties:
+        caller:
+          type: string
+        refund_id:
+          type: string
+    InitiateMultisigPaymentRequest:
+      type: object
+      required:
+        - merchant_address
+        - amount
+        - token
+        - required_signatures
+        - signers
+      properties:
+        merchant_address:
+          type: string
+        amount:
+          type: integer
+          format: int64
+        token:
+          type: string
+        required_signatures:
+          type: integer
+          format: int64
+        signers:
+          type: array
+          items:
+            type: string
+    SignMultisigPaymentRequest:
+      type: object
+      required:
+        - caller
+        - payment_id
+      properties:
+        caller:
+          type: string
+        payment_id:
+          type: string
+    CancelMultisigPaymentRequest:
+      type: object
+      required:
+        - caller
+        - payment_id
+      properties:
+        caller:
+          type: string
+        payment_id:
+          type: string
+    GetMerchantsRequest:
+      type: object
+      properties: {}
+    CreatePaymentRequestRequest:
+      type: object
+      required:
+        - merchant_address
+        - payer
+        - token
+        - amount
+        - memo
+      properties:
+        merchant_address:
+          type: string
+        payer:
+          type: string
+        token:
+          type: string
+        amount:
+          type: integer
+          format: int64
+        memo:
+          type: string
+    PayPaymentRequestRequest:
+      type: object
+      required:
+        - payer
+        - request_id
+      properties:
+        payer:
+          type: string
+        request_id:
+          type: string
+    CreateSubscriptionPlanRequest:
+      type: object
+      required:
+        - merchant
+        - plan_id
+        - token
+        - amount
+        - interval_secs
+        - max_cycles
+      properties:
+        merchant:
+          type: string
+        plan_id:
+          type: string
+        token:
+          type: string
+        amount:
+          type: integer
+          format: int64
+        interval_secs:
+          type: integer
+          format: int64
+        max_cycles:
+          type: integer
+          format: int32
+    SubscribeRequest:
+      type: object
+      required:
+        - subscriber
+        - plan_id
+      properties:
+        subscriber:
+          type: string
+        plan_id:
+          type: string
+    ChargeSubscriptionRequest:
+      type: object
+      required:
+        - caller
+        - subscription_id
+      properties:
+        caller:
+          type: string
+        subscription_id:
+          type: string
+    CancelSubscriptionRequest:
+      type: object
+      required:
+        - caller
+        - subscription_id
+      properties:
+        caller:
+          type: string
+        subscription_id:
+          type: string
+    RenewSubscriptionAllowanceRequest:
+      type: object
+      required:
+        - caller
+        - subscription_id
+        - cycles
+      properties:
+        caller:
+          type: string
+        subscription_id:
+          type: string
+        cycles:
+          type: integer
+          format: int32
+    Merchant:
+      type: object
+      properties:
+        address:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        contact_info:
+          type: string
+        category:
+          type: string
+        active:
+          type: boolean
+        verified:
+          type: boolean
+        registered_at:
+          type: integer
+          format: int64
+        total_received:
+          type: integer
+          format: int64
+    PaymentOrder:
+      type: object
+      properties:
+        order_id:
+          type: string
+        merchant_address:
+          type: string
+        payer:
+          type: string
+        token:
+          type: string
+        amount:
+          type: integer
+          format: int64
+        status:
+          type: string
+        paid_at:
+          type: integer
+          format: int64
+        refunded_amount:
+          type: integer
+          format: int64
+        memo:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+    PaymentSummary:
+      type: object
+      properties:
+        order_id:
+          type: string
+        merchant_address:
+          type: string
+        amount:
+          type: integer
+          format: int64
+        token:
+          type: string
+        status:
+          type: string
+        paid_at:
+          type: integer
+          format: int64
+    RefundRecord:
+      type: object
+      properties:
+        refund_id:
+          type: string
+        order_id:
+          type: string
+        initiator:
+          type: string
+        amount:
+          type: integer
+          format: int64
+        reason:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: integer
+          format: int64
+    RefundRecordsResponse:
+      type: array
+      items:
+        $ref: '#/components/schemas/RefundRecord'
+    PaymentPage:
+      type: object
+      properties:
+        payments:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaymentOrder'
+        next_cursor:
+          type: string
+        total:
+          type: integer
+          format: int32
+    GlobalStats:
+      type: object
+      properties:
+        total_payments:
+          type: integer
+          format: int32
+        total_volume:
+          type: integer
+          format: int64
+        total_refunds:
+          type: integer
+          format: int32
+        total_refund_volume:
+          type: integer
+          format: int64
+        active_merchants:
+          type: integer
+          format: int32
+    MerchantStats:
+      type: object
+      properties:
+        total_payments:
+          type: integer
+          format: int32
+        total_volume:
+          type: integer
+          format: int64
+        total_refunds:
+          type: integer
+          format: int32
+        total_refund_volume:
+          type: integer
+          format: int64
+    MultisigPayment:
+      type: object
+      properties:
+        payment_id:
+          type: string
+        merchant_address:
+          type: string
+        token:
+          type: string
+        amount:
+          type: integer
+          format: int64
+        required_signatures:
+          type: integer
+          format: int32
+        signers:
+          type: array
+          items:
+            type: string
+        signatures:
+          type: array
+          items:
+            type: string
+        signed_by:
+          type: array
+          items:
+            type: string
+        executed:
+          type: boolean
+        created_at:
+          type: integer
+          format: int64
+    MerchantListResponse:
+      type: array
+      items:
+        $ref: '#/components/schemas/Merchant'
+    PaymentRequest:
+      type: object
+      properties:
+        request_id:
+          type: string
+        merchant:
+          type: string
+        token:
+          type: string
+        amount:
+          type: integer
+          format: int64
+        memo:
+          type: string
+        expires_at:
+          type: integer
+          format: int64
+    SubscriptionPlan:
+      type: object
+      properties:
+        plan_id:
+          type: string
+        merchant:
+          type: string
+        token:
+          type: string
+        amount:
+          type: integer
+          format: int64
+        interval_secs:
+          type: integer
+          format: int64
+        max_cycles:
+          type: integer
+          format: int32
+    Subscription:
+      type: object
+      properties:
+        subscription_id:
+          type: string
+        plan_id:
+          type: string
+        subscriber:
+          type: string
+        cycles_charged:
+          type: integer
+          format: int32
+        last_charged_at:
+          type: integer
+          format: int64
+        status:
+          type: string
+        created_at:
+          type: integer
+          format: int64
