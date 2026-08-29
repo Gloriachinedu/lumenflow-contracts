@@ -881,7 +881,7 @@ feat/sdk-rpc-retry-integration
     hideLoadingOverlay();
 
     if (result.success) {
-      state.signatures.add(signerAddress);
+      store.get().multisig.signatures.add(signerAddress);
       renderProgress();
     } else {
       if (btn) { btn.disabled = false; btn.textContent = 'Sign'; }
