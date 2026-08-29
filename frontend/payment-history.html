@@ -93,6 +93,9 @@
     thead th:hover { color: #6c47ff; }
     thead th .sort-icon { margin-left: 0.3rem; opacity: 0.5; }
     thead th.active .sort-icon { opacity: 1; color: #6c47ff; }
+    thead th:focus { outline: 2px solid #6c47ff; outline-offset: -2px; }
+    thead th[aria-sort="ascending"]  .sort-icon::after { content: ' (ascending)';  position: absolute; clip: rect(0,0,0,0); }
+    thead th[aria-sort="descending"] .sort-icon::after { content: ' (descending)'; position: absolute; clip: rect(0,0,0,0); }
 
     tbody tr { border-bottom: 1px solid #f4f4f4; transition: background 0.1s; }
     tbody tr:last-child { border-bottom: none; }
