@@ -1382,7 +1382,17 @@ impl PaymentProcessingContract {
         } else {
             PaymentStatus::PartiallyRefunded
         };
+        let original_amount = payment.amount;
         storage::set_payment(&env, &payment);
+        env.events().publish(
+            ("lumenflow", "payment_status_updated"),
+            PaymentStatusUpdatedEvent {
+                order_id,
+                status: payment.status,
+                refunded_amount: payment.refunded_amount,
+                original_amount,
+            },
+        );
         Ok(())
     }
 
@@ -2162,8 +2172,16 @@ impl PaymentProcessingContract {
         };
         storage::set_multisig(&env, &ms);
 
-        env.events()
-            .publish(("lumenflow", "multisig_initiated"), payment_id);
+        env.events().publish(
+            ("lumenflow", "multisig_initiated"),
+            MultisigInitiatedEvent {
+                payment_id,
+                merchant: ms.merchant_address,
+                token: ms.token,
+                amount: ms.amount,
+                required_signatures: ms.required_signatures,
+            },
+        );
         Ok(())
     }
 
@@ -2341,8 +2359,16 @@ impl PaymentProcessingContract {
         stats.total_volume = stats.total_volume.saturating_add(ms.amount);
         storage::set_global_stats(&env, &stats);
 
-        env.events()
-            .publish(("lumenflow", "multisig_executed"), payment_id);
+        env.events().publish(
+            ("lumenflow", "multisig_executed"),
+            MultisigExecutedEvent {
+                payment_id,
+                payer,
+                merchant: ms.merchant_address,
+                token: ms.token,
+                amount: ms.amount,
+            },
+        );
         Ok(())
     }
 
@@ -2718,6 +2744,11 @@ impl PaymentProcessingContract {
         // Transfer tokens from payer to merchant
         let token_client = token::Client::new(&env, &pr.token);
         token_client.transfer(&payer, &pr.merchant, &pr.amount);
+
+        // Capture fields for event before pr fields are moved into PaymentOrder
+        let event_merchant = pr.merchant.clone();
+        let event_token = pr.token.clone();
+        let event_amount = pr.amount;
 
         // Create a PaymentOrder for history
         let now = env.ledger().timestamp();
