@@ -63,6 +63,7 @@ This document lists all the error codes returned by the LumenFlow contract, alon
 | `PaginationLimitExceeded` | 51 | The requested limit for pagination exceeds the maximum allowed (100). | Use a limit of 100 or less. |
 | `BatchSizeExceeded` | 52 | The batch operation exceeds the maximum allowed items. | Reduce the number of items in the batch. |
 | `InvalidTags` | 53 | The provided tags exceed length or count limits. | Ensure tags are within the allowed limits (e.g., max 5 tags, max 20 chars per tag). |
+| `SerializedPayloadTooLarge` | 54 | The serialized payload for a batch item exceeds the maximum allowed size (1 024 bytes). | Reduce the size of memo, order_id, or other string fields in the batch item. |
 
 ## Subscription Errors
 

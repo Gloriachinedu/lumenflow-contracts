@@ -27,6 +27,14 @@ use types::{
 
 // ── Contract ──────────────────────────────────────────────────────────────────
 
+/// Maximum number of items allowed in a single batch payment call.
+const MAX_BATCH_SIZE: u32 = 10;
+
+/// Maximum serialized byte size for a single batch payment item's payload.
+/// Limits memo (max ~256 bytes), order_id (max ~64 bytes), and other fields to
+/// prevent resource exhaustion on-chain. Set to 1 024 bytes as a conservative bound.
+const MAX_SERIALIZED_PAYLOAD_BYTES: u32 = 1_024;
+
 #[contract]
 pub struct PaymentProcessingContract;
 
@@ -785,10 +793,11 @@ impl PaymentProcessingContract {
     ///
     /// # Errors
     /// * [`PaymentError::BatchSizeExceeded`] — more than 10 items provided.
+    /// * [`PaymentError::SerializedPayloadTooLarge`] — an item's serialized payload exceeds 1 024 bytes.
     /// * [`PaymentError::InvalidAmount`] — any item has a non-positive amount.
     /// * [`PaymentError::InvalidInput`] — any item has an empty `order_id`.
     /// * [`PaymentError::TokenNotAllowed`] — any item's token is not on the allow-list.
-    /// * [`PaymentError::PaymentAlreadyExists`] — any item's `order_id` already exists.
+    /// * [`PaymentError::PaymentAlreadyExists`] — any item's `order_id` already exists (cross-call or intra-batch).
     /// * [`PaymentError::MerchantNotFound`] — any item's merchant is not registered.
     /// * [`PaymentError::MerchantInactive`] — any item's merchant is deactivated.
     /// * [`PaymentError::InvalidSignature`] — any item's signature verification fails.
@@ -799,7 +808,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         require_not_paused(&env)?;
         payer.require_auth();
-        if payments.len() > 10 {
+        if payments.len() > MAX_BATCH_SIZE {
             return Err(PaymentError::BatchSizeExceeded);
         }
 
@@ -808,6 +817,14 @@ impl PaymentProcessingContract {
         for item in payments.iter() {
             require_positive(item.amount)?;
             require_valid_id(&item.order_id)?;
+
+            // Reject intra-batch duplicate order IDs
+            for seen_id in seen.iter() {
+                if seen_id == item.order_id {
+                    return Err(PaymentError::PaymentAlreadyExists);
+                }
+            }
+            seen.push_back(item.order_id.clone());
 
             if !storage::is_token_allowed(&env, &item.token_address) {
                 return Err(PaymentError::TokenNotAllowed);
@@ -828,13 +845,19 @@ impl PaymentProcessingContract {
                 return Err(PaymentError::TokenNotAllowed);
             }
 
-            // Build payload: order_id bytes + amount bytes
+            // Build payload: network_id + contract address + order_id + amount
             let mut payload = Bytes::new(&env);
             let network_id_bytes: Bytes = env.ledger().network_id().into();
             payload.append(&network_id_bytes);
             payload.append(&env.current_contract_address().to_xdr(&env));
             payload.append(&item.order_id.clone().to_xdr(&env));
             payload.append(&Bytes::from_slice(&env, &item.amount.to_be_bytes()));
+
+            // Guard against excessively large serialized payloads
+            if payload.len() > MAX_SERIALIZED_PAYLOAD_BYTES {
+                return Err(PaymentError::SerializedPayloadTooLarge);
+            }
+
             verify_signature(&env, &item.merchant_public_key, &payload, &item.signature)?;
 
             // Transfer tokens from payer to merchant
