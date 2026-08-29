@@ -1,0 +1,7 @@
+{
+  "_comment": "Tracks compiled WASM binary size over time. Updated automatically by CI on every build.",
+  "limit_bytes": 102400,
+  "hard_limit_bytes": 131072,
+  "pr_increase_threshold_bytes": 5120,
+  "entries": []
+}
