@@ -45,7 +45,7 @@
       cursor: pointer;
       transition: opacity 0.15s;
     }
-    .btn:hover { opacity: 0.85; }
+    .btn:hover:not(:disabled) { opacity: 0.85; }
     .btn-primary { background: #6c47ff; color: #fff; }
     .btn-outline {
       background: #fff;
@@ -159,64 +159,253 @@
     }
     .page-info { font-size: 0.85rem; color: #555; }
 
-    /* ── Empty state ───────────────────────────────────────────────────── */
-    .empty {
+    /* ── Loading state ─────────────────────────────────────────────────── */
+    #loading-state {
+      display: none;
       text-align: center;
-      padding: 3rem 1rem;
-      color: #999;
+      padding: 3.5rem 1rem;
+      color: #6c47ff;
       font-size: 0.9rem;
     }
+
+    .spinner {
+      display: inline-block;
+      width: 2rem;
+      height: 2rem;
+      border: 3px solid #e0d9ff;
+      border-top-color: #6c47ff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 0.75rem;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .loading-text {
+      display: block;
+      font-weight: 600;
+    }
+
+    /* ── Empty state ───────────────────────────────────────────────────── */
+    #empty-state {
+      display: none;
+      text-align: center;
+      padding: 3.5rem 1rem;
+      color: #888;
+    }
+
+    .empty-icon {
+      font-size: 2.5rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .empty-title {
+      font-size: 1rem;
+      font-weight: 700;
+      color: #555;
+      margin-bottom: 0.4rem;
+    }
+
+    .empty-desc {
+      font-size: 0.85rem;
+    }
+
+    /* ── Error state ───────────────────────────────────────────────────── */
+    #error-state {
+      display: none;
+      text-align: center;
+      padding: 3.5rem 1rem;
+      color: #c0392b;
+    }
+
+    .error-icon {
+      font-size: 2.5rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .error-title {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 0.4rem;
+    }
+
+    #error-message {
+      font-size: 0.85rem;
+      color: #666;
+      margin-bottom: 1rem;
+    }
+
+    .btn-retry {
+      padding: 0.5rem 1.2rem;
+      border: 1.5px solid #c0392b;
+      border-radius: 8px;
+      background: #fff;
+      color: #c0392b;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn-retry:hover { background: #fce8e8; }
 
     /* ── Responsive breakpoint ─────────────────────────────────────────── */
     @media (max-width: 640px) {
       .table-wrap { display: none; }
       .cards-list { display: block; }
     }
+
+    /* ── Skip link for keyboard nav ────────────────────────────────────── */
+    .skip-link {
+      position: absolute;
+      left: -9999px;
+      top: auto;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+    }
+    .skip-link:focus {
+      position: static;
+      width: auto;
+      height: auto;
+      padding: 0.5rem 1rem;
+      background: #6c47ff;
+      color: #fff;
+      border-radius: 4px;
+      z-index: 100;
+    }
   </style>
 </head>
 <body>
 
+<a href="#main-content" class="skip-link">Skip to payment history</a>
+
 <h1>Payment History</h1>
 <p class="subtitle">View and filter your past transactions.</p>
 
-<div class="toolbar">
-  <input type="text" id="search" placeholder="Search order ID…" oninput="applyFilters()" />
-  <select id="status-filter" onchange="applyFilters()">
+<div class="toolbar" role="search" aria-label="Payment filters">
+  <input
+    type="text"
+    id="search"
+    placeholder="Search order ID…"
+    aria-label="Search by order ID or merchant address"
+    oninput="applyFilters()"
+    autocomplete="off"
+  />
+  <select
+    id="status-filter"
+    aria-label="Filter by status"
+    onchange="applyFilters()"
+  >
     <option value="">All statuses</option>
     <option value="Completed">Completed</option>
     <option value="PartiallyRefunded">Partially Refunded</option>
     <option value="FullyRefunded">Fully Refunded</option>
   </select>
-  <button class="btn btn-outline" onclick="resetFilters()">Reset</button>
+  <button class="btn btn-outline" onclick="resetFilters()">Reset filters</button>
+</div>
+
+<!-- Loading state -->
+<div
+  id="loading-state"
+  role="status"
+  aria-live="polite"
+  aria-label="Loading payment history"
+>
+  <div class="spinner" aria-hidden="true"></div>
+  <span class="loading-text">Loading payments…</span>
+</div>
+
+<!-- Error state -->
+<div
+  id="error-state"
+  role="alert"
+  aria-live="assertive"
+  aria-atomic="true"
+>
+  <div class="error-icon" aria-hidden="true">⚠️</div>
+  <div class="error-title">Failed to load payments</div>
+  <div id="error-message">An unexpected error occurred.</div>
+  <button class="btn-retry" onclick="retryLoad()" aria-label="Retry loading payment history">
+    ↺ Try again
+  </button>
+</div>
+
+<!-- Empty state -->
+<div
+  id="empty-state"
+  role="status"
+  aria-live="polite"
+  aria-label="No payments found"
+>
+  <div class="empty-icon" aria-hidden="true">💸</div>
+  <div class="empty-title">No payments found</div>
+  <p class="empty-desc" id="empty-desc">No transactions match your current filters.</p>
 </div>
 
 <!-- Desktop table -->
-<div class="table-wrap">
-  <table id="history-table">
+<div class="table-wrap" id="main-content">
+  <table id="history-table" aria-label="Payment history" aria-live="polite">
     <thead>
       <tr>
-        <th onclick="sortBy('order_id')">Order ID <span class="sort-icon">↕</span></th>
-        <th onclick="sortBy('merchant_address')">Merchant <span class="sort-icon">↕</span></th>
-        <th onclick="sortBy('amount')">Amount <span class="sort-icon">↕</span></th>
-        <th onclick="sortBy('status')">Status <span class="sort-icon">↕</span></th>
-        <th onclick="sortBy('paid_at')">Date <span class="sort-icon">↕</span></th>
+        <th
+          scope="col"
+          onclick="sortBy('order_id')"
+          aria-sort="none"
+          id="th-order-id"
+        >Order ID <span class="sort-icon" aria-hidden="true">↕</span></th>
+        <th
+          scope="col"
+          onclick="sortBy('merchant_address')"
+          aria-sort="none"
+          id="th-merchant"
+        >Merchant <span class="sort-icon" aria-hidden="true">↕</span></th>
+        <th
+          scope="col"
+          onclick="sortBy('amount')"
+          aria-sort="none"
+          id="th-amount"
+        >Amount <span class="sort-icon" aria-hidden="true">↕</span></th>
+        <th
+          scope="col"
+          onclick="sortBy('status')"
+          aria-sort="none"
+          id="th-status"
+        >Status <span class="sort-icon" aria-hidden="true">↕</span></th>
+        <th
+          scope="col"
+          onclick="sortBy('paid_at')"
+          aria-sort="descending"
+          id="th-date"
+        >Date <span class="sort-icon" aria-hidden="true">↓</span></th>
       </tr>
     </thead>
-    <tbody id="table-body">
-      <tr><td colspan="5" class="empty">Loading…</td></tr>
-    </tbody>
+    <tbody id="table-body"></tbody>
   </table>
 </div>
 
 <!-- Mobile cards -->
-<div class="cards-list" id="cards-list"></div>
+<div class="cards-list" id="cards-list" aria-label="Payment history cards"></div>
 
 <!-- Pagination -->
-<div class="pagination">
-  <button class="btn btn-outline" id="prev-btn" onclick="prevPage()" disabled>← Prev</button>
-  <span class="page-info" id="page-info"></span>
-  <button class="btn btn-outline" id="next-btn" onclick="nextPage()" disabled>Next →</button>
-</div>
+<nav class="pagination" aria-label="Pagination">
+  <button
+    class="btn btn-outline"
+    id="prev-btn"
+    onclick="prevPage()"
+    disabled
+    aria-label="Previous page"
+  >← Prev</button>
+  <span class="page-info" id="page-info" aria-live="polite"></span>
+  <button
+    class="btn btn-outline"
+    id="next-btn"
+    onclick="nextPage()"
+    disabled
+    aria-label="Next page"
+  >Next →</button>
+</nav>
 
 <script>
   // ── Mock data (replace with contract call) ─────────────────────────────────
@@ -241,8 +430,109 @@
   let sortAsc = false;
   let filtered = [...MOCK_PAYMENTS];
 
+  // ── UI state helpers ───────────────────────────────────────────────────────
+
+  /**
+   * Show the loading spinner and hide all other states.
+   * Announces loading to screen readers via role="status".
+   */
+  function showLoading() {
+    document.getElementById('loading-state').style.display = 'block';
+    document.getElementById('error-state').style.display   = 'none';
+    document.getElementById('empty-state').style.display   = 'none';
+    document.getElementById('history-table').style.display = 'none';
+    document.getElementById('cards-list').style.display    = 'none';
+    document.querySelector('.pagination').style.display    = 'none';
+  }
+
+  /**
+   * Show the error panel with a descriptive message.
+   * The role="alert" container ensures screen readers announce the failure
+   * immediately without requiring focus.
+   * @param {string} message - Human-readable description of what went wrong.
+   */
+  function showError(message) {
+    document.getElementById('loading-state').style.display = 'none';
+    document.getElementById('error-state').style.display   = 'block';
+    document.getElementById('error-message').textContent   = message || 'An unexpected error occurred. Please try again.';
+    document.getElementById('empty-state').style.display   = 'none';
+    document.getElementById('history-table').style.display = 'none';
+    document.getElementById('cards-list').style.display    = 'none';
+    document.querySelector('.pagination').style.display    = 'none';
+  }
+
+  /**
+   * Show the empty state when no records match the current filters.
+   * @param {string} [desc] - Optional custom description.
+   */
+  function showEmpty(desc) {
+    document.getElementById('loading-state').style.display = 'none';
+    document.getElementById('error-state').style.display   = 'none';
+    document.getElementById('empty-state').style.display   = 'block';
+    document.getElementById('empty-desc').textContent      = desc || 'No transactions match your current filters.';
+    document.getElementById('history-table').style.display = 'none';
+    document.getElementById('cards-list').style.display    = 'none';
+    document.querySelector('.pagination').style.display    = 'none';
+  }
+
+  /**
+   * Reveal the data table (and mobile cards) after data is ready.
+   */
+  function showData() {
+    document.getElementById('loading-state').style.display = 'none';
+    document.getElementById('error-state').style.display   = 'none';
+    document.getElementById('empty-state').style.display   = 'none';
+    document.getElementById('history-table').style.display = '';
+    document.getElementById('cards-list').style.display    = '';
+    document.querySelector('.pagination').style.display    = '';
+  }
+
+  // ── Data loading ───────────────────────────────────────────────────────────
+
+  /**
+   * Simulate an async data fetch. Replace this with a real Soroban RPC call.
+   * Returns a promise that resolves to the full payment list, or rejects on error.
+   */
+  async function fetchPayments() {
+    // Simulate network latency in demo mode
+    await new Promise(resolve => setTimeout(resolve, 400));
+    // In live mode this would call the Soroban contract; for now return mock data.
+    return [...MOCK_PAYMENTS];
+  }
+
+  async function loadData() {
+    showLoading();
+    try {
+      const payments = await fetchPayments();
+      filtered = payments;
+      applyClientFilters();
+    } catch (err) {
+      showError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function retryLoad() {
+    loadData();
+  }
+
   // ── Filtering ──────────────────────────────────────────────────────────────
+
   function applyFilters() {
+    const search = document.getElementById('search').value.trim().toLowerCase();
+    const status = document.getElementById('status-filter').value;
+
+    filtered = MOCK_PAYMENTS.filter(p => {
+      const matchSearch = !search || p.order_id.toLowerCase().includes(search) ||
+                          p.merchant_address.toLowerCase().includes(search);
+      const matchStatus = !status || p.status === status;
+      return matchSearch && matchStatus;
+    });
+
+    currentPage = 1;
+    sortAndRender();
+  }
+
+  function applyClientFilters() {
     const search = document.getElementById('search').value.trim().toLowerCase();
     const status = document.getElementById('status-filter').value;
 
@@ -266,6 +556,15 @@
   }
 
   // ── Sorting ────────────────────────────────────────────────────────────────
+
+  const HEADER_IDS = {
+    order_id:         'th-order-id',
+    merchant_address: 'th-merchant',
+    amount:           'th-amount',
+    status:           'th-status',
+    paid_at:          'th-date',
+  };
+
   function sortBy(field) {
     if (sortField === field) {
       sortAsc = !sortAsc;
@@ -273,14 +572,21 @@
       sortField = field;
       sortAsc = true;
     }
-    // Update header icons
-    document.querySelectorAll('thead th').forEach(th => th.classList.remove('active'));
-    const headers = ['order_id', 'merchant_address', 'amount', 'status', 'paid_at'];
-    const idx = headers.indexOf(field);
-    if (idx !== -1) {
-      const ths = document.querySelectorAll('thead th');
-      ths[idx].classList.add('active');
-      ths[idx].querySelector('.sort-icon').textContent = sortAsc ? '↑' : '↓';
+    // Update aria-sort and icon on all sortable headers
+    for (const [f, id] of Object.entries(HEADER_IDS)) {
+      const th = document.getElementById(id);
+      if (!th) continue;
+      const icon = th.querySelector('.sort-icon');
+      th.classList.remove('active');
+      th.setAttribute('aria-sort', 'none');
+      if (icon) icon.textContent = '↕';
+    }
+    const activeTh = document.getElementById(HEADER_IDS[field]);
+    if (activeTh) {
+      activeTh.classList.add('active');
+      activeTh.setAttribute('aria-sort', sortAsc ? 'ascending' : 'descending');
+      const icon = activeTh.querySelector('.sort-icon');
+      if (icon) icon.textContent = sortAsc ? '↑' : '↓';
     }
     sortAndRender();
   }
@@ -296,6 +602,7 @@
   }
 
   // ── Rendering ──────────────────────────────────────────────────────────────
+
   function statusBadge(status) {
     const map = {
       Completed:          ['badge-completed',      'Completed'],
@@ -313,50 +620,49 @@
     const start = (currentPage - 1) * PAGE_SIZE;
     const page  = sorted.slice(start, start + PAGE_SIZE);
 
+    if (sorted.length === 0) {
+      showEmpty();
+      return;
+    }
+
+    showData();
+
     // Table rows
     const tbody = document.getElementById('table-body');
-    if (page.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" class="empty">No payments found.</td></tr>';
-    } else {
-      tbody.innerHTML = page.map(p => `
-        <tr>
-          <td><span class="order-id">${p.order_id}</span></td>
-          <td>${p.merchant_address}</td>
-          <td class="amount">${p.amount.toLocaleString()} XLM</td>
-          <td>${statusBadge(p.status)}</td>
-          <td>${p.paid_at}</td>
-        </tr>`).join('');
-    }
+    tbody.innerHTML = page.map(p => `
+      <tr>
+        <td><span class="order-id">${p.order_id}</span></td>
+        <td>${p.merchant_address}</td>
+        <td class="amount">${p.amount.toLocaleString()} XLM</td>
+        <td>${statusBadge(p.status)}</td>
+        <td>${p.paid_at}</td>
+      </tr>`).join('');
 
     // Cards
     const cardsList = document.getElementById('cards-list');
-    if (page.length === 0) {
-      cardsList.innerHTML = '<div class="empty">No payments found.</div>';
-    } else {
-      cardsList.innerHTML = page.map(p => `
-        <div class="payment-card">
-          <div class="card-header">
-            <span class="card-order-id">${p.order_id}</span>
-            <span class="card-amount">${p.amount.toLocaleString()} XLM</span>
-          </div>
-          <div class="card-row">
-            <span class="card-label">Merchant</span>
-            <span>${p.merchant_address}</span>
-          </div>
-          <div class="card-row">
-            <span class="card-label">Status</span>
-            <span>${statusBadge(p.status)}</span>
-          </div>
-          <div class="card-row">
-            <span class="card-label">Date</span>
-            <span>${p.paid_at}</span>
-          </div>
-        </div>`).join('');
-    }
+    cardsList.innerHTML = page.map(p => `
+      <div class="payment-card">
+        <div class="card-header">
+          <span class="card-order-id">${p.order_id}</span>
+          <span class="card-amount">${p.amount.toLocaleString()} XLM</span>
+        </div>
+        <div class="card-row">
+          <span class="card-label">Merchant</span>
+          <span>${p.merchant_address}</span>
+        </div>
+        <div class="card-row">
+          <span class="card-label">Status</span>
+          <span>${statusBadge(p.status)}</span>
+        </div>
+        <div class="card-row">
+          <span class="card-label">Date</span>
+          <span>${p.paid_at}</span>
+        </div>
+      </div>`).join('');
 
     // Pagination controls
     document.getElementById('page-info').textContent =
-      sorted.length === 0 ? 'No results' : `Page ${currentPage} of ${totalPages} (${sorted.length} records)`;
+      `Page ${currentPage} of ${totalPages} (${sorted.length} records)`;
     document.getElementById('prev-btn').disabled = currentPage <= 1;
     document.getElementById('next-btn').disabled = currentPage >= totalPages;
   }
@@ -366,7 +672,7 @@
   function nextPage() { currentPage++; sortAndRender(); }
 
   // ── Init ───────────────────────────────────────────────────────────────────
-  sortAndRender();
+  loadData();
 </script>
 </body>
 </html>
