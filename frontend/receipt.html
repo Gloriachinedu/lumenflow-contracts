@@ -202,8 +202,12 @@
     </div>
 
     <div class="actions">
-      <button class="btn btn-outline" onclick="window.print()">🖨 Print</button>
-      <button class="btn btn-primary" onclick="copyLink()">🔗 Copy Link</button>
+      <button class="btn btn-outline" onclick="window.print()" aria-label="Print this receipt">
+        <span aria-hidden="true">🖨</span> Print
+      </button>
+      <button class="btn btn-primary" onclick="copyLink()" aria-label="Copy link to this receipt">
+        <span aria-hidden="true">🔗</span> Copy Link
+      </button>
     </div>
   </div>
 </div>

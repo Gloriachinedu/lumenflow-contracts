@@ -84,6 +84,9 @@
     thead th:hover { color: #6c47ff; }
     thead th .sort-icon { margin-left: 0.3rem; opacity: 0.5; }
     thead th.active .sort-icon { opacity: 1; color: #6c47ff; }
+    thead th:focus { outline: 2px solid #6c47ff; outline-offset: -2px; }
+    thead th[aria-sort="ascending"]  .sort-icon::after { content: ' (ascending)';  position: absolute; clip: rect(0,0,0,0); }
+    thead th[aria-sort="descending"] .sort-icon::after { content: ' (descending)'; position: absolute; clip: rect(0,0,0,0); }
 
     tbody tr { border-bottom: 1px solid #f4f4f4; transition: background 0.1s; }
     tbody tr:last-child { border-bottom: none; }
@@ -172,6 +175,22 @@
       .table-wrap { display: none; }
       .cards-list { display: block; }
     }
+
+    /* ── Accessibility ─────────────────────────────────────────────────── */
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0,0,0,0);
+      border: 0;
+    }
+    button:focus-visible, select:focus-visible, input:focus-visible, [tabindex]:focus-visible {
+      outline: 2px solid #6c47ff;
+      outline-offset: 2px;
+    }
   </style>
 </head>
 <body>
@@ -179,15 +198,17 @@
 <h1>Payment History</h1>
 <p class="subtitle">View and filter your past transactions.</p>
 
-<div class="toolbar">
-  <input type="text" id="search" placeholder="Search order ID…" oninput="applyFilters()" />
-  <select id="status-filter" onchange="applyFilters()">
+<div class="toolbar" role="search" aria-label="Payment filters">
+  <label for="search" class="sr-only">Search order ID or merchant</label>
+  <input type="text" id="search" placeholder="Search order ID…" oninput="applyFilters()" aria-label="Search order ID or merchant" />
+  <label for="status-filter" class="sr-only">Filter by status</label>
+  <select id="status-filter" onchange="applyFilters()" aria-label="Filter by status">
     <option value="">All statuses</option>
     <option value="Completed">Completed</option>
     <option value="PartiallyRefunded">Partially Refunded</option>
     <option value="FullyRefunded">Fully Refunded</option>
   </select>
-  <button class="btn btn-outline" onclick="resetFilters()">Reset</button>
+  <button class="btn btn-outline" onclick="resetFilters()" aria-label="Reset all filters">Reset</button>
 </div>
 
 <!-- Desktop table -->
@@ -195,11 +216,26 @@
   <table id="history-table">
     <thead>
       <tr>
-        <th onclick="sortBy('order_id')">Order ID <span class="sort-icon">↕</span></th>
-        <th onclick="sortBy('merchant_address')">Merchant <span class="sort-icon">↕</span></th>
-        <th onclick="sortBy('amount')">Amount <span class="sort-icon">↕</span></th>
-        <th onclick="sortBy('status')">Status <span class="sort-icon">↕</span></th>
-        <th onclick="sortBy('paid_at')">Date <span class="sort-icon">↕</span></th>
+        <th onclick="sortBy('order_id')" onkeydown="if(event.key==='Enter'||event.key===' ')sortBy('order_id')"
+            tabindex="0" role="columnheader" aria-sort="none" id="th-order-id">
+          Order ID <span class="sort-icon" aria-hidden="true">↕</span>
+        </th>
+        <th onclick="sortBy('merchant_address')" onkeydown="if(event.key==='Enter'||event.key===' ')sortBy('merchant_address')"
+            tabindex="0" role="columnheader" aria-sort="none" id="th-merchant">
+          Merchant <span class="sort-icon" aria-hidden="true">↕</span>
+        </th>
+        <th onclick="sortBy('amount')" onkeydown="if(event.key==='Enter'||event.key===' ')sortBy('amount')"
+            tabindex="0" role="columnheader" aria-sort="none" id="th-amount">
+          Amount <span class="sort-icon" aria-hidden="true">↕</span>
+        </th>
+        <th onclick="sortBy('status')" onkeydown="if(event.key==='Enter'||event.key===' ')sortBy('status')"
+            tabindex="0" role="columnheader" aria-sort="none" id="th-status">
+          Status <span class="sort-icon" aria-hidden="true">↕</span>
+        </th>
+        <th onclick="sortBy('paid_at')" onkeydown="if(event.key==='Enter'||event.key===' ')sortBy('paid_at')"
+            tabindex="0" role="columnheader" aria-sort="none" id="th-paid-at">
+          Date <span class="sort-icon" aria-hidden="true">↕</span>
+        </th>
       </tr>
     </thead>
     <tbody id="table-body">
@@ -213,9 +249,9 @@
 
 <!-- Pagination -->
 <div class="pagination">
-  <button class="btn btn-outline" id="prev-btn" onclick="prevPage()" disabled>← Prev</button>
-  <span class="page-info" id="page-info"></span>
-  <button class="btn btn-outline" id="next-btn" onclick="nextPage()" disabled>Next →</button>
+  <button class="btn btn-outline" id="prev-btn" onclick="prevPage()" disabled aria-label="Go to previous page">← Prev</button>
+  <span class="page-info" id="page-info" aria-live="polite" aria-atomic="true"></span>
+  <button class="btn btn-outline" id="next-btn" onclick="nextPage()" disabled aria-label="Go to next page">Next →</button>
 </div>
 
 <script>
@@ -266,6 +302,14 @@
   }
 
   // ── Sorting ────────────────────────────────────────────────────────────────
+  const SORT_TH_MAP = {
+    order_id:         'th-order-id',
+    merchant_address: 'th-merchant',
+    amount:           'th-amount',
+    status:           'th-status',
+    paid_at:          'th-paid-at',
+  };
+
   function sortBy(field) {
     if (sortField === field) {
       sortAsc = !sortAsc;
@@ -273,15 +317,23 @@
       sortField = field;
       sortAsc = true;
     }
-    // Update header icons
-    document.querySelectorAll('thead th').forEach(th => th.classList.remove('active'));
-    const headers = ['order_id', 'merchant_address', 'amount', 'status', 'paid_at'];
-    const idx = headers.indexOf(field);
-    if (idx !== -1) {
-      const ths = document.querySelectorAll('thead th');
-      ths[idx].classList.add('active');
-      ths[idx].querySelector('.sort-icon').textContent = sortAsc ? '↑' : '↓';
+
+    // Update aria-sort on all column headers
+    Object.entries(SORT_TH_MAP).forEach(([f, id]) => {
+      const th = document.getElementById(id);
+      if (!th) return;
+      th.classList.remove('active');
+      th.setAttribute('aria-sort', 'none');
+      th.querySelector('.sort-icon').textContent = '↕';
+    });
+
+    const activeTh = document.getElementById(SORT_TH_MAP[field]);
+    if (activeTh) {
+      activeTh.classList.add('active');
+      activeTh.setAttribute('aria-sort', sortAsc ? 'ascending' : 'descending');
+      activeTh.querySelector('.sort-icon').textContent = sortAsc ? '↑' : '↓';
     }
+
     sortAndRender();
   }
 
