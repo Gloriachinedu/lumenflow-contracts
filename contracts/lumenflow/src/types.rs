@@ -168,3 +168,57 @@ pub enum SuspiciousActivityReason {
     RapidRefunds = 2,
     ManyAuthFailures = 3,
 }
+
+// ── Health / Readiness (#819) ─────────────────────────────────────────────────
+
+/// Overall liveness status of the contract.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HealthStatus {
+    /// Contract is operational.
+    Ok,
+    /// Contract is running in a degraded state.
+    Degraded,
+    /// Contract is not operational.
+    Down,
+}
+
+/// Liveness report returned by `health_check`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HealthReport {
+    /// Overall status.
+    pub status: HealthStatus,
+    /// Ledger sequence at time of check.
+    pub ledger_sequence: u32,
+    /// Ledger timestamp at time of check.
+    pub ledger_timestamp: u64,
+    /// Contract version string (semver).
+    pub version: String,
+}
+
+/// Readiness report returned by `readiness_check`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReadinessReport {
+    /// True when the contract is ready to serve requests.
+    pub ready: bool,
+    /// True when the admin key has been set.
+    pub admin_configured: bool,
+    /// Number of active merchants currently registered.
+    pub active_merchants: u32,
+    /// Ledger timestamp at time of check.
+    pub ledger_timestamp: u64,
+}
+
+/// Status of a single on-chain dependency.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DependencyStatus {
+    /// Human-readable dependency name.
+    pub name: String,
+    /// Whether the dependency is reachable / correctly configured.
+    pub available: bool,
+    /// Additional detail (e.g. "admin not set").
+    pub detail: String,
+}

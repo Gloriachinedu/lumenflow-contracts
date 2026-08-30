@@ -597,3 +597,92 @@ fn test_is_registered() {
     
     assert!(client.is_registered(&merchant));
 }
+
+// ── Health / Readiness tests (#819) ──────────────────────────────────────────
+
+#[test]
+fn test_health_check_degraded_before_admin() {
+    let (env, client) = setup();
+    let report = client.health_check();
+    // Admin not yet set → contract is degraded
+    assert_eq!(report.status, crate::types::HealthStatus::Degraded);
+    assert!(report.ledger_timestamp > 0 || report.ledger_sequence == 0);
+    assert_eq!(report.version, String::from_str(&env, "1.0.0"));
+}
+
+#[test]
+fn test_health_check_ok_after_admin() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let report = client.health_check();
+    assert_eq!(report.status, crate::types::HealthStatus::Ok);
+    assert_eq!(report.version, String::from_str(&env, "1.0.0"));
+}
+
+#[test]
+fn test_readiness_not_ready_before_admin() {
+    let (_env, client) = setup();
+    let report = client.readiness_check();
+    assert!(!report.ready);
+    assert!(!report.admin_configured);
+    assert_eq!(report.active_merchants, 0);
+}
+
+#[test]
+fn test_readiness_ready_after_merchant_registered() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let merchant = Address::generate(&env);
+    client.register_merchant(
+        &merchant,
+        &String::from_str(&env, "Shop"),
+        &String::from_str(&env, "desc"),
+        &String::from_str(&env, "contact"),
+        &crate::types::MerchantCategory::Retail,
+    );
+
+    let report = client.readiness_check();
+    assert!(report.ready);
+    assert!(report.admin_configured);
+    assert_eq!(report.active_merchants, 1);
+}
+
+#[test]
+fn test_dependency_status_no_admin() {
+    let (env, client) = setup();
+    let deps = client.dependency_status();
+    // admin_key entry should be unavailable
+    let admin_dep = deps.iter().find(|d| d.name == String::from_str(&env, "admin_key"));
+    assert!(admin_dep.is_some());
+    assert!(!admin_dep.unwrap().available);
+}
+
+#[test]
+fn test_dependency_status_all_ok() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let merchant = Address::generate(&env);
+    client.register_merchant(
+        &merchant,
+        &String::from_str(&env, "Shop"),
+        &String::from_str(&env, "desc"),
+        &String::from_str(&env, "contact"),
+        &crate::types::MerchantCategory::Retail,
+    );
+
+    let deps = client.dependency_status();
+
+    let admin_dep = deps.iter().find(|d| d.name == String::from_str(&env, "admin_key")).unwrap();
+    assert!(admin_dep.available);
+
+    let stats_dep = deps.iter().find(|d| d.name == String::from_str(&env, "global_stats")).unwrap();
+    assert!(stats_dep.available);
+
+    let merchant_dep = deps.iter().find(|d| d.name == String::from_str(&env, "merchant_registry")).unwrap();
+    assert!(merchant_dep.available);
+}

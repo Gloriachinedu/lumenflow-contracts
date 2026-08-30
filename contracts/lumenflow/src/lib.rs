@@ -22,6 +22,8 @@ use types::{
     BatchPaymentItem, GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder,
     PaymentPage, PaymentStatus, RefundRecord, RefundStatus, SortField, SortOrder,
     StatusFilter, Merchant, SuspiciousActivityReason,
+    // #819 – health / readiness
+    DependencyStatus, HealthReport, HealthStatus, ReadinessReport,
 };
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -969,5 +971,94 @@ impl PaymentProcessingContract {
 
         env.events().publish(("lumenflow", "payment_request_paid"), request_id);
         Ok(())
+    }
+
+    // ── Health / Readiness (#819) ─────────────────────────────────────────────
+
+    /// Liveness probe: always returns `Ok` while the contract can execute.
+    ///
+    /// Returns a [`HealthReport`] with the current ledger position, timestamp,
+    /// and a degraded status when the admin key has not yet been initialised.
+    pub fn health_check(env: Env) -> HealthReport {
+        let admin_set = storage::get_admin(&env).is_some();
+        let status = if admin_set {
+            HealthStatus::Ok
+        } else {
+            HealthStatus::Degraded
+        };
+
+        env.events().publish(("lumenflow", "health_check"), ());
+
+        HealthReport {
+            status,
+            ledger_sequence: env.ledger().sequence(),
+            ledger_timestamp: env.ledger().timestamp(),
+            version: String::from_str(&env, "1.0.0"),
+        }
+    }
+
+    /// Readiness probe: reports whether the contract is ready to serve requests.
+    ///
+    /// A contract is considered ready when:
+    /// - The admin key has been set via `set_admin`.
+    /// - At least one active merchant is registered.
+    pub fn readiness_check(env: Env) -> ReadinessReport {
+        let admin_configured = storage::get_admin(&env).is_some();
+        let stats = storage::get_global_stats(&env);
+        let active_merchants = stats.active_merchants;
+        let ready = admin_configured && active_merchants > 0;
+
+        ReadinessReport {
+            ready,
+            admin_configured,
+            active_merchants,
+            ledger_timestamp: env.ledger().timestamp(),
+        }
+    }
+
+    /// Dependency status: reports the health of each on-chain dependency the
+    /// contract relies on.
+    ///
+    /// Each entry in the returned `Vec` describes one logical dependency:
+    /// - `admin_key`   – the admin account has been initialised.
+    /// - `global_stats` – the global statistics store is reachable.
+    /// - `merchant_registry` – at least one merchant is registered.
+    pub fn dependency_status(env: Env) -> Vec<DependencyStatus> {
+        let mut deps: Vec<DependencyStatus> = Vec::new(&env);
+
+        // Dependency: admin key
+        let admin_ok = storage::get_admin(&env).is_some();
+        deps.push_back(DependencyStatus {
+            name: String::from_str(&env, "admin_key"),
+            available: admin_ok,
+            detail: if admin_ok {
+                String::from_str(&env, "admin address configured")
+            } else {
+                String::from_str(&env, "admin not set; call set_admin first")
+            },
+        });
+
+        // Dependency: global stats store
+        let stats = storage::get_global_stats(&env);
+        deps.push_back(DependencyStatus {
+            name: String::from_str(&env, "global_stats"),
+            available: true,
+            detail: String::from_str(&env, "storage reachable"),
+        });
+
+        // Dependency: merchant registry
+        let merchant_ok = stats.active_merchants > 0;
+        deps.push_back(DependencyStatus {
+            name: String::from_str(&env, "merchant_registry"),
+            available: merchant_ok,
+            detail: if merchant_ok {
+                String::from_str(&env, "active merchants present")
+            } else {
+                String::from_str(&env, "no active merchants registered")
+            },
+        });
+
+        env.events().publish(("lumenflow", "dependency_status"), ());
+        deps
     }
 }
