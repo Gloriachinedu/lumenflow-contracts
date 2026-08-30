@@ -284,3 +284,12 @@ key (see [Idempotency Considerations](#4-idempotency-considerations)).
 - [Soroban Events](https://developers.stellar.org/docs/learn/encyclopedia/contract-development/events)
 - [Stellar Friendbot (testnet funding)](https://friendbot.stellar.org)
 
+
+## Troubleshooting
+
+LumenFlow does not expose custom webhooks. Integrators should watch on-chain activity via Stellar Horizon API contract events or Soroban events.
+
+### Failure / Edge Cases
+- No events received: confirm correct contract ID and network (testnet vs mainnet).
+- Missed events during downtime: track the last processed ledger and backfill via Horizon's paginated event history.
+- Friendbot is testnet-only funding, not for production integration.
