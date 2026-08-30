@@ -7589,3 +7589,104 @@ fn test_update_payment_status_without_version_always_succeeds() {
     let payment = client.get_payment_by_id(&payer, &str(&env, "VER_006"));
     assert_eq!(payment.version, 3);
 }
+
+// ── Retention job tests (#817) ────────────────────────────────────────────────
+
+#[test]
+fn test_cleanup_expired_payments_also_removes_refunds() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "PAY_RET_001", 500);
+
+    // Initiate a refund against that payment
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REF_RET_001"),
+        &str(&env, "PAY_RET_001"),
+        &100,
+        &str(&env, "test retention"),
+    );
+
+    // Advance time past cleanup period
+    client.set_payment_cleanup_period(&admin, &1);
+    env.ledger().with_mut(|l| l.timestamp += 10);
+
+    let removed = client.cleanup_expired_payments(&admin);
+    assert_eq!(removed, 1, "one payment should be removed");
+
+    // The payment should be gone
+    let pay_result = client.try_get_payment_by_id(&payer, &str(&env, "PAY_RET_001"));
+    assert!(pay_result.is_err(), "payment should have been purged");
+
+    // The refund record should also be gone
+    let ref_result = client.try_get_refund(&str(&env, "REF_RET_001"));
+    assert!(ref_result.is_err(), "refund should have been purged with its payment");
+}
+
+#[test]
+fn test_cleanup_expired_payments_leaves_recent_payments() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "PAY_RECENT", 500);
+
+    // Short cleanup period but don't advance time
+    client.set_payment_cleanup_period(&admin, &9999);
+
+    let removed = client.cleanup_expired_payments(&admin);
+    assert_eq!(removed, 0, "recent payment should not be removed");
+}
+
+#[test]
+fn test_set_refund_retention_period_and_cleanup() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "PAY_EXP_REF", 500);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REF_EXP_001"),
+        &str(&env, "PAY_EXP_REF"),
+        &100,
+        &str(&env, "cleanup test"),
+    );
+
+    // Approve and execute so the refund reaches terminal state
+    client.approve_refund(&admin, &str(&env, "REF_EXP_001"));
+
+    // Mint tokens to the merchant so the refund transfer succeeds
+    let token_admin = Address::generate(&env);
+    StellarAssetClient::new(&env, &token).mint(&merchant, &100);
+    client.execute_refund(&str(&env, "REF_EXP_001"));
+
+    // Set a 1-second refund retention period and advance time
+    client.set_refund_retention_period(&admin, &1);
+    env.ledger().with_mut(|l| l.timestamp += 10);
+
+    let removed = client.cleanup_expired_refunds(&admin);
+    assert_eq!(removed, 1, "one expired completed refund should be removed");
+}
+
+#[test]
+fn test_cleanup_expired_refunds_skips_pending_refunds() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "PAY_SKIP_PEND", 500);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REF_PEND_001"),
+        &str(&env, "PAY_SKIP_PEND"),
+        &100,
+        &str(&env, "still pending"),
+    );
+
+    // Very short retention period and advance time — but refund is still Pending
+    client.set_refund_retention_period(&admin, &1);
+    env.ledger().with_mut(|l| l.timestamp += 10);
+
+    let removed = client.cleanup_expired_refunds(&admin);
+    assert_eq!(removed, 0, "pending refunds should not be removed");
+}
+
+#[test]
+fn test_cleanup_expired_refunds_unauthorized_fails() {
+    let (env, client, _admin, merchant, _payer, _token) = setup_payment_env();
+    let result = client.try_cleanup_expired_refunds(&merchant);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
