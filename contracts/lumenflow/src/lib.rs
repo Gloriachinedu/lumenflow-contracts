@@ -1406,12 +1406,20 @@ impl PaymentProcessingContract {
         caller: Address,
         order_id: String,
         refunded_amount: i128,
+        expected_version: Option<u32>,
     ) -> Result<(), PaymentError> {
         require_not_paused(&env)?;
         let mut payment =
             storage::get_payment(&env, &order_id).ok_or(PaymentError::PaymentNotFound)?;
 
         require_admin_or(&env, &caller, &payment.merchant_address.clone())?;
+
+        // Optimistic concurrency check
+        if let Some(ev) = expected_version {
+            if payment.version != ev {
+                return Err(PaymentError::VersionMismatch);
+            }
+        }
 
         payment.refunded_amount = refunded_amount;
         payment.status = if refunded_amount >= payment.amount {
@@ -1888,6 +1896,7 @@ impl PaymentProcessingContract {
         } else {
             PaymentStatus::PartiallyRefunded
         };
+        payment.version += 1;
         storage::set_payment(&env, &payment);
 
         let mut r = refund;
