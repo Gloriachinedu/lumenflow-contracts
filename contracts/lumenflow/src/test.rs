@@ -597,3 +597,102 @@ fn test_is_registered() {
     
     assert!(client.is_registered(&merchant));
 }
+
+// ── Audit event tests (#818) ──────────────────────────────────────────────────
+
+#[test]
+fn test_deactivate_merchant_emits_admin_action_event() {
+    let (env, client, admin, merchant, _payer, _token) = setup_payment_env();
+    client.deactivate_merchant(&admin, &merchant);
+
+    let events = env.events().all();
+    let audit_event = events.iter().find(|e| {
+        e.topics.get(1) == Some(soroban_sdk::Symbol::new(&env, "admin_action"))
+    });
+    assert!(audit_event.is_some(), "deactivate_merchant should emit admin_action event");
+}
+
+#[test]
+fn test_deactivate_nonexistent_merchant_fails() {
+    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
+    let unknown = Address::generate(&env);
+    let result = client.try_deactivate_merchant(&admin, &unknown);
+    assert_eq!(result, Err(Ok(PaymentError::MerchantNotFound)));
+}
+
+#[test]
+fn test_set_payment_cleanup_period_emits_admin_action_event() {
+    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
+    client.set_payment_cleanup_period(&admin, &3600);
+
+    let events = env.events().all();
+    let audit_event = events.iter().find(|e| {
+        e.topics.get(1) == Some(soroban_sdk::Symbol::new(&env, "admin_action"))
+    });
+    assert!(audit_event.is_some(), "set_payment_cleanup_period should emit admin_action event");
+}
+
+#[test]
+fn test_set_large_payment_threshold_emits_admin_action_event() {
+    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
+    client.set_large_payment_threshold(&admin, &5_000_000);
+
+    let events = env.events().all();
+    let audit_event = events.iter().find(|e| {
+        e.topics.get(1) == Some(soroban_sdk::Symbol::new(&env, "admin_action"))
+    });
+    assert!(audit_event.is_some(), "set_large_payment_threshold should emit admin_action event");
+}
+
+#[test]
+fn test_set_large_payment_threshold_zero_fails() {
+    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
+    let result = client.try_set_large_payment_threshold(&admin, &0);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+}
+
+#[test]
+fn test_archive_payment_record_emits_admin_action_event() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ARCH_001", 100);
+    client.archive_payment_record(&admin, &str(&env, "ARCH_001"));
+
+    let events = env.events().all();
+    let audit_event = events.iter().find(|e| {
+        e.topics.get(1) == Some(soroban_sdk::Symbol::new(&env, "admin_action"))
+    });
+    assert!(audit_event.is_some(), "archive_payment_record should emit admin_action event");
+}
+
+#[test]
+fn test_archive_nonexistent_payment_fails() {
+    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
+    let result = client.try_archive_payment_record(&admin, &str(&env, "NO_SUCH_ORDER"));
+    assert_eq!(result, Err(Ok(PaymentError::PaymentNotFound)));
+}
+
+#[test]
+fn test_cleanup_expired_payments_emits_admin_action_event() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "EXP_AUD_001", 100);
+
+    client.set_payment_cleanup_period(&admin, &1);
+    env.ledger().with_mut(|l| l.timestamp += 10);
+
+    let removed = client.cleanup_expired_payments(&admin);
+    assert_eq!(removed, 1);
+
+    let events = env.events().all();
+    let audit_event = events.iter().find(|e| {
+        e.topics.get(1) == Some(soroban_sdk::Symbol::new(&env, "admin_action"))
+    });
+    assert!(audit_event.is_some(), "cleanup_expired_payments should emit admin_action event");
+}
+
+#[test]
+fn test_admin_action_unauthorized_fails() {
+    let (env, client, _admin, merchant, _payer, _token) = setup_payment_env();
+    // merchant is not admin — should be rejected
+    let result = client.try_deactivate_merchant(&merchant, &merchant);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}

@@ -58,6 +58,10 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         require_admin(&env, &admin)?;
         storage::set_cleanup_period(&env, period);
+        env.events().publish(
+            ("lumenflow", "admin_action"),
+            (String::from_str(&env, "set_payment_cleanup_period"), admin, period),
+        );
         Ok(())
     }
 
@@ -70,6 +74,10 @@ impl PaymentProcessingContract {
         require_admin(&env, &admin)?;
         require_positive(threshold)?;
         storage::set_large_payment_threshold(&env, threshold);
+        env.events().publish(
+            ("lumenflow", "admin_action"),
+            (String::from_str(&env, "set_large_payment_threshold"), admin, threshold),
+        );
         Ok(())
     }
 
@@ -132,6 +140,11 @@ impl PaymentProcessingContract {
             stats.active_merchants -= 1;
         }
         storage::set_global_stats(&env, &stats);
+
+        env.events().publish(
+            ("lumenflow", "admin_action"),
+            (String::from_str(&env, "deactivate_merchant"), admin, merchant_address),
+        );
         Ok(())
     }
 
@@ -403,7 +416,11 @@ impl PaymentProcessingContract {
         }
         storage::remove_payment(&env, &order_id);
         env.events()
-            .publish(("lumenflow", "payment_archived"), order_id);
+            .publish(("lumenflow", "payment_archived"), order_id.clone());
+        env.events().publish(
+            ("lumenflow", "admin_action"),
+            (String::from_str(&env, "archive_payment_record"), admin, order_id),
+        );
         Ok(())
     }
 
@@ -429,6 +446,11 @@ impl PaymentProcessingContract {
                 }
             }
         }
+
+        env.events().publish(
+            ("lumenflow", "admin_action"),
+            (String::from_str(&env, "cleanup_expired_payments"), admin, removed),
+        );
         Ok(removed)
     }
 
