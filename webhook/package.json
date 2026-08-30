@@ -1,0 +1,26 @@
+{
+  "name": "@lumenflow/webhook-server",
+  "version": "1.0.0",
+  "description": "Idempotent webhook delivery server for LumenFlow Soroban contract events",
+  "main": "webhook-server.js",
+  "scripts": {
+    "start": "node webhook-server.js",
+    "test": "jest --testPathPattern=webhook/ --no-coverage"
+  },
+  "dependencies": {
+    "eventsource": "2.0.2",
+    "node-fetch": "2.7.0"
+  },
+  "devDependencies": {
+    "jest": "29.7.0"
+  },
+  "peerDependencies": {
+    "ioredis": ">=5"
+  },
+  "peerDependenciesMeta": {
+    "ioredis": {
+      "optional": true
+    }
+  },
+  "license": "MIT"
+}

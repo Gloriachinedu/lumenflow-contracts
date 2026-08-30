@@ -1,0 +1,180 @@
+# Signature Format
+
+To process payments with a signature in LumenFlow, the merchant must sign a specific payload using their Ed25519 private key. This document describes the exact byte layout of that payload for SDK implementors.
+
+## Payload Layout
+
+The payload is the concatenation of the network ID, the XDR-encoded `contract_address`, the big-endian 8-byte `nonce`, the XDR-encoded `order_id`, and the big-endian 16-byte representation of the `amount`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `network_id` | 32 Bytes | The SHA-256 hash of the network passphrase (e.g., testnet or public). |
+| `contract_address` | XDR Address | The contract's Stellar Address, encoded as a Soroban XDR `ScAddress`. |
+| `nonce` | u64 (8 bytes) | Replay-protection counter. Must equal `get_merchant_nonce(merchant) + 1`. |
+| `order_id` | XDR String | The unique order identifier, encoded as a Stellar/Soroban XDR `ScVal` String. |
+| `amount` | i128 (16 bytes) | The payment amount as a 128-bit signed integer in big-endian byte order. |
+
+### 0. Nonce (Replay Protection)
+
+Before constructing the payload, call `get_merchant_nonce(merchant_address)` to retrieve the
+merchant's current nonce counter. The value passed in the `nonce` parameter (and included in
+the payload) **must be exactly `current_nonce + 1`**. On a successful payment the contract
+increments the stored nonce, permanently invalidating any previously captured signature.
+
+This prevents an attacker who intercepts a valid `(signature, order_id)` pair from
+resubmitting it with a different `order_id` to drain merchant funds.
+
+### 1. Network ID
+
+The 32-byte hash of the network passphrase. For example, Testnet uses `Test SDF Network ; September 2015`. The SHA-256 hash of this string is the network ID.
+
+### 2. XDR Encoding of contract_address
+
+The contract address is encoded as a Soroban `ScAddress` XDR object.
+
+### 3. XDR Encoding of order_id
+
+In the smart contract, `order_id.to_xdr()` is used. This produces the XDR representation of a Soroban `String` object. In the Stellar XDR definition, this corresponds to an `ScVal` of type `SCV_STRING`.
+
+The byte layout for `order_id.to_xdr()` is:
+- **ScVal Tag**: `0x0000000e` (4 bytes, representing `SCV_STRING` / 14)
+- **Length**: 4 bytes, big-endian unsigned integer (number of bytes in the string).
+- **Data**: The UTF-8 bytes of the string.
+- **Padding**: 0 to 3 null bytes (`0x00`) to align the data to a 4-byte boundary.
+
+### 4. Amount Encoding
+
+The `amount` is a 128-bit signed integer. It must be encoded as exactly 16 bytes in big-endian order.
+
+---
+
+## JavaScript Implementation Example
+
+Using the `@stellar/stellar-sdk` library:
+
+```javascript
+import { xdr, hash } from '@stellar/stellar-sdk';
+import { Address } from '@stellar/stellar-sdk';
+
+/**
+ * Builds the payload that the merchant needs to sign.
+ * 
+ * @param {string} networkPassphrase - The network passphrase.
+ * @param {string} contractId - The contract's address (C...).
+ * @param {bigint} nonce - Must equal get_merchant_nonce(merchant) + 1n.
+ * @param {string} orderId - The unique order ID.
+ * @param {bigint|string} amount - The payment amount.
+ * @returns {Buffer} The concatenated payload.
+ */
+function buildSignaturePayload(networkPassphrase, contractId, nonce, orderId, amount) {
+  // 1. Network ID (SHA-256 of passphrase)
+  const networkId = hash(Buffer.from(networkPassphrase));
+
+  // 2. Encode contract_address as ScAddress XDR
+  const contractIdXdr = Address.fromString(contractId).toScAddress().toXDR();
+
+  // 3. Encode nonce as 8-byte big-endian u64
+  const nonceBuf = Buffer.alloc(8);
+  nonceBuf.writeBigUInt64BE(BigInt(nonce), 0);
+
+  // 4. Encode order_id as ScVal String XDR
+  const orderIdXdr = xdr.ScVal.scvString(orderId).toXDR();
+
+  // 5. Encode amount as 16-byte big-endian integer
+  const amountBuf = Buffer.alloc(16);
+  const bigAmount = BigInt(amount);
+  amountBuf.writeBigInt64BE(bigAmount >> 64n, 0);
+  amountBuf.writeBigInt64BE(bigAmount & 0xFFFFFFFFFFFFFFFFn, 8);
+
+  return Buffer.concat([networkId, contractIdXdr, nonceBuf, orderIdXdr, amountBuf]);
+}
+```
+
+## Python Implementation Example
+
+```python
+import xdrbuf # or any XDR library
+import struct
+import hashlib
+
+def build_signature_payload(network_passphrase: str, contract_address_xdr: bytes,
+                             nonce: int, order_id: str, amount: int):
+    # 1. Network ID
+    network_id = hashlib.sha256(network_passphrase.encode('utf-8')).digest()
+
+    # 2. Contract Address XDR (Assuming it's already encoded to XDR)
+    # Using stellar-sdk for Python can do Address(contract_id).to_xdr()
+
+    # 3. Nonce as 8-byte big-endian u64
+    nonce_bytes = struct.pack(">Q", nonce)
+
+    # 4. ScVal tag for SCV_STRING is 14
+    tag = struct.pack(">I", 14)
+    order_bytes = order_id.encode('utf-8')
+    length = struct.pack(">I", len(order_bytes))
+    padding = b'\x00' * ((4 - (len(order_bytes) % 4)) % 4)
+    order_xdr = tag + length + order_bytes + padding
+    
+    # 5. Amount as 16-byte big-endian
+    amount_bytes = amount.to_bytes(16, byteorder='big', signed=True)
+    
+    return network_id + contract_address_xdr + nonce_bytes + order_xdr + amount_bytes
+```
+
+## Reference
+
+- [Stellar XDR Definitions](https://github.com/stellar/stellar-core/blob/master/src/xdr/Stellar-ledger-entries.x#L571)
+- [Soroban SDK String to_xdr](https://docs.rs/soroban-sdk/latest/soroban_sdk/struct.String.html#method.to_xdr)
+
+---
+
+## Smoke Test Usage
+
+`scripts/smoke_test.sh` exercises the full signature verification path against a live
+deployment. It delegates key generation and signing to `scripts/generate_smoke_keypair.sh`,
+which implements exactly the payload layout described above.
+
+### What the helper does
+
+1. Calls `get_merchant_nonce(merchant_address)` via `stellar contract invoke` to obtain
+   the current on-chain nonce, then sets `nonce = current_nonce + 1`.
+2. Builds the canonical payload:
+   ```
+   SHA-256(network_passphrase)       ← 32 bytes (network_id)
+   || ScAddress XDR(contract_id)    ← variable
+   || nonce as u64 big-endian        ← 8 bytes
+   || ScVal::String XDR(order_id)   ← variable (tag + len + data + padding)
+   || amount as i128 big-endian      ← 16 bytes
+   ```
+3. Generates a throwaway ed25519 keypair using Node.js 18+ built-in `crypto.generateKeyPairSync`.
+4. Signs the payload with `crypto.sign(null, payload, privateKey)`.
+5. Exports `SMOKE_SIG` (128 hex chars), `SMOKE_PUBKEY` (64 hex chars), and `SMOKE_NONCE`.
+
+### Network passphrases
+
+| Network | Passphrase |
+|---------|-----------|
+| Testnet | `Test SDF Network ; September 2015` |
+| Mainnet | `Public Global Stellar Network ; September 2015` |
+| Local   | `Standalone Network ; February 2017` |
+
+### Running manually
+
+```bash
+eval "$(./scripts/generate_smoke_keypair.sh \
+  --contract-id  "$CONTRACT_ID" \
+  --merchant     "$MERCHANT_ADDRESS" \
+  --order-id     "SMOKE_$(date +%s)" \
+  --amount       1 \
+  --network      testnet)"
+
+echo "Signature : $SMOKE_SIG"
+echo "Public key: $SMOKE_PUBKEY"
+echo "Nonce     : $SMOKE_NONCE"
+
+./scripts/smoke_test.sh
+```
+
+> **Note:** The helper caches `@stellar/stellar-sdk` under `scripts/.smoke_node_modules` to
+> avoid re-downloading it on every CI run. This directory is excluded from version control
+> (add it to `.gitignore` if it is not already there).

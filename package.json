@@ -1,0 +1,16 @@
+{
+  "name": "lumenflow-contracts-ui-tests",
+  "private": true,
+  "scripts": {
+    "test:receipt": "playwright test tests/receipt.spec.js",
+    "test:playwright": "playwright test tests/playwright/",
+    "test:e2e": "playwright test",
+    "lint:html": "htmlhint \"frontend/**/*.html\" --config .htmlhintrc",
+    "lint:js": "eslint \"frontend/**/*.js\" \"tests/**/*.js\"",
+    "check:roadmap": "node scripts/check-roadmap-tracking.mjs",
+    "test:roadmap": "node --test \"scripts/*.test.mjs\""
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
+  }
+}
