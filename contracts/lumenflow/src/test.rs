@@ -7690,3 +7690,134 @@ fn test_cleanup_expired_refunds_unauthorized_fails() {
     let result = client.try_cleanup_expired_refunds(&merchant);
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
+
+// ── Background job recovery tests (#822) ─────────────────────────────────────
+
+#[test]
+fn test_register_and_get_job() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let initiator = Address::generate(&env);
+
+    client.register_job(
+        &initiator,
+        &str(&env, "job-001"),
+        &crate::types::JobKind::Payment,
+        &str(&env, "ORDER_001"),
+    );
+
+    let job = client.get_job(&str(&env, "job-001"));
+    assert_eq!(job.job_id, str(&env, "job-001"));
+    assert_eq!(job.entity_id, str(&env, "ORDER_001"));
+    assert_eq!(job.status, crate::types::JobStatus::Pending);
+    assert_eq!(job.retry_count, 0);
+}
+
+#[test]
+fn test_complete_job() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let initiator = Address::generate(&env);
+
+    client.register_job(
+        &initiator,
+        &str(&env, "job-complete"),
+        &crate::types::JobKind::Payment,
+        &str(&env, "ORDER_002"),
+    );
+
+    client.complete_job(&initiator, &str(&env, "job-complete"));
+
+    let job = client.get_job(&str(&env, "job-complete"));
+    assert_eq!(job.status, crate::types::JobStatus::Completed);
+}
+
+#[test]
+fn test_fail_and_recover_job() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let initiator = Address::generate(&env);
+
+    client.register_job(
+        &initiator,
+        &str(&env, "job-recover"),
+        &crate::types::JobKind::Payment,
+        &str(&env, "ORDER_003"),
+    );
+
+    // Mark as failed
+    client.fail_job(
+        &initiator,
+        &str(&env, "job-recover"),
+        &Some(str(&env, "timeout")),
+    );
+
+    let failed_job = client.get_job(&str(&env, "job-recover"));
+    assert_eq!(failed_job.status, crate::types::JobStatus::Failed);
+
+    // Admin recovers the job
+    let recovered = client.recover_job(&admin, &str(&env, "job-recover"));
+    assert_eq!(recovered.status, crate::types::JobStatus::InProgress);
+    assert_eq!(recovered.retry_count, 1);
+    assert!(recovered.failure_reason.is_none());
+}
+
+#[test]
+fn test_duplicate_job_id_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let initiator = Address::generate(&env);
+
+    client.register_job(
+        &initiator,
+        &str(&env, "job-dup"),
+        &crate::types::JobKind::Payment,
+        &str(&env, "ORDER_004"),
+    );
+
+    let result = client.try_register_job(
+        &initiator,
+        &str(&env, "job-dup"),
+        &crate::types::JobKind::Payment,
+        &str(&env, "ORDER_005"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_recover_completed_job_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let initiator = Address::generate(&env);
+
+    client.register_job(
+        &initiator,
+        &str(&env, "job-done"),
+        &crate::types::JobKind::Payment,
+        &str(&env, "ORDER_006"),
+    );
+    client.complete_job(&initiator, &str(&env, "job-done"));
+
+    // Cannot recover a completed job
+    let result = client.try_recover_job(&admin, &str(&env, "job-done"));
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_list_job_ids() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let initiator = Address::generate(&env);
+
+    client.register_job(&initiator, &str(&env, "job-list-1"), &crate::types::JobKind::Payment, &str(&env, "ORDER_007"));
+    client.register_job(&initiator, &str(&env, "job-list-2"), &crate::types::JobKind::RefundExecution, &str(&env, "REFUND_001"));
+
+    let ids = client.list_job_ids(&admin);
+    assert_eq!(ids.len(), 2);
+}
