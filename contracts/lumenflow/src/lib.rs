@@ -22,6 +22,8 @@ use types::{
     BatchPaymentItem, GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder,
     PaymentPage, PaymentStatus, RefundRecord, RefundStatus, SortField, SortOrder,
     StatusFilter, Merchant, SuspiciousActivityReason,
+    // #822 – background job recovery
+    JobKind, JobStatus, PendingJob,
 };
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -969,5 +971,177 @@ impl PaymentProcessingContract {
 
         env.events().publish(("lumenflow", "payment_request_paid"), request_id);
         Ok(())
+    }
+
+    // ── Background job recovery (#822) ───────────────────────────────────────
+
+    /// Register a recoverable job before starting a payment operation.
+    ///
+    /// Callers should register a job _before_ executing the payment so that if
+    /// the transaction is interrupted (e.g. network failure, out-of-gas) an
+    /// admin can detect the incomplete job and trigger `recover_job`.
+    ///
+    /// Job IDs must be unique — attempting to register a duplicate `job_id`
+    /// returns `InvalidInput`.
+    pub fn register_job(
+        env: Env,
+        initiator: Address,
+        job_id: String,
+        kind: JobKind,
+        entity_id: String,
+    ) -> Result<(), PaymentError> {
+        initiator.require_auth();
+        require_non_empty_string(&job_id)?;
+        require_non_empty_string(&entity_id)?;
+
+        if storage::get_job(&env, &job_id).is_some() {
+            return Err(PaymentError::InvalidInput);
+        }
+
+        let now = env.ledger().timestamp();
+        let job = PendingJob {
+            job_id: job_id.clone(),
+            kind,
+            entity_id: entity_id.clone(),
+            initiator: initiator.clone(),
+            status: JobStatus::Pending,
+            created_at: now,
+            updated_at: now,
+            failure_reason: None,
+            retry_count: 0,
+        };
+
+        storage::set_job(&env, &job);
+        storage::add_job_id(&env, &job_id);
+
+        env.events().publish(
+            ("lumenflow", "job_registered"),
+            (job_id, entity_id, initiator),
+        );
+        Ok(())
+    }
+
+    /// Mark a job as successfully completed.
+    ///
+    /// Should be called at the end of a successful payment transaction.
+    /// Only the job initiator or an admin may mark a job complete.
+    pub fn complete_job(
+        env: Env,
+        caller: Address,
+        job_id: String,
+    ) -> Result<(), PaymentError> {
+        caller.require_auth();
+        let mut job = storage::get_job(&env, &job_id)
+            .ok_or(PaymentError::InvalidInput)?;
+
+        let is_admin = storage::get_admin(&env).map_or(false, |a| a == caller);
+        if !is_admin && caller != job.initiator {
+            return Err(PaymentError::Unauthorized);
+        }
+
+        // Completed and Recovered jobs are terminal
+        if matches!(job.status, JobStatus::Completed | JobStatus::Recovered) {
+            return Err(PaymentError::InvalidInput);
+        }
+
+        job.status = JobStatus::Completed;
+        job.updated_at = env.ledger().timestamp();
+        storage::set_job(&env, &job);
+
+        env.events().publish(("lumenflow", "job_completed"), job_id);
+        Ok(())
+    }
+
+    /// Mark a job as failed with an optional reason.
+    ///
+    /// Failed jobs can be retried via `recover_job`.
+    /// Only the job initiator or an admin may mark a job failed.
+    pub fn fail_job(
+        env: Env,
+        caller: Address,
+        job_id: String,
+        reason: Option<String>,
+    ) -> Result<(), PaymentError> {
+        caller.require_auth();
+        let mut job = storage::get_job(&env, &job_id)
+            .ok_or(PaymentError::InvalidInput)?;
+
+        let is_admin = storage::get_admin(&env).map_or(false, |a| a == caller);
+        if !is_admin && caller != job.initiator {
+            return Err(PaymentError::Unauthorized);
+        }
+
+        if matches!(job.status, JobStatus::Completed | JobStatus::Recovered) {
+            return Err(PaymentError::InvalidInput);
+        }
+
+        job.status = JobStatus::Failed;
+        job.failure_reason = reason;
+        job.updated_at = env.ledger().timestamp();
+        storage::set_job(&env, &job);
+
+        env.events().publish(("lumenflow", "job_failed"), job_id);
+        Ok(())
+    }
+
+    /// Recover (retry) an interrupted or failed job.
+    ///
+    /// Admin-only.  Increments the retry counter and transitions the job from
+    /// `Failed` → `InProgress`.  The admin is then expected to re-invoke the
+    /// underlying payment function (e.g. `process_payment_with_signature`)
+    /// and call `complete_job` on success or `fail_job` on subsequent failure.
+    ///
+    /// A job may not be recovered if it has already been completed or has
+    /// exceeded the maximum retry limit (5).
+    pub fn recover_job(
+        env: Env,
+        admin: Address,
+        job_id: String,
+    ) -> Result<PendingJob, PaymentError> {
+        require_admin(&env, &admin)?;
+
+        let mut job = storage::get_job(&env, &job_id)
+            .ok_or(PaymentError::InvalidInput)?;
+
+        // Only failed or interrupted (pending) jobs may be recovered
+        if !matches!(job.status, JobStatus::Failed | JobStatus::Pending | JobStatus::InProgress) {
+            return Err(PaymentError::InvalidInput);
+        }
+
+        const MAX_RETRIES: u32 = 5;
+        if job.retry_count >= MAX_RETRIES {
+            return Err(PaymentError::InvalidInput);
+        }
+
+        job.status = JobStatus::InProgress;
+        job.retry_count += 1;
+        job.failure_reason = None;
+        job.updated_at = env.ledger().timestamp();
+        storage::set_job(&env, &job);
+
+        env.events().publish(
+            ("lumenflow", "job_recovery_started"),
+            (job_id, job.retry_count),
+        );
+        Ok(job)
+    }
+
+    /// Retrieve a job record by ID.
+    pub fn get_job(
+        env: Env,
+        job_id: String,
+    ) -> Result<PendingJob, PaymentError> {
+        storage::get_job(&env, &job_id).ok_or(PaymentError::InvalidInput)
+    }
+
+    /// List all job IDs registered in this contract.  Admin only.
+    ///
+    /// Returns the raw list of IDs; callers use `get_job` to fetch individual
+    /// records.  For large deployments this should be paginated; the current
+    /// implementation returns the full list which is acceptable for moderate
+    /// usage.
+    pub fn list_job_ids(env: Env, admin: Address) -> Result<Vec<String>, PaymentError> {
+        require_admin(&env, &admin)?;
+        Ok(storage::get_job_list(&env))
     }
 }

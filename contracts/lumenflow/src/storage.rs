@@ -1,6 +1,6 @@
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
 
-use crate::types::{GlobalStats, Merchant, MultisigPayment, PaymentOrder, PaymentRequest, RefundRecord};
+use crate::types::{GlobalStats, Merchant, MultisigPayment, PaymentOrder, PaymentRequest, RefundRecord, PendingJob};
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -18,6 +18,12 @@ pub enum DataKey {
     Multisig(String),
     PaymentRequest(String),
     LargePaymentThreshold,
+    /// Background job record keyed by job_id (#822)
+    Job(String),
+    /// Global list of all registered job IDs (#822) – kept in instance storage
+    /// for efficient admin scanning. Large deployments should use a separate
+    /// index; for this implementation a bounded list is acceptable.
+    JobList,
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -191,4 +197,29 @@ pub fn remove_payment_request(env: &Env, request_id: &String) {
     env.storage()
         .temporary()
         .remove(&DataKey::PaymentRequest(request_id.clone()));
+}
+
+// ── Background job recovery (#822) ───────────────────────────────────────────
+
+pub fn get_job(env: &Env, job_id: &String) -> Option<PendingJob> {
+    env.storage().persistent().get(&DataKey::Job(job_id.clone()))
+}
+
+pub fn set_job(env: &Env, job: &PendingJob) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::Job(job.job_id.clone()), job);
+}
+
+pub fn get_job_list(env: &Env) -> Vec<String> {
+    env.storage()
+        .instance()
+        .get(&DataKey::JobList)
+        .unwrap_or(Vec::new(env))
+}
+
+pub fn add_job_id(env: &Env, job_id: &String) {
+    let mut list = get_job_list(env);
+    list.push_back(job_id.clone());
+    env.storage().instance().set(&DataKey::JobList, &list);
 }

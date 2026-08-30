@@ -168,3 +168,60 @@ pub enum SuspiciousActivityReason {
     RapidRefunds = 2,
     ManyAuthFailures = 3,
 }
+
+// ── Background job recovery (#822) ───────────────────────────────────────────
+
+/// The kind of operation a recoverable job represents.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum JobKind {
+    /// A single payment via `process_payment_with_signature`.
+    Payment,
+    /// A batch payment via `batch_payment`.
+    BatchPayment,
+    /// A refund execution via `execute_refund`.
+    RefundExecution,
+    /// A multisig payment execution via `execute_multisig_payment`.
+    MultisigExecution,
+}
+
+/// Lifecycle state of a recoverable job.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum JobStatus {
+    /// Job has been registered but not yet started.
+    Pending,
+    /// Job is currently being processed.
+    InProgress,
+    /// Job completed successfully.
+    Completed,
+    /// Job failed; eligible for recovery.
+    Failed,
+    /// Job was interrupted and subsequently recovered.
+    Recovered,
+}
+
+/// A recoverable unit of work stored on-chain so that interrupted payment
+/// processing can be detected and retried by an admin or the original caller.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingJob {
+    /// Unique job identifier (caller-chosen).
+    pub job_id: String,
+    /// What kind of operation this job represents.
+    pub kind: JobKind,
+    /// The primary entity this job acts on (order_id, refund_id, etc.).
+    pub entity_id: String,
+    /// The address that initiated the job.
+    pub initiator: Address,
+    /// Current lifecycle state.
+    pub status: JobStatus,
+    /// Ledger timestamp when the job was registered.
+    pub created_at: u64,
+    /// Ledger timestamp of the last status update.
+    pub updated_at: u64,
+    /// Optional failure reason (set when status = Failed).
+    pub failure_reason: Option<String>,
+    /// Number of recovery attempts so far.
+    pub retry_count: u32,
+}
