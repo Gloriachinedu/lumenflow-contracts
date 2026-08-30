@@ -1082,3 +1082,89 @@ fn test_auth_sign_multisig_requires_listed_signer() {
     let result = client.try_sign_multisig_payment(&stranger, &str(&env, "AUTH_MS"), &bytes(&env, &[0u8; 64]));
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
+
+// ── Issue #810 — cursor validation and stable ordering ────────────────────────
+
+/// An invalid cursor (one that does not belong to the caller's payment list)
+/// must return InvalidInput.
+#[test]
+fn test_cursor_invalid_returns_error() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "CUR_001", 100);
+    make_payment(&env, &client, &merchant, &payer, &token, "CUR_002", 200);
+
+    // "NONEXISTENT" is not in this merchant's payment list.
+    let result = client.try_get_merchant_payment_history(
+        &merchant,
+        &Some(str(&env, "NONEXISTENT")),
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+/// A valid cursor must resume AFTER the cursor row, not include it.
+#[test]
+fn test_cursor_resumes_after_cursor_row() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "STAB_A", 100);
+    make_payment(&env, &client, &merchant, &payer, &token, "STAB_B", 200);
+    make_payment(&env, &client, &merchant, &payer, &token, "STAB_C", 300);
+
+    // Fetch first page with limit=1 — sort ascending by amount.
+    let page1 = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &1,
+        &None,
+        &SortField::Amount,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page1.payments.len(), 1);
+    // First item is the smallest amount.
+    assert_eq!(page1.payments.get(0).unwrap().amount, 100);
+    // next_cursor should be present and point to the next unconsumed item.
+    assert!(page1.next_cursor.is_some());
+
+    // Fetch second page using the cursor.
+    let page2 = client.get_merchant_payment_history(
+        &merchant,
+        &page1.next_cursor,
+        &1,
+        &None,
+        &SortField::Amount,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page2.payments.len(), 1);
+    // Must NOT repeat the cursor row; must advance to the next one.
+    assert_eq!(page2.payments.get(0).unwrap().amount, 200);
+}
+
+/// Payments with the same sort-key value (e.g., identical timestamps) must
+/// always come out in the same order across calls — stable tie-break on order_id.
+#[test]
+fn test_stable_ordering_on_equal_sort_keys() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // All three payments share the same ledger timestamp and the same amount
+    // so the tie-break on order_id must determine the winner.
+    make_payment(&env, &client, &merchant, &payer, &token, "TIE_Z", 500);
+    make_payment(&env, &client, &merchant, &payer, &token, "TIE_A", 500);
+    make_payment(&env, &client, &merchant, &payer, &token, "TIE_M", 500);
+
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &10,
+        &None,
+        &SortField::Amount,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page.total, 3);
+    // Lexicographic order on order_id: TIE_A < TIE_M < TIE_Z
+    assert_eq!(page.payments.get(0).unwrap().order_id, str(&env, "TIE_A"));
+    assert_eq!(page.payments.get(1).unwrap().order_id, str(&env, "TIE_M"));
+    assert_eq!(page.payments.get(2).unwrap().order_id, str(&env, "TIE_Z"));
+}

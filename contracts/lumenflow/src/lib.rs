@@ -1162,14 +1162,31 @@ impl PaymentProcessingContract {
         sort_field: SortField,
         sort_order: SortOrder,
     ) -> Result<PaymentPage, PaymentError> {
-        // Collect matching payments
+        // Validate cursor: if provided, it must exist in the id list.
+        if let Some(ref c) = cursor {
+            let mut found = false;
+            for id in ids.iter() {
+                if id == *c {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                return Err(PaymentError::InvalidInput);
+            }
+        }
+
+        // Collect matching payments.
+        // When a cursor is supplied we skip every id up to AND INCLUDING the cursor
+        // itself, then include ids that follow it.
         let mut payments: Vec<PaymentOrder> = Vec::new(env);
         let mut skip = cursor.is_some();
 
         for id in ids.iter() {
-            // Cursor: skip until we pass the cursor id
             if skip {
                 if Some(id.clone()) == cursor {
+                    // The cursor row has been reached — stop skipping but do NOT
+                    // include this row; the next iteration will be the first result.
                     skip = false;
                 }
                 continue;
@@ -1182,9 +1199,10 @@ impl PaymentProcessingContract {
             }
         }
 
-        // Sort
+        // Sort — stable insertion sort (WASM-friendly, no std).
+        // Tie-break on order_id ensures a deterministic, stable total order so that
+        // repeated calls with the same cursor always return the same sequence.
         let mut sorted: Vec<PaymentOrder> = Vec::new(env);
-        // Simple insertion sort (WASM-friendly, no std)
         for p in payments.iter() {
             let mut inserted = false;
             let mut new_vec: Vec<PaymentOrder> = Vec::new(env);
@@ -1290,6 +1308,12 @@ impl PaymentProcessingContract {
         let cmp = match field {
             SortField::Date => a.paid_at.cmp(&b.paid_at),
             SortField::Amount => a.amount.cmp(&b.amount),
+        };
+        // Resolve ties via order_id to guarantee a stable, deterministic ordering.
+        let cmp = if cmp == core::cmp::Ordering::Equal {
+            a.order_id.cmp(&b.order_id)
+        } else {
+            cmp
         };
         match order {
             SortOrder::Ascending => cmp == core::cmp::Ordering::Less,
