@@ -408,6 +408,7 @@ impl PaymentProcessingContract {
     }
 
     /// Remove payments older than the cleanup period. Admin only.
+    /// Also removes all RefundRecords linked to each purged payment.
     pub fn cleanup_expired_payments(env: Env, admin: Address) -> Result<u32, PaymentError> {
         require_admin(&env, &admin)?;
         let cutoff = env
@@ -423,12 +424,78 @@ impl PaymentProcessingContract {
             for id in ids.iter() {
                 if let Some(p) = storage::get_payment(&env, &id) {
                     if p.paid_at < cutoff {
+                        // Remove all refund records linked to this payment
+                        let refund_ids = storage::get_order_refund_ids(&env, &id);
+                        for rid in refund_ids.iter() {
+                            storage::remove_refund(&env, &rid);
+                        }
+                        storage::remove_order_refund_index(&env, &id);
+
                         storage::remove_payment(&env, &id);
                         removed += 1;
                     }
                 }
             }
         }
+
+        env.events().publish(
+            ("lumenflow", "admin_action"),
+            (String::from_str(&env, "cleanup_expired_payments"), admin, removed),
+        );
+        Ok(removed)
+    }
+
+    /// Set how long (seconds) completed/rejected refund records are retained.
+    /// Admin only.
+    pub fn set_refund_retention_period(
+        env: Env,
+        admin: Address,
+        period: u64,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_refund_retention_period(&env, period);
+        env.events().publish(
+            ("lumenflow", "admin_action"),
+            (String::from_str(&env, "set_refund_retention_period"), admin, period),
+        );
+        Ok(())
+    }
+
+    /// Purge completed or rejected refund records older than the refund
+    /// retention period. Admin only. Returns the number of records removed.
+    pub fn cleanup_expired_refunds(env: Env, admin: Address) -> Result<u32, PaymentError> {
+        require_admin(&env, &admin)?;
+        let cutoff = env
+            .ledger()
+            .timestamp()
+            .saturating_sub(storage::get_refund_retention_period(&env));
+
+        let merchant_list = storage::get_merchant_list(&env);
+        let mut removed: u32 = 0;
+
+        for merchant_addr in merchant_list.iter() {
+            let payment_ids = storage::get_merchant_payment_ids(&env, &merchant_addr);
+            for pid in payment_ids.iter() {
+                let refund_ids = storage::get_order_refund_ids(&env, &pid);
+                for rid in refund_ids.iter() {
+                    if let Some(r) = storage::get_refund(&env, &rid) {
+                        let is_terminal = matches!(
+                            r.status,
+                            RefundStatus::Completed | RefundStatus::Rejected
+                        );
+                        if is_terminal && r.created_at < cutoff {
+                            storage::remove_refund(&env, &rid);
+                            removed += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        env.events().publish(
+            ("lumenflow", "admin_action"),
+            (String::from_str(&env, "cleanup_expired_refunds"), admin, removed),
+        );
         Ok(removed)
     }
 
@@ -519,7 +586,7 @@ impl PaymentProcessingContract {
 
         let refund = RefundRecord {
             refund_id: refund_id.clone(),
-            order_id,
+            order_id: order_id.clone(),
             initiator: caller,
             amount,
             reason,
@@ -527,6 +594,7 @@ impl PaymentProcessingContract {
             created_at: now,
         };
         storage::set_refund(&env, &refund);
+        storage::add_order_refund_id(&env, &order_id, &refund_id);
 
         env.events()
             .publish(("lumenflow", "refund_initiated"), refund_id);

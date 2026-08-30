@@ -8,6 +8,7 @@ use crate::types::{GlobalStats, Merchant, MultisigPayment, PaymentOrder, Payment
 pub enum DataKey {
     Admin,
     CleanupPeriod,
+    RefundRetentionPeriod,
     GlobalStats,
     Merchant(Address),
     MerchantList,
@@ -15,6 +16,7 @@ pub enum DataKey {
     MerchantPayments(Address),
     PayerPayments(Address),
     Refund(String),
+    OrderRefunds(String),
     Multisig(String),
     PaymentRequest(String),
     LargePaymentThreshold,
@@ -41,6 +43,21 @@ pub fn get_cleanup_period(env: &Env) -> u64 {
 
 pub fn set_cleanup_period(env: &Env, period: u64) {
     env.storage().instance().set(&DataKey::CleanupPeriod, &period);
+}
+
+/// How long (seconds) a refund record is retained after it reaches a terminal
+/// state (Completed or Rejected).  Defaults to 90 days.
+pub fn get_refund_retention_period(env: &Env) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::RefundRetentionPeriod)
+        .unwrap_or(90 * 24 * 3600)
+}
+
+pub fn set_refund_retention_period(env: &Env, period: u64) {
+    env.storage()
+        .instance()
+        .set(&DataKey::RefundRetentionPeriod, &period);
 }
 
 // ── Suspicious Activity Thresholds ────────────────────────────────────────────
@@ -158,6 +175,33 @@ pub fn set_refund(env: &Env, refund: &RefundRecord) {
     env.storage()
         .persistent()
         .set(&DataKey::Refund(refund.refund_id.clone()), refund);
+}
+
+pub fn remove_refund(env: &Env, refund_id: &String) {
+    env.storage().persistent().remove(&DataKey::Refund(refund_id.clone()));
+}
+
+/// Get all refund IDs linked to a payment order.
+pub fn get_order_refund_ids(env: &Env, order_id: &String) -> Vec<String> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::OrderRefunds(order_id.clone()))
+        .unwrap_or(Vec::new(env))
+}
+
+/// Record that `refund_id` belongs to `order_id`.
+pub fn add_order_refund_id(env: &Env, order_id: &String, refund_id: &String) {
+    let mut ids = get_order_refund_ids(env, order_id);
+    ids.push_back(refund_id.clone());
+    env.storage()
+        .persistent()
+        .set(&DataKey::OrderRefunds(order_id.clone()), &ids);
+}
+
+pub fn remove_order_refund_index(env: &Env, order_id: &String) {
+    env.storage()
+        .persistent()
+        .remove(&DataKey::OrderRefunds(order_id.clone()));
 }
 
 // ── Multisig ──────────────────────────────────────────────────────────────────
