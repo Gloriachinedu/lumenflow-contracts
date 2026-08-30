@@ -85,6 +85,8 @@ pub enum DataKey {
     Dispute(String),
     Multisig(String),
     PaymentRequest(String),
+    /// Index of all outstanding payment request IDs, used for bulk cleanup.
+    PaymentRequestIndex,
     /// Replaced verbose `LargePaymentThreshold` — short code `LPT`.
     LPT,
     /// Replaced verbose `AllowedToken` — short code `AT`.
@@ -516,12 +518,41 @@ pub fn set_payment_request(env: &Env, pr: &PaymentRequest) {
     env.storage()
         .temporary()
         .set(&DataKey::PaymentRequest(pr.request_id.clone()), pr);
+
+    let mut ids = get_payment_request_ids(env);
+    if !ids.contains(&pr.request_id) {
+        ids.push_back(pr.request_id.clone());
+        env.storage()
+            .temporary()
+            .set(&DataKey::PaymentRequestIndex, &ids);
+    }
 }
 
 pub fn remove_payment_request(env: &Env, request_id: &String) {
     env.storage()
         .temporary()
         .remove(&DataKey::PaymentRequest(request_id.clone()));
+
+    let ids = get_payment_request_ids(env);
+    if ids.contains(request_id) {
+        let mut kept = Vec::new(env);
+        for id in ids.iter() {
+            if &id != request_id {
+                kept.push_back(id);
+            }
+        }
+        env.storage()
+            .temporary()
+            .set(&DataKey::PaymentRequestIndex, &kept);
+    }
+}
+
+/// Return the IDs of all outstanding (unpaid) payment requests.
+pub fn get_payment_request_ids(env: &Env) -> Vec<String> {
+    env.storage()
+        .temporary()
+        .get(&DataKey::PaymentRequestIndex)
+        .unwrap_or_else(|| Vec::new(env))
 }
 
 // ── Nonce (replay protection) ─────────────────────────────────────────────────

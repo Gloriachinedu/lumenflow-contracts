@@ -15,6 +15,8 @@ Environment variables:
     SCRAPE_INTERVAL   Seconds between Horizon polls. Default: 30
     EXPORTER_PORT     Port to expose /metrics on. Default: 9101
     CURSOR_FILE       Path to persist the last paging_token. Default: .lumenflow_cursor
+    LUMENFLOW_VERSION Deployed release version, published via lumenflow_build_info. Default: unknown
+    LUMENFLOW_COMMIT  Deployed commit SHA, published via lumenflow_build_info. Default: unknown
 """
 
 import os
@@ -44,6 +46,11 @@ HORIZON_URL     = os.environ.get("HORIZON_URL", "https://horizon-testnet.stellar
 SCRAPE_INTERVAL = int(os.environ.get("SCRAPE_INTERVAL", "30"))
 EXPORTER_PORT   = int(os.environ.get("EXPORTER_PORT", "9101"))
 CURSOR_FILE     = os.environ.get("CURSOR_FILE", ".lumenflow_cursor")
+
+# Deployment identity, injected by the deploy pipeline so operators can tie a
+# running instance back to an exact build. Defaults to "unknown" when unset.
+BUILD_VERSION   = os.environ.get("LUMENFLOW_VERSION", "unknown")
+BUILD_COMMIT    = os.environ.get("LUMENFLOW_COMMIT", "unknown")
 
 if not CONTRACT_ID:
     log.error("CONTRACT_ID environment variable is required")
@@ -118,6 +125,16 @@ last_scrape_timestamp = Gauge(
     "Unix timestamp of the last successful Horizon scrape",
     LABELS,
 )
+
+# Static "build_info" gauge (always set to 1) whose label set publishes the
+# deployed version and commit SHA to runtime diagnostics — the standard
+# Prometheus pattern for exposing build metadata.
+build_info = Gauge(
+    "lumenflow_build_info",
+    "Deployment metadata for the running exporter/contract (always 1)",
+    LABELS + ["version", "commit"],
+)
+build_info.labels(CONTRACT_ID, BUILD_VERSION, BUILD_COMMIT).set(1)
 
 # ─── Cursor persistence ────────────────────────────────────────────────────────
 
@@ -219,6 +236,7 @@ def scrape_once(cursor: str) -> str:
 def main() -> None:
     log.info("Starting LumenFlow Prometheus exporter")
     log.info("Contract : %s", CONTRACT_ID)
+    log.info("Build    : %s (%s)", BUILD_VERSION, BUILD_COMMIT)
     log.info("Horizon  : %s", HORIZON_URL)
     log.info("Port     : %d", EXPORTER_PORT)
     log.info("Interval : %ds", SCRAPE_INTERVAL)

@@ -2988,6 +2988,71 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Cancel a single, not-yet-expired payment request early.
+    ///
+    /// Only the merchant that created the request may cancel it. Emits a
+    /// `lumenflow/payment_request_cancelled` event carrying the request ID.
+    ///
+    /// # Errors
+    /// * [`PaymentError::PaymentNotFound`] — no request exists with `request_id`.
+    /// * [`PaymentError::Unauthorized`] — `caller` is not the request's merchant.
+    pub fn cancel_payment_request(
+        env: Env,
+        caller: Address,
+        request_id: String,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        caller.require_auth();
+
+        let pr =
+            storage::get_payment_request(&env, &request_id).ok_or(PaymentError::PaymentNotFound)?;
+
+        if pr.merchant != caller {
+            return Err(PaymentError::Unauthorized);
+        }
+
+        storage::remove_payment_request(&env, &request_id);
+        env.events()
+            .publish(("lumenflow", "payment_request_cancelled"), request_id);
+        Ok(())
+    }
+
+    /// Remove every payment request whose `expires_at` has elapsed.
+    ///
+    /// Admin-only maintenance call that reclaims ledger storage held by stale
+    /// payment requests. Emits one `lumenflow/payment_request_cancelled` event
+    /// per removed request and returns the number of requests removed.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    pub fn cancel_expired_payment_requests(env: Env, admin: Address) -> Result<u32, PaymentError> {
+        require_admin(&env, &admin)?;
+
+        let now = env.ledger().timestamp();
+        let ids = storage::get_payment_request_ids(&env);
+        let mut removed: u32 = 0;
+
+        for request_id in ids.iter() {
+            match storage::get_payment_request(&env, &request_id) {
+                Some(pr) if now > pr.expires_at => {
+                    storage::remove_payment_request(&env, &request_id);
+                    env.events().publish(
+                        ("lumenflow", "payment_request_cancelled"),
+                        request_id.clone(),
+                    );
+                    removed += 1;
+                }
+                None => {
+                    // Entry already gone from temporary storage; drop the stale index slot.
+                    storage::remove_payment_request(&env, &request_id);
+                }
+                _ => {}
+            }
+        }
+
+        Ok(removed)
+    }
+
     // -- Subscriptions ---------------------------------------------------------
 
     /// Create a subscription plan that subscribers can later subscribe to.
