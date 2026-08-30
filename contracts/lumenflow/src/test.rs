@@ -597,3 +597,80 @@ fn test_is_registered() {
     
     assert!(client.is_registered(&merchant));
 }
+
+// ── Correlation ID tests (#820) ───────────────────────────────────────────────
+
+#[test]
+fn test_register_and_get_correlation() {
+    let (env, client) = setup();
+    let caller = Address::generate(&env);
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    client.register_correlation(
+        &caller,
+        &str(&env, "trace-abc-123"),
+        &str(&env, "payment"),
+        &str(&env, "ORDER_001"),
+    );
+
+    let record = client.get_correlation(&str(&env, "trace-abc-123"));
+    assert_eq!(record.entity_type, str(&env, "payment"));
+    assert_eq!(record.entity_id, str(&env, "ORDER_001"));
+    assert_eq!(record.correlation_id, str(&env, "trace-abc-123"));
+}
+
+#[test]
+fn test_duplicate_correlation_id_fails() {
+    let (env, client) = setup();
+    let caller = Address::generate(&env);
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    client.register_correlation(
+        &caller,
+        &str(&env, "trace-dup"),
+        &str(&env, "payment"),
+        &str(&env, "ORDER_001"),
+    );
+
+    // Second registration with the same correlation_id must fail
+    let result = client.try_register_correlation(
+        &caller,
+        &str(&env, "trace-dup"),
+        &str(&env, "payment"),
+        &str(&env, "ORDER_002"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_get_unknown_correlation_fails() {
+    let (env, client) = setup();
+    let result = client.try_get_correlation(&str(&env, "unknown-trace-id"));
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_process_payment_correlated() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let _ = admin; // used in setup
+
+    let correlation_id = str(&env, "req-corr-001");
+    client.process_payment_correlated(
+        &payer,
+        &str(&env, "ORDER_CORR_1"),
+        &merchant,
+        &token,
+        &500,
+        &str(&env, "correlated payment"),
+        &None::<Vec<String>>,
+        &bytes(&env, &[0u8; 64]),
+        &bytes(&env, &[0u8; 32]),
+        &correlation_id,
+    );
+
+    let record = client.get_correlation(&str(&env, "req-corr-001"));
+    assert_eq!(record.entity_id, str(&env, "ORDER_CORR_1"));
+    assert_eq!(record.entity_type, str(&env, "payment"));
+}

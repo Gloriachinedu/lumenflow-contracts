@@ -168,3 +168,21 @@ pub enum SuspiciousActivityReason {
     RapidRefunds = 2,
     ManyAuthFailures = 3,
 }
+
+// ── Correlation IDs (#820) ────────────────────────────────────────────────────
+
+/// Maps a caller-supplied correlation ID to the entity (order / refund / job)
+/// that was created with it.  Stored as an instance-level key so it survives
+/// the lifetime of the entity it references.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CorrelationRecord {
+    /// The caller-assigned opaque trace / correlation identifier.
+    pub correlation_id: String,
+    /// The entity type this record points to.
+    pub entity_type: String,
+    /// The primary key of the entity (order_id, refund_id, etc.).
+    pub entity_id: String,
+    /// Ledger timestamp when the correlation was registered.
+    pub created_at: u64,
+}

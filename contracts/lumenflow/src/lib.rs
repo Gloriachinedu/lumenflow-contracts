@@ -22,6 +22,8 @@ use types::{
     BatchPaymentItem, GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder,
     PaymentPage, PaymentStatus, RefundRecord, RefundStatus, SortField, SortOrder,
     StatusFilter, Merchant, SuspiciousActivityReason,
+    // #820 – correlation IDs
+    CorrelationRecord,
 };
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -968,6 +970,117 @@ impl PaymentProcessingContract {
         storage::remove_payment_request(&env, &request_id);
 
         env.events().publish(("lumenflow", "payment_request_paid"), request_id);
+        Ok(())
+    }
+
+    // ── Correlation IDs (#820) ────────────────────────────────────────────────
+
+    /// Attach a caller-supplied correlation / trace ID to an existing entity
+    /// (payment order, refund, multisig payment, etc.).
+    ///
+    /// The correlation ID is an opaque string chosen by the caller (e.g. a
+    /// UUID, trace-id header, or job ID).  It is stored on-chain and emitted
+    /// in an event so off-chain systems can correlate requests end-to-end
+    /// across API calls, background jobs, and webhook deliveries.
+    ///
+    /// `entity_type` should be one of: `"payment"`, `"refund"`, `"multisig"`,
+    /// `"job"`, `"webhook"`.
+    pub fn register_correlation(
+        env: Env,
+        caller: Address,
+        correlation_id: String,
+        entity_type: String,
+        entity_id: String,
+    ) -> Result<(), PaymentError> {
+        caller.require_auth();
+        require_non_empty_string(&correlation_id)?;
+        require_non_empty_string(&entity_type)?;
+        require_non_empty_string(&entity_id)?;
+
+        // Prevent duplicate registration of the same correlation ID
+        if storage::get_correlation(&env, &correlation_id).is_some() {
+            return Err(PaymentError::InvalidInput);
+        }
+
+        let record = CorrelationRecord {
+            correlation_id: correlation_id.clone(),
+            entity_type,
+            entity_id: entity_id.clone(),
+            created_at: env.ledger().timestamp(),
+        };
+        storage::set_correlation(&env, &record);
+
+        env.events().publish(
+            ("lumenflow", "correlation_registered"),
+            (correlation_id, entity_id, caller),
+        );
+        Ok(())
+    }
+
+    /// Look up the entity associated with a correlation / trace ID.
+    ///
+    /// Returns the [`CorrelationRecord`] registered via `register_correlation`,
+    /// or errors with `InvalidInput` if the correlation ID is unknown.
+    pub fn get_correlation(
+        env: Env,
+        correlation_id: String,
+    ) -> Result<CorrelationRecord, PaymentError> {
+        storage::get_correlation(&env, &correlation_id)
+            .ok_or(PaymentError::InvalidInput)
+    }
+
+    /// Process a payment and atomically register a correlation ID for the
+    /// resulting order so the operation can be traced end-to-end.
+    ///
+    /// This is a convenience wrapper around `process_payment_with_signature`
+    /// plus `register_correlation`; both actions succeed or both fail.
+    pub fn process_payment_correlated(
+        env: Env,
+        payer: Address,
+        order_id: String,
+        merchant_address: Address,
+        token_address: Address,
+        amount: i128,
+        memo: String,
+        tags: Option<Vec<String>>,
+        signature: Bytes,
+        merchant_public_key: Bytes,
+        correlation_id: String,
+    ) -> Result<(), PaymentError> {
+        require_non_empty_string(&correlation_id)?;
+
+        // Ensure the correlation ID is not already in use
+        if storage::get_correlation(&env, &correlation_id).is_some() {
+            return Err(PaymentError::InvalidInput);
+        }
+
+        // Delegate to the core payment function
+        Self::process_payment_with_signature(
+            env.clone(),
+            payer.clone(),
+            order_id.clone(),
+            merchant_address,
+            token_address,
+            amount,
+            memo,
+            tags,
+            signature,
+            merchant_public_key,
+        )?;
+
+        // Attach the correlation ID to the newly created order
+        let record = CorrelationRecord {
+            correlation_id: correlation_id.clone(),
+            entity_type: String::from_str(&env, "payment"),
+            entity_id: order_id.clone(),
+            created_at: env.ledger().timestamp(),
+        };
+        storage::set_correlation(&env, &record);
+
+        env.events().publish(
+            ("lumenflow", "correlation_registered"),
+            (correlation_id, order_id, payer),
+        );
         Ok(())
     }
 }

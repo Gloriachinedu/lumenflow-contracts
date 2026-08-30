@@ -1,6 +1,6 @@
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
 
-use crate::types::{GlobalStats, Merchant, MultisigPayment, PaymentOrder, PaymentRequest, RefundRecord};
+use crate::types::{GlobalStats, Merchant, MultisigPayment, PaymentOrder, PaymentRequest, RefundRecord, CorrelationRecord};
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -18,6 +18,8 @@ pub enum DataKey {
     Multisig(String),
     PaymentRequest(String),
     LargePaymentThreshold,
+    /// Correlation ID lookup: maps a correlation_id string → CorrelationRecord
+    Correlation(String),
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -191,4 +193,21 @@ pub fn remove_payment_request(env: &Env, request_id: &String) {
     env.storage()
         .temporary()
         .remove(&DataKey::PaymentRequest(request_id.clone()));
+}
+
+// ── Correlation IDs (#820) ────────────────────────────────────────────────────
+
+/// Persist a correlation record so callers can look up an entity by its
+/// caller-supplied correlation / trace ID.
+pub fn set_correlation(env: &Env, record: &CorrelationRecord) {
+    env.storage()
+        .instance()
+        .set(&DataKey::Correlation(record.correlation_id.clone()), record);
+}
+
+/// Retrieve the entity reference associated with a correlation ID.
+pub fn get_correlation(env: &Env, correlation_id: &String) -> Option<CorrelationRecord> {
+    env.storage()
+        .instance()
+        .get(&DataKey::Correlation(correlation_id.clone()))
 }
