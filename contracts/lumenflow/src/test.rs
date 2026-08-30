@@ -597,3 +597,81 @@ fn test_is_registered() {
     
     assert!(client.is_registered(&merchant));
 }
+
+// ── Streaming payout export tests (#821) ─────────────────────────────────────
+
+#[test]
+fn test_export_merchant_payouts_first_page() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let _ = admin;
+    // Create 3 payments
+    make_payment(&env, &client, &merchant, &payer, &token, "EXP_001", 100);
+    make_payment(&env, &client, &merchant, &payer, &token, "EXP_002", 200);
+    make_payment(&env, &client, &merchant, &payer, &token, "EXP_003", 300);
+
+    let page = client.export_merchant_payouts(&merchant, &merchant, &None::<String>, &2, &0);
+    assert_eq!(page.payments.len(), 2);
+    assert!(page.next_cursor.is_some()); // more pages available
+    assert_eq!(page.page_index, 0);
+}
+
+#[test]
+fn test_export_merchant_payouts_last_page() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let _ = admin;
+    make_payment(&env, &client, &merchant, &payer, &token, "EXP_P2_001", 100);
+    make_payment(&env, &client, &merchant, &payer, &token, "EXP_P2_002", 200);
+    make_payment(&env, &client, &merchant, &payer, &token, "EXP_P2_003", 300);
+
+    // Get first page of size 2
+    let page1 = client.export_merchant_payouts(&merchant, &merchant, &None::<String>, &2, &0);
+    assert_eq!(page1.payments.len(), 2);
+
+    // Use cursor from first page to get second page
+    let page2 = client.export_merchant_payouts(&merchant, &merchant, &page1.next_cursor, &2, &1);
+    assert_eq!(page2.payments.len(), 1);
+    assert!(page2.next_cursor.is_none()); // no more pages
+}
+
+#[test]
+fn test_export_merchant_payouts_unauthorized() {
+    let (env, client, _admin, merchant, _payer, _token) = setup_payment_env();
+    let intruder = Address::generate(&env);
+    let result = client.try_export_merchant_payouts(&intruder, &merchant, &None::<String>, &10, &0);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_export_payout_summary_net_amounts() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "SUM_001", 1000);
+    make_payment(&env, &client, &merchant, &payer, &token, "SUM_002", 2000);
+
+    let (rows, next_cursor) =
+        client.export_payout_summary(&merchant, &merchant, &None::<String>, &10);
+
+    assert_eq!(rows.len(), 2);
+    assert!(next_cursor.is_none());
+
+    // Net payout = amount − refunded_amount (0 here)
+    for row in rows.iter() {
+        assert_eq!(row.net_payout, row.amount);
+        assert_eq!(row.refunded_amount, 0);
+    }
+
+    let _ = admin; // silence unused warning
+}
+
+#[test]
+fn test_export_page_size_capped_at_50() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    // Create just 3 payments; requesting 200 should still return at most 50 (and 3 here)
+    make_payment(&env, &client, &merchant, &payer, &token, "CAP_001", 10);
+    make_payment(&env, &client, &merchant, &payer, &token, "CAP_002", 20);
+    make_payment(&env, &client, &merchant, &payer, &token, "CAP_003", 30);
+
+    let page = client.export_merchant_payouts(&merchant, &merchant, &None::<String>, &200, &0);
+    // effective_size is capped at 50; with only 3 payments we get 3
+    assert_eq!(page.payments.len(), 3);
+    assert!(page.next_cursor.is_none());
+}

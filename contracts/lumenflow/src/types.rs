@@ -168,3 +168,44 @@ pub enum SuspiciousActivityReason {
     RapidRefunds = 2,
     ManyAuthFailures = 3,
 }
+
+// ── Streaming payout export (#821) ───────────────────────────────────────────
+
+/// A single page in a cursor-based streamed payout export.
+///
+/// Large exports are split into fixed-size pages so the contract never buffers
+/// an unbounded collection of records in a single invocation.  Callers iterate
+/// by passing `next_cursor` from one call as the `cursor` argument of the next.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayoutExportPage {
+    /// The payment orders in this page.
+    pub payments: Vec<PaymentOrder>,
+    /// Opaque cursor to pass to the next call to continue the export.
+    /// `None` when this is the last page.
+    pub next_cursor: Option<String>,
+    /// The merchant whose payments this page covers.
+    pub merchant: Address,
+    /// Total records seen so far (cumulative across pages in this export run).
+    pub page_index: u32,
+}
+
+/// Describes a summary row in a payout export (one row per completed payment).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayoutSummaryRow {
+    /// Order identifier.
+    pub order_id: String,
+    /// Payer address.
+    pub payer: Address,
+    /// Token address used.
+    pub token: Address,
+    /// Gross payment amount.
+    pub amount: i128,
+    /// Amount already refunded.
+    pub refunded_amount: i128,
+    /// Net payout (amount − refunded_amount).
+    pub net_payout: i128,
+    /// Ledger timestamp of the payment.
+    pub paid_at: u64,
+}

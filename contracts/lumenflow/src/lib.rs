@@ -22,6 +22,8 @@ use types::{
     BatchPaymentItem, GlobalStats, MerchantCategory, MultisigPayment, PaymentFilter, PaymentOrder,
     PaymentPage, PaymentStatus, RefundRecord, RefundStatus, SortField, SortOrder,
     StatusFilter, Merchant, SuspiciousActivityReason,
+    // #821 – streaming payout export
+    PayoutExportPage, PayoutSummaryRow,
 };
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -969,5 +971,148 @@ impl PaymentProcessingContract {
 
         env.events().publish(("lumenflow", "payment_request_paid"), request_id);
         Ok(())
+    }
+
+    // ── Streaming payout exports (#821) ──────────────────────────────────────
+
+    /// Stream a merchant's payout history one page at a time.
+    ///
+    /// Instead of loading the entire payment list into a single Vec (which
+    /// would consume unbounded memory on-chain and exhaust the Soroban
+    /// instruction budget for large merchants), this function returns a
+    /// fixed-size [`PayoutExportPage`].  Callers iterate by passing the
+    /// `next_cursor` from the previous page as the `cursor` argument of the
+    /// next call.
+    ///
+    /// `page_size` is capped at 50 records per invocation to bound memory use.
+    ///
+    /// # Access control
+    /// Callable by the merchant themselves or the contract admin.
+    pub fn export_merchant_payouts(
+        env: Env,
+        caller: Address,
+        merchant_address: Address,
+        cursor: Option<String>,
+        page_size: u32,
+        page_index: u32,
+    ) -> Result<PayoutExportPage, PaymentError> {
+        // Validate access: must be the merchant or admin
+        caller.require_auth();
+        let is_admin = storage::get_admin(&env).map_or(false, |a| a == caller);
+        if !is_admin && caller != merchant_address {
+            return Err(PaymentError::Unauthorized);
+        }
+
+        // Cap page size to prevent unbounded memory use
+        const MAX_EXPORT_PAGE_SIZE: u32 = 50;
+        let effective_size = if page_size == 0 || page_size > MAX_EXPORT_PAGE_SIZE {
+            MAX_EXPORT_PAGE_SIZE
+        } else {
+            page_size
+        };
+
+        // Verify merchant exists
+        storage::get_merchant(&env, &merchant_address)
+            .ok_or(PaymentError::MerchantNotFound)?;
+
+        let ids = storage::get_merchant_payment_ids(&env, &merchant_address);
+
+        // Cursor-based skip: advance past records up to and including the cursor
+        let mut skip = cursor.is_some();
+        let mut page: Vec<PaymentOrder> = Vec::new(&env);
+        let mut next_cursor: Option<String> = None;
+
+        for id in ids.iter() {
+            if skip {
+                if Some(id.clone()) == cursor {
+                    skip = false;
+                }
+                continue;
+            }
+
+            if page.len() >= effective_size {
+                // Next record is the start of the following page
+                next_cursor = Some(id.clone());
+                break;
+            }
+
+            if let Some(p) = storage::get_payment(&env, &id) {
+                page.push_back(p);
+            }
+        }
+
+        Ok(PayoutExportPage {
+            payments: page,
+            next_cursor,
+            merchant: merchant_address,
+            page_index,
+        })
+    }
+
+    /// Stream a payout summary (net-payout rows) for a merchant, one page at
+    /// a time.
+    ///
+    /// Returns [`PayoutSummaryRow`] entries where `net_payout = amount -
+    /// refunded_amount`.  Useful for accounting exports that only need the
+    /// financial totals rather than the full [`PaymentOrder`] structs.
+    ///
+    /// `page_size` is capped at 50 records per invocation.
+    pub fn export_payout_summary(
+        env: Env,
+        caller: Address,
+        merchant_address: Address,
+        cursor: Option<String>,
+        page_size: u32,
+    ) -> Result<(Vec<PayoutSummaryRow>, Option<String>), PaymentError> {
+        caller.require_auth();
+        let is_admin = storage::get_admin(&env).map_or(false, |a| a == caller);
+        if !is_admin && caller != merchant_address {
+            return Err(PaymentError::Unauthorized);
+        }
+
+        const MAX_EXPORT_PAGE_SIZE: u32 = 50;
+        let effective_size = if page_size == 0 || page_size > MAX_EXPORT_PAGE_SIZE {
+            MAX_EXPORT_PAGE_SIZE
+        } else {
+            page_size
+        };
+
+        storage::get_merchant(&env, &merchant_address)
+            .ok_or(PaymentError::MerchantNotFound)?;
+
+        let ids = storage::get_merchant_payment_ids(&env, &merchant_address);
+
+        let mut skip = cursor.is_some();
+        let mut rows: Vec<PayoutSummaryRow> = Vec::new(&env);
+        let mut next_cursor: Option<String> = None;
+
+        for id in ids.iter() {
+            if skip {
+                if Some(id.clone()) == cursor {
+                    skip = false;
+                }
+                continue;
+            }
+
+            if rows.len() >= effective_size {
+                next_cursor = Some(id.clone());
+                break;
+            }
+
+            if let Some(p) = storage::get_payment(&env, &id) {
+                let net = p.amount.saturating_sub(p.refunded_amount);
+                rows.push_back(PayoutSummaryRow {
+                    order_id: p.order_id,
+                    payer: p.payer,
+                    token: p.token,
+                    amount: p.amount,
+                    refunded_amount: p.refunded_amount,
+                    net_payout: net,
+                    paid_at: p.paid_at,
+                });
+            }
+        }
+
+        Ok((rows, next_cursor))
     }
 }
