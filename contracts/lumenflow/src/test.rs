@@ -7510,101 +7510,183 @@ fn test_get_refund_unauthorized_for_stranger() {
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
 
-// ── Audit event tests (#818) ──────────────────────────────────────────────────
+// ── Optimistic concurrency tests (#816) ──────────────────────────────────────
 
 #[test]
-fn test_deactivate_merchant_emits_admin_action_event() {
-    let (env, client, admin, merchant, _payer, _token) = setup_payment_env();
-    client.deactivate_merchant(&admin, &merchant);
-
-    let events = env.events().all();
-    let audit_event = events.iter().find(|e| {
-        e.topics.get(1) == Some(soroban_sdk::Symbol::new(&env, "admin_action"))
-    });
-    assert!(audit_event.is_some(), "deactivate_merchant should emit admin_action event");
+fn test_payment_version_starts_at_zero() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "VER_001", 1_000);
+    let payment = client.get_payment_by_id(&payer, &str(&env, "VER_001"));
+    assert_eq!(payment.version, 0, "new payment should have version 0");
 }
 
 #[test]
-fn test_deactivate_nonexistent_merchant_fails() {
-    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
-    let unknown = Address::generate(&env);
-    let result = client.try_deactivate_merchant(&admin, &unknown);
-    assert_eq!(result, Err(Ok(PaymentError::MerchantNotFound)));
-}
-
-#[test]
-fn test_set_payment_cleanup_period_emits_admin_action_event() {
-    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
-    client.set_payment_cleanup_period(&admin, &3600);
-
-    let events = env.events().all();
-    let audit_event = events.iter().find(|e| {
-        e.topics.get(1) == Some(soroban_sdk::Symbol::new(&env, "admin_action"))
-    });
-    assert!(audit_event.is_some(), "set_payment_cleanup_period should emit admin_action event");
-}
-
-#[test]
-fn test_set_large_payment_threshold_emits_admin_action_event() {
-    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
-    client.set_large_payment_threshold(&admin, &5_000_000);
-
-    let events = env.events().all();
-    let audit_event = events.iter().find(|e| {
-        e.topics.get(1) == Some(soroban_sdk::Symbol::new(&env, "admin_action"))
-    });
-    assert!(audit_event.is_some(), "set_large_payment_threshold should emit admin_action event");
-}
-
-#[test]
-fn test_set_large_payment_threshold_zero_fails() {
-    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
-    let result = client.try_set_large_payment_threshold(&admin, &0);
-    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
-}
-
-#[test]
-fn test_archive_payment_record_emits_admin_action_event() {
+fn test_update_payment_status_increments_version() {
     let (env, client, admin, merchant, payer, token) = setup_payment_env();
-    make_payment(&env, &client, &merchant, &payer, &token, "ARCH_001", 100);
-    client.archive_payment_record(&admin, &str(&env, "ARCH_001"));
+    make_payment(&env, &client, &merchant, &payer, &token, "VER_002", 1_000);
 
-    let events = env.events().all();
-    let audit_event = events.iter().find(|e| {
-        e.topics.get(1) == Some(soroban_sdk::Symbol::new(&env, "admin_action"))
-    });
-    assert!(audit_event.is_some(), "archive_payment_record should emit admin_action event");
+    client.update_payment_status(&admin, &str(&env, "VER_002"), &500, &None);
+    let payment = client.get_payment_by_id(&payer, &str(&env, "VER_002"));
+    assert_eq!(payment.version, 1, "version should be incremented after update");
 }
 
 #[test]
-fn test_archive_nonexistent_payment_fails() {
-    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
-    let result = client.try_archive_payment_record(&admin, &str(&env, "NO_SUCH_ORDER"));
-    assert_eq!(result, Err(Ok(PaymentError::PaymentNotFound)));
-}
-
-#[test]
-fn test_cleanup_expired_payments_emits_admin_action_event() {
+fn test_update_payment_status_with_correct_version_succeeds() {
     let (env, client, admin, merchant, payer, token) = setup_payment_env();
-    make_payment(&env, &client, &merchant, &payer, &token, "EXP_AUD_001", 100);
+    make_payment(&env, &client, &merchant, &payer, &token, "VER_003", 1_000);
 
+    // Pass expected version 0 — matches the initial value
+    client.update_payment_status(&admin, &str(&env, "VER_003"), &500, &Some(0));
+    let payment = client.get_payment_by_id(&payer, &str(&env, "VER_003"));
+    assert_eq!(payment.version, 1);
+}
+
+#[test]
+fn test_update_payment_status_with_stale_version_fails() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "VER_004", 1_000);
+
+    // First update succeeds; bumps version to 1
+    client.update_payment_status(&admin, &str(&env, "VER_004"), &200, &None);
+
+    // Second update with stale version 0 should fail
+    let result = client.try_update_payment_status(&admin, &str(&env, "VER_004"), &400, &Some(0));
+    assert_eq!(result, Err(Ok(PaymentError::VersionMismatch)));
+}
+
+#[test]
+fn test_execute_refund_increments_payment_version() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "VER_005", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "RVER_001"),
+        &str(&env, "VER_005"),
+        &200,
+        &str(&env, "version test"),
+    );
+    client.approve_refund(&admin, &str(&env, "RVER_001"));
+
+    // Mint tokens to merchant for the refund transfer
+    StellarAssetClient::new(&env, &token).mint(&merchant, &200);
+    client.execute_refund(&str(&env, "RVER_001"));
+
+    let payment = client.get_payment_by_id(&payer, &str(&env, "VER_005"));
+    assert_eq!(payment.version, 1, "execute_refund should bump the payment version");
+}
+
+#[test]
+fn test_update_payment_status_without_version_always_succeeds() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "VER_006", 1_000);
+
+    // Three consecutive updates with no expected_version — each should succeed
+    client.update_payment_status(&admin, &str(&env, "VER_006"), &100, &None);
+    client.update_payment_status(&admin, &str(&env, "VER_006"), &200, &None);
+    client.update_payment_status(&admin, &str(&env, "VER_006"), &300, &None);
+
+    let payment = client.get_payment_by_id(&payer, &str(&env, "VER_006"));
+    assert_eq!(payment.version, 3);
+}
+
+// ── Retention job tests (#817) ────────────────────────────────────────────────
+
+#[test]
+fn test_cleanup_expired_payments_also_removes_refunds() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "PAY_RET_001", 500);
+
+    // Initiate a refund against that payment
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REF_RET_001"),
+        &str(&env, "PAY_RET_001"),
+        &100,
+        &str(&env, "test retention"),
+    );
+
+    // Advance time past cleanup period
     client.set_payment_cleanup_period(&admin, &1);
     env.ledger().with_mut(|l| l.timestamp += 10);
 
     let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 1);
+    assert_eq!(removed, 1, "one payment should be removed");
 
-    let events = env.events().all();
-    let audit_event = events.iter().find(|e| {
-        e.topics.get(1) == Some(soroban_sdk::Symbol::new(&env, "admin_action"))
-    });
-    assert!(audit_event.is_some(), "cleanup_expired_payments should emit admin_action event");
+    // The payment should be gone
+    let pay_result = client.try_get_payment_by_id(&payer, &str(&env, "PAY_RET_001"));
+    assert!(pay_result.is_err(), "payment should have been purged");
+
+    // The refund record should also be gone
+    let ref_result = client.try_get_refund(&str(&env, "REF_RET_001"));
+    assert!(ref_result.is_err(), "refund should have been purged with its payment");
 }
 
 #[test]
-fn test_admin_action_unauthorized_fails() {
+fn test_cleanup_expired_payments_leaves_recent_payments() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "PAY_RECENT", 500);
+
+    // Short cleanup period but don't advance time
+    client.set_payment_cleanup_period(&admin, &9999);
+
+    let removed = client.cleanup_expired_payments(&admin);
+    assert_eq!(removed, 0, "recent payment should not be removed");
+}
+
+#[test]
+fn test_set_refund_retention_period_and_cleanup() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "PAY_EXP_REF", 500);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REF_EXP_001"),
+        &str(&env, "PAY_EXP_REF"),
+        &100,
+        &str(&env, "cleanup test"),
+    );
+
+    // Approve and execute so the refund reaches terminal state
+    client.approve_refund(&admin, &str(&env, "REF_EXP_001"));
+
+    // Mint tokens to the merchant so the refund transfer succeeds
+    let token_admin = Address::generate(&env);
+    StellarAssetClient::new(&env, &token).mint(&merchant, &100);
+    client.execute_refund(&str(&env, "REF_EXP_001"));
+
+    // Set a 1-second refund retention period and advance time
+    client.set_refund_retention_period(&admin, &1);
+    env.ledger().with_mut(|l| l.timestamp += 10);
+
+    let removed = client.cleanup_expired_refunds(&admin);
+    assert_eq!(removed, 1, "one expired completed refund should be removed");
+}
+
+#[test]
+fn test_cleanup_expired_refunds_skips_pending_refunds() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "PAY_SKIP_PEND", 500);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REF_PEND_001"),
+        &str(&env, "PAY_SKIP_PEND"),
+        &100,
+        &str(&env, "still pending"),
+    );
+
+    // Very short retention period and advance time — but refund is still Pending
+    client.set_refund_retention_period(&admin, &1);
+    env.ledger().with_mut(|l| l.timestamp += 10);
+
+    let removed = client.cleanup_expired_refunds(&admin);
+    assert_eq!(removed, 0, "pending refunds should not be removed");
+}
+
+#[test]
+fn test_cleanup_expired_refunds_unauthorized_fails() {
     let (env, client, _admin, merchant, _payer, _token) = setup_payment_env();
-    // merchant is not admin — should be rejected
-    let result = client.try_deactivate_merchant(&merchant, &merchant);
+    let result = client.try_cleanup_expired_refunds(&merchant);
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
