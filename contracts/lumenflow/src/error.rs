@@ -64,12 +64,20 @@ pub enum PaymentError {
     InsufficientSignatures = 43,
     /// The multi-signature payment has already been cancelled. Remediation: No action needed.
     MultisigAlreadyCancelled = 44,
+    /// The multi-signature payment was cancelled and can no longer be signed or executed.
+    MultisigCancelled = 45,
+    /// The multi-signature payment has expired and can no longer be signed or executed.
+    MultisigExpired = 46,
 
     // Contract state
     /// The contract is currently paused. Remediation: An admin must unpause the contract.
     ContractPaused = 70,
     /// The payment history limit for this account has been exceeded. Remediation: Archive old payments.
     PaymentHistoryLimitExceeded = 71,
+    /// The number of refunds for a payment has exceeded the allowed maximum.
+    TooManyRefunds = 72,
+    /// The stored on-chain contract version does not match the compiled binary version.
+    VersionMismatch = 73,
 
     // General
     /// The provided input parameters are invalid. Remediation: Check the input values and format.

@@ -1429,7 +1429,10 @@ impl PaymentProcessingContract {
 
     /// Get refund status.
     ///
+    /// Access is restricted to the payer, the payment's merchant, or the admin.
+    ///
     /// # Arguments
+    /// * `caller` - Address of the requester. Must be the payer, merchant, or admin.
     /// * `refund_id` - The refund identifier to look up.
     ///
     /// # Returns
@@ -1437,8 +1440,30 @@ impl PaymentProcessingContract {
     ///
     /// # Errors
     /// * [`PaymentError::RefundNotFound`] — no refund exists with `refund_id`.
-    pub fn get_refund(env: Env, refund_id: String) -> Result<RefundRecord, PaymentError> {
-        storage::get_refund(&env, &refund_id).ok_or(PaymentError::RefundNotFound)
+    /// * [`PaymentError::Unauthorized`] — `caller` is not the payer, merchant, or admin.
+    pub fn get_refund(
+        env: Env,
+        caller: Address,
+        refund_id: String,
+    ) -> Result<RefundRecord, PaymentError> {
+        caller.require_auth();
+        let refund = storage::get_refund(&env, &refund_id).ok_or(PaymentError::RefundNotFound)?;
+        let is_admin = storage::get_admin(&env).map_or(false, |a| a == caller);
+        if !is_admin {
+            // Verify caller is the initiator of the refund or can access the payment
+            if caller != refund.initiator {
+                // Fall back to checking payment roles
+                if let Some(payment) = storage::get_payment(&env, &refund.order_id) {
+                    if caller != payment.payer && caller != payment.merchant_address {
+                        return Err(PaymentError::Unauthorized);
+                    }
+                } else {
+                    // Payment archived — only the refund initiator or admin may access
+                    return Err(PaymentError::Unauthorized);
+                }
+            }
+        }
+        Ok(refund)
     }
 
     // ── Multi-signature payments ──────────────────────────────────────────────

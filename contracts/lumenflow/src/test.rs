@@ -902,7 +902,7 @@ fn test_successful_refund_flow() {
     client.approve_refund(&merchant, &str(&env, "REFUND_001"));
     client.execute_refund(&str(&env, "REFUND_001"));
 
-    let refund = client.get_refund(&str(&env, "REFUND_001"));
+    let refund = client.get_refund(&payer, &str(&env, "REFUND_001"));
     assert!(matches!(
         refund.status,
         crate::types::RefundStatus::Completed
@@ -925,7 +925,7 @@ fn test_execute_pending_refund_fails() {
     let result = client.try_execute_refund(&str(&env, "REFUND_005"));
     assert_eq!(result, Err(Ok(PaymentError::RefundNotApproved)));
 
-    let refund = client.get_refund(&str(&env, "REFUND_005"));
+    let refund = client.get_refund(&payer, &str(&env, "REFUND_005"));
     assert!(matches!(refund.status, crate::types::RefundStatus::Pending));
 }
 
@@ -946,7 +946,7 @@ fn test_execute_rejected_refund_fails() {
     let result = client.try_execute_refund(&str(&env, "REFUND_006"));
     assert_eq!(result, Err(Ok(PaymentError::RefundNotApproved)));
 
-    let refund = client.get_refund(&str(&env, "REFUND_006"));
+    let refund = client.get_refund(&payer, &str(&env, "REFUND_006"));
     assert!(matches!(refund.status, crate::types::RefundStatus::Rejected));
 }
 
@@ -968,7 +968,7 @@ fn test_execute_completed_refund_fails() {
     let result = client.try_execute_refund(&str(&env, "REFUND_007"));
     assert_eq!(result, Err(Ok(PaymentError::RefundNotApproved)));
 
-    let refund = client.get_refund(&str(&env, "REFUND_007"));
+    let refund = client.get_refund(&payer, &str(&env, "REFUND_007"));
     assert!(matches!(refund.status, crate::types::RefundStatus::Completed));
 }
 
@@ -1172,7 +1172,7 @@ fn test_reject_refund() {
     );
     client.reject_refund(&merchant, &str(&env, "REFUND_004"));
 
-    let refund = client.get_refund(&str(&env, "REFUND_004"));
+    let refund = client.get_refund(&payer, &str(&env, "REFUND_004"));
     assert!(matches!(
         refund.status,
         crate::types::RefundStatus::Rejected
@@ -3717,7 +3717,7 @@ fn test_set_min_refund_amount_success() {
         &100,
         &str(&env, "At minimum"),
     );
-    let refund = client.get_refund(&str(&env, "REFUND_MRA1"));
+    let refund = client.get_refund(&payer, &str(&env, "REFUND_MRA1"));
     assert_eq!(refund.amount, 100);
 }
 
@@ -3748,7 +3748,7 @@ fn test_refund_above_minimum_succeeds() {
         &51,
         &str(&env, "Above minimum"),
     );
-    let refund = client.get_refund(&str(&env, "REFUND_MRA3"));
+    let refund = client.get_refund(&payer, &str(&env, "REFUND_MRA3"));
     assert_eq!(refund.amount, 51);
 }
 
@@ -3771,7 +3771,7 @@ fn test_min_refund_not_set_allows_any_positive() {
         &1,
         &str(&env, "Tiny refund"),
     );
-    let refund = client.get_refund(&str(&env, "REFUND_MRA4"));
+    let refund = client.get_refund(&payer, &str(&env, "REFUND_MRA4"));
     assert_eq!(refund.amount, 1);
 }
 
@@ -4160,7 +4160,7 @@ fn test_merchant_can_initiate_refund() {
         &str(&env, "merchant initiated"),
     );
 
-    let refund = client.get_refund(&str(&env, "RF_MINIT"));
+    let refund = client.get_refund(&merchant, &str(&env, "RF_MINIT"));
     assert!(matches!(refund.status, crate::types::RefundStatus::Pending));
 }
 
@@ -4534,4 +4534,73 @@ fn test_get_token_whitelist() {
     let list_after = client.get_token_whitelist();
     assert_eq!(list_after.len(), 1);
     assert!(list_after.contains(&token));
+}
+
+// ── Merchant-level authorization tests (#811) ─────────────────────────────────
+
+/// Payer can retrieve their own refund record.
+#[test]
+fn test_get_refund_allowed_for_payer() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "AUTH811_P", 1_000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "AUTH811_RF1"),
+        &str(&env, "AUTH811_P"),
+        &100,
+        &str(&env, "payer refund"),
+    );
+    // Payer should be allowed
+    let refund = client.get_refund(&payer, &str(&env, "AUTH811_RF1"));
+    assert_eq!(refund.amount, 100);
+}
+
+/// Merchant can retrieve a refund on their payment.
+#[test]
+fn test_get_refund_allowed_for_merchant() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "AUTH811_M", 1_000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "AUTH811_RF2"),
+        &str(&env, "AUTH811_M"),
+        &100,
+        &str(&env, "merchant access"),
+    );
+    // Merchant should be allowed
+    let refund = client.get_refund(&merchant, &str(&env, "AUTH811_RF2"));
+    assert_eq!(refund.amount, 100);
+}
+
+/// Admin can retrieve any refund record.
+#[test]
+fn test_get_refund_allowed_for_admin() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "AUTH811_A", 1_000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "AUTH811_RF3"),
+        &str(&env, "AUTH811_A"),
+        &100,
+        &str(&env, "admin access"),
+    );
+    let refund = client.get_refund(&admin, &str(&env, "AUTH811_RF3"));
+    assert_eq!(refund.amount, 100);
+}
+
+/// Unrelated address is rejected from accessing a refund record.
+#[test]
+fn test_get_refund_unauthorized_for_stranger() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "AUTH811_U", 1_000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "AUTH811_RF4"),
+        &str(&env, "AUTH811_U"),
+        &100,
+        &str(&env, "unauthorized"),
+    );
+    let stranger = Address::generate(&env);
+    let result = client.try_get_refund(&stranger, &str(&env, "AUTH811_RF4"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
