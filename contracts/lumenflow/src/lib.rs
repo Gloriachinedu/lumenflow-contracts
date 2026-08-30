@@ -230,6 +230,7 @@ impl PaymentProcessingContract {
             refunded_amount: 0,
             memo,
             tags,
+            version: 0,
         };
 
         storage::set_payment(&env, &payment);
@@ -309,6 +310,7 @@ impl PaymentProcessingContract {
                 paid_at: now,
                 refunded_amount: 0,
                 memo: item.memo.clone(),
+                version: 0,
             };
 
             storage::set_payment(&env, &payment);
@@ -370,16 +372,27 @@ impl PaymentProcessingContract {
     }
 
     /// Update payment status after a partial refund.
+    /// `expected_version` is an optional optimistic concurrency guard — if
+    /// provided it must match the current record version or the call returns
+    /// `VersionMismatch`.
     pub fn update_payment_status(
         env: Env,
         caller: Address,
         order_id: String,
         refunded_amount: i128,
+        expected_version: Option<u32>,
     ) -> Result<(), PaymentError> {
         let mut payment = storage::get_payment(&env, &order_id)
             .ok_or(PaymentError::PaymentNotFound)?;
 
         require_admin_or(&env, &caller, &payment.merchant_address.clone())?;
+
+        // Optimistic concurrency check
+        if let Some(ev) = expected_version {
+            if payment.version != ev {
+                return Err(PaymentError::VersionMismatch);
+            }
+        }
 
         payment.refunded_amount = refunded_amount;
         payment.status = if refunded_amount >= payment.amount {
@@ -387,6 +400,7 @@ impl PaymentProcessingContract {
         } else {
             PaymentStatus::PartiallyRefunded
         };
+        payment.version += 1;
         storage::set_payment(&env, &payment);
         Ok(())
     }
@@ -609,6 +623,7 @@ impl PaymentProcessingContract {
         } else {
             PaymentStatus::PartiallyRefunded
         };
+        payment.version += 1;
         storage::set_payment(&env, &payment);
 
         let mut r = refund;
@@ -952,6 +967,7 @@ impl PaymentProcessingContract {
             paid_at: now,
             refunded_amount: 0,
             memo: pr.memo,
+            version: 0,
         };
 
         storage::set_payment(&env, &payment);

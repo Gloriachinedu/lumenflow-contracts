@@ -597,3 +597,83 @@ fn test_is_registered() {
     
     assert!(client.is_registered(&merchant));
 }
+
+// ── Optimistic concurrency tests (#816) ──────────────────────────────────────
+
+#[test]
+fn test_payment_version_starts_at_zero() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "VER_001", 1_000);
+    let payment = client.get_payment_by_id(&payer, &str(&env, "VER_001"));
+    assert_eq!(payment.version, 0, "new payment should have version 0");
+}
+
+#[test]
+fn test_update_payment_status_increments_version() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "VER_002", 1_000);
+
+    client.update_payment_status(&admin, &str(&env, "VER_002"), &500, &None);
+    let payment = client.get_payment_by_id(&payer, &str(&env, "VER_002"));
+    assert_eq!(payment.version, 1, "version should be incremented after update");
+}
+
+#[test]
+fn test_update_payment_status_with_correct_version_succeeds() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "VER_003", 1_000);
+
+    // Pass expected version 0 — matches the initial value
+    client.update_payment_status(&admin, &str(&env, "VER_003"), &500, &Some(0));
+    let payment = client.get_payment_by_id(&payer, &str(&env, "VER_003"));
+    assert_eq!(payment.version, 1);
+}
+
+#[test]
+fn test_update_payment_status_with_stale_version_fails() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "VER_004", 1_000);
+
+    // First update succeeds; bumps version to 1
+    client.update_payment_status(&admin, &str(&env, "VER_004"), &200, &None);
+
+    // Second update with stale version 0 should fail
+    let result = client.try_update_payment_status(&admin, &str(&env, "VER_004"), &400, &Some(0));
+    assert_eq!(result, Err(Ok(PaymentError::VersionMismatch)));
+}
+
+#[test]
+fn test_execute_refund_increments_payment_version() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "VER_005", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "RVER_001"),
+        &str(&env, "VER_005"),
+        &200,
+        &str(&env, "version test"),
+    );
+    client.approve_refund(&admin, &str(&env, "RVER_001"));
+
+    // Mint tokens to merchant for the refund transfer
+    StellarAssetClient::new(&env, &token).mint(&merchant, &200);
+    client.execute_refund(&str(&env, "RVER_001"));
+
+    let payment = client.get_payment_by_id(&payer, &str(&env, "VER_005"));
+    assert_eq!(payment.version, 1, "execute_refund should bump the payment version");
+}
+
+#[test]
+fn test_update_payment_status_without_version_always_succeeds() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "VER_006", 1_000);
+
+    // Three consecutive updates with no expected_version — each should succeed
+    client.update_payment_status(&admin, &str(&env, "VER_006"), &100, &None);
+    client.update_payment_status(&admin, &str(&env, "VER_006"), &200, &None);
+    client.update_payment_status(&admin, &str(&env, "VER_006"), &300, &None);
+
+    let payment = client.get_payment_by_id(&payer, &str(&env, "VER_006"));
+    assert_eq!(payment.version, 3);
+}
