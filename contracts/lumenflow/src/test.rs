@@ -8423,3 +8423,242 @@ fn alloc_str(n: u32) -> &'static str {
         _ => "BND_XX",
     }
 }
+
+// ── Replay-protection tests (#828) ───────────────────────────────────────────
+// Verify that every signed / ID-keyed operation is idempotent-safe:
+// a second submission with the same identifier must be rejected.
+
+/// Replaying a process_payment_with_signature call with the same order_id fails.
+#[test]
+fn test_replay_payment_with_same_order_id_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // First submission succeeds.
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "REPLAY_ORD_001"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+
+    // Replaying the exact same signed payload must be rejected.
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "REPLAY_ORD_001"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::PaymentAlreadyExists)),
+        "replay of order_id must be rejected"
+    );
+}
+
+/// Replaying with a different payer but the same order_id is also blocked.
+#[test]
+fn test_replay_payment_different_payer_same_order_id_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let other_payer = Address::generate(&env);
+    mint(&env, &token, &Address::generate(&env), &other_payer, 5_000);
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "REPLAY_ORD_002"),
+        &merchant,
+        &token,
+        &50,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+
+    // A different payer attempting to re-use the same order_id must fail.
+    let result = client.try_process_payment_with_signature(
+        &other_payer,
+        &str(&env, "REPLAY_ORD_002"),
+        &merchant,
+        &token,
+        &50,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::PaymentAlreadyExists)),
+        "order_id is global; different payer cannot reuse it"
+    );
+}
+
+/// Replaying a refund initiation with the same refund_id fails.
+#[test]
+fn test_replay_refund_initiation_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "REPLAY_ORD_R", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REPLAY_REF_001"),
+        &str(&env, "REPLAY_ORD_R"),
+        &200,
+        &str(&env, "first"),
+    );
+
+    // Submitting the same refund_id a second time must fail.
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "REPLAY_REF_001"),
+        &str(&env, "REPLAY_ORD_R"),
+        &200,
+        &str(&env, "duplicate"),
+    );
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::RefundAlreadyExists)),
+        "refund_id replay must be rejected"
+    );
+}
+
+/// Executing an already-executed multisig payment is blocked.
+#[test]
+fn test_replay_multisig_execution_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "REPLAY_MS_001"),
+        &merchant,
+        &token,
+        &300,
+        &signers,
+        &1,
+    );
+    client.sign_multisig_payment(&signer, &str(&env, "REPLAY_MS_001"), &bytes(&env, &[1u8; 64]));
+    client.execute_multisig_payment(&payer, &str(&env, "REPLAY_MS_001"));
+
+    // Second execution of the same payment must fail.
+    let result = client.try_execute_multisig_payment(&payer, &str(&env, "REPLAY_MS_001"));
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::MultisigAlreadyExecuted)),
+        "multisig payment cannot be executed twice"
+    );
+}
+
+/// Initiating a multisig payment with a duplicate payment_id fails.
+#[test]
+fn test_replay_multisig_initiation_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "REPLAY_MS_002"),
+        &merchant,
+        &token,
+        &100,
+        &signers,
+        &1,
+    );
+
+    // Attempting to re-initiate with the same payment_id must be blocked.
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "REPLAY_MS_002"),
+        &merchant,
+        &token,
+        &100,
+        &signers,
+        &1,
+    );
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::PaymentAlreadyExists)),
+        "multisig payment_id replay must be rejected"
+    );
+}
+
+/// Approving an already-completed refund is blocked (no double-approval).
+#[test]
+fn test_replay_refund_approval_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "REPLAY_ORD_RA", 500);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REPLAY_REF_RA"),
+        &str(&env, "REPLAY_ORD_RA"),
+        &100,
+        &str(&env, "ok"),
+    );
+    client.approve_refund(&merchant, &str(&env, "REPLAY_REF_RA"));
+
+    // Approving again once already approved must fail.
+    let result = client.try_approve_refund(&merchant, &str(&env, "REPLAY_REF_RA"));
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::RefundAlreadyCompleted)),
+        "refund can only be approved once"
+    );
+}
+
+/// Batch payment rejects a batch that contains an already-used order_id.
+#[test]
+fn test_replay_in_batch_payment_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // Register order_id beforehand.
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "REPLAY_BATCH_EXISTS"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+
+    // A batch that includes the already-used order_id must be rejected.
+    let mut payments = Vec::new(&env);
+    payments.push_back(BatchPaymentItem {
+        order_id: str(&env, "REPLAY_BATCH_EXISTS"),
+        merchant_address: merchant.clone(),
+        token_address: token.clone(),
+        amount: 100,
+        memo: str(&env, ""),
+        signature: bytes(&env, &[0u8; 64]),
+        merchant_public_key: bytes(&env, &[0u8; 32]),
+    });
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::PaymentAlreadyExists)),
+        "batch containing existing order_id must fail"
+    );
+}
