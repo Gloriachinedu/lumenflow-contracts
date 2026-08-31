@@ -123,3 +123,23 @@ Signed double-submit-cookie tokens in `csrfProtection.ts` (no server store):
 - `isSafeMethod(method)` — method exemption helper.
 
 Enforce on every state-changing request from a cookie-authenticated browser.
+
+## Redaction of sensitive values from logs (#892)
+
+`logRedaction.ts` scrubs credentials before they reach application or
+deployment logs. It is defence-in-depth — do not deliberately log secrets —
+but it protects the values you cannot fully control (caught errors, upstream
+response bodies, request dumps).
+
+- `redactString(text)` — replaces Stellar secret keys, PEM private-key blocks,
+  `Bearer`/`Basic` `Authorization` values, GitHub/AWS tokens, and
+  secret-looking `key=value` assignments with `[REDACTED]`, keeping the field
+  name / scheme so the line stays readable.
+- `redactSecrets(value)` — recursively redacts an arbitrary value (strings,
+  arrays, nested plain objects); values under a known secret key
+  (`authorization`, `password`, `secret`, `token`, `seed`, `*_key`, …) are
+  replaced wholesale. Cycles are handled; the input is never mutated.
+- `redactingLogger(sink)` — wraps `console.*` or a structured logger so every
+  argument is passed through `redactSecrets` first.
+
+See [log-redaction.md](./log-redaction.md) for operational guidance.
