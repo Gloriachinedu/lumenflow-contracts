@@ -8141,3 +8141,524 @@ fn test_dependency_status_all_ok() {
     let merchant_dep = deps.iter().find(|d| d.name == String::from_str(&env, "merchant_registry")).unwrap();
     assert!(merchant_dep.available);
 }
+
+// ── Saturating arithmetic / boundary-value tests (#829) ──────────────────────
+// Exercise i128 / u64 boundaries and verify saturating_add / saturating_sub
+// used in cleanup, TTL expiry, and stats do not panic or wrap.
+
+/// Amount of exactly 1 (minimum valid) is accepted.
+#[test]
+fn test_minimum_valid_amount_accepted() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "BNDRY_MIN"),
+        &merchant,
+        &token,
+        &1,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    let p = client.get_payment_by_id(&payer, &str(&env, "BNDRY_MIN"));
+    assert_eq!(p.amount, 1);
+}
+
+/// Amount of 0 is rejected as InvalidAmount.
+#[test]
+fn test_zero_amount_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "BNDRY_ZERO"),
+        &merchant,
+        &token,
+        &0,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+}
+
+/// Negative amount is rejected as InvalidAmount.
+#[test]
+fn test_negative_amount_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "BNDRY_NEG"),
+        &merchant,
+        &token,
+        &-1,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+}
+
+/// i128::MIN is rejected as InvalidAmount.
+#[test]
+fn test_i128_min_amount_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "BNDRY_I128_MIN"),
+        &merchant,
+        &token,
+        &i128::MIN,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+}
+
+/// Refund of exactly the original amount succeeds (boundary: refunded_amount == amount).
+#[test]
+fn test_refund_exactly_full_amount_succeeds() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "BNDRY_FULL_R", 500);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "BNDRY_FULL_REF"),
+        &str(&env, "BNDRY_FULL_R"),
+        &500, // exactly original amount
+        &str(&env, "full refund"),
+    );
+    let refund = client.get_refund(&str(&env, "BNDRY_FULL_REF"));
+    assert!(matches!(refund.status, crate::types::RefundStatus::Pending));
+}
+
+/// Refund of original_amount + 1 fails (boundary: one over).
+#[test]
+fn test_refund_one_over_original_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "BNDRY_OVER_R", 500);
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "BNDRY_OVER_REF"),
+        &str(&env, "BNDRY_OVER_R"),
+        &501,
+        &str(&env, "one over"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundExceedsOriginal)));
+}
+
+/// Cleanup with a period of 0 removes all payments (saturating_sub(0) == timestamp).
+#[test]
+fn test_cleanup_period_zero_removes_all() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "BNDRY_CLEAN_1", 100);
+    make_payment(&env, &client, &merchant, &payer, &token, "BNDRY_CLEAN_2", 200);
+
+    // Period = 0: cutoff == current timestamp, all payments are "expired".
+    client.set_payment_cleanup_period(&admin, &0);
+
+    // Advance time by 1 so paid_at < cutoff.
+    env.ledger().with_mut(|l| l.timestamp += 1);
+
+    let removed = client.cleanup_expired_payments(&admin);
+    assert_eq!(removed, 2, "all payments should be cleaned up with period=0");
+}
+
+/// Cleanup with u64::MAX period keeps all payments (saturating_sub wraps to 0).
+#[test]
+fn test_cleanup_period_u64_max_keeps_all() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "BNDRY_KEEP_1", 100);
+
+    // Period = u64::MAX: cutoff = timestamp.saturating_sub(u64::MAX) == 0,
+    // so no payment can be older than the epoch.
+    client.set_payment_cleanup_period(&admin, &u64::MAX);
+
+    let removed = client.cleanup_expired_payments(&admin);
+    assert_eq!(removed, 0, "no payments should be removed with period=u64::MAX");
+}
+
+/// Payment request with TTL = 0 expires immediately (saturating_add(0) == timestamp).
+#[test]
+fn test_payment_request_ttl_zero_expires_immediately() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    client.create_payment_request(
+        &merchant,
+        &str(&env, "BNDRY_REQ_ZERO_TTL"),
+        &token,
+        &100,
+        &str(&env, ""),
+        &0,
+    );
+
+    // Advance time by 1 so expires_at < now.
+    env.ledger().with_mut(|l| l.timestamp += 1);
+
+    let result = client.try_pay_payment_request(&payer, &str(&env, "BNDRY_REQ_ZERO_TTL"));
+    assert_eq!(result, Err(Ok(PaymentError::PaymentExpired)));
+}
+
+/// Batch of exactly 10 items (maximum allowed) succeeds.
+#[test]
+fn test_batch_max_size_succeeds() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let mut payments = Vec::new(&env);
+    for i in 0u32..10 {
+        let id = String::from_str(&env, &alloc_str(i));
+        payments.push_back(BatchPaymentItem {
+            order_id: id,
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 1,
+            memo: str(&env, ""),
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        });
+    }
+    client.batch_payment(&payer, &payments);
+}
+
+/// Batch of exactly 11 items (one over maximum) is rejected.
+#[test]
+fn test_batch_one_over_max_size_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let mut payments = Vec::new(&env);
+    for i in 0u32..11 {
+        let id = String::from_str(&env, &alloc_str(i));
+        payments.push_back(BatchPaymentItem {
+            order_id: id,
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 1,
+            memo: str(&env, ""),
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        });
+    }
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::BatchSizeExceeded)));
+}
+
+/// Pagination limit of 1 returns exactly one item and sets next_cursor.
+#[test]
+fn test_pagination_limit_one() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "PAGE1_A", 100);
+    make_payment(&env, &client, &merchant, &payer, &token, "PAGE1_B", 200);
+
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &1,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page.payments.len(), 1);
+    assert!(page.next_cursor.is_some());
+}
+
+/// Pagination limit of 0 is rejected.
+#[test]
+fn test_pagination_limit_zero_rejected() {
+    let (env, client, _admin, merchant, _payer, _token) = setup_payment_env();
+    let result = client.try_get_merchant_payment_history(
+        &merchant,
+        &None,
+        &0,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::PaginationLimitExceeded)));
+}
+
+/// Pagination limit of MAX_PAGE_LIMIT + 1 is rejected.
+#[test]
+fn test_pagination_limit_over_max_rejected() {
+    let (env, client, _admin, merchant, _payer, _token) = setup_payment_env();
+    let result = client.try_get_merchant_payment_history(
+        &merchant,
+        &None,
+        &101, // MAX_PAGE_LIMIT is 100
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::PaginationLimitExceeded)));
+}
+
+// Helper: produce a short unique string from an integer (no_std compatible).
+fn alloc_str(n: u32) -> &'static str {
+    match n {
+        0 => "BND_00",
+        1 => "BND_01",
+        2 => "BND_02",
+        3 => "BND_03",
+        4 => "BND_04",
+        5 => "BND_05",
+        6 => "BND_06",
+        7 => "BND_07",
+        8 => "BND_08",
+        9 => "BND_09",
+        10 => "BND_10",
+        _ => "BND_XX",
+    }
+}
+
+// ── Replay-protection tests (#828) ───────────────────────────────────────────
+// Verify that every signed / ID-keyed operation is idempotent-safe:
+// a second submission with the same identifier must be rejected.
+
+/// Replaying a process_payment_with_signature call with the same order_id fails.
+#[test]
+fn test_replay_payment_with_same_order_id_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // First submission succeeds.
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "REPLAY_ORD_001"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+
+    // Replaying the exact same signed payload must be rejected.
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "REPLAY_ORD_001"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::PaymentAlreadyExists)),
+        "replay of order_id must be rejected"
+    );
+}
+
+/// Replaying with a different payer but the same order_id is also blocked.
+#[test]
+fn test_replay_payment_different_payer_same_order_id_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let other_payer = Address::generate(&env);
+    mint(&env, &token, &Address::generate(&env), &other_payer, 5_000);
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "REPLAY_ORD_002"),
+        &merchant,
+        &token,
+        &50,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+
+    // A different payer attempting to re-use the same order_id must fail.
+    let result = client.try_process_payment_with_signature(
+        &other_payer,
+        &str(&env, "REPLAY_ORD_002"),
+        &merchant,
+        &token,
+        &50,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::PaymentAlreadyExists)),
+        "order_id is global; different payer cannot reuse it"
+    );
+}
+
+/// Replaying a refund initiation with the same refund_id fails.
+#[test]
+fn test_replay_refund_initiation_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "REPLAY_ORD_R", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REPLAY_REF_001"),
+        &str(&env, "REPLAY_ORD_R"),
+        &200,
+        &str(&env, "first"),
+    );
+
+    // Submitting the same refund_id a second time must fail.
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "REPLAY_REF_001"),
+        &str(&env, "REPLAY_ORD_R"),
+        &200,
+        &str(&env, "duplicate"),
+    );
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::RefundAlreadyExists)),
+        "refund_id replay must be rejected"
+    );
+}
+
+/// Executing an already-executed multisig payment is blocked.
+#[test]
+fn test_replay_multisig_execution_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "REPLAY_MS_001"),
+        &merchant,
+        &token,
+        &300,
+        &signers,
+        &1,
+    );
+    client.sign_multisig_payment(&signer, &str(&env, "REPLAY_MS_001"), &bytes(&env, &[1u8; 64]));
+    client.execute_multisig_payment(&payer, &str(&env, "REPLAY_MS_001"));
+
+    // Second execution of the same payment must fail.
+    let result = client.try_execute_multisig_payment(&payer, &str(&env, "REPLAY_MS_001"));
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::MultisigAlreadyExecuted)),
+        "multisig payment cannot be executed twice"
+    );
+}
+
+/// Initiating a multisig payment with a duplicate payment_id fails.
+#[test]
+fn test_replay_multisig_initiation_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "REPLAY_MS_002"),
+        &merchant,
+        &token,
+        &100,
+        &signers,
+        &1,
+    );
+
+    // Attempting to re-initiate with the same payment_id must be blocked.
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "REPLAY_MS_002"),
+        &merchant,
+        &token,
+        &100,
+        &signers,
+        &1,
+    );
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::PaymentAlreadyExists)),
+        "multisig payment_id replay must be rejected"
+    );
+}
+
+/// Approving an already-completed refund is blocked (no double-approval).
+#[test]
+fn test_replay_refund_approval_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "REPLAY_ORD_RA", 500);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "REPLAY_REF_RA"),
+        &str(&env, "REPLAY_ORD_RA"),
+        &100,
+        &str(&env, "ok"),
+    );
+    client.approve_refund(&merchant, &str(&env, "REPLAY_REF_RA"));
+
+    // Approving again once already approved must fail.
+    let result = client.try_approve_refund(&merchant, &str(&env, "REPLAY_REF_RA"));
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::RefundAlreadyCompleted)),
+        "refund can only be approved once"
+    );
+}
+
+/// Batch payment rejects a batch that contains an already-used order_id.
+#[test]
+fn test_replay_in_batch_payment_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // Register order_id beforehand.
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "REPLAY_BATCH_EXISTS"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &None,
+        &sig,
+        &pub_key,
+    );
+
+    // A batch that includes the already-used order_id must be rejected.
+    let mut payments = Vec::new(&env);
+    payments.push_back(BatchPaymentItem {
+        order_id: str(&env, "REPLAY_BATCH_EXISTS"),
+        merchant_address: merchant.clone(),
+        token_address: token.clone(),
+        amount: 100,
+        memo: str(&env, ""),
+        signature: bytes(&env, &[0u8; 64]),
+        merchant_public_key: bytes(&env, &[0u8; 32]),
+    });
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::PaymentAlreadyExists)),
+        "batch containing existing order_id must fail"
+    );
+}

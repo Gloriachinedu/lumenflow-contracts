@@ -34,5 +34,5 @@ coverage/
 # Smoke test: ephemeral npm cache for generate_smoke_keypair.sh
 scripts/.smoke_node_modules/
 
-# Terraform local plan artifacts (drift detection output)
-.terraform-artifacts/
+# Local backup bundles (produced by scripts/backup-manager.mjs)
+backup-bundle/
