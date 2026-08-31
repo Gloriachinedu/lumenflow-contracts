@@ -22,4 +22,4 @@ export * from "./wallet";
 export * from "./idempotency";
 export * from "./eventCatalog";
 export * from "./security";
-export * from "./webhookStatus";
+export * from "./lazyRoute";
