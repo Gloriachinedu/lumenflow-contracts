@@ -8,10 +8,17 @@ on:
 permissions:
   contents: write
 
+# Prevent concurrent deploys to the same ref; never cancel an in-progress deploy
+# to avoid leaving the contract in an indeterminate state.
+concurrency:
+  group: deploy-testnet-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   deploy:
     name: Deploy + Smoke Test
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
