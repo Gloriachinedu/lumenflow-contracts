@@ -281,6 +281,18 @@ Emitted when a pre-generated payment request is paid by a user.
 
 ---
 
+### `payment_request_cancelled`
+Emitted when a payment request is cancelled early by its merchant or removed by
+the admin bulk-cleanup call.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful call to `cancel_payment_request`, or each request removed by `cancel_expired_payment_requests`. |
+| **Topics** | `["lumenflow", "payment_request_cancelled"]` |
+| **Data** | `request_id: String` |
+
+---
+
 ## Subscribing to Events
 
 You can subscribe to LumenFlow events using any Stellar SDK or by querying Horizon/RPC directly.

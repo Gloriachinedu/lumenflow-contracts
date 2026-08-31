@@ -69,6 +69,34 @@ jobs:
           echo "Contract ID: \`$CONTRACT_ID\`" >> "$GITHUB_STEP_SUMMARY"
           echo "Deployed contract: $CONTRACT_ID"
 
+      # ── Publish deployment version + commit metadata ─────────────────────
+      - name: Publish deployment metadata to runtime diagnostics
+        env:
+          CONTRACT_ID: ${{ steps.deploy.outputs.contract_id }}
+        run: |
+          set -euo pipefail
+          VERSION=$(grep '^version' contracts/lumenflow/Cargo.toml | head -1 | sed 's/.*= *"\(.*\)"/\1/')
+          mkdir -p smoke-results
+          cat > smoke-results/deployment-metadata.json <<EOF
+          {
+            "version": "$VERSION",
+            "commit": "${{ github.sha }}",
+            "ref": "${{ github.ref_name }}",
+            "contract_id": "$CONTRACT_ID",
+            "network": "testnet",
+            "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          }
+          EOF
+          echo "LUMENFLOW_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "LUMENFLOW_COMMIT=${{ github.sha }}" >> "$GITHUB_ENV"
+          {
+            echo "## 📦 Deployment metadata"
+            echo '```json'
+            cat smoke-results/deployment-metadata.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # ── Smoke Test ────────────────────────────────────────────────────────
       - name: Run smoke test
         id: smoke

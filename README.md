@@ -172,15 +172,16 @@ rustup target add wasm32-unknown-unknown
 ```
 lumenflow-contracts/
 ├── contracts/
-│   └── lumenflow/
-│       ├── Cargo.toml
-│       └── src/
-│           ├── lib.rs        # Contract entry points
-│           ├── types.rs      # Data structures
-│           ├── storage.rs    # Persistent storage helpers
-│           ├── error.rs      # Typed error codes
-│           ├── helper.rs     # Auth & validation utilities
-│           └── test.rs       # Unit tests
+│   ├── lumenflow/
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs        # Contract entry points
+│   │       ├── types.rs      # Data structures
+│   │       ├── storage.rs    # Persistent storage helpers
+│   │       ├── error.rs      # Typed error codes
+│   │       ├── helper.rs     # Auth & validation utilities
+│   │       └── test.rs       # Unit tests
+│   └── router/               # Payment router contract
 ├── scripts/
 │   ├── deploy.sh             # Build + deploy helper
 │   └── test.sh               # Lint + test runner
@@ -679,6 +680,14 @@ stellar contract invoke --id $CONTRACT_ID --source-account $MERCHANT_KEY --netwo
 # Pay a payment request
 stellar contract invoke --id $CONTRACT_ID --source-account $PAYER_KEY --network $NETWORK \
   -- pay_payment_request --payer $PAYER_ADDR --request_id "REQ_001"
+
+# Cancel an unexpired payment request early (merchant only)
+stellar contract invoke --id $CONTRACT_ID --source-account $MERCHANT_KEY --network $NETWORK \
+  -- cancel_payment_request --caller $MERCHANT_ADDR --request_id "REQ_001"
+
+# Bulk-remove all expired payment requests (admin only)
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- cancel_expired_payment_requests --admin $ADMIN_ADDR
 ```
 
 ### Payment History Queries
@@ -928,7 +937,7 @@ so that anyone can confirm the on-chain binary matches the open-source code.
 
 ```bash
 # 1. Clone the repo at the release tag
-git clone https://github.com/PrincessnJoy/lumenflow-contracts.git
+git clone https://github.com/Gloriachinedu/lumenflow-contracts.git
 cd lumenflow-contracts
 git checkout v1.0.0          # replace with the target version
 
@@ -953,7 +962,7 @@ A passing run prints `✅  Hash match — build is reproducible for v1.0.0.`
 
 ```bash
 # Download the released artifact from GitHub Releases
-curl -LO https://github.com/PrincessnJoy/lumenflow-contracts/releases/download/v1.0.0/lumenflow_v1.0.0.wasm.sha256
+curl -LO https://github.com/Gloriachinedu/lumenflow-contracts/releases/download/v1.0.0/lumenflow_v1.0.0.wasm.sha256
 cat lumenflow_v1.0.0.wasm.sha256
 ```
 
@@ -1013,9 +1022,9 @@ The server watches `**/*.html`, `**/*.css`, and `**/*.js` inside `frontend/` and
 Need help or want to discuss LumenFlow?
 
 - **Discord Server:** Join our [Discord community](https://discord.gg/lumenflow) to chat with developers and other users.
-- **Q&A Discussions:** Ask questions in [GitHub Discussions — Q&A](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/q-a).
-- **Developer Help:** SDK, deployment, and tooling questions in [Developer Help](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/developer-help).
-- **Feature Requests:** Propose and discuss new features in [Feature Requests](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/feature-requests).
+- **Q&A Discussions:** Ask questions in [GitHub Discussions — Q&A](https://github.com/Gloriachinedu/lumenflow-contracts/discussions/categories/q-a).
+- **Developer Help:** SDK, deployment, and tooling questions in [Developer Help](https://github.com/Gloriachinedu/lumenflow-contracts/discussions/categories/developer-help).
+- **Feature Requests:** Propose and discuss new features in [Feature Requests](https://github.com/Gloriachinedu/lumenflow-contracts/discussions/categories/feature-requests).
 - **Support Guidelines:** See [SUPPORT.md](SUPPORT.md) for where to get help and how to report bugs.
 
 ---

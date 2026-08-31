@@ -38,7 +38,13 @@ Releases are automated via `.github/workflows/release.yml` and triggered by push
    `contracts/lumenflow/Cargo.toml` or `sdk/package.json`. This prevents mismatched
    release artefacts.
 
-2. **release** job (runs after validation passes):
+2. **container-scan** job — runs [Trivy](https://github.com/aquasecurity/trivy) against
+   every container image shipped in the project's compose stack
+   (`stellar/quickstart:latest`, `ubuntu:22.04`). A fixable `CRITICAL` vulnerability
+   in any image fails the release gate; results are also uploaded to the repository's
+   **Security → Code scanning** tab as SARIF.
+
+3. **release** job (runs after validation and the container scan pass):
    - Builds the WASM artefact with `cargo build --locked --release`.
    - Enforces the 100 KB WASM size limit.
    - Creates a GitHub Release with auto-generated release notes

@@ -7017,6 +7017,82 @@ mod ledger_edge_cases {
         client.pay_payment_request(&payer, &str(&env, "PR_EXACT"));
     }
 
+    // ── Payment request cancellation / cleanup ────────────────────────────────
+
+    #[test]
+    fn test_cancel_payment_request_before_expiry_succeeds() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        set_ledger(&env, 5_000, 10);
+        client.create_payment_request(
+            &merchant, &str(&env, "PR_CANCEL"), &token, &200, &str(&env, "memo"), &1_000u64,
+        );
+
+        client.cancel_payment_request(&merchant, &str(&env, "PR_CANCEL"));
+
+        // Request is gone: paying it now fails with PaymentNotFound.
+        let result = client.try_pay_payment_request(&payer, &str(&env, "PR_CANCEL"));
+        assert_eq!(result, Err(Ok(PaymentError::PaymentNotFound)));
+    }
+
+    #[test]
+    fn test_cancel_payment_request_by_non_merchant_fails() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        set_ledger(&env, 5_000, 10);
+        client.create_payment_request(
+            &merchant, &str(&env, "PR_NOAUTH"), &token, &200, &str(&env, "memo"), &1_000u64,
+        );
+
+        let result = client.try_cancel_payment_request(&payer, &str(&env, "PR_NOAUTH"));
+        assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+    }
+
+    #[test]
+    fn test_pay_expired_payment_request_fails() {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        set_ledger(&env, 5_000, 10);
+        client.create_payment_request(
+            &merchant, &str(&env, "PR_EXP2"), &token, &200, &str(&env, "memo"), &1_000u64,
+        );
+        set_ledger(&env, 6_001, 11);
+        let result = client.try_pay_payment_request(&payer, &str(&env, "PR_EXP2"));
+        assert_eq!(result, Err(Ok(PaymentError::PaymentExpired)));
+    }
+
+    #[test]
+    fn test_cancel_expired_payment_requests_removes_only_expired() {
+        let (env, client, admin, merchant, payer, token) = setup_payment_env();
+        set_ledger(&env, 5_000, 10);
+        client.create_payment_request(
+            &merchant, &str(&env, "PR_OLD"), &token, &100, &str(&env, "old"), &1_000u64,
+        );
+        client.create_payment_request(
+            &merchant, &str(&env, "PR_NEW"), &token, &100, &str(&env, "new"), &10_000u64,
+        );
+
+        // Advance past PR_OLD's expiry but not PR_NEW's.
+        set_ledger(&env, 7_000, 11);
+        let removed = client.cancel_expired_payment_requests(&admin);
+        assert_eq!(removed, 1);
+
+        assert_eq!(
+            client.try_pay_payment_request(&payer, &str(&env, "PR_OLD")),
+            Err(Ok(PaymentError::PaymentNotFound))
+        );
+        // PR_NEW is still payable.
+        client.pay_payment_request(&payer, &str(&env, "PR_NEW"));
+    }
+
+    #[test]
+    fn test_cancel_expired_payment_requests_requires_admin() {
+        let (env, client, _admin, merchant, _payer, token) = setup_payment_env();
+        set_ledger(&env, 5_000, 10);
+        client.create_payment_request(
+            &merchant, &str(&env, "PR_X"), &token, &100, &str(&env, "x"), &1_000u64,
+        );
+        let result = client.try_cancel_expired_payment_requests(&merchant);
+        assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+    }
+
     // ── Sequence number edge cases ────────────────────────────────────────────
 
     #[test]

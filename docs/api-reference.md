@@ -1414,6 +1414,52 @@ Pay a payment request. The payer must sign the call. Emits `lumenflow/payment_re
 | 24 | [`PaymentExpired`](errors.md#payment-errors) | Payment request has passed its TTL. |
 | 25 | [`InsufficientBalance`](errors.md#payment-errors) | Payer does not have sufficient token balance. |
 
+### `cancel_payment_request`
+
+```rust
+pub fn cancel_payment_request(env: Env, caller: Address, request_id: String) -> Result<(), PaymentError>
+```
+
+Cancel a not-yet-expired payment request early. Only the merchant that created
+the request may cancel it. Emits `lumenflow/payment_request_cancelled`.
+
+| Parameter    | Type      | Required | Example |
+|--------------|-----------|----------|---------|
+| `caller`     | `Address` | Yes (must sign) | `GMERCHANT…` |
+| `request_id` | `String`  | Yes      | `"REQ-001"` |
+
+**Returns:** `()` on success.
+
+**Errors:**
+
+| Code | Name | Condition |
+|------|------|-----------|
+| 1 | [`Unauthorized`](errors.md#auth-errors) | `caller` is not the request's merchant. |
+| 20 | [`PaymentNotFound`](errors.md#payment-errors) | No payment request with `request_id`. |
+
+### `cancel_expired_payment_requests`
+
+```rust
+pub fn cancel_expired_payment_requests(env: Env, admin: Address) -> Result<u32, PaymentError>
+```
+
+Admin-only maintenance call that removes every payment request whose `expires_at`
+has elapsed, reclaiming ledger storage. Emits one
+`lumenflow/payment_request_cancelled` event per removed request and returns the
+number of requests removed.
+
+| Parameter | Type      | Required | Example |
+|-----------|-----------|----------|---------|
+| `admin`   | `Address` | Yes (must sign) | `GADMIN…` |
+
+**Returns:** `u32` — number of expired requests removed.
+
+**Errors:**
+
+| Code | Name | Condition |
+|------|------|-----------|
+| 1 | [`Unauthorized`](errors.md#auth-errors) | `admin` is not the configured administrator. |
+
 ---
 
 ## Data Types
