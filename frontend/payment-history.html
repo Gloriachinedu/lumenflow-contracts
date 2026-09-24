@@ -179,6 +179,48 @@
       color: #6c47ff;
       font-size: 0.9rem;
     }
+
+    .skeleton-row,
+    .skeleton-card {
+      position: relative;
+      overflow: hidden;
+      background: #f0f2f5;
+    }
+    .skeleton-row::after,
+    .skeleton-card::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      transform: translateX(-100%);
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.7), transparent);
+      animation: shimmer 1.4s infinite;
+    }
+    .skeleton-row td { height: 3.3rem; }
+    .skeleton-line {
+      display: block;
+      width: 70%;
+      height: 0.8rem;
+      border-radius: 4px;
+      background: #dfe3e8;
+    }
+    .skeleton-line.short { width: 42%; }
+    .skeleton-card {
+      height: 7.8rem;
+      margin-bottom: 0.85rem;
+      border-radius: 12px;
+    }
+    @keyframes shimmer { 100% { transform: translateX(100%); } }
+    @media (prefers-reduced-motion: reduce) {
+      .skeleton-row::after,
+      .skeleton-card::after { animation: none; }
+    }
+    @media (prefers-color-scheme: dark) {
+      .skeleton-row,
+      .skeleton-card { background: #252936; }
+      .skeleton-line { background: #343a4a; }
+      .skeleton-row::after,
+      .skeleton-card::after { background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent); }
+    }
     .empty .empty-title { font-size: 1rem; font-weight: 700; color: #444; margin: 0.75rem 0 0.35rem; }
     .empty .empty-sub { font-size: 0.875rem; color: #888; }
     /* ── Copy button ─────────────────────────────────────────────────────── */
@@ -354,12 +396,22 @@
         <th scope="col" onclick="sortBy('paid_at')">Date <span class="sort-icon" aria-hidden="true">↕</span></th>
       </tr>
     </thead>
-    <tbody id="table-body"></tbody>
+    <tbody id="table-body" aria-busy="true" aria-label="Loading payment history">
+      <tr class="skeleton-row" aria-hidden="true"><td><span class="skeleton-line"></span></td><td><span class="skeleton-line"></span></td><td><span class="skeleton-line short"></span></td><td><span class="skeleton-line short"></span></td><td><span class="skeleton-line short"></span></td></tr>
+      <tr class="skeleton-row" aria-hidden="true"><td><span class="skeleton-line"></span></td><td><span class="skeleton-line"></span></td><td><span class="skeleton-line short"></span></td><td><span class="skeleton-line short"></span></td><td><span class="skeleton-line short"></span></td></tr>
+      <tr class="skeleton-row" aria-hidden="true"><td><span class="skeleton-line"></span></td><td><span class="skeleton-line"></span></td><td><span class="skeleton-line short"></span></td><td><span class="skeleton-line short"></span></td><td><span class="skeleton-line short"></span></td></tr>
+      <tr class="skeleton-row" aria-hidden="true"><td><span class="skeleton-line"></span></td><td><span class="skeleton-line"></span></td><td><span class="skeleton-line short"></span></td><td><span class="skeleton-line short"></span></td><td><span class="skeleton-line short"></span></td></tr>
+      <tr class="skeleton-row" aria-hidden="true"><td><span class="skeleton-line"></span></td><td><span class="skeleton-line"></span></td><td><span class="skeleton-line short"></span></td><td><span class="skeleton-line short"></span></td><td><span class="skeleton-line short"></span></td></tr>
+    </tbody>
   </table>
 </div>
 
 <!-- Mobile cards -->
-<div class="cards-list" id="cards-list" aria-label="Payment history cards"></div>
+<div class="cards-list" id="cards-list" aria-busy="true" aria-label="Loading payment history">
+  <div class="skeleton-card" aria-hidden="true"></div>
+  <div class="skeleton-card" aria-hidden="true"></div>
+  <div class="skeleton-card" aria-hidden="true"></div>
+</div>
 
 <!-- Pagination -->
 <nav class="pagination" aria-label="Payment history pagination">

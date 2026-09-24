@@ -1128,3 +1128,32 @@ pub fn set_storage_version(env: &Env, version: u32) {
         .instance()
         .set(&DataKey::StorageVersion, &version);
 }
+
+// ── Merchant registration commitments (commit-reveal, issue #614) ─────────────
+
+/// TTL in ledgers for a pending commitment (≈ 100 × 5 s = 500 s ≈ 8 minutes).
+pub const COMMITMENT_TTL_LEDGERS: u32 = 100;
+
+pub fn get_merchant_commitment(env: &Env, address: &Address) -> Option<MerchantCommitment> {
+    env.storage()
+        .temporary()
+        .get(&DataKey::MerchantCommitment(address.clone()))
+}
+
+pub fn set_merchant_commitment(env: &Env, commitment: &MerchantCommitment) {
+    env.storage().temporary().set(
+        &DataKey::MerchantCommitment(commitment.merchant_address.clone()),
+        commitment,
+    );
+    env.storage().temporary().extend_ttl(
+        &DataKey::MerchantCommitment(commitment.merchant_address.clone()),
+        COMMITMENT_TTL_LEDGERS,
+        COMMITMENT_TTL_LEDGERS,
+    );
+}
+
+pub fn remove_merchant_commitment(env: &Env, address: &Address) {
+    env.storage()
+        .temporary()
+        .remove(&DataKey::MerchantCommitment(address.clone()));
+}

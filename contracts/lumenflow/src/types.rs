@@ -213,6 +213,21 @@ pub struct PaymentPage {
     pub total_matching: u32,
 }
 
+// ── Merchant registration commitment (commit-reveal, issue #614) ─────────────
+
+/// A pending commitment created by `commit_merchant_registration`.
+/// Stored until the merchant calls `reveal_merchant_registration`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantCommitment {
+    /// The address that submitted the commitment.
+    pub merchant_address: Address,
+    /// SHA-256 hash of the pre-image: `merchant_address_bytes ++ name_bytes ++ nonce_bytes`.
+    pub commitment_hash: Bytes,
+    /// Ledger sequence at which this commitment was submitted.
+    pub committed_at_ledger: u32,
+}
+
 // ── Stats ─────────────────────────────────────────────────────────────────────
 
 #[contracttype]
