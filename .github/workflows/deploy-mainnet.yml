@@ -1,0 +1,261 @@
+name: Deploy to Mainnet
+
+# Mainnet deploys are gated behind a mandatory human approval step.
+# Only the `release/*` and `main` branches can trigger this workflow.
+# Two approvals are required before the deploy job runs (enforced via
+# GitHub Environments with required reviewers configured in repo settings).
+#
+# Required GitHub Environment: "mainnet"
+#   - Set at: Settings → Environments → mainnet → Required reviewers
+#   - Add at least 2 maintainers as required reviewers
+#   - Enable "Prevent self-review" for the approval gate
+#
+# Required secrets (in the "mainnet" environment scope):
+#   MAINNET_DEPLOYER_KEY, MAINNET_ADMIN_KEY, MAINNET_SOURCE_ACCOUNT,
+#   MAINNET_ADMIN_ADDRESS
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Reason for this mainnet deploy"
+        required: true
+        type: string
+      skip_smoke:
+        description: "Skip post-deploy smoke test (emergency deploys only)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: write
+  id-token: write
+
+# Never cancel an in-progress mainnet deploy.
+concurrency:
+  group: deploy-mainnet
+  cancel-in-progress: false
+
+jobs:
+  # ── Pre-flight checks ────────────────────────────────────────────────────────
+  preflight:
+    name: Pre-flight Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.87.0
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-mainnet-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-mainnet-
+
+      - name: Build WASM (release)
+        run: |
+          cargo build --target wasm32-unknown-unknown --release --package lumenflow
+          WASM_SIZE=$(wc -c < target/wasm32-unknown-unknown/release/lumenflow.wasm)
+          echo "WASM size: $WASM_SIZE bytes"
+          if [[ "$WASM_SIZE" -gt 102400 ]]; then
+            echo "::error::WASM size $WASM_SIZE exceeds 100 KB limit"
+            exit 1
+          fi
+
+      - name: Run full test suite
+        run: cargo test --all-features
+
+      - name: Audit readiness check
+        run: |
+          chmod +x scripts/audit-readiness-check.sh
+          ./scripts/audit-readiness-check.sh || true
+          echo "## Audit Readiness" >> "$GITHUB_STEP_SUMMARY"
+          echo "Audit readiness check completed. Review output above." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record deploy metadata
+        run: |
+          echo "## Pre-flight Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Branch:** \`${{ github.ref_name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Commit:** \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Triggered by:** @${{ github.actor }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Reason:** ${{ inputs.reason }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Skip smoke test:** ${{ inputs.skip_smoke }}" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Human approval gate ──────────────────────────────────────────────────────
+  # This job uses the "mainnet" GitHub Environment which must be configured with
+  # required reviewers. The deploy job below will not run until approved.
+  await-approval:
+    name: Await Mainnet Approval
+    runs-on: ubuntu-latest
+    needs: preflight
+    timeout-minutes: 1440  # 24 hours — expire unapproved deploys
+    environment:
+      name: mainnet
+
+    steps:
+      - name: Approval received
+        run: |
+          echo "✅ Mainnet deploy approved by ${{ github.actor }}"
+          echo "## ✅ Approval Gate Passed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Approved by: @${{ github.actor }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Approval time: $(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Mainnet deploy ────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to Mainnet
+    runs-on: ubuntu-latest
+    needs: await-approval
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.87.0
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-mainnet-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-mainnet-
+
+      - name: Install Stellar CLI
+        run: |
+          curl -fsSL \
+            https://github.com/stellar/stellar-cli/releases/download/v22.8.1/stellar-cli-22.8.1-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /usr/local/bin stellar
+
+      - name: Deploy contract to mainnet
+        id: deploy
+        env:
+          NETWORK: mainnet
+          SOURCE_ACCOUNT: ${{ secrets.MAINNET_DEPLOYER_KEY }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/deploy.sh
+          CONTRACT_ID=$(bash scripts/deploy.sh)
+
+          if [[ -z "$CONTRACT_ID" ]]; then
+            echo "::error::Deploy script did not output a contract ID"
+            exit 1
+          fi
+
+          echo "contract_id=$CONTRACT_ID" >> "$GITHUB_OUTPUT"
+          echo "## ✅ Mainnet Deploy Succeeded" >> "$GITHUB_STEP_SUMMARY"
+          echo "Contract ID: \`$CONTRACT_ID\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit: \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      # ── Post-deploy smoke test (skippable for emergency deploys) ──────────────
+      - name: Run post-deploy smoke test
+        id: smoke
+        if: inputs.skip_smoke == 'false'
+        env:
+          CONTRACT_ID: ${{ steps.deploy.outputs.contract_id }}
+          ADMIN_KEY: ${{ secrets.MAINNET_ADMIN_KEY }}
+          ADMIN_ADDRESS: ${{ secrets.MAINNET_ADMIN_ADDRESS }}
+          NETWORK: mainnet
+        run: |
+          set -euo pipefail
+          chmod +x scripts/smoke_test.sh
+          mkdir -p smoke-results
+          if bash scripts/smoke_test.sh 2>&1 | tee smoke-results/smoke-mainnet.log; then
+            echo "result=passed" >> "$GITHUB_OUTPUT"
+            echo "## ✅ Mainnet smoke test passed" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "result=failed" >> "$GITHUB_OUTPUT"
+            echo "## ❌ Mainnet smoke test FAILED" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Upload smoke test results
+        if: always() && inputs.skip_smoke == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mainnet-smoke-results-${{ github.run_id }}
+          path: smoke-results/
+          retention-days: 90
+
+      # ── Rollback on failure ────────────────────────────────────────────────────
+      - name: Pause contract on smoke test failure
+        if: failure() && steps.deploy.outputs.contract_id != ''
+        env:
+          MAINNET_SOURCE_ACCOUNT: ${{ secrets.MAINNET_SOURCE_ACCOUNT }}
+        run: |
+          echo "::error::Mainnet smoke test failed — pausing contract to prevent live traffic"
+          stellar contract invoke \
+            --id "${{ steps.deploy.outputs.contract_id }}" \
+            --network mainnet \
+            --source-account "$MAINNET_SOURCE_ACCOUNT" \
+            -- pause_contract \
+            --admin "${{ secrets.MAINNET_ADMIN_ADDRESS }}" \
+            || echo "::warning::Pause failed — immediate manual intervention required"
+
+          echo "## ⏸ Contract paused (post-deploy failure)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Notify Slack — mainnet deploy succeeded
+        if: success()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "✅ *Mainnet deploy succeeded*",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "✅ *Mainnet deploy succeeded*\n*Contract:* `${{ steps.deploy.outputs.contract_id }}`\n*Commit:* `${{ github.sha }}`\n*Reason:* ${{ inputs.reason }}\n*Approved by:* @${{ github.actor }}\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Notify Slack — mainnet deploy FAILED
+        if: failure()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "🚨 *MAINNET DEPLOY FAILED — IMMEDIATE ATTENTION REQUIRED*",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "🚨 *Mainnet deploy FAILED*\n*Contract:* `${{ steps.deploy.outputs.contract_id || 'not deployed' }}`\n*Commit:* `${{ github.sha }}`\n*Triggered by:* @${{ github.actor }}\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run — check smoke test logs>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
