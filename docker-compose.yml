@@ -1,4 +1,15 @@
 services:
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    ports:
+      - "8474:8474"
+      - "18000:18000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8474/proxies"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
   stellar:
     image: stellar/quickstart:latest
     ports:

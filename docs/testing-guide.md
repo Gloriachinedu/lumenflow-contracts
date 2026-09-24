@@ -2,6 +2,20 @@
 
 This guide explains the Soroban contract test architecture used in the LumenFlow repository.
 
+## RPC chaos testing
+
+The opt-in chaos harness uses Toxiproxy to exercise SDK and CLI behavior when the RPC path is degraded. Start the proxy and create an RPC route locally:
+
+```bash
+docker compose up -d toxiproxy
+curl -X POST http://localhost:8474/proxies \
+    -H 'content-type: application/json' \
+    -d '{"name":"lumenflow-rpc","listen":"0.0.0.0:18000","upstream":"host.docker.internal:8000"}'
+CHAOS_TESTS=1 node --test tests/chaos/rpc-chaos.test.mjs
+```
+
+The tests inject RPC timeouts, 5-second latency, and truncated responses. The SDK retry suite covers recovery from transient failures and the CLI reports persistent failures in its result table. HTTP 503 responses should be supplied by a fault-injecting RPC fixture; Toxiproxy itself is a transport proxy and does not generate application-layer status codes. True 50% packet loss requires host network emulation such as `tc netem` and is intentionally kept outside the default Docker setup.
+
 ## Soroban testutils overview
 
 Soroban provides a `testutils` module for contract unit testing in Rust. It includes:
