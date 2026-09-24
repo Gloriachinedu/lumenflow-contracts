@@ -89,7 +89,17 @@ pub enum PaymentError {
     /// The caller is not a registered pause guardian. Remediation: Only addresses set via set_pause_guardians can approve early unpause.
     NotAPauseGuardian = 75,
     /// The on-chain stored version does not match the binary version. Remediation: Call set_contract_version after upgrading.
-    VersionMismatch = 80,
+    VersionMismatch = 79,
+    /// The supplied token issuer is not on the approved issuer list.
+    InvalidIssuer = 80,
+    /// The on-chain storage was written by a newer contract binary.
+    StorageVersionTooNew = 81,
+    /// The on-chain storage requires migration to the current schema.
+    StorageMigrationRequired = 82,
+    CommitmentAlreadyExists = 84,
+    CommitmentNotFound = 85,
+    CommitmentExpired = 86,
+    CommitmentHashMismatch = 87,
 
     // General
     /// The provided input parameters are invalid. Remediation: Check the input values and format.
@@ -106,7 +116,7 @@ pub enum PaymentError {
     // Referral
     /// The referral address is invalid: either it does not belong to a registered merchant or
     /// the caller attempted to refer themselves. Remediation: Provide a valid, distinct referrer address.
-    InvalidReferral = 80,
+    InvalidReferral = 83,
 
     // Subscriptions
     /// A subscription plan with the given ID already exists. Remediation: Use a unique plan ID.

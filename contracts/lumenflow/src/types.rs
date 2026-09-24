@@ -60,6 +60,7 @@ pub struct PaymentOrder {
     pub payer: Address,
     pub token: Address,
     pub amount: i128,
+    pub version: u32,
     pub status: PaymentStatus,
     pub paid_at: u64,
     pub refunded_amount: i128,

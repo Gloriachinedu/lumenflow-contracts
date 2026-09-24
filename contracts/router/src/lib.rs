@@ -120,8 +120,7 @@ impl RouterContract {
     /// call (admin key rotation). On first call any address may be set.
     pub fn set_admin(env: Env, admin: Address) {
         if env.storage().instance().has(&RouterKey::Admin) {
-            let current: Address =
-                env.storage().instance().get(&RouterKey::Admin).unwrap();
+            let current: Address = env.storage().instance().get(&RouterKey::Admin).unwrap();
             current.require_auth();
         }
         env.storage().instance().set(&RouterKey::Admin, &admin);
@@ -181,9 +180,7 @@ impl RouterContract {
             }
         }
 
-        env.storage()
-            .instance()
-            .set(&RouterKey::ActiveSlot, &slot);
+        env.storage().instance().set(&RouterKey::ActiveSlot, &slot);
 
         env.events().publish(
             (

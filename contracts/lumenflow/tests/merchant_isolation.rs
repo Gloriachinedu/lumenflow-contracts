@@ -16,16 +16,11 @@
 
 extern crate alloc;
 
-use soroban_sdk::{
-    testutils::Address as _,
-    token::StellarAssetClient,
-    Address, Env, String,
-};
+use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, Address, Env, String};
 
 use lumenflow::{
-    error::PaymentError,
-    types::MerchantCategory,
-    PaymentProcessingContract, PaymentProcessingContractClient,
+    error::PaymentError, types::MerchantCategory, PaymentProcessingContract,
+    PaymentProcessingContractClient,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -35,14 +30,20 @@ fn str(env: &Env, s: &str) -> String {
 }
 
 fn create_token(env: &Env, admin: &Address) -> Address {
-    env.register_stellar_asset_contract_v2(admin.clone()).address()
+    env.register_stellar_asset_contract_v2(admin.clone())
+        .address()
 }
 
 fn mint(env: &Env, token: &Address, to: &Address, amount: i128) {
     StellarAssetClient::new(env, token).mint(to, &amount);
 }
 
-fn register(client: &PaymentProcessingContractClient<'_>, env: &Env, merchant: &Address, name: &str) {
+fn register(
+    client: &PaymentProcessingContractClient<'_>,
+    env: &Env,
+    merchant: &Address,
+    name: &str,
+) {
     client.register_merchant(
         merchant,
         &str(env, name),
@@ -87,7 +88,15 @@ fn setup() -> World {
     mint(&env, &token, &merchant_a, 1_000_000);
     mint(&env, &token, &merchant_b, 1_000_000);
 
-    World { env, client, admin, merchant_a, merchant_b, payer, token }
+    World {
+        env,
+        client,
+        admin,
+        merchant_a,
+        merchant_b,
+        payer,
+        token,
+    }
 }
 
 /// Payer pays `merchant` for `order_id` / `amount` via the nonce path.
@@ -209,11 +218,9 @@ fn merchant_cannot_update_a_foreign_payments_status() {
     let w = setup();
     pay(&w, "ISO_ORDER_5", &w.merchant_a, 4_000, 0);
 
-    let foreign = w.client.try_update_payment_status(
-        &w.merchant_b,
-        &str(&w.env, "ISO_ORDER_5"),
-        &1_000,
-    );
+    let foreign =
+        w.client
+            .try_update_payment_status(&w.merchant_b, &str(&w.env, "ISO_ORDER_5"), &1_000);
     assert_eq!(foreign, Err(Ok(PaymentError::Unauthorized)));
 
     // Owning merchant can update its own payment.

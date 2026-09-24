@@ -76,8 +76,7 @@ fn setup_env(
 
     // Cast away the lifetime so the values can be moved into criterion closures.
     // Safety: `env` is moved alongside the client in every benchmark.
-    let client: PaymentProcessingContractClient<'static> =
-        unsafe { core::mem::transmute(client) };
+    let client: PaymentProcessingContractClient<'static> = unsafe { core::mem::transmute(client) };
 
     (env, client, admin, payer, merchant, token_addr)
 }

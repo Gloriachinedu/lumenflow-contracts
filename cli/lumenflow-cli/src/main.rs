@@ -235,14 +235,24 @@ pub struct ResolvedConfig {
 /// Validation errors with actionable guidance.
 #[derive(Debug, PartialEq)]
 pub enum ConfigError {
-    MissingField { field: &'static str, env_var: &'static str, toml_key: &'static str },
-    InvalidNetwork { value: String },
+    MissingField {
+        field: &'static str,
+        env_var: &'static str,
+        toml_key: &'static str,
+    },
+    InvalidNetwork {
+        value: String,
+    },
 }
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ConfigError::MissingField { field, env_var, toml_key } => write!(
+            ConfigError::MissingField {
+                field,
+                env_var,
+                toml_key,
+            } => write!(
                 f,
                 "Missing required config field: {field}\n  \
                  Set it via environment variable:  {env_var}=<value>\n  \
@@ -309,7 +319,11 @@ pub fn validate_config(cfg: Config) -> Result<ValidatedConfig, Vec<ConfigError>>
     };
 
     if errors.is_empty() {
-        Ok(ValidatedConfig { network, contract_id, source_account })
+        Ok(ValidatedConfig {
+            network,
+            contract_id,
+            source_account,
+        })
     } else {
         Err(errors)
     }
@@ -393,10 +407,7 @@ fn apply_env_overrides(base: RawConfig) -> RawConfig {
     }
 }
 
-fn resolve_config(
-    file_env: RawConfig,
-    cli: &Cli,
-) -> ResolvedConfig {
+fn resolve_config(file_env: RawConfig, cli: &Cli) -> ResolvedConfig {
     let network = cli
         .network
         .clone()
@@ -434,42 +445,6 @@ fn resolve_config(
         contract_id,
         source_account,
     }
-
-    #[test]
-    fn test_stellar_invoke_prefix_defaults() {
-        let config = Config::default();
-        let prefix = stellar_invoke_prefix(&config);
-        assert!(prefix.contains("testnet"));
-        assert!(prefix.contains("<CONTRACT_ID>"));
-        assert!(prefix.contains("<SOURCE_ACCOUNT>"));
-    }
-}
-
-    #[test]
-    fn test_stellar_invoke_prefix_with_config() {
-        let config = Config {
-            network: Some("mainnet".to_string()),
-            contract_id: Some("CABC123".to_string()),
-            source_account: Some("SABC456".to_string()),
-        };
-        let prefix = stellar_invoke_prefix(&config);
-        assert!(prefix.contains("mainnet"));
-        assert!(prefix.contains("CABC123"));
-        assert!(prefix.contains("SABC456"));
-    }
-
-    #[test]
-    fn test_multisig_init_signers_formatting() {
-        // Verify that comma-separated signers are formatted into a JSON array
-        let signers = "GAAA,GBBB,GCCC";
-        let signer_list: Vec<String> = signers
-            .split(',')
-            .map(|s| format!("\"{}\"", s.trim()))
-            .collect();
-        let json = format!("[{}]", signer_list.join(","));
-        assert_eq!(json, "[\"GAAA\",\"GBBB\",\"GCCC\"]");
-    }
-    Ok(())
 }
 
 // ── Payment struct for the interactive flow ───────────────────────────────────
@@ -503,11 +478,7 @@ fn prompt_key() -> Result<String> {
     Ok(key.trim().to_string())
 }
 
-fn resolve_source(
-    config: &mut Config,
-    key_file: Option<&PathBuf>,
-    use_prompt: bool,
-) -> Result<()> {
+fn resolve_source(config: &mut Config, key_file: Option<&PathBuf>, use_prompt: bool) -> Result<()> {
     if let Some(path) = key_file {
         config.source_account = Some(load_key_from_file(path)?);
     } else if use_prompt {
@@ -548,22 +519,37 @@ fn base_invoke(config: &Config) -> Result<Command> {
         .contract_id
         .as_deref()
         .filter(|s| !s.is_empty())
-        .context("Missing contract ID. Set LUMENFLOW_CONTRACT_ID or contract_id in .lumenflow.toml")?;
+        .context(
+            "Missing contract ID. Set LUMENFLOW_CONTRACT_ID or contract_id in .lumenflow.toml",
+        )?;
 
     let source = config
         .source_account
         .as_deref()
         .filter(|s| !s.is_empty())
-        .context("Missing source account. Set LUMENFLOW_SOURCE or source_account in .lumenflow.toml")?;
+        .context(
+            "Missing source account. Set LUMENFLOW_SOURCE or source_account in .lumenflow.toml",
+        )?;
 
     let mut cmd = Command::new("stellar");
-    cmd.args(["contract", "invoke", "--id", contract_id, "--source-account", source]);
+    cmd.args([
+        "contract",
+        "invoke",
+        "--id",
+        contract_id,
+        "--source-account",
+        source,
+    ]);
 
     if let Some(rpc) = config.rpc_url.as_deref().filter(|s| !s.is_empty()) {
         cmd.args(["--rpc-url", rpc]);
     }
 
-    if let Some(passphrase) = config.network_passphrase.as_deref().filter(|s| !s.is_empty()) {
+    if let Some(passphrase) = config
+        .network_passphrase
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
         cmd.args(["--network-passphrase", passphrase]);
     } else if let Some(network) = config.network.as_deref().filter(|s| !s.is_empty()) {
         cmd.args(["--network", network]);
@@ -684,7 +670,13 @@ pub fn parse_csv(content: &str) -> Result<Vec<CsvRow>> {
         };
 
         if row_ok {
-            rows.push(CsvRow { order_id, merchant_address, token_address, amount, memo });
+            rows.push(CsvRow {
+                order_id,
+                merchant_address,
+                token_address,
+                amount,
+                memo,
+            });
         }
     }
 
@@ -711,9 +703,24 @@ struct RowResult {
 /// Print a results table: | order_id | status | tx_hash |
 fn print_results_table(results: &[RowResult]) {
     // Calculate column widths.
-    let w_order = results.iter().map(|r| r.order_id.len()).max().unwrap_or(0).max("order_id".len());
-    let w_status = results.iter().map(|r| r.status.len()).max().unwrap_or(0).max("status".len());
-    let w_hash = results.iter().map(|r| r.tx_hash.len()).max().unwrap_or(0).max("tx_hash".len());
+    let w_order = results
+        .iter()
+        .map(|r| r.order_id.len())
+        .max()
+        .unwrap_or(0)
+        .max("order_id".len());
+    let w_status = results
+        .iter()
+        .map(|r| r.status.len())
+        .max()
+        .unwrap_or(0)
+        .max("status".len());
+    let w_hash = results
+        .iter()
+        .map(|r| r.tx_hash.len())
+        .max()
+        .unwrap_or(0)
+        .max("tx_hash".len());
 
     let sep = format!(
         "+-{}-+-{}-+-{}-+",
@@ -725,16 +732,24 @@ fn print_results_table(results: &[RowResult]) {
     println!("{}", sep);
     println!(
         "| {:<w_order$} | {:<w_status$} | {:<w_hash$} |",
-        "order_id", "status", "tx_hash",
-        w_order = w_order, w_status = w_status, w_hash = w_hash
+        "order_id",
+        "status",
+        "tx_hash",
+        w_order = w_order,
+        w_status = w_status,
+        w_hash = w_hash
     );
     println!("{}", sep);
 
     for r in results {
         println!(
             "| {:<w_order$} | {:<w_status$} | {:<w_hash$} |",
-            r.order_id, r.status, r.tx_hash,
-            w_order = w_order, w_status = w_status, w_hash = w_hash
+            r.order_id,
+            r.status,
+            r.tx_hash,
+            w_order = w_order,
+            w_status = w_status,
+            w_hash = w_hash
         );
     }
 
@@ -753,11 +768,20 @@ fn main() -> Result<()> {
     let contract_id = config.contract_id.as_deref().unwrap_or("N/A");
 
     match &cli.command {
-        Commands::Pay { merchant, amount, order_id, idempotent, .. } => {
+        Commands::Pay {
+            merchant,
+            amount,
+            order_id,
+            idempotent,
+            ..
+        } => {
             if config.source_account.is_none() {
                 bail!("No signing key available. Use --key-file, --prompt-key, or set LUMENFLOW_SOURCE.");
             }
-            println!("Processing payment{}...", if *idempotent { " (idempotent)" } else { "" });
+            println!(
+                "Processing payment{}...",
+                if *idempotent { " (idempotent)" } else { "" }
+            );
             println!("  Order:    {}", order_id);
             println!("  Merchant: {}", merchant);
             println!("  Amount:   {}", amount);
@@ -765,14 +789,19 @@ fn main() -> Result<()> {
             if *idempotent {
                 println!("\nNote: duplicate submissions for order {} will return the existing payment record.", order_id);
             }
-            println!("\nSuccess! Payment for order {} has been submitted.", order_id);
+            println!(
+                "\nSuccess! Payment for order {} has been submitted.",
+                order_id
+            );
         }
         Commands::Refund { action } => {
             if config.source_account.is_none() {
                 bail!("No signing key available. Use --key-file, --prompt-key, or set LUMENFLOW_SOURCE.");
             }
             match action {
-                RefundCommands::Init { order_id, amount, .. } => {
+                RefundCommands::Init {
+                    order_id, amount, ..
+                } => {
                     println!("Initiating refund of {} for order {}...", amount, order_id);
                     println!("  Contract: {}", contract_id);
                 }
@@ -788,23 +817,6 @@ fn main() -> Result<()> {
                 RefundCommands::Status { refund_id } => {
                     println!("Querying status of refund {}...", refund_id);
                 }
-            } else if all_flags_present {
-                // ── Non-interactive (flag-based) mode — unchanged behaviour ──
-                let args = PaymentArgs {
-                    merchant: merchant.clone().unwrap(),
-                    amount: amount.unwrap(),
-                    order_id: order_id.clone().unwrap(),
-                    memo: memo.clone().unwrap_or_default(),
-                    token: token.clone().unwrap_or_else(|| "native".to_string()),
-                };
-                execute_payment(&args, &config);
-            } else {
-                // Partial flags: guide the user rather than silently failing.
-                return Err(anyhow!(
-                    "Provide either ALL of --merchant, --amount, --order-id \
-                     (plus optional --memo and --token) for flag mode, \
-                     or run `lumenflow pay` with NO flags to use interactive mode."
-                ));
             }
         }
         Commands::History { merchant, .. } => {
@@ -815,21 +827,48 @@ fn main() -> Result<()> {
         }
         Commands::PrintConfig => {
             println!("Resolved configuration:");
-            println!("  network:            {}", config.network.as_deref().unwrap_or("testnet"));
-            println!("  rpc_url:            {}", config.rpc_url.as_deref().unwrap_or("https://soroban-testnet.stellar.org"));
-            println!("  network_passphrase: {}", config.network_passphrase.as_deref().unwrap_or("Test SDF Network ; September 2015"));
-            println!("  contract_id:        {}", config.contract_id.as_deref().unwrap_or("N/A"));
+            println!(
+                "  network:            {}",
+                config.network.as_deref().unwrap_or("testnet")
+            );
+            println!(
+                "  rpc_url:            {}",
+                config
+                    .rpc_url
+                    .as_deref()
+                    .unwrap_or("https://soroban-testnet.stellar.org")
+            );
+            println!(
+                "  network_passphrase: {}",
+                config
+                    .network_passphrase
+                    .as_deref()
+                    .unwrap_or("Test SDF Network ; September 2015")
+            );
+            println!(
+                "  contract_id:        {}",
+                config.contract_id.as_deref().unwrap_or("N/A")
+            );
             // Redact the source account when printing configuration to avoid leaking secrets.
-            let source_display = config.source_account.as_deref().map(|s| {
-                if s.len() > 8 {
-                    format!("{}…{}", &s[..4], &s[s.len() - 4..])
-                } else {
-                    "*****".to_string()
-                }
-            }).unwrap_or_else(|| "(not set)".to_string());
+            let source_display = config
+                .source_account
+                .as_deref()
+                .map(|s| {
+                    if s.len() > 8 {
+                        format!("{}…{}", &s[..4], &s[s.len() - 4..])
+                    } else {
+                        "*****".to_string()
+                    }
+                })
+                .unwrap_or_else(|| "(not set)".to_string());
             println!("  source_account:     {}", source_display);
         }
-        Commands::BatchPay { file, token, signature, merchant_public_key } => {
+        Commands::BatchPay {
+            file,
+            token,
+            signature,
+            merchant_public_key,
+        } => {
             if config.source_account.is_none() {
                 bail!("No signing key available. Use --key-file, --prompt-key, or set LUMENFLOW_SOURCE.");
             }
@@ -840,11 +879,19 @@ fn main() -> Result<()> {
             let rows = parse_csv(&content)?;
 
             if rows.len() > 10 {
-                bail!("Too many rows: {} (batch_payment supports at most 10 items per call)", rows.len());
+                bail!(
+                    "Too many rows: {} (batch_payment supports at most 10 items per call)",
+                    rows.len()
+                );
             }
 
             let payer = config.source_account.as_deref().unwrap_or_default();
-            println!("Submitting {} payment(s) from {} on {}...\n", rows.len(), payer, network);
+            println!(
+                "Submitting {} payment(s) from {} on {}...\n",
+                rows.len(),
+                payer,
+                network
+            );
 
             let mut results: Vec<RowResult> = Vec::new();
 
@@ -856,16 +903,26 @@ fn main() -> Result<()> {
                 cmd.args([
                     "--",
                     "process_payment_with_signature",
-                    "--payer", payer,
-                    "--order_id", &row.order_id,
-                    "--merchant_address", &row.merchant_address,
-                    "--token_address", token_addr,
-                    "--amount", &row.amount.to_string(),
-                    "--memo", &row.memo,
-                    "--tags", "null",
-                    "--nonce", "1",
-                    "--signature", signature,
-                    "--merchant_public_key", merchant_public_key,
+                    "--payer",
+                    payer,
+                    "--order_id",
+                    &row.order_id,
+                    "--merchant_address",
+                    &row.merchant_address,
+                    "--token_address",
+                    token_addr,
+                    "--amount",
+                    &row.amount.to_string(),
+                    "--memo",
+                    &row.memo,
+                    "--tags",
+                    "null",
+                    "--nonce",
+                    "1",
+                    "--signature",
+                    signature,
+                    "--merchant_public_key",
+                    merchant_public_key,
                 ]);
 
                 let output = cmd.output();
@@ -915,15 +972,15 @@ fn main() -> Result<()> {
             print_results_table(&results);
 
             // Report overall outcome.
-            let failed = results.iter().filter(|r| r.status.starts_with("FAILED") || r.status.starts_with("ERROR")).count();
+            let failed = results
+                .iter()
+                .filter(|r| r.status.starts_with("FAILED") || r.status.starts_with("ERROR"))
+                .count();
             let succeeded = results.len() - failed;
             println!("\n{}/{} payment(s) succeeded.", succeeded, results.len());
             if failed > 0 {
                 bail!("{} payment(s) failed. See table above for details.", failed);
             }
-        }
-        Commands::Multisig { action } => {
-            handle_multisig(action, &config);
         }
         Commands::Admin { action } => match action {
             AdminCommands::AccountStats { address } => {
@@ -944,7 +1001,12 @@ fn main() -> Result<()> {
                     .lines()
                     .rev()
                     .find_map(|l| l.trim().parse::<u32>().ok())
-                    .with_context(|| format!("could not parse payment count from output: {}", stdout.trim()))?;
+                    .with_context(|| {
+                        format!(
+                            "could not parse payment count from output: {}",
+                            stdout.trim()
+                        )
+                    })?;
 
                 let pct = (count as f64 / MAX_PAYMENT_IDS_PER_ACCOUNT as f64) * 100.0;
                 println!("Account:        {}", address);
@@ -982,7 +1044,9 @@ mod tests {
             source_account: None,
             key_file: None,
             prompt_key: false,
-            command: Commands::Stats { admin: "GSTATS".to_string() },
+            command: Commands::Stats {
+                admin: "GSTATS".to_string(),
+            },
         }
     }
 
@@ -1022,7 +1086,7 @@ mod tests {
             Commands::Admin {
                 action: AdminCommands::AccountStats { address },
             } => assert_eq!(address, "GADDRESS"),
-            _ => panic!("expected Commands::Admin { AccountStats }"),
+            _ => panic!("expected Commands::Admin {{ AccountStats }}"),
         }
     }
 
@@ -1034,7 +1098,10 @@ mod tests {
         std::env::remove_var("LUMENFLOW_SOURCE");
 
         let path = ".test_lumenflow_273.toml";
-        fs::write(path, "network = \"local\"\ncontract_id = \"C123\"\nsource_account = \"S123\"")?;
+        fs::write(
+            path,
+            "network = \"local\"\ncontract_id = \"C123\"\nsource_account = \"S123\"",
+        )?;
         let config = load_config(Some(PathBuf::from(path)))?;
         assert_eq!(config.network.as_deref(), Some("local"));
         assert_eq!(config.contract_id.as_deref(), Some("C123"));
@@ -1145,7 +1212,10 @@ mod tests {
         let cli = make_cli(Some("local"), None, None);
         let resolved = resolve_config(RawConfig::default(), &cli);
         assert_eq!(resolved.rpc_url, "http://localhost:8000/soroban/rpc");
-        assert_eq!(resolved.network_passphrase, "Standalone Network ; February 2017");
+        assert_eq!(
+            resolved.network_passphrase,
+            "Standalone Network ; February 2017"
+        );
     }
 
     #[test]
@@ -1166,23 +1236,50 @@ mod tests {
 
     #[test]
     fn test_missing_network_reports_error() {
-        let cfg = Config { network: None, ..full_config() };
+        let cfg = Config {
+            network: None,
+            ..full_config()
+        };
         let errors = validate_config(cfg).unwrap_err();
-        assert!(errors.iter().any(|e| matches!(e, ConfigError::MissingField { field: "network", .. })));
+        assert!(errors.iter().any(|e| matches!(
+            e,
+            ConfigError::MissingField {
+                field: "network",
+                ..
+            }
+        )));
     }
 
     #[test]
     fn test_missing_contract_id_reports_error() {
-        let cfg = Config { contract_id: None, ..full_config() };
+        let cfg = Config {
+            contract_id: None,
+            ..full_config()
+        };
         let errors = validate_config(cfg).unwrap_err();
-        assert!(errors.iter().any(|e| matches!(e, ConfigError::MissingField { field: "contract_id", .. })));
+        assert!(errors.iter().any(|e| matches!(
+            e,
+            ConfigError::MissingField {
+                field: "contract_id",
+                ..
+            }
+        )));
     }
 
     #[test]
     fn test_missing_source_account_reports_error() {
-        let cfg = Config { source_account: None, ..full_config() };
+        let cfg = Config {
+            source_account: None,
+            ..full_config()
+        };
         let errors = validate_config(cfg).unwrap_err();
-        assert!(errors.iter().any(|e| matches!(e, ConfigError::MissingField { field: "source_account", .. })));
+        assert!(errors.iter().any(|e| matches!(
+            e,
+            ConfigError::MissingField {
+                field: "source_account",
+                ..
+            }
+        )));
     }
 
     #[test]
@@ -1194,24 +1291,41 @@ mod tests {
 
     #[test]
     fn test_invalid_network_reports_error() {
-        let cfg = Config { network: Some("devnet".into()), ..full_config() };
+        let cfg = Config {
+            network: Some("devnet".into()),
+            ..full_config()
+        };
         let errors = validate_config(cfg).unwrap_err();
-        assert!(errors.iter().any(|e| matches!(e, ConfigError::InvalidNetwork { .. })));
+        assert!(errors
+            .iter()
+            .any(|e| matches!(e, ConfigError::InvalidNetwork { .. })));
     }
 
     #[test]
     fn test_valid_networks_accepted() {
         for net in ["local", "testnet", "mainnet"] {
-            let cfg = Config { network: Some(net.into()), ..full_config() };
+            let cfg = Config {
+                network: Some(net.into()),
+                ..full_config()
+            };
             assert!(validate_config(cfg).is_ok(), "Expected {net} to be valid");
         }
     }
 
     #[test]
     fn test_empty_string_treated_as_missing() {
-        let cfg = Config { network: Some("  ".into()), ..full_config() };
+        let cfg = Config {
+            network: Some("  ".into()),
+            ..full_config()
+        };
         let errors = validate_config(cfg).unwrap_err();
-        assert!(errors.iter().any(|e| matches!(e, ConfigError::MissingField { field: "network", .. })));
+        assert!(errors.iter().any(|e| matches!(
+            e,
+            ConfigError::MissingField {
+                field: "network",
+                ..
+            }
+        )));
     }
 
     #[test]
@@ -1228,7 +1342,9 @@ mod tests {
 
     #[test]
     fn test_invalid_network_error_message_lists_valid_values() {
-        let e = ConfigError::InvalidNetwork { value: "wrongnet".into() };
+        let e = ConfigError::InvalidNetwork {
+            value: "wrongnet".into(),
+        };
         let msg = e.to_string();
         assert!(msg.contains("testnet"));
         assert!(msg.contains("mainnet"));
@@ -1370,13 +1486,20 @@ mod tests {
     fn test_cli_pay_args_parse() {
         use clap::CommandFactory;
         let m = Cli::command().try_get_matches_from([
-            "lumenflow", "pay",
-            "--merchant", "GADDR",
-            "--amount", "500",
-            "--order-id", "ORD1",
-            "--token", "TADDR",
-            "--signature", "SIG",
-            "--merchant-public-key", "MPK",
+            "lumenflow",
+            "pay",
+            "--merchant",
+            "GADDR",
+            "--amount",
+            "500",
+            "--order-id",
+            "ORD1",
+            "--token",
+            "TADDR",
+            "--signature",
+            "SIG",
+            "--merchant-public-key",
+            "MPK",
         ]);
         assert!(m.is_ok(), "pay subcommand should parse successfully");
     }
@@ -1391,9 +1514,8 @@ mod tests {
     #[test]
     fn test_cli_history_args_parse() {
         use clap::CommandFactory;
-        let m = Cli::command().try_get_matches_from([
-            "lumenflow", "history", "--merchant", "GADDR",
-        ]);
+        let m =
+            Cli::command().try_get_matches_from(["lumenflow", "history", "--merchant", "GADDR"]);
         assert!(m.is_ok(), "history subcommand should parse successfully");
     }
 
@@ -1401,12 +1523,20 @@ mod tests {
     fn test_cli_refund_init_args_parse() {
         use clap::CommandFactory;
         let m = Cli::command().try_get_matches_from([
-            "lumenflow", "refund", "init",
-            "--order-id", "ORD1",
-            "--amount", "100",
-            "--caller", "GCALLER",
+            "lumenflow",
+            "refund",
+            "init",
+            "--order-id",
+            "ORD1",
+            "--amount",
+            "100",
+            "--caller",
+            "GCALLER",
         ]);
-        assert!(m.is_ok(), "refund init subcommand should parse successfully");
+        assert!(
+            m.is_ok(),
+            "refund init subcommand should parse successfully"
+        );
     }
 
     #[test]

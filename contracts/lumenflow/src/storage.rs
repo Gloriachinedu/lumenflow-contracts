@@ -3,7 +3,8 @@ use soroban_sdk::{contracttype, Address, Env, String, Vec};
 use crate::error::PaymentError;
 use crate::types::{
     DisputeRecord, EscrowRecord, GlobalStats, Merchant, MerchantStats, MultisigPayment,
-    PaymentOrder, PaymentRequest, RefundRecord, Subscription, SubscriptionPlan,
+    MerchantCommitment, PaymentOrder, PaymentRequest, RefundRecord, Subscription,
+    SubscriptionPlan,
 };
 
 // ── TTL / limit constants ─────────────────────────────────────────────────────
@@ -38,9 +39,9 @@ pub const DEFAULT_LARGE_PAYMENT_THRESHOLD: i128 = 10_000_000;
 //   1 year  ≈ 6_307_200 ledgers
 //   2 years ≈ 12_614_400 ledgers
 pub const MERCHANT_TTL_LEDGERS: u32 = 12_614_400; // 2 years
-pub const PAYMENT_TTL_LEDGERS: u32 = 12_614_400;  // 2 years
-pub const REFUND_TTL_LEDGERS: u32 = 6_307_200;    // 1 year
-pub const MULTISIG_TTL_LEDGERS: u32 = 6_307_200;  // 1 year
+pub const PAYMENT_TTL_LEDGERS: u32 = 12_614_400; // 2 years
+pub const REFUND_TTL_LEDGERS: u32 = 6_307_200; // 1 year
+pub const MULTISIG_TTL_LEDGERS: u32 = 6_307_200; // 1 year
 pub const SUBSCRIPTION_TTL_LEDGERS: u32 = 12_614_400; // 2 years
 
 // ── Compile-time TTL bound assertions ─────────────────────────────────────────
@@ -53,11 +54,26 @@ pub const SUBSCRIPTION_TTL_LEDGERS: u32 = 12_614_400; // 2 years
 pub const SOROBAN_MAX_ENTRY_TTL: u32 = 3_110_400;
 
 const _: () = {
-    assert!(MERCHANT_TTL_LEDGERS     <= SOROBAN_MAX_ENTRY_TTL * 5, "MERCHANT_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)");
-    assert!(PAYMENT_TTL_LEDGERS      <= SOROBAN_MAX_ENTRY_TTL * 5, "PAYMENT_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)");
-    assert!(REFUND_TTL_LEDGERS       <= SOROBAN_MAX_ENTRY_TTL * 5, "REFUND_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)");
-    assert!(MULTISIG_TTL_LEDGERS     <= SOROBAN_MAX_ENTRY_TTL * 5, "MULTISIG_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)");
-    assert!(SUBSCRIPTION_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5, "SUBSCRIPTION_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)");
+    assert!(
+        MERCHANT_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
+        "MERCHANT_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
+    );
+    assert!(
+        PAYMENT_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
+        "PAYMENT_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
+    );
+    assert!(
+        REFUND_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
+        "REFUND_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
+    );
+    assert!(
+        MULTISIG_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
+        "MULTISIG_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
+    );
+    assert!(
+        SUBSCRIPTION_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
+        "SUBSCRIPTION_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
+    );
 };
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
@@ -80,6 +96,7 @@ pub enum DataKey {
     /// Replaced verbose `PayerPayments` — short code `PP`.
     PP(Address),
     Refund(String),
+    RefundRetentionPeriod,
     /// Replaced verbose `OrderRefunds` — short code `OR`.
     OR(String),
     Dispute(String),
@@ -107,6 +124,10 @@ pub enum DataKey {
     SubscriptionPlan(String),
     Subscription(String),
     SubscriptionReserve(Address, Address),
+    /// Legacy aliases retained for storage compatibility with existing deployments.
+    SP(String),
+    Sub(String),
+    SR(Address, Address),
     /// Global rate-limit cap (max payments per merchant per window).
     RateLimitPerWindow,
     /// Rolling-window counter for a merchant: (merchant, window_start_ledger) → count.
@@ -117,6 +138,17 @@ pub enum DataKey {
     AuthFailCount(Address),
     /// Auth lockout expiry (Issue #628): (address) → ledger at which lockout expires.
     AuthLockoutUntil(Address),
+    StoredContractVersion,
+    StorageVersion,
+    SV,
+    PR,
+    ULU,
+    PG,
+    EPA,
+    AllowedIssuer(Address),
+    DeletionRequest(Address),
+    ReferralFeeBps,
+    MerchantCommitment(Address),
 }
 
 /// The schema version this binary was compiled against.
@@ -138,7 +170,10 @@ pub fn set_admin(env: &Env, admin: &Address) {
 // ── Pause ─────────────────────────────────────────────────────────────────────
 
 pub fn get_paused(env: &Env) -> bool {
-    env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
+    env.storage()
+        .instance()
+        .get(&DataKey::Paused)
+        .unwrap_or(false)
 }
 
 pub fn set_paused(env: &Env, paused: bool) {
@@ -155,9 +190,7 @@ pub fn get_cleanup_period(env: &Env) -> u64 {
 }
 
 pub fn set_cleanup_period(env: &Env, period: u64) {
-    env.storage()
-        .instance()
-        .set(&DataKey::CP, &period);
+    env.storage().instance().set(&DataKey::CP, &period);
 }
 
 // ── Platform fee ──────────────────────────────────────────────────────────────
@@ -170,9 +203,7 @@ pub fn get_platform_fee_bps(env: &Env) -> u32 {
 }
 
 pub fn set_platform_fee_bps(env: &Env, fee_bps: u32) {
-    env.storage()
-        .instance()
-        .set(&DataKey::PFB, &fee_bps);
+    env.storage().instance().set(&DataKey::PFB, &fee_bps);
 }
 
 pub fn get_fee_recipient(env: &Env) -> Option<Address> {
@@ -180,9 +211,7 @@ pub fn get_fee_recipient(env: &Env) -> Option<Address> {
 }
 
 pub fn set_fee_recipient(env: &Env, recipient: &Address) {
-    env.storage()
-        .instance()
-        .set(&DataKey::FR, recipient);
+    env.storage().instance().set(&DataKey::FR, recipient);
 }
 
 // ── Refund window ─────────────────────────────────────────────────────────────
@@ -195,9 +224,7 @@ pub fn get_refund_window(env: &Env) -> u64 {
 }
 
 pub fn set_refund_window(env: &Env, window_secs: u64) {
-    env.storage()
-        .instance()
-        .set(&DataKey::RW, &window_secs);
+    env.storage().instance().set(&DataKey::RW, &window_secs);
 }
 
 /// How long (seconds) a refund record is retained after it reaches a terminal
@@ -225,9 +252,7 @@ pub fn get_large_payment_threshold(env: &Env) -> i128 {
 }
 
 pub fn set_large_payment_threshold(env: &Env, threshold: i128) {
-    env.storage()
-        .instance()
-        .set(&DataKey::LPT, &threshold);
+    env.storage().instance().set(&DataKey::LPT, &threshold);
 }
 
 pub fn get_min_refund_amount(env: &Env) -> i128 {
@@ -238,9 +263,7 @@ pub fn get_min_refund_amount(env: &Env) -> i128 {
 }
 
 pub fn set_min_refund_amount(env: &Env, amount: i128) {
-    env.storage()
-        .instance()
-        .set(&DataKey::MRA, &amount);
+    env.storage().instance().set(&DataKey::MRA, &amount);
 }
 
 // ── Global stats ──────────────────────────────────────────────────────────────
@@ -349,7 +372,11 @@ pub fn get_merchant_payment_count(env: &Env, merchant: &Address) -> u32 {
     get_merchant_payment_ids(env, merchant).len()
 }
 
-pub fn add_merchant_payment_id(env: &Env, merchant: &Address, order_id: &String) -> Result<(), PaymentError> {
+pub fn add_merchant_payment_id(
+    env: &Env,
+    merchant: &Address,
+    order_id: &String,
+) -> Result<(), PaymentError> {
     let mut ids = get_merchant_payment_ids(env, merchant);
     let old_len = ids.len();
     if old_len >= MAX_PAYMENT_IDS_PER_ACCOUNT {
@@ -384,7 +411,11 @@ pub fn get_payer_payment_count(env: &Env, payer: &Address) -> u32 {
     get_payer_payment_ids(env, payer).len()
 }
 
-pub fn add_payer_payment_id(env: &Env, payer: &Address, order_id: &String) -> Result<(), PaymentError> {
+pub fn add_payer_payment_id(
+    env: &Env,
+    payer: &Address,
+    order_id: &String,
+) -> Result<(), PaymentError> {
     let mut ids = get_payer_payment_ids(env, payer);
     let old_len = ids.len();
     if old_len >= MAX_PAYMENT_IDS_PER_ACCOUNT {
@@ -440,10 +471,18 @@ pub fn add_order_refund_id(env: &Env, order_id: &String, refund_id: &String) {
         .set(&DataKey::OR(order_id.clone()), &ids);
 }
 
+pub fn remove_order_refund_index(env: &Env, order_id: &String) {
+    env.storage()
+        .persistent()
+        .remove(&DataKey::OR(order_id.clone()));
+}
+
 // ── Dispute ───────────────────────────────────────────────────────────────────
 
 pub fn get_dispute(env: &Env, dispute_id: &String) -> Option<DisputeRecord> {
-    env.storage().persistent().get(&DataKey::Dispute(dispute_id.clone()))
+    env.storage()
+        .persistent()
+        .get(&DataKey::Dispute(dispute_id.clone()))
 }
 
 pub fn set_dispute(env: &Env, dispute: &DisputeRecord) {
@@ -456,30 +495,9 @@ pub fn set_dispute(env: &Env, dispute: &DisputeRecord) {
 }
 
 pub fn remove_refund(env: &Env, refund_id: &String) {
-    env.storage().persistent().remove(&DataKey::Refund(refund_id.clone()));
-}
-
-/// Get all refund IDs linked to a payment order.
-pub fn get_order_refund_ids(env: &Env, order_id: &String) -> Vec<String> {
     env.storage()
         .persistent()
-        .get(&DataKey::OrderRefunds(order_id.clone()))
-        .unwrap_or(Vec::new(env))
-}
-
-/// Record that `refund_id` belongs to `order_id`.
-pub fn add_order_refund_id(env: &Env, order_id: &String, refund_id: &String) {
-    let mut ids = get_order_refund_ids(env, order_id);
-    ids.push_back(refund_id.clone());
-    env.storage()
-        .persistent()
-        .set(&DataKey::OrderRefunds(order_id.clone()), &ids);
-}
-
-pub fn remove_order_refund_index(env: &Env, order_id: &String) {
-    env.storage()
-        .persistent()
-        .remove(&DataKey::OrderRefunds(order_id.clone()));
+        .remove(&DataKey::Refund(refund_id.clone()));
 }
 
 // ── Multisig ──────────────────────────────────────────────────────────────────
@@ -614,9 +632,7 @@ pub fn increment_merchant_nonce(env: &Env, merchant: &Address) {
 // ── Allowed Tokens ────────────────────────────────────────────────────────────
 
 pub fn is_token_allowed(env: &Env, token: &Address) -> bool {
-    env.storage()
-        .instance()
-        .has(&DataKey::AT(token.clone()))
+    env.storage().instance().has(&DataKey::AT(token.clone()))
 }
 
 pub fn set_token_allowed(env: &Env, token: &Address, allowed: bool) {
@@ -625,9 +641,7 @@ pub fn set_token_allowed(env: &Env, token: &Address, allowed: bool) {
             .instance()
             .set(&DataKey::AT(token.clone()), &());
     } else {
-        env.storage()
-            .instance()
-            .remove(&DataKey::AT(token.clone()));
+        env.storage().instance().remove(&DataKey::AT(token.clone()));
     }
 }
 
@@ -643,9 +657,7 @@ pub fn get_multisig_expiry_duration(env: &Env) -> u64 {
 }
 
 pub fn set_multisig_expiry_duration(env: &Env, duration: u64) {
-    env.storage()
-        .instance()
-        .set(&DataKey::MED, &duration);
+    env.storage().instance().set(&DataKey::MED, &duration);
 }
 
 // -- Subscriptions -------------------------------------------------------------
@@ -685,10 +697,7 @@ pub fn set_subscription(env: &Env, sub: &Subscription) {
 pub fn get_subscription_reserve(env: &Env, subscriber: &Address, token: &Address) -> i128 {
     env.storage()
         .persistent()
-        .get(&DataKey::SR(
-            subscriber.clone(),
-            token.clone(),
-        ))
+        .get(&DataKey::SR(subscriber.clone(), token.clone()))
         .unwrap_or(0)
 }
 
@@ -698,9 +707,11 @@ pub fn set_subscription_reserve(env: &Env, subscriber: &Address, token: &Address
         env.storage().persistent().remove(&key);
     } else {
         env.storage().persistent().set(&key, &amount);
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, SUBSCRIPTION_TTL_LEDGERS, SUBSCRIPTION_TTL_LEDGERS);
+        env.storage().persistent().extend_ttl(
+            &key,
+            SUBSCRIPTION_TTL_LEDGERS,
+            SUBSCRIPTION_TTL_LEDGERS,
+        );
     }
 }
 
@@ -737,6 +748,16 @@ pub const RATE_LIMIT_WINDOW_LEDGERS: u32 = 300;
 /// TTL for rate-limit counters — kept alive for 2 windows so a counter is not
 /// silently dropped mid-window.
 pub const RATE_LIMIT_TTL_LEDGERS: u32 = 600;
+
+pub fn set_payment_rate_limit(env: &Env, limit: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::RateLimitPerWindow, &limit);
+}
+
+pub fn set_payment_rate_window(env: &Env, window_secs: u64) {
+    env.storage().instance().set(&DataKey::RW, &window_secs);
+}
 
 pub fn get_rate_limit_per_window(env: &Env) -> u32 {
     env.storage()
@@ -783,9 +804,7 @@ pub fn get_stored_version(env: &Env) -> Option<String> {
 
 /// Persist the contract version string on-chain.
 pub fn set_stored_version(env: &Env, version: &String) {
-    env.storage()
-        .instance()
-        .set(&DataKey::SV, version);
+    env.storage().instance().set(&DataKey::SV, version);
 }
 
 // ── Emergency pause timelock ──────────────────────────────────────────────────
@@ -812,9 +831,7 @@ pub fn get_unpause_lock_until(env: &Env) -> Option<u64> {
 
 /// Persist the unpause timelock expiry timestamp.
 pub fn set_unpause_lock_until(env: &Env, timestamp: u64) {
-    env.storage()
-        .instance()
-        .set(&DataKey::ULU, &timestamp);
+    env.storage().instance().set(&DataKey::ULU, &timestamp);
 }
 
 /// Clear the unpause timelock from storage.
@@ -832,9 +849,7 @@ pub fn get_pause_guardians(env: &Env) -> Vec<Address> {
 
 /// Persist the list of authorized pause guardians.
 pub fn set_pause_guardians(env: &Env, guardians: &Vec<Address>) {
-    env.storage()
-        .instance()
-        .set(&DataKey::PG, guardians);
+    env.storage().instance().set(&DataKey::PG, guardians);
 }
 
 /// Retrieve the list of guardians who have approved the current early unpause.
@@ -847,16 +862,12 @@ pub fn get_early_unpause_approvals(env: &Env) -> Vec<Address> {
 
 /// Persist the list of guardians who have approved the current early unpause.
 pub fn set_early_unpause_approvals(env: &Env, approvals: &Vec<Address>) {
-    env.storage()
-        .instance()
-        .set(&DataKey::EPA, approvals);
+    env.storage().instance().set(&DataKey::EPA, approvals);
 }
 
 /// Clear the early unpause approval list from storage.
 pub fn clear_early_unpause_approvals(env: &Env) {
-    env.storage()
-        .instance()
-        .remove(&DataKey::EPA);
+    env.storage().instance().remove(&DataKey::EPA);
 }
 
 // ── Storage key migration (v1 → v2) ──────────────────────────────────────────
@@ -911,13 +922,13 @@ pub fn migrate_storage_keys(env: &Env) {
         }};
     }
 
-    migrate_instance!("CleanupPeriod",          DataKey::CP,  u64);
-    migrate_instance!("PlatformFeeBps",         DataKey::PFB, u32);
-    migrate_instance!("RefundWindow",           DataKey::RW,  u64);
-    migrate_instance!("LargePaymentThreshold",  DataKey::LPT, i128);
-    migrate_instance!("MinRefundAmount",        DataKey::MRA, i128);
+    migrate_instance!("CleanupPeriod", DataKey::CP, u64);
+    migrate_instance!("PlatformFeeBps", DataKey::PFB, u32);
+    migrate_instance!("RefundWindow", DataKey::RW, u64);
+    migrate_instance!("LargePaymentThreshold", DataKey::LPT, i128);
+    migrate_instance!("MinRefundAmount", DataKey::MRA, i128);
     migrate_instance!("MultisigExpiryDuration", DataKey::MED, u64);
-    migrate_instance!("StoredVersion",          DataKey::SV,  soroban_sdk::String);
+    migrate_instance!("StoredVersion", DataKey::SV, soroban_sdk::String);
     // MerchantList migration — value type is Vec<Address>
     {
         let old_key = Symbol::new(env, "MerchantList");
@@ -1077,13 +1088,14 @@ pub fn record_auth_failure(env: &Env, address: &Address) -> bool {
     let seq = env.ledger().sequence();
     let (count, window_start) = get_auth_fail_count(env, address);
 
-    let (new_count, new_window) = if window_start == 0 || seq >= window_start + AUTH_FAILURE_WINDOW_LEDGERS {
-        // First failure or window expired — start a fresh window.
-        (1u32, seq)
-    } else {
-        // Still within the current window.
-        (count + 1, window_start)
-    };
+    let (new_count, new_window) =
+        if window_start == 0 || seq >= window_start + AUTH_FAILURE_WINDOW_LEDGERS {
+            // First failure or window expired — start a fresh window.
+            (1u32, seq)
+        } else {
+            // Still within the current window.
+            (count + 1, window_start)
+        };
 
     set_auth_fail_count(env, address, new_count, new_window);
 
@@ -1099,15 +1111,21 @@ pub fn record_auth_failure(env: &Env, address: &Address) -> bool {
 
 /// Returns true if the issuer has been registered as an approved token issuer.
 pub fn is_issuer_allowed(env: &Env, issuer: &Address) -> bool {
-    env.storage().instance().has(&DataKey::AllowedIssuer(issuer.clone()))
+    env.storage()
+        .instance()
+        .has(&DataKey::AllowedIssuer(issuer.clone()))
 }
 
 /// Register or deregister an issuer address.
 pub fn set_issuer_allowed(env: &Env, issuer: &Address, allowed: bool) {
     if allowed {
-        env.storage().instance().set(&DataKey::AllowedIssuer(issuer.clone()), &());
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedIssuer(issuer.clone()), &());
     } else {
-        env.storage().instance().remove(&DataKey::AllowedIssuer(issuer.clone()));
+        env.storage()
+            .instance()
+            .remove(&DataKey::AllowedIssuer(issuer.clone()));
     }
 }
 

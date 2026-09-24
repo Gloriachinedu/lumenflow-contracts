@@ -20,6 +20,15 @@ pub const MAX_REASON_LEN: u32 = 256;
 /// Maximum UTF-8 character length for merchant contact information.
 pub const MAX_CONTACT_INFO_LEN: u32 = 128;
 
+pub fn require_bounded_string(value: &String, min: u32, max: u32) -> Result<(), PaymentError> {
+    let len = value.len();
+    if len < min || len > max {
+        Err(PaymentError::InvalidInput)
+    } else {
+        Ok(())
+    }
+}
+
 /// Return ContractPaused if the contract is currently paused.
 pub fn require_not_paused(env: &Env) -> Result<(), PaymentError> {
     if storage::get_paused(env) {
