@@ -122,6 +122,40 @@
       color: #888;
       font-size: 0.875rem;
     }
+
+    .load-more-sentinel {
+      height: 1px;
+    }
+
+    .load-more-btn,
+    .loading-indicator {
+      display: none;
+      margin: 0.75rem auto;
+    }
+
+    .loading-indicator {
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      color: #888;
+      font-size: 0.875rem;
+    }
+
+    .spinner {
+      width: 1rem;
+      height: 1rem;
+      border: 2px solid #dde1e7;
+      border-top-color: #6c47ff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    @media (prefers-reduced-motion: reduce) {
+      .load-more-btn { display: flex; }
+      .spinner { animation: none; }
+    }
   </style>
 </head>
 <body>
@@ -146,16 +180,13 @@
   </table>
 </div>
 
-<!-- Pagination controls -->
+<!-- Pagination controls and infinite-scroll status -->
 <div class="pagination-bar" id="pagination-bar">
   <div class="page-meta" id="page-meta"></div>
 
   <div class="page-controls">
-    <button class="btn" id="prev-btn" onclick="prevPage()" disabled aria-label="Previous page">
-      ← Prev
-    </button>
-    <button class="btn" id="next-btn" onclick="nextPage()" disabled aria-label="Next page">
-      Next →
+    <button class="btn load-more-btn" id="load-more-btn" type="button" onclick="loadNextPage()">
+      Load more
     </button>
   </div>
 
@@ -168,14 +199,19 @@
     </select>
   </div>
 </div>
+<div id="loading-indicator" class="loading-indicator" role="status" aria-live="polite" hidden>
+  <span class="spinner" aria-hidden="true"></span>
+  Loading more payments…
+</div>
+<div id="load-more-sentinel" class="load-more-sentinel" aria-hidden="true"></div>
 
 <script>
   // ── Pagination state ───────────────────────────────────────────────────────
-  // cursor stack: index 0 = first page (null cursor), each push = next-page cursor
-  let cursorStack = [null];  // cursorStack[currentIdx] is cursor for that page
-  let currentIdx  = 0;
-  let pageSize    = 5;
-  let totalOnPage = 0;
+  let nextCursor = new URLSearchParams(window.location.search).get('cursor');
+  let pageSize = 5;
+  let isLoading = false;
+  let hasMore = true;
+  const loadedOrderIds = new Set();
 
   // ── Mock data simulating contract paginated API ────────────────────────────
   const ALL_PAYMENTS = [
@@ -222,78 +258,80 @@
   }
 
   function setLoading(on) {
-    document.getElementById('table-body').innerHTML = on
-      ? '<tr class="empty-row"><td colspan="5">Loading…</td></tr>'
-      : '';
-    document.getElementById('prev-btn').disabled = on || true;
-    document.getElementById('next-btn').disabled = on || true;
+    isLoading = on;
+    const indicator = document.getElementById('loading-indicator');
+    const button = document.getElementById('load-more-btn');
+    indicator.hidden = !on;
+    indicator.style.display = on ? 'flex' : 'none';
+    button.disabled = on || !hasMore;
   }
 
-  async function loadPage() {
+  function updateCursorInUrl() {
+    const url = new URL(window.location.href);
+    if (nextCursor) url.searchParams.set('cursor', nextCursor);
+    else url.searchParams.delete('cursor');
+    window.history.replaceState({}, '', url);
+  }
+
+  function appendPayments(payments) {
+    const tbody = document.getElementById('table-body');
+    const newPayments = payments.filter(payment => {
+      if (loadedOrderIds.has(payment.order_id)) return false;
+      loadedOrderIds.add(payment.order_id);
+      return true;
+    });
+
+    if (newPayments.length === 0 && loadedOrderIds.size === 0) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No payments found.</td></tr>';
+      return 0;
+    }
+
+    if (tbody.querySelector('.empty-row')) tbody.innerHTML = '';
+    tbody.insertAdjacentHTML('beforeend', newPayments.map(p => `
+      <tr>
+        <td><span class="order-id">${p.order_id}</span></td>
+        <td>${p.merchant_address}</td>
+        <td class="amount">${p.amount.toLocaleString()} XLM</td>
+        <td>${statusBadge(p.status)}</td>
+        <td>${p.paid_at}</td>
+      </tr>`).join(''));
+    return newPayments.length;
+  }
+
+  async function loadNextPage() {
+    if (isLoading || !hasMore) return;
     setLoading(true);
 
-    const cursor = cursorStack[currentIdx];
-    const { payments, next_cursor } = await fetchPage(cursor, pageSize);
-
-    totalOnPage = payments.length;
-
-    // Render table rows
-    const tbody = document.getElementById('table-body');
-    if (payments.length === 0) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No payments found.</td></tr>';
-    } else {
-      tbody.innerHTML = payments.map(p => `
-        <tr>
-          <td><span class="order-id">${p.order_id}</span></td>
-          <td>${p.merchant_address}</td>
-          <td class="amount">${p.amount.toLocaleString()} XLM</td>
-          <td>${statusBadge(p.status)}</td>
-          <td>${p.paid_at}</td>
-        </tr>`).join('');
-    }
-
-    // Store next cursor if we don't have it yet (first visit to this position)
-    if (next_cursor && cursorStack.length === currentIdx + 1) {
-      cursorStack.push(next_cursor);
-    }
+    const { payments, next_cursor } = await fetchPage(nextCursor, pageSize);
+    const addedCount = appendPayments(payments);
+    nextCursor = next_cursor;
+    hasMore = Boolean(nextCursor) && addedCount > 0;
+    updateCursorInUrl();
 
     // Update meta text
-    const pageNum = currentIdx + 1;
     document.getElementById('page-meta').textContent =
-      payments.length === 0
+      loadedOrderIds.size === 0
         ? 'No records'
-        : `Page ${pageNum} · showing ${payments.length} record${payments.length !== 1 ? 's' : ''}`;
+        : `Showing ${loadedOrderIds.size} record${loadedOrderIds.size !== 1 ? 's' : ''}`;
 
-    // Update button states
-    document.getElementById('prev-btn').disabled = currentIdx === 0;
-    document.getElementById('next-btn').disabled = !next_cursor;
-  }
-
-  // ── Navigation ─────────────────────────────────────────────────────────────
-  function prevPage() {
-    if (currentIdx > 0) {
-      currentIdx--;
-      loadPage();
-    }
-  }
-
-  function nextPage() {
-    if (currentIdx + 1 < cursorStack.length) {
-      currentIdx++;
-      loadPage();
-    }
+    setLoading(false);
   }
 
   function changePageSize() {
     pageSize = parseInt(document.getElementById('page-size').value, 10);
-    // Reset to first page when page size changes
-    cursorStack = [null];
-    currentIdx  = 0;
-    loadPage();
+    nextCursor = null;
+    hasMore = true;
+    loadedOrderIds.clear();
+    document.getElementById('table-body').innerHTML = '';
+    loadNextPage();
   }
 
   // ── Init ───────────────────────────────────────────────────────────────────
-  loadPage();
+  const observer = new IntersectionObserver(entries => {
+    if (entries.some(entry => entry.isIntersecting)) loadNextPage();
+  }, { rootMargin: '240px' });
+  observer.observe(document.getElementById('load-more-sentinel'));
+  loadNextPage();
 </script>
 </body>
 </html>
