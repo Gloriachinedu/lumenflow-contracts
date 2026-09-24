@@ -144,11 +144,28 @@ import { withIdempotency, IdempotentResult } from "./idempotency";
 
 export type Signer = (tx: Transaction) => Promise<Transaction> | Transaction;
 
+/**
+ * The major version of the contract API this SDK is built against.
+ * Version compatibility is defined as matching major versions (semver).
+ */
+export const SDK_CONTRACT_MAJOR_VERSION = 0;
+
 export interface ClientConfig {
   contractId: string;
   rpcUrl: string;
   networkPassphrase: string;
   signer?: Signer;
+  /**
+   * Skip the automatic contract version compatibility check on initialisation.
+   * Defaults to `false`.
+   */
+  skipVersionCheck?: boolean;
+  /**
+   * Throw an error instead of logging a warning when the contract major version
+   * does not match the SDK's expected major version.
+   * Defaults to `false`.
+   */
+  strictVersionCheck?: boolean;
 }
 
 export class LumenFlowClient {
@@ -156,12 +173,88 @@ export class LumenFlowClient {
   public readonly server: SorobanRpc.Server;
   public readonly networkPassphrase: string;
   private signer?: Signer;
+  private skipVersionCheck: boolean;
+  private strictVersionCheck: boolean;
 
   constructor(config: ClientConfig) {
     this.contract = new Contract(config.contractId);
     this.server = new SorobanRpc.Server(config.rpcUrl);
     this.networkPassphrase = config.networkPassphrase;
     this.signer = config.signer;
+    this.skipVersionCheck = config.skipVersionCheck ?? false;
+    this.strictVersionCheck = config.strictVersionCheck ?? false;
+  }
+
+  /**
+   * Check that the deployed contract version is compatible with this SDK.
+   *
+   * Compatibility is defined as having the same major version (semver).
+   * Call this once after construction — it is invoked automatically by
+   * {@link init}.
+   *
+   * @throws {Error} when `strictVersionCheck` is `true` and the major versions differ.
+   */
+  async checkContractVersion(): Promise<void> {
+    if (this.skipVersionCheck) {
+      return;
+    }
+
+    let rawVersion: string;
+    try {
+      rawVersion = await this.getContractVersion();
+    } catch (err) {
+      // If we cannot fetch the version, log a warning and proceed so that
+      // callers are not hard-blocked by transient RPC issues.
+      console.warn(
+        "[LumenFlowSDK] Unable to fetch contract version for compatibility check:",
+        err
+      );
+      return;
+    }
+
+    const contractMajor = parseInt(rawVersion.split(".")[0] ?? "0", 10);
+    if (isNaN(contractMajor)) {
+      console.warn(
+        `[LumenFlowSDK] Contract returned an unparseable version string: "${rawVersion}". ` +
+          "Skipping version check."
+      );
+      return;
+    }
+
+    if (contractMajor !== SDK_CONTRACT_MAJOR_VERSION) {
+      const message =
+        `[LumenFlowSDK] Contract version mismatch: SDK expects major version ` +
+        `${SDK_CONTRACT_MAJOR_VERSION} but contract reports "${rawVersion}" ` +
+        `(major ${contractMajor}). Silent serialisation failures may occur.`;
+
+      if (this.strictVersionCheck) {
+        throw new Error(message);
+      } else {
+        console.warn(message);
+      }
+    }
+  }
+
+  /**
+   * Initialise the client by verifying contract version compatibility.
+   *
+   * This is a convenience factory that constructs the client and immediately
+   * runs the version check. Use this instead of the constructor when you want
+   * to ensure compatibility before issuing any contract calls.
+   *
+   * @example
+   * ```typescript
+   * const client = await LumenFlowClient.init({
+   *   contractId: "C...",
+   *   rpcUrl: "https://soroban-testnet.stellar.org",
+   *   networkPassphrase: Networks.TESTNET,
+   * });
+   * ```
+   */
+  static async init(config: ClientConfig): Promise<LumenFlowClient> {
+    const client = new LumenFlowClient(config);
+    await client.checkContractVersion();
+    return client;
   }
 
   /**
@@ -172,6 +265,13 @@ export class LumenFlowClient {
   }
 
   // ── Admin ─────────────────────────────────────────────────────────────────
+
+  /**
+   * Fetch the version string deployed in the contract (e.g. `"0.2.0"`).
+   */
+  async getContractVersion(): Promise<string> {
+    return await this.call("get_contract_version", []);
+  }
 
   async setAdmin(admin: string): Promise<void> {
     await this.invoke("set_admin", [new Address(admin)]);
