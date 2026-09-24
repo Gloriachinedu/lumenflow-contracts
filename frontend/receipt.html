@@ -123,6 +123,64 @@
     .state-box p  { color: #666; font-size: 0.9rem; }
 
     #loading, #not-found, #receipt-content { display: none; }
+
+    @media print {
+      @page { margin: 1.5cm; }
+
+      body {
+        background: #fff;
+        color: #000;
+        display: block;
+        padding: 0;
+      }
+
+      nav,
+      .wallet-status-bar,
+      .actions,
+      footer {
+        display: none !important;
+      }
+
+      .receipt {
+        width: 100%;
+        max-width: none;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+      }
+
+      #receipt-content,
+      .receipt-header,
+      .field,
+      .refunds-section,
+      .refund-item {
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
+
+      #receipt-content {
+        display: block !important;
+      }
+
+      .receipt-header {
+        border-bottom-color: #000;
+      }
+
+      .field .value.amount,
+      .verified-badge {
+        color: #000;
+      }
+
+      img,
+      svg,
+      canvas,
+      .qr-code {
+        max-width: 100%;
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
+    }
   </style>
 </head>
 <body>
