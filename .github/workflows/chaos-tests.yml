@@ -1,0 +1,30 @@
+name: RPC chaos tests
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 1"
+
+jobs:
+  chaos:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Start Toxiproxy
+        run: docker compose up -d toxiproxy
+      - name: Create RPC proxy
+        run: |
+          curl --fail --retry 10 --retry-delay 2 -X POST http://localhost:8474/proxies \
+            -H 'content-type: application/json' \
+            -d '{"name":"lumenflow-rpc","listen":"0.0.0.0:18000","upstream":"host.docker.internal:8000"}'
+      - name: Run opt-in chaos tests
+        run: CHAOS_TESTS=1 node --test tests/chaos/rpc-chaos.test.mjs 2>&1 | tee chaos-results.log
+      - name: Upload chaos results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpc-chaos-results
+          path: chaos-results.log
