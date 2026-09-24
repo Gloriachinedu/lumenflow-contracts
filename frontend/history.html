@@ -244,6 +244,50 @@
       outline: 2px solid #6c47ff;
       outline-offset: 2px;
     }
+
+    .modal-backdrop[hidden] { display: none; }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      display: grid;
+      place-items: center;
+      padding: 1rem;
+      background: rgba(15, 18, 30, 0.55);
+    }
+    .shortcut-modal {
+      width: min(100%, 30rem);
+      max-height: min(32rem, calc(100vh - 2rem));
+      overflow: auto;
+      padding: 1.5rem;
+      background: #fff;
+      color: #1a1a2e;
+      border-radius: 12px;
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.25);
+    }
+    .shortcut-modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+    .shortcut-modal h2 { font-size: 1.15rem; }
+    .shortcut-list { display: grid; gap: 0.75rem; list-style: none; }
+    .shortcut-list li { display: flex; justify-content: space-between; gap: 1rem; }
+    .shortcut-list kbd {
+      min-width: 3.5rem;
+      padding: 0.15rem 0.4rem;
+      border: 1px solid #ccd1dc;
+      border-radius: 4px;
+      background: #f5f7fa;
+      text-align: center;
+      font: 0.8rem monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      .shortcut-modal { background: #202434; color: #f5f7fa; }
+      .shortcut-list kbd { border-color: #596176; background: #30374b; }
+    }
   </style>
 </head>
 <body>
@@ -345,6 +389,18 @@
   </div>
 </div>
 
+<div id="keyboard-help" class="modal-backdrop" hidden>
+  <section class="shortcut-modal" role="dialog" aria-modal="true" aria-labelledby="keyboard-help-title" tabindex="-1">
+    <div class="shortcut-modal-header">
+      <h2 id="keyboard-help-title">Keyboard shortcuts</h2>
+      <button id="keyboard-help-close" class="btn-icon" type="button" aria-label="Close keyboard shortcuts">&times;</button>
+    </div>
+    <ul id="shortcut-list" class="shortcut-list"></ul>
+  </section>
+</div>
+
+<script src="./focus-management.js"></script>
+<script src="./filter-keyboard.js"></script>
 <script>
   // ── Config ──────────────────────────────────────────────────────────────────
   const CONTRACT_ID = window.LUMENFLOW_CONTRACT_ID || '';
@@ -552,6 +608,48 @@
   }
 
   function retryFetch() { updateResults(); }
+
+  function resetFilters() {
+    Object.keys(filters).forEach(key => { filters[key] = key === 'status' ? 'Any' : ''; });
+    document.querySelectorAll('.filter-group input').forEach(input => { input.value = ''; });
+    document.getElementById('token-selector').value = '';
+    document.getElementById('status-selector').value = 'Any';
+    updateUrl();
+    renderActiveFilters();
+    updateResults();
+  }
+
+  const helpModal = document.getElementById('keyboard-help');
+  const helpDialog = helpModal.querySelector('[role="dialog"]');
+  const helpClose = document.getElementById('keyboard-help-close');
+  const shortcutList = document.getElementById('shortcut-list');
+  [...FILTER_KEYBOARD_SHORTCUTS, ...FOCUS_MANAGEMENT_SHORTCUTS].forEach(shortcut => {
+    const item = document.createElement('li');
+    item.innerHTML = `<kbd>${shortcut.key}</kbd><span>${shortcut.description}</span>`;
+    shortcutList.appendChild(item);
+  });
+
+  function closeKeyboardHelp() {
+    helpModal.hidden = true;
+    FocusManagement.deactivate();
+  }
+
+  function openKeyboardHelp() {
+    helpModal.hidden = false;
+    FocusManagement.activate(helpDialog, helpClose);
+  }
+
+  helpClose.addEventListener('click', closeKeyboardHelp);
+  helpModal.addEventListener('click', event => {
+    if (event.target === helpModal) closeKeyboardHelp();
+  });
+  helpDialog.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeKeyboardHelp();
+    }
+  });
+  initializeFilterKeyboard({ onHelp: openKeyboardHelp, onReset: resetFilters });
 
   // ── Event Listeners ─────────────────────────────────────────────────────────
   const inputBindings = [
