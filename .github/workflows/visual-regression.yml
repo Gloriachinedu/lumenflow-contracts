@@ -1,0 +1,105 @@
+name: Visual Regression Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  visual-regression:
+    name: Visual Regression – Frontend UI
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: tests/package.json
+
+      - name: Install test dependencies
+        run: npm install
+        working-directory: tests
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+        working-directory: tests
+
+      - name: Run visual regression tests
+        run: npx playwright test playwright/visual-regression.spec.ts --reporter=list,html
+        working-directory: tests
+        env:
+          BASE_URL: http://localhost:3000
+          CI: "true"
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-visual
+          path: tests/playwright-report/
+          retention-days: 14
+
+      - name: Upload diff images on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-regression-diffs
+          path: |
+            tests/test-results/**/*-diff.png
+            tests/test-results/**/*-actual.png
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Baseline update workflow
+  #
+  # To approve new baselines after intentional UI changes:
+  #   1. Open a PR with your UI changes.
+  #   2. A maintainer triggers this job manually from the Actions tab.
+  #   3. The job updates baselines and opens a follow-up PR for review.
+  # ---------------------------------------------------------------------------
+  update-baselines:
+    name: Update Visual Baselines
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Use a PAT so the commit can trigger status checks
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: tests/package.json
+
+      - name: Install test dependencies
+        run: npm install
+        working-directory: tests
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+        working-directory: tests
+
+      - name: Update screenshot baselines
+        run: npx playwright test playwright/visual-regression.spec.ts --update-snapshots
+        working-directory: tests
+        env:
+          BASE_URL: http://localhost:3000
+          CI: "true"
+
+      - name: Commit updated baselines
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: "tests/playwright/screenshots/"
+          message: "chore(tests): update visual regression baselines [skip ci]"
+          default_author: github_actions

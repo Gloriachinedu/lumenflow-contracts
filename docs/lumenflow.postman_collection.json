@@ -1,0 +1,411 @@
+{
+  "info": {
+    "name": "LumenFlow Contract API",
+    "description": "Complete Postman collection for the LumenFlow Soroban smart contract on Stellar. Covers all contract function categories: admin, merchant management, payment processing, refunds, and multi-signature payments.\n\n## Setup\n1. Import this collection into Postman v10+.\n2. Create an environment and set the variables listed below.\n3. Run requests in order within each folder, or use individual requests as needed.\n\n## Environment Variables\n| Variable | Description | Example |\n|---|---|---|\n| `RPC_URL` | Soroban RPC endpoint | `https://soroban-testnet.stellar.org` |\n| `NETWORK_PASSPHRASE` | Stellar network passphrase | `Test SDF Network ; September 2015` |\n| `CONTRACT_ID` | Deployed LumenFlow contract ID | `CAAAA...` |\n| `ADMIN_ADDRESS` | Admin Stellar address | `GAAA...` |\n| `ADMIN_SECRET` | Admin secret key | `SAAA...` |\n| `MERCHANT_ADDRESS` | Merchant Stellar address | `GBBB...` |\n| `MERCHANT_SECRET` | Merchant secret key | `SBBB...` |\n| `PAYER_ADDRESS` | Payer Stellar address | `GCCC...` |\n| `PAYER_SECRET` | Payer secret key | `SCCC...` |\n| `TOKEN_ADDRESS` | SAC token contract address | `CDDD...` |\n| `ORDER_ID` | Example order ID | `ORDER_001` |\n| `REFUND_ID` | Example refund ID | `REFUND_001` |\n| `PAYMENT_ID` | Example multisig payment ID | `MS_001` |",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "version": {
+      "major": 1,
+      "minor": 0,
+      "patch": 0
+    }
+  },
+  "variable": [
+    { "key": "RPC_URL", "value": "https://soroban-testnet.stellar.org", "type": "string" },
+    { "key": "NETWORK_PASSPHRASE", "value": "Test SDF Network ; September 2015", "type": "string" },
+    { "key": "CONTRACT_ID", "value": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4", "type": "string" },
+    { "key": "ADMIN_ADDRESS", "value": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", "type": "string" },
+    { "key": "MERCHANT_ADDRESS", "value": "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "type": "string" },
+    { "key": "PAYER_ADDRESS", "value": "GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", "type": "string" },
+    { "key": "TOKEN_ADDRESS", "value": "CDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD", "type": "string" },
+    { "key": "ORDER_ID", "value": "ORDER_001", "type": "string" },
+    { "key": "REFUND_ID", "value": "REFUND_001", "type": "string" },
+    { "key": "PAYMENT_ID", "value": "MS_001", "type": "string" }
+  ],
+  "item": [
+
+    {
+      "name": "Admin",
+      "description": "Admin-only operations: initialise the contract, configure thresholds, pause/unpause, cleanup and archive payments, and query global statistics.",
+      "item": [
+        {
+          "name": "Set Admin",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account {{ADMIN_SECRET}} --network-passphrase '{{NETWORK_PASSPHRASE}}' --rpc-url {{RPC_URL}} -- set_admin --admin {{ADMIN_ADDRESS}}>\"\n  }\n}"
+            },
+            "description": "One-time initialisation. Sets the contract admin. Must be called before any other admin functions.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $ADMIN_SECRET \\\n  --rpc-url $RPC_URL \\\n  --network-passphrase \"$NETWORK_PASSPHRASE\" \\\n  -- set_admin \\\n  --admin $ADMIN_ADDRESS\n```\n\n**Expected response:** `null` (void, no return value)\n\n**Errors:** `AlreadyInitialized` if admin is already set."
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"results\":[{\"xdr\":\"AAAAAA==\"}],\"cost\":{\"cpuInsns\":\"500000\",\"memBytes\":\"1000\"}}}"
+            }
+          ]
+        },
+        {
+          "name": "Set Payment Cleanup Period",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 2,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account {{ADMIN_SECRET}} -- set_payment_cleanup_period --admin {{ADMIN_ADDRESS}} --period 7776000>\"\n  }\n}"
+            },
+            "description": "Sets how long (in seconds) a payment record is retained before it becomes eligible for cleanup.\n\nDefault: `2592000` (30 days). Example value `7776000` = 90 days.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $ADMIN_SECRET \\\n  -- set_payment_cleanup_period \\\n  --admin $ADMIN_ADDRESS \\\n  --period 7776000\n```\n\n**Expected response:** `null`\n\n**Errors:** `Unauthorized` if caller is not admin."
+          },
+          "response": []
+        },
+        {
+          "name": "Cleanup Expired Payments",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 3,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account {{ADMIN_SECRET}} -- cleanup_expired_payments --admin {{ADMIN_ADDRESS}}>\"\n  }\n}"
+            },
+            "description": "Deletes all payment records older than `CleanupPeriod` seconds. Also removes corresponding entries from `MerchantPayments` and `PayerPayments` indexes. Idempotent — safe to call multiple times.\n\nSee [docs/storage-schema.md](storage-schema.md) for full details on which keys are deleted.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $ADMIN_SECRET \\\n  -- cleanup_expired_payments \\\n  --admin $ADMIN_ADDRESS\n```\n\n**Expected response:** `null`\n\n**Errors:** `Unauthorized`, `NotInitialized`"
+          },
+          "response": []
+        },
+        {
+          "name": "Archive Payment Record",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 4,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account {{ADMIN_SECRET}} -- archive_payment_record --admin {{ADMIN_ADDRESS}} --order_id {{ORDER_ID}}>\"\n  }\n}"
+            },
+            "description": "Explicitly removes a single payment record regardless of age. Use for manual archiving.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $ADMIN_SECRET \\\n  -- archive_payment_record \\\n  --admin $ADMIN_ADDRESS \\\n  --order_id \"$ORDER_ID\"\n```\n\n**Expected response:** `null`\n\n**Errors:** `Unauthorized`, `PaymentNotFound`"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Global Payment Stats",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 5,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account {{ADMIN_SECRET}} -- get_global_payment_stats --admin {{ADMIN_ADDRESS}} --date_start null --date_end null>\"\n  }\n}"
+            },
+            "description": "Returns aggregate payment and refund statistics. Optionally filter by date range.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $ADMIN_SECRET \\\n  -- get_global_payment_stats \\\n  --admin $ADMIN_ADDRESS \\\n  --date_start null \\\n  --date_end null\n```\n\n**Expected response:**\n```json\n{\n  \"total_payments\": 142,\n  \"total_volume\": 5832000,\n  \"total_refunds\": 8,\n  \"total_refund_volume\": 120000,\n  \"active_merchants\": 17\n}\n```\n\n**Errors:** `Unauthorized`"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"jsonrpc\":\"2.0\",\"id\":5,\"result\":{\"results\":[{\"xdr\":\"<GlobalStats XDR>\"}],\"cost\":{\"cpuInsns\":\"200000\",\"memBytes\":\"500\"}}}"
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "Merchant Management",
+      "description": "Register merchants, update profiles, deactivate accounts, and query merchant data.",
+      "item": [
+        {
+          "name": "Register Merchant",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 10,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $MERCHANT_SECRET -- register_merchant --merchant_address {{MERCHANT_ADDRESS}} --name 'Acme Store' --description 'Online retailer' --contact_info 'contact@acme.com' --category Retail>\"\n  }\n}"
+            },
+            "description": "Registers a new merchant profile. The merchant_address must sign the transaction.\n\n**Categories:** `Retail` | `Food` | `Services` | `Digital` | `Other`\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $MERCHANT_SECRET \\\n  -- register_merchant \\\n  --merchant_address $MERCHANT_ADDRESS \\\n  --name \"Acme Store\" \\\n  --description \"Online retailer\" \\\n  --contact_info \"contact@acme.com\" \\\n  --category Retail\n```\n\n**Expected response:** `null`\n\n**Errors:** `AlreadyRegistered`, `InvalidInput` (empty name/description)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Merchant",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 11,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $CALLER_SECRET -- get_merchant --merchant_address {{MERCHANT_ADDRESS}}>\"\n  }\n}"
+            },
+            "description": "Retrieves a merchant profile. Any caller may read merchant data.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $CALLER_SECRET \\\n  -- get_merchant \\\n  --merchant_address $MERCHANT_ADDRESS\n```\n\n**Expected response:**\n```json\n{\n  \"address\": \"GBBB...\",\n  \"name\": \"Acme Store\",\n  \"description\": \"Online retailer\",\n  \"contact_info\": \"contact@acme.com\",\n  \"category\": \"Retail\",\n  \"active\": true,\n  \"verified\": false,\n  \"registered_at\": 1706745600,\n  \"total_received\": 5832000\n}\n```\n\n**Errors:** `MerchantNotFound`"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"jsonrpc\":\"2.0\",\"id\":11,\"result\":{\"results\":[{\"xdr\":\"<Merchant XDR>\"}]}}"
+            }
+          ]
+        },
+        {
+          "name": "Is Registered",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 12,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $CALLER_SECRET -- is_registered --address {{MERCHANT_ADDRESS}}>\"\n  }\n}"
+            },
+            "description": "Returns `true` if the address has a registered merchant profile, `false` otherwise.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $CALLER_SECRET \\\n  -- is_registered \\\n  --address $MERCHANT_ADDRESS\n```\n\n**Expected response:** `true` or `false`"
+          },
+          "response": []
+        },
+        {
+          "name": "Deactivate Merchant",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 13,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account {{ADMIN_ADDRESS}} -- deactivate_merchant --admin {{ADMIN_ADDRESS}} --merchant_address {{MERCHANT_ADDRESS}}>\"\n  }\n}"
+            },
+            "description": "Sets the merchant's `active` flag to `false`. Admin only. The merchant record is retained; payments to a deactivated merchant are rejected.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $ADMIN_SECRET \\\n  -- deactivate_merchant \\\n  --admin $ADMIN_ADDRESS \\\n  --merchant_address $MERCHANT_ADDRESS\n```\n\n**Expected response:** `null`\n\n**Errors:** `Unauthorized`, `MerchantNotFound`"
+          },
+          "response": []
+        }
+      ]
+    },
+
+    {
+      "name": "Payment Processing",
+      "description": "Process single and batch payments, query payment records, and manage payment history.",
+      "item": [
+        {
+          "name": "Process Payment With Signature",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 20,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $PAYER_SECRET -- process_payment_with_signature --payer {{PAYER_ADDRESS}} --order_id {{ORDER_ID}} --merchant_address {{MERCHANT_ADDRESS}} --token_address {{TOKEN_ADDRESS}} --amount 5000 --memo 'Invoice #001' --signature <ed25519-sig-bytes> --merchant_public_key <ed25519-pubkey-bytes>>\"\n  }\n}"
+            },
+            "description": "Processes a single payment verified by an Ed25519 merchant signature.\n\nThe `signature` is computed off-chain by the merchant over:\n`SHA-256(order_id || payer || merchant_address || token_address || amount || memo)`\n\nSee [docs/signature-format.md](signature-format.md) for the canonical byte layout and SDK helpers.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $PAYER_SECRET \\\n  -- process_payment_with_signature \\\n  --payer $PAYER_ADDRESS \\\n  --order_id \"ORDER_001\" \\\n  --merchant_address $MERCHANT_ADDRESS \\\n  --token_address $TOKEN_ADDRESS \\\n  --amount 5000 \\\n  --memo \"Invoice #001\" \\\n  --signature <ed25519-sig-bytes> \\\n  --merchant_public_key <ed25519-pubkey-bytes>\n```\n\n**Expected response:** `null`\n\n**Errors:** `InvalidSignature`, `DuplicateOrderId`, `MerchantNotFound`, `MerchantInactive`, `InsufficientBalance`"
+          },
+          "response": []
+        },
+        {
+          "name": "Process Batch Payment",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 21,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $PAYER_SECRET -- process_batch_payment --payer {{PAYER_ADDRESS}} --items '[{\\\"order_id\\\":\\\"ORDER_001\\\",\\\"merchant_address\\\":\\\"{{MERCHANT_ADDRESS}}\\\",\\\"token_address\\\":\\\"{{TOKEN_ADDRESS}}\\\",\\\"amount\\\":5000,\\\"memo\\\":\\\"Invoice #001\\\",\\\"signature\\\":\\\"a1b2c3...\\\",\\\"merchant_public_key\\\":\\\"ed25519key01...\\\"},{\\\"order_id\\\":\\\"ORDER_002\\\",\\\"merchant_address\\\":\\\"{{MERCHANT_ADDRESS}}\\\",\\\"token_address\\\":\\\"{{TOKEN_ADDRESS}}\\\",\\\"amount\\\":12000,\\\"memo\\\":\\\"Invoice #002\\\",\\\"signature\\\":\\\"b2c3d4...\\\",\\\"merchant_public_key\\\":\\\"ed25519key01...\\\"},{\\\"order_id\\\":\\\"ORDER_003\\\",\\\"merchant_address\\\":\\\"{{MERCHANT_ADDRESS}}\\\",\\\"token_address\\\":\\\"{{TOKEN_ADDRESS}}\\\",\\\"amount\\\":800,\\\"memo\\\":\\\"Invoice #003\\\",\\\"signature\\\":\\\"c3d4e5...\\\",\\\"merchant_public_key\\\":\\\"ed25519key01...\\\"}]'>\"\n  }\n}"
+            },
+            "description": "Process up to **10 payments** in a single invocation. Non-atomic: each item is processed independently. See [docs/batch-payments.md](batch-payments.md) for full details on partial failures, error codes, and idempotent re-submission.\n\n**Max batch size:** 10 items\n\n**Expected response (per-item results):**\n```json\n{\n  \"results\": [\n    { \"order_id\": \"ORDER_001\", \"status\": \"success\" },\n    { \"order_id\": \"ORDER_002\", \"status\": \"error\", \"code\": \"InvalidSignature\" },\n    { \"order_id\": \"ORDER_003\", \"status\": \"success\" }\n  ]\n}\n```\n\n**Errors (per-item):** `InvalidSignature`, `DuplicateOrderId`, `MerchantNotFound`, `BatchTooLarge`"
+          },
+          "response": [
+            {
+              "name": "Partial Success (item 2 fails)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"jsonrpc\":\"2.0\",\"id\":21,\"result\":{\"results\":[{\"xdr\":\"<batch results XDR>\"}]}}"
+            }
+          ]
+        },
+        {
+          "name": "Get Payment By ID",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 22,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $CALLER_SECRET -- get_payment_by_id --caller $CALLER_ADDRESS --order_id {{ORDER_ID}}>\"\n  }\n}"
+            },
+            "description": "Retrieves a single payment record by order ID. Caller must be the payer, merchant, or admin.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $CALLER_SECRET \\\n  -- get_payment_by_id \\\n  --caller $CALLER_ADDRESS \\\n  --order_id \"ORDER_001\"\n```\n\n**Expected response:**\n```json\n{\n  \"order_id\": \"ORDER_001\",\n  \"merchant_address\": \"GBBB...\",\n  \"payer\": \"GCCC...\",\n  \"token\": \"CDDD...\",\n  \"amount\": 5000,\n  \"status\": \"Completed\",\n  \"paid_at\": 1706745600,\n  \"refunded_amount\": 0,\n  \"memo\": \"Invoice #001\"\n}\n```\n\n**Errors:** `PaymentNotFound`, `Unauthorized`"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Merchant Payment History",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 23,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $MERCHANT_SECRET -- get_merchant_payment_history --merchant {{MERCHANT_ADDRESS}} --cursor null --limit 10 --filter null --sort_field Date --sort_order Descending>\"\n  }\n}"
+            },
+            "description": "Returns a paginated, filtered, and sorted list of payments for a merchant. Uses cursor-based pagination (see ADR-002).\n\n**Sort fields:** `Date` | `Amount`\n**Sort orders:** `Ascending` | `Descending`\n**Max page size:** 100\n**Filter fields:** `date_start`, `date_end`, `amount_min`, `amount_max`, `token`, `status`\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $MERCHANT_SECRET \\\n  -- get_merchant_payment_history \\\n  --merchant $MERCHANT_ADDRESS \\\n  --cursor null \\\n  --limit 10 \\\n  --filter null \\\n  --sort_field Date \\\n  --sort_order Descending\n```\n\n**Expected response:**\n```json\n{\n  \"payments\": [ { \"order_id\": \"ORDER_001\", ... } ],\n  \"next_cursor\": \"ORDER_001\",\n  \"total\": 42\n}\n```"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Payer Payment History",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 24,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $PAYER_SECRET -- get_payer_payment_history --payer {{PAYER_ADDRESS}} --cursor null --limit 10 --filter '{\\\"amount_min\\\":100,\\\"amount_max\\\":5000,\\\"status\\\":\\\"Any\\\"}' --sort_field Amount --sort_order Ascending>\"\n  }\n}"
+            },
+            "description": "Returns a paginated payment history for a payer, with optional amount/status/date filters.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $PAYER_SECRET \\\n  -- get_payer_payment_history \\\n  --payer $PAYER_ADDRESS \\\n  --cursor null \\\n  --limit 10 \\\n  --filter '{\"amount_min\":100,\"amount_max\":5000,\"status\":\"Any\"}' \\\n  --sort_field Amount \\\n  --sort_order Ascending\n```\n\n**Status filter values:** `Any` | `Completed` | `PartiallyRefunded` | `FullyRefunded`"
+          },
+          "response": []
+        }
+      ]
+    },
+
+    {
+      "name": "Refunds",
+      "description": "Full refund lifecycle: initiate → approve/reject → execute. See docs/refund-lifecycle.md for the state diagram.",
+      "item": [
+        {
+          "name": "Initiate Refund",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 30,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $CALLER_SECRET -- initiate_refund --caller $CALLER_ADDRESS --refund_id {{REFUND_ID}} --order_id {{ORDER_ID}} --amount 500 --reason 'Customer request'>\"\n  }\n}"
+            },
+            "description": "Opens a refund request for an existing payment. Caller must be the payer or merchant.\n\n**Refund rules:**\n- Window: 30 days from `paid_at`\n- Partial refunds allowed; cumulative total cannot exceed original payment amount\n- Max refunds per order: `MaxRefundsPerOrder` (default 5)\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $CALLER_SECRET \\\n  -- initiate_refund \\\n  --caller $CALLER_ADDRESS \\\n  --refund_id \"REFUND_001\" \\\n  --order_id \"ORDER_001\" \\\n  --amount 500 \\\n  --reason \"Customer request\"\n```\n\n**Expected response:** `null`\n\n**Errors:** `Unauthorized`, `PaymentNotFound`, `RefundWindowExpired`, `RefundLimitExceeded`, `AmountExceedsPayment`"
+          },
+          "response": []
+        },
+        {
+          "name": "Approve Refund",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 31,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $MERCHANT_SECRET -- approve_refund --caller {{MERCHANT_ADDRESS}} --refund_id {{REFUND_ID}}>\"\n  }\n}"
+            },
+            "description": "Approves a pending refund. Caller must be the merchant or admin.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $MERCHANT_SECRET \\\n  -- approve_refund \\\n  --caller $MERCHANT_ADDRESS \\\n  --refund_id \"REFUND_001\"\n```\n\n**Expected response:** `null`\n\n**Errors:** `Unauthorized`, `RefundNotFound`, `InvalidRefundStatus` (must be Pending)"
+          },
+          "response": []
+        },
+        {
+          "name": "Reject Refund",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 32,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $MERCHANT_SECRET -- reject_refund --caller {{MERCHANT_ADDRESS}} --refund_id {{REFUND_ID}}>\"\n  }\n}"
+            },
+            "description": "Rejects a pending refund. Caller must be the merchant or admin.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $MERCHANT_SECRET \\\n  -- reject_refund \\\n  --caller $MERCHANT_ADDRESS \\\n  --refund_id \"REFUND_001\"\n```\n\n**Expected response:** `null`\n\n**Errors:** `Unauthorized`, `RefundNotFound`, `InvalidRefundStatus` (must be Pending)"
+          },
+          "response": []
+        },
+        {
+          "name": "Execute Refund",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 33,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $MERCHANT_SECRET -- execute_refund --refund_id {{REFUND_ID}}>\"\n  }\n}"
+            },
+            "description": "Executes an approved refund, transferring tokens from merchant back to payer. Caller must be the merchant (who signs the token transfer).\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $MERCHANT_SECRET \\\n  -- execute_refund \\\n  --refund_id \"REFUND_001\"\n```\n\n**Expected response:** `null`\n\n**Errors:** `Unauthorized`, `RefundNotFound`, `InvalidRefundStatus` (must be Approved), `InsufficientBalance`"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Refund",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 34,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $CALLER_SECRET -- get_refund --refund_id {{REFUND_ID}}>\"\n  }\n}"
+            },
+            "description": "Returns the current state of a refund record.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $CALLER_SECRET \\\n  -- get_refund \\\n  --refund_id \"REFUND_001\"\n```\n\n**Expected response:**\n```json\n{\n  \"refund_id\": \"REFUND_001\",\n  \"order_id\": \"ORDER_001\",\n  \"initiator\": \"GCCC...\",\n  \"amount\": 500,\n  \"reason\": \"Customer request\",\n  \"status\": \"Approved\",\n  \"created_at\": 1706832000\n}\n```\n\n**Status values:** `Pending` | `Approved` | `Rejected` | `Completed` | `Disputed`\n\n**Errors:** `RefundNotFound`"
+          },
+          "response": []
+        }
+      ]
+    },
+
+    {
+      "name": "Multi-Signature Payments",
+      "description": "Initiate, sign, and execute multi-signature payments that require threshold approvals from a defined signer set.",
+      "item": [
+        {
+          "name": "Initiate Multisig Payment",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 40,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $INITIATOR_SECRET -- initiate_multisig_payment --initiator $INITIATOR_ADDRESS --payment_id {{PAYMENT_ID}} --merchant_address {{MERCHANT_ADDRESS}} --token_address {{TOKEN_ADDRESS}} --amount 5000 --signers '[\\\"GSIGNER1...\\\",\\\"GSIGNER2...\\\"]' --required_signatures 2>\"\n  }\n}"
+            },
+            "description": "Creates a new multi-signature payment requiring `required_signatures` out of the listed `signers` to approve before execution.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $INITIATOR_SECRET \\\n  -- initiate_multisig_payment \\\n  --initiator $INITIATOR_ADDRESS \\\n  --payment_id \"MS_001\" \\\n  --merchant_address $MERCHANT_ADDRESS \\\n  --token_address $TOKEN_ADDRESS \\\n  --amount 5000 \\\n  --signers '[\"GSIGNER1...\",\"GSIGNER2...\"]' \\\n  --required_signatures 2\n```\n\n**Expected response:** `null`\n\n**Errors:** `DuplicatePaymentId`, `InvalidInput` (required_signatures > signers count), `MerchantNotFound`"
+          },
+          "response": []
+        },
+        {
+          "name": "Sign Multisig Payment",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 41,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $SIGNER_SECRET -- sign_multisig_payment --signer $SIGNER_ADDRESS --payment_id {{PAYMENT_ID}} --signature <ed25519-sig-bytes>>\"\n  }\n}"
+            },
+            "description": "Adds a signature from one of the authorised signers. Once `required_signatures` threshold is met, the payment is ready to execute.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $SIGNER_SECRET \\\n  -- sign_multisig_payment \\\n  --signer $SIGNER_ADDRESS \\\n  --payment_id \"MS_001\" \\\n  --signature <ed25519-sig-bytes>\n```\n\n**Expected response:** `null`\n\n**Errors:** `PaymentNotFound`, `Unauthorized` (signer not in list), `AlreadySigned`, `PaymentAlreadyExecuted`"
+          },
+          "response": []
+        },
+        {
+          "name": "Execute Multisig Payment",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 42,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $PAYER_SECRET -- execute_multisig_payment --payer {{PAYER_ADDRESS}} --payment_id {{PAYMENT_ID}}>\"\n  }\n}"
+            },
+            "description": "Executes the multisig payment once the required signature threshold has been met. The payer triggers the final token transfer.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $PAYER_SECRET \\\n  -- execute_multisig_payment \\\n  --payer $PAYER_ADDRESS \\\n  --payment_id \"MS_001\"\n```\n\n**Expected response:** `null`\n\n**Errors:** `PaymentNotFound`, `ThresholdNotMet` (not enough signatures yet), `PaymentAlreadyExecuted`, `InsufficientBalance`"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Multisig Payment",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 43,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $CALLER_SECRET -- get_multisig_payment --payment_id {{PAYMENT_ID}}>\"\n  }\n}"
+            },
+            "description": "Returns the current state of a multisig payment, including collected signatures and execution status.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $CALLER_SECRET \\\n  -- get_multisig_payment \\\n  --payment_id \"MS_001\"\n```\n\n**Expected response:**\n```json\n{\n  \"payment_id\": \"MS_001\",\n  \"merchant_address\": \"GBBB...\",\n  \"token\": \"CDDD...\",\n  \"amount\": 5000,\n  \"required_signatures\": 2,\n  \"signers\": [\"GSIGNER1...\", \"GSIGNER2...\"],\n  \"signatures\": [\"<sig1>\"],\n  \"executed\": false,\n  \"created_at\": 1706832000\n}\n```\n\n**Errors:** `PaymentNotFound`"
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

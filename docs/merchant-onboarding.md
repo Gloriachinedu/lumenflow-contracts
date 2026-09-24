@@ -1,156 +1,109 @@
 # Merchant Onboarding Guide
 
-This guide explains how to register a merchant with LumenFlow, including the recommended commit-reveal registration flow that protects against front-running attacks.
+This guide walks new merchants through the LumenFlow registration process using the onboarding wizard at [`frontend/onboarding.html`](../frontend/onboarding.html).
 
 ---
 
-## Background: The Front-Running Problem
+## Overview
 
-A naive single-transaction registration is vulnerable to front-running:
-
-1. An attacker monitors the Stellar mempool.
-2. The attacker sees a pending `register_merchant` transaction for address `G...`.
-3. The attacker submits their own `register_merchant` for the same address with different (malicious) details.
-4. If the attacker's transaction is included first, they control that merchant profile.
-
-The commit-reveal pattern eliminates this attack by separating registration into two phases, with a cryptographic commitment that binds the registrant to their intended data before it is publicly visible.
+The onboarding wizard is a 5-step flow that guides merchants from wallet connection through contract registration. No backend or build step is required — it runs entirely in the browser.
 
 ---
 
-## Recommended Flow: Commit-Reveal Registration
+## Step-by-Step Walkthrough
 
-### Phase 1 — Commit
+### Step 1 — Welcome
 
-The merchant submits a hash of their registration data **without revealing the data itself**.
+Introduces LumenFlow and its core benefits:
 
-**Pre-image construction:**
+- **Instant Settlement** — payments settle in seconds on Stellar
+- **Low Fees** — minimal 2.5% platform fee, no hidden charges
+- **Multi-sig Security** — optional multi-party approval for high-value payments
 
-```
-pre_image = XDR(merchant_address) || XDR(name) || nonce_bytes
-```
-
-- `nonce_bytes` — 32 random bytes chosen by the client. Keep this secret until the reveal step.
-- All fields are XDR-encoded using `soroban_sdk::xdr::ToXdr`.
-- `commitment_hash = SHA-256(pre_image)` (32 bytes).
-
-**Contract call:**
-
-```bash
-stellar contract invoke --id $CONTRACT_ID --source-account $MERCHANT_KEY --network $NETWORK \
-  -- commit_merchant_registration \
-  --merchant_address $MERCHANT_ADDR \
-  --commitment_hash "<hex-encoded-sha256-hash>"
-```
-
-**Important:** The commitment expires after **100 ledgers** (≈ 8 minutes with 5-second ledgers). You must call `reveal_merchant_registration` before expiry. After expiry the commitment is automatically invalidated and you must re-commit.
+Click **Get Started** to proceed.
 
 ---
 
-### Phase 2 — Reveal
+### Step 2 — Connect Wallet
 
-After the commitment is stored on-chain (typically 1–2 ledger confirmations), the merchant reveals the original data:
+Your Stellar wallet address becomes your merchant identity on-chain.
 
-```bash
-stellar contract invoke --id $CONTRACT_ID --source-account $MERCHANT_KEY --network $NETWORK \
-  -- reveal_merchant_registration \
-  --merchant_address $MERCHANT_ADDR \
-  --name "My Store" \
-  --description "Store description" \
-  --contact_info "contact@store.com" \
-  --category Retail \
-  --nonce "<32-bytes-used-at-commit-time>"
-```
+| Option | Description |
+|--------|-------------|
+| **Freighter** | Browser extension wallet. Install from [freighter.app](https://www.freighter.app/) |
+| **Albedo** | Web-based wallet. Available at [albedo.link](https://albedo.link/) |
+| **Demo mode** | Simulates a wallet address for UI preview without a real wallet |
 
-The contract:
-1. Loads the stored commitment for `merchant_address`.
-2. Checks that fewer than 100 ledgers have passed since `commit_merchant_registration`.
-3. Recomputes `SHA-256(XDR(merchant_address) || XDR(name) || nonce_bytes)`.
-4. Verifies the hash matches the stored commitment.
-5. Registers the merchant and emits `lumenflow/merchant_registered`.
+Once connected, your public address is displayed and used for all subsequent steps.
 
 ---
 
-## Client-Side Example (TypeScript / SDK)
+### Step 3 — Business Details
 
-```typescript
-import { Keypair, hash } from "@stellar/stellar-sdk";
-import { randomBytes } from "crypto";
-import { LumenFlowClient } from "@lumenflow/sdk";
+Required information fields:
 
-const merchantKeypair = Keypair.fromSecret(process.env.MERCHANT_SECRET!);
-const merchantAddress = merchantKeypair.publicKey();
-const name = "My Store";
+| Field | Description | Max Length |
+|-------|-------------|------------|
+| **Business Name** | Display name shown to customers | 80 characters |
+| **Description** | Brief description of your products/services | 280 characters |
+| **Contact Email** | Support or billing email | — |
+| **Category** | Retail / Services / Digital / Food & Beverage / Other | — |
 
-// 1. Generate a random nonce
-const nonce = randomBytes(32);
-
-// 2. Build the pre-image: XDR(address) || XDR(name) || nonce
-//    (see contracts/lumenflow/src/lib.rs::reveal_merchant_registration for
-//    the exact XDR encoding used on-chain)
-const preImage = Buffer.concat([
-  xdrEncodeAddress(merchantAddress),   // XDR-encoded address
-  xdrEncodeSorobanString(name),        // XDR-encoded soroban String
-  nonce,
-]);
-
-// 3. Compute the commitment hash
-const commitmentHash = hash(preImage);  // SHA-256, returns Buffer
-
-// 4. Phase 1: commit
-await client.commitMerchantRegistration({
-  merchant_address: merchantAddress,
-  commitment_hash: commitmentHash,
-});
-
-// Wait for ledger confirmation (1–2 ledgers), then:
-
-// 5. Phase 2: reveal
-await client.revealMerchantRegistration({
-  merchant_address: merchantAddress,
-  name,
-  description: "Store description",
-  contact_info: "contact@store.com",
-  category: "Retail",
-  nonce: nonce,
-});
-```
-
-> **Note:** Helper functions `xdrEncodeAddress` and `xdrEncodeSorobanString` must produce byte-identical output to the `soroban_sdk::xdr::ToXdr` encoding used on-chain. The SDK provides utilities for this — see `sdk/src/signPaymentPayload.ts` for the pattern.
+All fields are validated client-side before proceeding. Error messages appear inline if any field is invalid.
 
 ---
 
-## Legacy Single-Step Registration
+### Step 4 — Review & Register
 
-The original `register_merchant` function remains available for backwards compatibility but is **not recommended** for new integrations because it is susceptible to front-running.
+Displays a read-only summary of all entered details before submission. Also shows:
 
-```bash
-stellar contract invoke --id $CONTRACT_ID --source-account $MERCHANT_KEY --network $NETWORK \
-  -- register_merchant \
-  --merchant_address $MERCHANT_ADDR \
-  --name "My Store" \
-  --description "Store description" \
-  --contact_info "contact@store.com" \
-  --category Retail
-```
+- **Platform fee**: 2.5% per transaction
+- **Refund window**: 30 days from payment date
+- **Minimum refund amount**: 100 stroops
+
+Click **Register Merchant** to submit. In demo mode, a 2-second simulated delay mimics network confirmation. In live mode, this calls the `register_merchant` contract function via the connected wallet.
 
 ---
 
-## Post-Registration Steps
+### Step 5 — Done
 
-1. **Verify registration:** Call `is_registered(merchant_address)` to confirm.
-2. **Retrieve your profile:** Call `get_merchant(merchant_address)`.
-3. **Request verification (optional):** Contact an admin to have your profile marked `verified`.
+Confirms successful registration and provides next steps:
+
+- Share your [payment receipt link](../frontend/receipt.html) with customers
+- Browse your [payment history](../frontend/history.html)
+- Manage refunds from the [merchant dashboard](../dashboard/merchant-dashboard/index.html)
 
 ---
 
-## Error Reference
+## Expected Next Steps After Registration
 
-| Error | Cause | Remediation |
-|---|---|---|
-| `CommitmentAlreadyExists` (72) | A pending commitment already exists | Reveal the existing commitment or wait for it to expire |
-| `CommitmentNotFound` (73) | No pending commitment found | Call `commit_merchant_registration` first |
-| `CommitmentHashMismatch` (74) | Revealed data does not match the committed hash | Ensure `name` and `nonce` are identical to what was used at commit time |
-| `CommitmentExpired` (75) | More than 100 ledgers have passed since commit | Submit a new `commit_merchant_registration` |
-| `MerchantAlreadyRegistered` (11) | Address is already registered | Use a different address or update the existing profile |
+1. **Configure your payment token** — add allowed tokens via `add_allowed_token` (admin).
+2. **Test a payment** — use the CLI or history page to process a test payment.
+3. **Set up webhook notifications** — follow the [webhook integration guide](webhook-integration.md).
+4. **Monitor activity** — use the [fraud analytics dashboard](../dashboard/fraud-analytics/index.html) to review suspicious activity.
 
-For the full error reference, see [docs/errors.md](./errors.md).
+---
+
+## Troubleshooting
+
+**Wallet not connecting:**
+- Ensure Freighter is installed and the extension is unlocked.
+- Check that your browser allows extensions on the page origin.
+
+**Already registered error:**
+- The wizard detects existing profiles via `is_registered`. If you see this, your address is already on-chain — proceed to the dashboard.
+
+**Transaction pending for too long:**
+- Stellar transactions typically confirm in 5 seconds. If pending longer, check network status at [status.stellar.org](https://status.stellar.org).
+
+**Validation errors:**
+- All fields on Step 3 are required. Ensure the email is in `user@domain.tld` format.
+
+---
+
+## Related Resources
+
+- [Contract API — Merchant Management](../README.md#merchant-management)
+- [CLI Usage](../README.md#cli-usage)
+- [Developer Onboarding Guide](ONBOARDING.md)
+- [Merchant Onboarding — Completion Metrics & Funnel Events](merchant-onboarding-metrics.md)
