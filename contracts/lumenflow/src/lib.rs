@@ -12,7 +12,7 @@ mod test;
 #[cfg(test)]
 mod test_error_codes;
 
-use soroban_sdk::{contract, contractimpl, token, xdr::ToXdr, Address, Bytes, Env, String, Vec};
+use soroban_sdk::{contract, contractimpl, crypto::Hash, token, xdr::ToXdr, Address, Bytes, Env, String, Vec};
 
 use error::PaymentError;
 use helper::{
@@ -544,7 +544,150 @@ impl PaymentProcessingContract {
 
     // ── Merchant management ───────────────────────────────────────────────────
 
-    /// Register a new merchant.
+    /// Phase 1 of commit-reveal merchant registration (issue #614).
+    ///
+    /// The caller commits to a registration by submitting a SHA-256 hash of:
+    ///   `merchant_address_xdr || name_xdr || nonce_bytes`
+    ///
+    /// The commitment expires after [`storage::COMMITMENT_TTL_LEDGERS`] ledgers
+    /// (100 ledgers ≈ 8 minutes with 5-second ledgers). After expiry the caller
+    /// must submit a new commitment.
+    ///
+    /// # Arguments
+    /// * `merchant_address` - The address being registered. Must sign the call.
+    /// * `commitment_hash` - SHA-256 hash of the pre-image (see above).
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::MerchantAlreadyRegistered`] — already registered.
+    /// * [`PaymentError::CommitmentAlreadyExists`] — a pending commitment exists.
+    pub fn commit_merchant_registration(
+        env: Env,
+        merchant_address: Address,
+        commitment_hash: Bytes,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        merchant_address.require_auth();
+
+        if storage::get_merchant(&env, &merchant_address).is_some() {
+            return Err(PaymentError::MerchantAlreadyRegistered);
+        }
+        if storage::get_merchant_commitment(&env, &merchant_address).is_some() {
+            return Err(PaymentError::CommitmentAlreadyExists);
+        }
+
+        let commitment = MerchantCommitment {
+            merchant_address: merchant_address.clone(),
+            commitment_hash,
+            committed_at_ledger: env.ledger().sequence(),
+        };
+        storage::set_merchant_commitment(&env, &commitment);
+
+        env.events()
+            .publish(("lumenflow", "merchant_committed"), merchant_address);
+        Ok(())
+    }
+
+    /// Phase 2 of commit-reveal merchant registration (issue #614).
+    ///
+    /// The caller reveals the pre-image committed in [`commit_merchant_registration`].
+    /// The contract recomputes the hash and checks it against the stored commitment.
+    /// If valid, the merchant is registered and the pending commitment is removed.
+    ///
+    /// Pre-image layout (all fields XDR-encoded, concatenated):
+    ///   `merchant_address_xdr || name_xdr || nonce_bytes`
+    ///
+    /// # Arguments
+    /// * `merchant_address` - The address being registered. Must sign the call.
+    /// * `name` - Non-empty display name (must match the committed value).
+    /// * `description` - Merchant description.
+    /// * `contact_info` - Contact details.
+    /// * `category` - Business category.
+    /// * `nonce` - Random bytes chosen at commit time to prevent grinding.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::CommitmentNotFound`] — no pending commitment for this address.
+    /// * [`PaymentError::CommitmentExpired`] — commitment is older than 100 ledgers.
+    /// * [`PaymentError::CommitmentHashMismatch`] — revealed pre-image does not match hash.
+    /// * [`PaymentError::MerchantAlreadyRegistered`] — already registered.
+    /// * [`PaymentError::InvalidInput`] — `name` is empty.
+    pub fn reveal_merchant_registration(
+        env: Env,
+        merchant_address: Address,
+        name: String,
+        description: String,
+        contact_info: String,
+        category: MerchantCategory,
+        nonce: Bytes,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        merchant_address.require_auth();
+        require_non_empty_string(&name)?;
+        validate_merchant_category(&category)?;
+
+        if storage::get_merchant(&env, &merchant_address).is_some() {
+            return Err(PaymentError::MerchantAlreadyRegistered);
+        }
+
+        let commitment = storage::get_merchant_commitment(&env, &merchant_address)
+            .ok_or(PaymentError::CommitmentNotFound)?;
+
+        // Check expiry
+        let ledger_age = env
+            .ledger()
+            .sequence()
+            .saturating_sub(commitment.committed_at_ledger);
+        if ledger_age > storage::COMMITMENT_TTL_LEDGERS {
+            storage::remove_merchant_commitment(&env, &merchant_address);
+            return Err(PaymentError::CommitmentExpired);
+        }
+
+        // Reconstruct and verify the commitment hash
+        let mut pre_image = Bytes::new(&env);
+        pre_image.append(&merchant_address.clone().to_xdr(&env));
+        pre_image.append(&name.clone().to_xdr(&env));
+        pre_image.append(&nonce);
+
+        let computed: Hash<32> = env.crypto().sha256(&pre_image);
+        let computed_bytes = Bytes::from_array(&env, computed.as_array());
+
+        if computed_bytes != commitment.commitment_hash {
+            return Err(PaymentError::CommitmentHashMismatch);
+        }
+
+        // Commitment is valid — remove it and register the merchant
+        storage::remove_merchant_commitment(&env, &merchant_address);
+
+        let merchant = Merchant {
+            address: merchant_address.clone(),
+            name,
+            description,
+            contact_info,
+            category,
+            active: true,
+            verified: false,
+            registered_at: env.ledger().timestamp(),
+            total_received: 0,
+        };
+
+        storage::set_merchant(&env, &merchant);
+        storage::add_to_merchant_list(&env, &merchant_address);
+
+        let mut stats = storage::get_global_stats(&env);
+        stats.active_merchants += 1;
+        storage::set_global_stats(&env, &stats);
+
+        env.events()
+            .publish(("lumenflow", "merchant_registered"), merchant_address);
+        Ok(())
+    }
+
+    /// Register a new merchant (legacy single-step path).
     ///
     /// # Arguments
     /// * `merchant_address` - The address of the merchant being registered. Must sign the call.
