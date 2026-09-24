@@ -2,8 +2,8 @@ use soroban_sdk::{contracttype, Address, Env, String, Vec};
 
 use crate::error::PaymentError;
 use crate::types::{
-    DisputeRecord, GlobalStats, Merchant, MerchantStats, MultisigPayment, PaymentOrder,
-    PaymentRequest, RefundRecord,
+    DisputeRecord, GlobalStats, Merchant, MerchantCommitment, MerchantStats, MultisigPayment,
+    PaymentOrder, PaymentRequest, RefundRecord,
 };
 
 // ── TTL / limit constants ─────────────────────────────────────────────────────
@@ -49,6 +49,8 @@ pub enum DataKey {
     FeeRecipient,
     RefundWindow,
     Nonce(Address),
+    /// Pending merchant registration commitment (commit-reveal, issue #614).
+    MerchantCommitment(Address),
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -430,4 +432,33 @@ pub fn get_fee_recipient(env: &Env) -> Option<Address> {
 
 pub fn set_fee_recipient(env: &Env, recipient: &Address) {
     env.storage().instance().set(&DataKey::FeeRecipient, recipient);
+}
+
+// ── Merchant registration commitments (commit-reveal, issue #614) ─────────────
+
+/// TTL in ledgers for a pending commitment (≈ 100 × 5 s = 500 s ≈ 8 minutes).
+pub const COMMITMENT_TTL_LEDGERS: u32 = 100;
+
+pub fn get_merchant_commitment(env: &Env, address: &Address) -> Option<MerchantCommitment> {
+    env.storage()
+        .temporary()
+        .get(&DataKey::MerchantCommitment(address.clone()))
+}
+
+pub fn set_merchant_commitment(env: &Env, commitment: &MerchantCommitment) {
+    env.storage().temporary().set(
+        &DataKey::MerchantCommitment(commitment.merchant_address.clone()),
+        commitment,
+    );
+    env.storage().temporary().extend_ttl(
+        &DataKey::MerchantCommitment(commitment.merchant_address.clone()),
+        COMMITMENT_TTL_LEDGERS,
+        COMMITMENT_TTL_LEDGERS,
+    );
+}
+
+pub fn remove_merchant_commitment(env: &Env, address: &Address) {
+    env.storage()
+        .temporary()
+        .remove(&DataKey::MerchantCommitment(address.clone()));
 }

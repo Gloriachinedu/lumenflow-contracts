@@ -70,6 +70,14 @@ pub enum PaymentError {
     ContractPaused = 70,
     /// The payment history limit for this account has been exceeded. Remediation: Archive old payments.
     PaymentHistoryLimitExceeded = 71,
+    /// A pending registration commitment already exists for this address. Remediation: Reveal or wait for expiry.
+    CommitmentAlreadyExists = 72,
+    /// No pending commitment found for this address. Remediation: Call commit_merchant_registration first.
+    CommitmentNotFound = 73,
+    /// The commitment pre-image does not match the stored hash. Remediation: Ensure the nonce and name match the original commit call.
+    CommitmentHashMismatch = 74,
+    /// The commitment has expired (more than 100 ledgers have passed). Remediation: Submit a new commit_merchant_registration call.
+    CommitmentExpired = 75,
 
     // General
     /// The provided input parameters are invalid. Remediation: Check the input values and format.
