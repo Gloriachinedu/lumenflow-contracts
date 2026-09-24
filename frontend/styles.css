@@ -177,6 +177,32 @@ h1 { font-size: 1.4rem; font-weight: 700; color: #6c47ff; margin-bottom: 0.25rem
   text-align: left;
 }
 
+/* ── Toast notifications ──────────────────────────────────────────────────── */
+.toast-region {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: min(24rem, calc(100vw - 2rem));
+  pointer-events: none;
+}
+.toast {
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+  font-size: 0.875rem;
+  pointer-events: auto;
+}
+.toast-info { background: #eff4ff; color: #2643a2; }
+.toast-error { background: #fff0f0; color: #a52020; }
+@media (prefers-color-scheme: dark) {
+  .toast-info { background: #1d315e; color: #e0e9ff; }
+  .toast-error { background: #5c2424; color: #ffe1e1; }
+}
+
 /* ── Print ──────────────────────────────────────────────────────────────────── */
 @media print {
   body { background: #fff; padding: 0; }

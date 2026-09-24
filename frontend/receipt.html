@@ -8,6 +8,7 @@
   <meta property="og:title" content="Payment Receipt – LumenFlow" />
   <meta property="og:description" content="Your LumenFlow payment receipt. View transaction details, amounts, and confirmation for completed payments." />
   <meta name="twitter:card" content="summary" />
+  <link rel="stylesheet" href="./styles.css" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -208,6 +209,7 @@
   </div>
 </div>
 
+<script src="./toast.js"></script>
 <script type="module">
   import { CONTRACT_ID, RPC_URL, formatAmount, formatDate, renderModeBanner } from './lumenflow-shared.js';
 
