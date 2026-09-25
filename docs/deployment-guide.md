@@ -170,3 +170,14 @@ Soroban contracts are immutable once deployed. There is no in-place upgrade path
 5. **Archive or document** the old `CONTRACT_ID` so historical payment records remain queryable during the transition window.
 
 To minimise downtime, prepare the new contract in parallel before switching traffic.
+
+---
+
+## Operator Runbooks
+
+Step-by-step guides for common post-deployment operations:
+
+| Runbook | Description |
+|---------|-------------|
+| [Platform Fee Configuration](runbooks/platform-fee-configuration.md) | Set fee basis points, configure fee recipient, verify deductions, and resolve the `fee_recipient not set` edge case. |
+| [Multi-Region Failover](runbooks/multi-region-failover.md) | Detect a region failure, execute failover steps, verify recovery, and roll back if needed. |
