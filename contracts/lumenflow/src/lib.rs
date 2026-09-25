@@ -22,12 +22,12 @@ use helper::{
     verify_signature,
 };
 use types::{
-    BatchPaymentItem, EscrowRecord, EscrowStatus, GlobalStats, Merchant, MerchantCategory,
-    MerchantPage, MerchantStats, MultisigExecutedEvent, MultisigInitiatedEvent, MultisigPayment,
-    PaymentFilter, PaymentOrder, PaymentPage, PaymentRequest, PaymentStatus,
-    PaymentStatusUpdatedEvent, PaymentSummary, RefundRecord, RefundStatus, SignatureEntry,
-    SortField, SortOrder, StatusFilter, Subscription, SubscriptionPlan, SubscriptionStatus,
-    SuspiciousActivityReason, MerchantCommitment,
+    BatchPaymentItem, DisputeOutcome, DisputeStatus, EscrowRecord, EscrowStatus, GlobalStats,
+    Merchant, MerchantCategory, MerchantCommitment, MerchantPage, MerchantStats,
+    MultisigExecutedEvent, MultisigInitiatedEvent, MultisigPayment, PaymentFilter, PaymentOrder,
+    PaymentPage, PaymentRequest, PaymentStatus, PaymentStatusUpdatedEvent, PaymentSummary,
+    RefundRecord, RefundStatus, SignatureEntry, SortField, SortOrder, StatusFilter, Subscription,
+    SubscriptionPlan, SubscriptionStatus, SuspiciousActivityReason,
 };
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -2283,6 +2283,7 @@ impl PaymentProcessingContract {
             initiator: caller,
             reason,
             status: types::DisputeStatus::Open,
+            outcome: None,
             resolution: None,
             created_at: now,
         };
@@ -2333,12 +2334,17 @@ impl PaymentProcessingContract {
         let mut dispute =
             storage::get_dispute(&env, &dispute_id).ok_or(PaymentError::DisputeNotFound)?;
 
-        if matches!(dispute.status, types::DisputeStatus::Resolved) {
+        if matches!(dispute.status, DisputeStatus::Resolved) {
             return Err(PaymentError::DisputeAlreadyResolved);
         }
 
         // Effects: update dispute state before any external calls
-        dispute.status = types::DisputeStatus::Resolved;
+        dispute.status = DisputeStatus::Resolved;
+        dispute.outcome = Some(if force_refund {
+            DisputeOutcome::PayerFavor
+        } else {
+            DisputeOutcome::MerchantFavor
+        });
         dispute.resolution = Some(resolution.clone());
         storage::set_dispute(&env, &dispute);
 
@@ -2402,6 +2408,172 @@ impl PaymentProcessingContract {
     /// * [`PaymentError::DisputeNotFound`] — no dispute exists with `dispute_id`.
     pub fn get_dispute(env: Env, dispute_id: String) -> Result<types::DisputeRecord, PaymentError> {
         storage::get_dispute(&env, &dispute_id).ok_or(PaymentError::DisputeNotFound)
+    }
+
+    /// Initiate a payment dispute on-chain (payer or merchant).
+    ///
+    /// Creates a [`DisputeRecord`] in `Open` state linked to the given `order_id`.
+    /// This is the primary entry point for the dispute flow:
+    ///
+    /// ```text
+    /// Open → UnderReview → Resolved(MerchantFavor | PayerFavor)
+    ///      ↘              ↗
+    ///        Escalated ──→
+    /// ```
+    ///
+    /// Unlike [`raise_dispute`] (which requires a rejected refund), `initiate_dispute`
+    /// can be called at any point by the payer or merchant to flag a payment for
+    /// admin attention. The admin is notified via the `lumenflow/dispute_initiated`
+    /// event and can subsequently call [`mark_dispute_under_review`],
+    /// [`escalate_dispute`], or [`resolve_dispute`].
+    ///
+    /// # Arguments
+    /// * `caller`     - Must be the payer or merchant of `order_id`. Must sign.
+    /// * `dispute_id` - Unique, non-empty identifier (max 64 chars).
+    /// * `order_id`   - The payment order being disputed. Must exist.
+    /// * `reason`     - Human-readable reason; maximum 256 characters.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::ContractPaused`] — contract is paused.
+    /// * [`PaymentError::InvalidInput`] — `dispute_id` is empty/too long or `reason` exceeds 256 chars.
+    /// * [`PaymentError::DisputeAlreadyExists`] — a dispute with this ID already exists.
+    /// * [`PaymentError::PaymentNotFound`] — no payment exists for `order_id`.
+    /// * [`PaymentError::Unauthorized`] — caller is neither payer nor merchant of the payment.
+    pub fn initiate_dispute(
+        env: Env,
+        caller: Address,
+        dispute_id: String,
+        order_id: String,
+        reason: String,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        caller.require_auth();
+        require_valid_id(&dispute_id)?;
+
+        if reason.len() == 0 || reason.len() > 256 {
+            return Err(PaymentError::InvalidInput);
+        }
+
+        if storage::get_dispute(&env, &dispute_id).is_some() {
+            return Err(PaymentError::DisputeAlreadyExists);
+        }
+
+        let payment =
+            storage::get_payment(&env, &order_id).ok_or(PaymentError::PaymentNotFound)?;
+
+        // Only payer or merchant may open a dispute
+        if caller != payment.payer && caller != payment.merchant_address {
+            return Err(PaymentError::Unauthorized);
+        }
+
+        let now = env.ledger().timestamp();
+        let dispute = types::DisputeRecord {
+            dispute_id: dispute_id.clone(),
+            order_id: order_id.clone(),
+            refund_id: String::from_str(&env, ""),   // no specific refund required
+            initiator: caller.clone(),
+            reason: reason.clone(),
+            status: DisputeStatus::Open,
+            outcome: None,
+            resolution: None,
+            created_at: now,
+        };
+        storage::set_dispute(&env, &dispute);
+
+        // Notify admin via event
+        env.events().publish(
+            ("lumenflow", "dispute_initiated"),
+            (dispute_id, order_id, caller, reason),
+        );
+        Ok(())
+    }
+
+    /// Admin: mark a dispute as under active review.
+    ///
+    /// Transitions the dispute from `Open` to `UnderReview`. This signals to
+    /// both parties that the admin is actively investigating.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — caller is not the admin.
+    /// * [`PaymentError::DisputeNotFound`] — no dispute with `dispute_id`.
+    /// * [`PaymentError::DisputeNotOpen`] — dispute is not in `Open` state.
+    pub fn mark_dispute_under_review(
+        env: Env,
+        admin: Address,
+        dispute_id: String,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        require_admin_rate_limited(&env, &admin)?;
+
+        let mut dispute =
+            storage::get_dispute(&env, &dispute_id).ok_or(PaymentError::DisputeNotFound)?;
+
+        if !matches!(dispute.status, DisputeStatus::Open) {
+            return Err(PaymentError::DisputeNotOpen);
+        }
+
+        dispute.status = DisputeStatus::UnderReview;
+        storage::set_dispute(&env, &dispute);
+
+        env.events().publish(
+            ("lumenflow", "dispute_under_review"),
+            (dispute_id,),
+        );
+        Ok(())
+    }
+
+    /// Admin: escalate a dispute that cannot be resolved internally.
+    ///
+    /// Transitions the dispute from `Open` or `UnderReview` to `Escalated`.
+    /// Once escalated, a dispute cannot be escalated again and can only be
+    /// finalised via [`resolve_dispute`].
+    ///
+    /// # Arguments
+    /// * `admin`      - Contract administrator. Must sign.
+    /// * `dispute_id` - The dispute to escalate.
+    /// * `notes`      - Optional escalation notes (max 256 chars).
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — caller is not the admin.
+    /// * [`PaymentError::DisputeNotFound`] — no dispute with `dispute_id`.
+    /// * [`PaymentError::DisputeAlreadyResolved`] — dispute is already resolved.
+    /// * [`PaymentError::DisputeAlreadyEscalated`] — dispute is already escalated.
+    pub fn escalate_dispute(
+        env: Env,
+        admin: Address,
+        dispute_id: String,
+        notes: Option<String>,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        require_admin_rate_limited(&env, &admin)?;
+
+        let mut dispute =
+            storage::get_dispute(&env, &dispute_id).ok_or(PaymentError::DisputeNotFound)?;
+
+        match dispute.status {
+            DisputeStatus::Resolved => return Err(PaymentError::DisputeAlreadyResolved),
+            DisputeStatus::Escalated => return Err(PaymentError::DisputeAlreadyEscalated),
+            _ => {}
+        }
+
+        if let Some(ref n) = notes {
+            if n.len() > 256 {
+                return Err(PaymentError::InvalidInput);
+            }
+        }
+
+        dispute.status = DisputeStatus::Escalated;
+        dispute.resolution = notes.clone();
+        storage::set_dispute(&env, &dispute);
+
+        env.events().publish(
+            ("lumenflow", "dispute_escalated"),
+            (dispute_id, notes),
+        );
+        Ok(())
     }
 
     // ── Multi-signature payments ──────────────────────────────────────────────

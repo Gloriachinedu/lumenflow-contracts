@@ -283,14 +283,34 @@ pub struct EscrowRecord {
 
 // ── Dispute ───────────────────────────────────────────────────────────────────
 
-/// Lifecycle states of a dispute.
+/// Full lifecycle state machine for a dispute.
+///
+/// ```text
+/// Open → UnderReview → Resolved(MerchantFavor | PayerFavor)
+///      ↘              ↗
+///        Escalated ──→
+/// ```
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DisputeStatus {
-    /// Dispute has been opened and is awaiting admin resolution.
+    /// Dispute has been opened; awaiting admin review.
     Open,
-    /// Admin has resolved the dispute (with or without a forced refund).
+    /// Admin has marked the dispute under active review.
+    UnderReview,
+    /// Admin has resolved the dispute in favour of one party.
     Resolved,
+    /// Admin has escalated the dispute (e.g. to an external arbitration layer).
+    Escalated,
+}
+
+/// Final outcome recorded when a dispute is resolved.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DisputeOutcome {
+    /// Resolved in the merchant's favour; no forced refund is issued.
+    MerchantFavor,
+    /// Resolved in the payer's favour; a forced refund is executed.
+    PayerFavor,
 }
 
 #[contracttype]
@@ -298,13 +318,19 @@ pub enum DisputeStatus {
 pub struct DisputeRecord {
     /// Unique identifier for this dispute.
     pub dispute_id: String,
-    /// The refund record being disputed (must be in `Rejected` state).
-    pub refund_id: String,
+    /// The order being disputed.
     pub order_id: String,
+    /// The refund associated with this dispute (if any). May be empty if
+    /// `initiate_dispute` is called before a refund exists.
+    pub refund_id: String,
+    /// The party that opened the dispute (payer or merchant).
     pub initiator: Address,
+    /// Human-readable reason; maximum 256 characters.
     pub reason: String,
     pub status: DisputeStatus,
-    /// Optional resolution notes written by the admin when resolving.
+    /// Set when the dispute is resolved.
+    pub outcome: Option<DisputeOutcome>,
+    /// Optional resolution or escalation notes written by the admin.
     pub resolution: Option<String>,
     pub created_at: u64,
 }
