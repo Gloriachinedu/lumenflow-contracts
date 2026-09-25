@@ -56,9 +56,9 @@ export const ERROR_MESSAGES: Record<PaymentErrorCode, string> = {
 
 export class LumenFlowError extends Error {
   public readonly code: PaymentErrorCode;
-  public readonly details?: any;
+  public readonly details?: unknown;
 
-  constructor(code: PaymentErrorCode, details?: any) {
+  constructor(code: PaymentErrorCode, details?: unknown) {
     const message = ERROR_MESSAGES[code] || `An unknown error occurred (code: ${code})`;
     super(message);
     this.name = "LumenFlowError";
