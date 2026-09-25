@@ -1,0 +1,7 @@
+{
+  "name": "@lumenflow/mock-server",
+  "version": "0.1.0",
+  "description": "Minimal mock contract server for SDK integration tests",
+  "main": "server.ts",
+  "private": true
+}
