@@ -61,6 +61,50 @@ assert!(suspicious_event.is_some());
 - Remember that ledger time advances are local to the test environment and do not persist across separate `Env` instances.
 - Prefer explicit `try_*` calls when asserting contract errors.
 
+## Property-Based Tests (proptest)
+
+Property-based tests verify that refund invariants hold across **arbitrary** sequences of partial refunds, not just hand-picked examples.
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `contracts/lumenflow/src/invariant_refund.rs` | Pure invariant definitions (no contract dependencies) |
+| `contracts/lumenflow/src/prop_tests.rs` | proptest strategies and property assertions |
+
+### Running
+
+```bash
+cargo test --all-features prop_
+```
+
+This runs all tests whose names start with `prop_`. For full CI coverage use:
+
+```bash
+cargo test --all-features
+```
+
+### Invariants verified
+
+1. **Cumulative refunds ≤ original amount** — the sum of all executed partial refunds never exceeds the original payment amount.
+2. **Refund window respected** — a refund initiated more than 30 days after payment is always rejected with `RefundWindowExpired`.
+3. **Order independence** — the total refunded amount is the same regardless of the order partial refunds are applied.
+4. **Remaining balance non-negative** — at any point, `original_amount - sum(executed_refunds) >= 0`.
+
+### Adding new strategies
+
+New refund invariants can be added to `invariant_refund.rs` and then exercised in `prop_tests.rs` using `proptest!` macros:
+
+```rust
+proptest! {
+    #[test]
+    fn prop_my_new_invariant(amount in 1_i128..=100_000_i128) {
+        // ... exercise the contract or call invariant functions directly
+        prop_assert!(my_invariant(amount));
+    }
+}
+```
+
 ## Dependency Security Audits
 
 Dependency audits run automatically in CI for every push and pull request.

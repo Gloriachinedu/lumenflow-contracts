@@ -7,8 +7,13 @@ mod helper;
 mod storage;
 mod types;
 
+pub mod invariant_refund;
+
 #[cfg(test)]
 mod test;
+
+#[cfg(test)]
+mod prop_tests;
 
 use soroban_sdk::{contract, contractimpl, token, xdr::ToXdr, Address, Bytes, Env, String, Vec};
 
