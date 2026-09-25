@@ -97,9 +97,50 @@ export class LumenFlowError extends Error {
   }
 
   /**
-   * Localization-ready message key.
+   * Human-readable name of the error code (e.g. `"InvalidSignature"`), or
+   * `"Unknown"` when the code is not a known {@link PaymentErrorCode}.
+   */
+  get codeName(): string {
+    return PaymentErrorCode[this.code] ?? "Unknown";
+  }
+
+  /**
+   * Localization-ready message key, e.g. `"error.invalidsignature"`.
+   * Falls back to `"error.unknown"` for unrecognised codes.
    */
   get messageKey(): string {
-    return `error.${PaymentErrorCode[this.code].toLowerCase()}`;
+    return `error.${this.codeName.toLowerCase()}`;
+  }
+
+  /**
+   * Plain, JSON-safe representation of the error. Used by `JSON.stringify`
+   * and when forwarding errors across process / network boundaries.
+   */
+  toJSON(): {
+    name: string;
+    code: PaymentErrorCode;
+    codeName: string;
+    message: string;
+    messageKey: string;
+    details?: unknown;
+  } {
+    const json: {
+      name: string;
+      code: PaymentErrorCode;
+      codeName: string;
+      message: string;
+      messageKey: string;
+      details?: unknown;
+    } = {
+      name: this.name,
+      code: this.code,
+      codeName: this.codeName,
+      message: this.message,
+      messageKey: this.messageKey,
+    };
+    if (this.details !== undefined) {
+      json.details = this.details;
+    }
+    return json;
   }
 }

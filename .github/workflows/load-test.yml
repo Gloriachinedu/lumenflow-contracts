@@ -1,0 +1,77 @@
+name: Load Test
+
+on:
+  # Weekly load test against testnet — every Monday at 09:00 UTC
+  schedule:
+    - cron: '0 9 * * 1'
+  # Allow manual trigger for ad-hoc load testing
+  workflow_dispatch:
+    inputs:
+      vus:
+        description: 'Number of concurrent virtual users (default: 50)'
+        required: false
+        default: '50'
+      payments_per_vu:
+        description: 'Payments per virtual user (default: 10)'
+        required: false
+        default: '10'
+      network:
+        description: 'Target network'
+        required: false
+        default: 'testnet'
+        type: choice
+        options:
+          - testnet
+
+jobs:
+  load-test:
+    name: k6 Load Test — Concurrent Payment Submission
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install k6
+        run: |
+          sudo gpg --no-default-keyring \
+            --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+            --keyserver hkp://keyserver.ubuntu.com:80 \
+            --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] \
+            https://dl.k6.io/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update -qq
+          sudo apt-get install -y k6
+
+      - name: Run load test
+        env:
+          CONTRACT_ID: ${{ secrets.TESTNET_CONTRACT_ID }}
+          RPC_URL: https://soroban-testnet.stellar.org
+          NETWORK: ${{ github.event.inputs.network || 'testnet' }}
+          VUS: ${{ github.event.inputs.vus || '50' }}
+          PAYMENTS_PER_VU: ${{ github.event.inputs.payments_per_vu || '10' }}
+          RESULTS_FILE: /tmp/load-test-results.json
+        run: |
+          chmod +x scripts/load-test.sh
+          ./scripts/load-test.sh
+
+      - name: Upload load test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-test-results-${{ github.run_id }}
+          path: /tmp/load-test-results.json
+          retention-days: 90
+
+      - name: Post results summary to job output
+        if: always()
+        run: |
+          if [ -f /tmp/load-test-results.json ]; then
+            echo "### Load Test Results" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/load-test-results.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
