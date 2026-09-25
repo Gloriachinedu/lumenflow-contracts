@@ -2066,4 +2066,43 @@ impl PaymentProcessingContract {
             .publish(("lumenflow", "payment_request_paid"), request_id);
         Ok(())
     }
+
+    /// Cancel an outstanding payment request (merchant only).
+    ///
+    /// The merchant who created the request can cancel it at any time before it
+    /// is paid or expired. Cancellation removes the request from storage and
+    /// emits a `lumenflow/payment_request_cancelled` event.
+    ///
+    /// # Arguments
+    /// * `merchant`   - The merchant who originally created the request. Must sign.
+    /// * `request_id` - The ID of the payment request to cancel.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::PaymentNotFound`] — no request exists with `request_id`.
+    /// * [`PaymentError::Unauthorized`]   — caller is not the merchant who created
+    ///   the request.
+    pub fn cancel_payment_request(
+        env: Env,
+        merchant: Address,
+        request_id: String,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        merchant.require_auth();
+
+        let pr = storage::get_payment_request(&env, &request_id)
+            .ok_or(PaymentError::PaymentNotFound)?;
+
+        if pr.merchant != merchant {
+            return Err(PaymentError::Unauthorized);
+        }
+
+        storage::remove_payment_request(&env, &request_id);
+
+        env.events()
+            .publish(("lumenflow", "payment_request_cancelled"), request_id);
+        Ok(())
+    }
 }
