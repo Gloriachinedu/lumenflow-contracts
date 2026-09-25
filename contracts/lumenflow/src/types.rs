@@ -197,6 +197,20 @@ pub struct PaymentPage {
     pub total_matching: u32,
 }
 
+// ── Cleanup ───────────────────────────────────────────────────────────────────
+
+/// Result returned by [`cleanup_expired_payments`].
+///
+/// * `cleaned`  — number of payment records removed in this batch.
+/// * `has_more` — `true` when more expired records may remain; the caller
+///   should invoke `cleanup_expired_payments` again to continue.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CleanupResult {
+    pub cleaned: u32,
+    pub has_more: bool,
+}
+
 // ── Stats ─────────────────────────────────────────────────────────────────────
 
 #[contracttype]

@@ -138,10 +138,58 @@ fn benchmark_cleanup(c: &mut Criterion) {
 
     c.bench_function("cleanup_expired_payments", |b| {
         b.iter(|| {
-            client.cleanup_expired_payments(&admin);
+            client.cleanup_expired_payments(&admin, &Option::<u32>::None);
         });
     });
 }
 
-criterion_group!(benches, benchmark_process_payment, benchmark_query_history, benchmark_cleanup);
+/// Benchmark cleanup with a small explicit batch_size to measure per-record cost.
+fn benchmark_cleanup_batched(c: &mut Criterion) {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(lumenflow::PaymentProcessingContract, ());
+    let client = PaymentProcessingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let payer = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let token = env.register_stellar_asset_contract_v2(payer.clone());
+    let token_addr = token.address();
+    let token_client = StellarAssetClient::new(&env, &token_addr);
+    token_client.mint(&payer, &100_000_000_i128);
+    client.add_allowed_token(&admin, &token_addr);
+    client.register_merchant(
+        &merchant,
+        &String::from_str(&env, "Merchant"),
+        &String::from_str(&env, "Merchant for batched cleanup"),
+        &String::from_str(&env, "merchant@example.com"),
+        &lumenflow::MerchantCategory::Retail,
+    );
+
+    env.ledger().with_mut(|l| l.timestamp += 10 * 24 * 3600);
+
+    for i in 0..50 {
+        client.process_payment_with_signature(
+            &payer,
+            &String::from_str(&env, &format!("order-batch-{i}")),
+            &merchant,
+            &token_addr,
+            &1000_i128,
+            &String::from_str(&env, "batched cleanup payment"),
+            &Option::<Vec<String>>::None,
+            &Bytes::from_slice(&env, &[0; 64]),
+            &Bytes::from_slice(&env, &[0; 32]),
+        );
+    }
+
+    env.ledger().with_mut(|l| l.timestamp += 100 * 24 * 3600);
+
+    c.bench_function("cleanup_expired_payments_batch_10", |b| {
+        b.iter(|| {
+            client.cleanup_expired_payments(&admin, &Some(10_u32));
+        });
+    });
+}
+
+criterion_group!(benches, benchmark_process_payment, benchmark_query_history, benchmark_cleanup, benchmark_cleanup_batched);
 criterion_main!(benches);

@@ -2332,8 +2332,8 @@ fn test_cleanup_expired_payments() {
     client.set_payment_cleanup_period(&admin, &1);
     env.ledger().with_mut(|l| l.timestamp += 10);
 
-    let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 1);
+    let removed = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(removed.cleaned, 1);
 }
 
 #[test]
@@ -3588,8 +3588,8 @@ fn test_cleanup_respects_period_does_not_remove_recent_payments() {
     make_payment(&env, &client, &merchant, &payer, &token, "RECENT_001", 500);
     env.ledger().with_mut(|l| l.timestamp += 50);
 
-    let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 0, "recent payment must not be removed");
+    let removed = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(removed.cleaned, 0, "recent payment must not be removed");
 
     // The payment should still be retrievable.
     let p = client.get_payment_by_id(&payer, &str(&env, "RECENT_001"));
@@ -3610,8 +3610,8 @@ fn test_cleanup_only_removes_payments_older_than_period() {
     // NEW_PAY is created after the cutoff — it should survive.
     make_payment(&env, &client, &merchant, &payer, &token, "NEW_PAY", 200);
 
-    let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 1, "only the expired payment should be removed");
+    let removed = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(removed.cleaned, 1, "only the expired payment should be removed");
 
     // NEW_PAY must still exist.
     let p = client.get_payment_by_id(&payer, &str(&env, "NEW_PAY"));
@@ -3626,8 +3626,8 @@ fn test_cleanup_with_no_expired_payments_returns_zero() {
     client.set_payment_cleanup_period(&admin, &86_400);
     make_payment(&env, &client, &merchant, &payer, &token, "SAFE_001", 300);
 
-    let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 0);
+    let removed = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(removed.cleaned, 0);
 }
 
 #[test]
@@ -3639,8 +3639,8 @@ fn test_cleanup_empty_contract_returns_zero() {
     client.set_payment_cleanup_period(&admin, &1);
     env.ledger().with_mut(|l| l.timestamp += 10);
 
-    let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 0);
+    let removed = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(removed.cleaned, 0);
 }
 
 #[test]
@@ -3670,8 +3670,8 @@ fn test_cleanup_large_set_completes_without_panic() {
     // Advance time so all payments are past the cleanup period.
     env.ledger().with_mut(|l| l.timestamp += 10);
 
-    let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 50, "all 50 expired payments should be removed");
+    let removed = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(removed.cleaned, 50, "all 50 expired payments should be removed");
 
     // Verify no payments remain in merchant history.
     let page = client.get_merchant_payment_history(
@@ -3697,8 +3697,76 @@ fn test_cleanup_does_not_remove_payments_at_exact_cutoff_boundary() {
     // Advance by exactly the period — paid_at == cutoff, should NOT be removed.
     env.ledger().with_mut(|l| l.timestamp += 10);
 
-    let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 0, "payment at exact cutoff boundary must not be removed");
+    let removed = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(removed.cleaned, 0, "payment at exact cutoff boundary must not be removed");
+}
+
+#[test]
+fn test_cleanup_batch_size_limits_records_removed() {
+    // With batch_size=2, only 2 of 5 expired payments are removed per call.
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.set_payment_cleanup_period(&admin, &1);
+
+    for i in 0u32..5 {
+        let order_id = soroban_sdk::String::from_str(&env, &format!("BATCH_{:02}", i));
+        let pub_key = Bytes::from_slice(&env, &[0u8; 32]);
+        let sig = Bytes::from_slice(&env, &[0u8; 64]);
+        client.process_payment_with_signature(
+            &payer, &order_id, &merchant, &token, &100, &str(&env, ""), &None, &sig, &pub_key,
+        );
+    }
+
+    env.ledger().with_mut(|l| l.timestamp += 10);
+
+    let result = client.cleanup_expired_payments(&admin, &Some(2_u32));
+    assert_eq!(result.cleaned, 2, "should remove exactly batch_size records");
+    assert!(result.has_more, "has_more must be true when records remain");
+}
+
+#[test]
+fn test_cleanup_batch_size_has_more_false_when_all_removed() {
+    // When all expired payments fit within batch_size, has_more is false.
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.set_payment_cleanup_period(&admin, &1);
+
+    for i in 0u32..3 {
+        let order_id = soroban_sdk::String::from_str(&env, &format!("SM_{:02}", i));
+        let pub_key = Bytes::from_slice(&env, &[0u8; 32]);
+        let sig = Bytes::from_slice(&env, &[0u8; 64]);
+        client.process_payment_with_signature(
+            &payer, &order_id, &merchant, &token, &100, &str(&env, ""), &None, &sig, &pub_key,
+        );
+    }
+
+    env.ledger().with_mut(|l| l.timestamp += 10);
+
+    // batch_size=10 is larger than the 3 expired records
+    let result = client.cleanup_expired_payments(&admin, &Some(10_u32));
+    assert_eq!(result.cleaned, 3);
+    assert!(!result.has_more, "has_more must be false when all records are cleaned");
+}
+
+#[test]
+fn test_cleanup_no_batch_size_defaults_to_100() {
+    // None batch_size uses the default cap of 100; with fewer than 100 records
+    // the result should have has_more=false.
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.set_payment_cleanup_period(&admin, &1);
+
+    for i in 0u32..5 {
+        let order_id = soroban_sdk::String::from_str(&env, &format!("DEF_{:02}", i));
+        let pub_key = Bytes::from_slice(&env, &[0u8; 32]);
+        let sig = Bytes::from_slice(&env, &[0u8; 64]);
+        client.process_payment_with_signature(
+            &payer, &order_id, &merchant, &token, &100, &str(&env, ""), &None, &sig, &pub_key,
+        );
+    }
+
+    env.ledger().with_mut(|l| l.timestamp += 10);
+
+    let result = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(result.cleaned, 5);
+    assert!(!result.has_more);
 }
 
 // ── Min refund amount tests ───────────────────────────────────────────────────
@@ -4413,7 +4481,7 @@ fn test_cleanup_expired_payments_unauthorized() {
     let admin = Address::generate(&env);
     let non_admin = Address::generate(&env);
     client.set_admin(&admin);
-    let result = client.try_cleanup_expired_payments(&non_admin);
+    let result = client.try_cleanup_expired_payments(&non_admin, &None);
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
 
