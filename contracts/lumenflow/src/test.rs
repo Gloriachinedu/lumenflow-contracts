@@ -4535,3 +4535,98 @@ fn test_get_token_whitelist() {
     assert_eq!(list_after.len(), 1);
     assert!(list_after.contains(&token));
 }
+
+// ── Issue #1019: MAX_MEMO_LENGTH enforcement tests ────────────────────────────
+
+#[test]
+fn test_memo_exactly_256_bytes_succeeds() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // Build a 256-character memo (ASCII, 1 byte per char)
+    let memo_256: String = String::from_str(
+        &env,
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
+         AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
+         AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
+         AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    );
+    assert_eq!(memo_256.len(), 256);
+
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "MEMO_256_OK"),
+        &merchant,
+        &token,
+        &500,
+        &memo_256,
+        &None,
+        &sig,
+        &pub_key,
+    );
+
+    let payment = client.get_payment_by_id(&payer, &str(&env, "MEMO_256_OK"));
+    assert_eq!(payment.amount, 500);
+}
+
+#[test]
+fn test_memo_257_bytes_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let pub_key = bytes(&env, &[0u8; 32]);
+    let sig = bytes(&env, &[0u8; 64]);
+
+    // Build a 257-character memo — one byte over the limit
+    let memo_257: String = String::from_str(
+        &env,
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
+         AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
+         AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
+         AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
+         A",
+    );
+    assert_eq!(memo_257.len(), 257);
+
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "MEMO_257_FAIL"),
+        &merchant,
+        &token,
+        &500,
+        &memo_257,
+        &None,
+        &sig,
+        &pub_key,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidMemoLength)));
+}
+
+#[test]
+fn test_batch_memo_257_bytes_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // 257-character memo in a batch item
+    let memo_257: String = String::from_str(
+        &env,
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
+         AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
+         AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
+         AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
+         A",
+    );
+    assert_eq!(memo_257.len(), 257);
+
+    let mut payments = Vec::new(&env);
+    payments.push_back(BatchPaymentItem {
+        order_id: str(&env, "BATCH_MEMO_FAIL"),
+        merchant_address: merchant.clone(),
+        token_address: token.clone(),
+        amount: 100,
+        memo: memo_257,
+        signature: bytes(&env, &[0u8; 64]),
+        merchant_public_key: bytes(&env, &[0u8; 32]),
+    });
+
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidMemoLength)));
+}

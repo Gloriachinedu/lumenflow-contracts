@@ -80,6 +80,8 @@ pub enum PaymentError {
     BatchSizeExceeded = 52,
     /// The provided tags exceed length or count limits. Remediation: Ensure tags are within the allowed limits (e.g., max 5 tags, max 20 chars per tag).
     InvalidTags = 53,
+    /// The memo field exceeds the maximum allowed length (256 bytes). Remediation: Shorten the memo to 256 bytes or fewer.
+    InvalidMemoLength = 54,
 
     // Subscriptions
     /// A subscription plan with the given ID already exists. Remediation: Use a unique plan ID.

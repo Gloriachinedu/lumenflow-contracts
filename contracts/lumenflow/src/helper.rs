@@ -8,6 +8,9 @@ pub const MAX_PAGE_LIMIT: u32 = 100;
 pub const REFUND_WINDOW_SECS: u64 = 30 * 24 * 3600; // 30 days
 pub const MULTISIG_EXPIRY_SECS: u64 = 7 * 24 * 3600; // 7 days
 
+/// Maximum byte length for the memo field on a payment.
+pub const MAX_MEMO_LENGTH: u32 = 256;
+
 /// Return ContractPaused if the contract is currently paused.
 pub fn require_not_paused(env: &Env) -> Result<(), PaymentError> {
     if storage::get_paused(env) {
@@ -156,4 +159,15 @@ pub fn validate_merchant_category(category: &MerchantCategory) -> Result<(), Pay
         }
     }
     Ok(())
+}
+
+/// Validate that a memo does not exceed MAX_MEMO_LENGTH (256 bytes).
+///
+/// Returns [`PaymentError::InvalidMemoLength`] if the memo is too long.
+pub fn require_valid_memo(memo: &String) -> Result<(), PaymentError> {
+    if memo.len() > MAX_MEMO_LENGTH {
+        Err(PaymentError::InvalidMemoLength)
+    } else {
+        Ok(())
+    }
 }

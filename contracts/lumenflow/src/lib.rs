@@ -16,7 +16,7 @@ use error::PaymentError;
 use helper::{
     require_admin, require_admin_or, require_min_refund_amount, require_non_empty_string,
     require_not_paused, require_positive, require_valid_id, require_valid_limit,
-    validate_merchant_category, validate_tags, verify_signature,
+    require_valid_memo, validate_merchant_category, validate_tags, verify_signature,
 };
 use types::{
     BatchPaymentItem, GlobalStats, Merchant, MerchantCategory, MerchantPage, MerchantStats,
@@ -528,6 +528,7 @@ impl PaymentProcessingContract {
         require_positive(amount)?;
         require_valid_id(&order_id)?;
         validate_tags(&tags)?;
+        require_valid_memo(&memo)?;
 
         if !storage::is_token_allowed(&env, &token_address) {
             return Err(PaymentError::TokenNotAllowed);
@@ -673,6 +674,7 @@ impl PaymentProcessingContract {
         require_positive(amount)?;
         require_valid_id(&order_id)?;
         validate_tags(&tags)?;
+        require_valid_memo(&memo)?;
 
         // Replay-protection: nonce must equal the stored value
         let expected = storage::get_nonce(&env, &payer);
@@ -808,6 +810,7 @@ impl PaymentProcessingContract {
         for item in payments.iter() {
             require_positive(item.amount)?;
             require_valid_id(&item.order_id)?;
+            require_valid_memo(&item.memo)?;
 
             if !storage::is_token_allowed(&env, &item.token_address) {
                 return Err(PaymentError::TokenNotAllowed);
