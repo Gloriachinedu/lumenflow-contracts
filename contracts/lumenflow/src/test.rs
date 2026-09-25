@@ -3346,7 +3346,26 @@ fn test_register_merchant_custom_category_success() {
 fn test_register_merchant_custom_category_max_length_success() {
     let (env, client) = setup();
     let merchant = Address::generate(&env);
-    // Exactly 32 characters — should pass
+    // Exactly 64 characters — should pass (new max per issue #1027)
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Custom(str(&env, "1234567890123456789012345678901234567890123456789012345678901234")),
+    );
+    let stored = client.get_merchant(&merchant);
+    assert_eq!(
+        stored.category,
+        MerchantCategory::Custom(str(&env, "1234567890123456789012345678901234567890123456789012345678901234"))
+    );
+}
+
+/// Previously valid 32-char categories must still be accepted at the new 64-char limit.
+#[test]
+fn test_register_merchant_custom_category_32_chars_still_valid() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
     client.register_merchant(
         &merchant,
         &str(&env, "Store"),
@@ -3379,15 +3398,80 @@ fn test_register_merchant_custom_category_empty_fails() {
 fn test_register_merchant_custom_category_too_long_fails() {
     let (env, client) = setup();
     let merchant = Address::generate(&env);
-    // 33 characters — should fail
+    // 65 characters — should fail (max is 64 per issue #1027)
     let result = client.try_register_merchant(
         &merchant,
         &str(&env, "Store"),
         &str(&env, "desc"),
         &str(&env, "c@c.com"),
-        &MerchantCategory::Custom(str(&env, "123456789012345678901234567890123")),
+        &MerchantCategory::Custom(str(&env, "12345678901234567890123456789012345678901234567890123456789012345")),
     );
     assert_eq!(result, Err(Ok(PaymentError::InvalidCategory)));
+}
+
+#[test]
+fn test_update_merchant_custom_category_empty_fails() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Retail,
+    );
+    let result = client.try_update_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Custom(str(&env, "")),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidCategory)));
+}
+
+#[test]
+fn test_update_merchant_custom_category_too_long_fails() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Retail,
+    );
+    // 65 characters — should fail
+    let result = client.try_update_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Custom(str(&env, "12345678901234567890123456789012345678901234567890123456789012345")),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidCategory)));
+}
+
+#[test]
+fn test_update_merchant_custom_category_valid_succeeds() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Retail,
+    );
+    client.update_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Custom(str(&env, "Artisan Crafts")),
+    );
+    let stored = client.get_merchant(&merchant);
+    assert_eq!(stored.category, MerchantCategory::Custom(str(&env, "Artisan Crafts")));
 }
 
 // ── Contract event subscription and provenance tests (#301) ──────────────────

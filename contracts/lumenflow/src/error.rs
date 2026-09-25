@@ -80,6 +80,8 @@ pub enum PaymentError {
     BatchSizeExceeded = 52,
     /// The provided tags exceed length or count limits. Remediation: Ensure tags are within the allowed limits (e.g., max 5 tags, max 20 chars per tag).
     InvalidTags = 53,
+    /// The custom merchant category is invalid. Remediation: Ensure the custom category is non-empty, at most 64 characters, and contains only alphanumeric characters and spaces.
+    InvalidCategory = 54,
 
     // Subscriptions
     /// A subscription plan with the given ID already exists. Remediation: Use a unique plan ID.
