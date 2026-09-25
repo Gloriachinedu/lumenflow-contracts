@@ -2,6 +2,19 @@
 
 The LumenFlow TypeScript SDK provides a convenient wrapper around the LumenFlow smart contract.
 
+## Version and RPC diagnostics
+
+The installed SDK version is available as `VERSION` for diagnostics and User-Agent metadata:
+
+```typescript
+import { LumenFlowClient, VERSION } from '@lumenflow/sdk';
+
+console.log(VERSION);
+const client = new LumenFlowClient('https://rpc.example', fetch);
+```
+
+RPC calls made by `LumenFlowClient` include the same value in the `X-SDK-Version` header.
+
 ## Error Handling
 
 The SDK maps numeric contract error codes to human-readable English messages and provides a typed `LumenFlowError` object.
