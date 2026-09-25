@@ -9,8 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: Build & Release
+  release-wasm:
+    name: Build & Release WASM
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
@@ -44,10 +44,103 @@ jobs:
           cp target/wasm32-unknown-unknown/release/lumenflow.wasm \
              lumenflow_${{ github.ref_name }}.wasm
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release (WASM)
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v3.0.0
         with:
           files: lumenflow_${{ github.ref_name }}.wasm
           generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
+
+  release-cli:
+    name: Build CLI (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            use_cross: false
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            use_cross: true
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            use_cross: false
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            use_cross: false
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            use_cross: false
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # master
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cross (for aarch64 cross-compilation)
+        if: matrix.use_cross
+        run: cargo install cross --locked --version 0.2.5
+
+      - name: Build CLI binary (native)
+        if: "!matrix.use_cross"
+        run: |
+          cargo build \
+            --target ${{ matrix.target }} \
+            --release \
+            --package lumenflow-cli
+        working-directory: cli/lumenflow-cli
+
+      - name: Build CLI binary (cross)
+        if: matrix.use_cross
+        run: |
+          cross build \
+            --target ${{ matrix.target }} \
+            --release \
+            --package lumenflow-cli
+        working-directory: cli/lumenflow-cli
+
+      - name: Package binary (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          BINARY=target/${{ matrix.target }}/release/lumenflow-cli
+          ARCHIVE=lumenflow-cli-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+          tar -czf "$ARCHIVE" -C "$(dirname $BINARY)" "$(basename $BINARY)"
+          sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Package binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binary = "target\${{ matrix.target }}\release\lumenflow-cli.exe"
+          $archive = "lumenflow-cli-${{ github.ref_name }}-${{ matrix.target }}.zip"
+          Compress-Archive -Path $binary -DestinationPath $archive
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
+          "$hash  $archive" | Out-File -Encoding ascii "$archive.sha256"
+          echo "ARCHIVE=$archive" >> $env:GITHUB_ENV
+
+      - name: Upload CLI binaries to GitHub Release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v3.0.0
+        with:
+          files: |
+            lumenflow-cli-${{ github.ref_name }}-${{ matrix.target }}.*
           draft: false
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
