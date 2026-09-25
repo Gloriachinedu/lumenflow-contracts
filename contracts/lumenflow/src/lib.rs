@@ -85,6 +85,121 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Add a token to the contract allowed-token list. Admin only.
+    pub fn add_allowed_token(
+        env: Env,
+        admin: Address,
+        token: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_token_allowed(&env, &token, true);
+        Ok(())
+    }
+
+    /// Remove a token from the contract allowed-token list. Admin only.
+    pub fn remove_allowed_token(
+        env: Env,
+        admin: Address,
+        token: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_token_allowed(&env, &token, false);
+        Ok(())
+    }
+
+    /// Set the platform fee in basis points (e.g. 100 = 1%). Admin only.
+    /// Emits a `lumenflow/config_updated` event with the old and new values.
+    pub fn set_platform_fee(
+        env: Env,
+        admin: Address,
+        fee_bps: u32,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        let old_value = storage::get_platform_fee(&env);
+        storage::set_platform_fee(&env, fee_bps);
+        env.events().publish(
+            ("lumenflow", "config_updated"),
+            (
+                String::from_str(&env, "platform_fee"),
+                old_value as i128,
+                fee_bps as i128,
+                admin,
+                env.ledger().timestamp(),
+            ),
+        );
+        Ok(())
+    }
+
+    /// Set the refund window in seconds. Admin only.
+    /// Emits a `lumenflow/config_updated` event with the old and new values.
+    pub fn set_refund_window(
+        env: Env,
+        admin: Address,
+        window_secs: u64,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        let old_value = storage::get_refund_window(&env);
+        storage::set_refund_window(&env, window_secs);
+        env.events().publish(
+            ("lumenflow", "config_updated"),
+            (
+                String::from_str(&env, "refund_window"),
+                old_value as i128,
+                window_secs as i128,
+                admin,
+                env.ledger().timestamp(),
+            ),
+        );
+        Ok(())
+    }
+
+    /// Set the minimum allowed refund amount. Admin only.
+    /// Emits a `lumenflow/config_updated` event with the old and new values.
+    pub fn set_min_refund_amount(
+        env: Env,
+        admin: Address,
+        min_amount: i128,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        require_positive(min_amount)?;
+        let old_value = storage::get_min_refund_amount(&env);
+        storage::set_min_refund_amount(&env, min_amount);
+        env.events().publish(
+            ("lumenflow", "config_updated"),
+            (
+                String::from_str(&env, "min_refund_amount"),
+                old_value,
+                min_amount,
+                admin,
+                env.ledger().timestamp(),
+            ),
+        );
+        Ok(())
+    }
+
+    /// Set the multisig payment expiry duration in seconds. Admin only.
+    /// Emits a `lumenflow/config_updated` event with the old and new values.
+    pub fn set_multisig_expiry_duration(
+        env: Env,
+        admin: Address,
+        duration_secs: u64,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        let old_value = storage::get_multisig_expiry_duration(&env);
+        storage::set_multisig_expiry_duration(&env, duration_secs);
+        env.events().publish(
+            ("lumenflow", "config_updated"),
+            (
+                String::from_str(&env, "multisig_expiry_duration"),
+                old_value as i128,
+                duration_secs as i128,
+                admin,
+                env.ledger().timestamp(),
+            ),
+        );
+        Ok(())
+    }
+
     // ── Merchant management ───────────────────────────────────────────────────
 
     /// Register a new merchant.

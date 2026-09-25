@@ -416,6 +416,7 @@ For production monitoring — Horizon SSE streaming, alert thresholds, and examp
 | `lumenflow/multisig_executed` | Multisig payment executed |
 | `lumenflow/payment_request_paid` | Payment request completed |
 | `lumenflow/suspicious_activity` | Safety threshold exceeded |
+| `lumenflow/config_updated` | Admin parameter changed |
 
 ---
 

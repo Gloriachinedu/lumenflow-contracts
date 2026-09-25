@@ -1082,3 +1082,127 @@ fn test_auth_sign_multisig_requires_listed_signer() {
     let result = client.try_sign_multisig_payment(&stranger, &str(&env, "AUTH_MS"), &bytes(&env, &[0u8; 64]));
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
+
+// ── Issue #1025: config_updated event tests ───────────────────────────────────
+
+#[test]
+fn test_set_platform_fee_emits_config_updated() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    // Should succeed without error
+    client.set_platform_fee(&admin, &250); // 2.5%
+}
+
+#[test]
+fn test_set_refund_window_emits_config_updated() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let new_window = 14 * 24 * 3600u64; // 14 days
+    client.set_refund_window(&admin, &new_window);
+}
+
+#[test]
+fn test_set_min_refund_amount_emits_config_updated() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    client.set_min_refund_amount(&admin, &100i128);
+}
+
+#[test]
+fn test_set_multisig_expiry_duration_emits_config_updated() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let new_duration = 3 * 24 * 3600u64; // 3 days
+    client.set_multisig_expiry_duration(&admin, &new_duration);
+}
+
+#[test]
+fn test_set_platform_fee_unauthorized_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_set_platform_fee(&non_admin, &100);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_set_refund_window_unauthorized_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_set_refund_window(&non_admin, &(7 * 24 * 3600));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_set_min_refund_amount_unauthorized_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_set_min_refund_amount(&non_admin, &50i128);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_set_multisig_expiry_duration_unauthorized_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_set_multisig_expiry_duration(&non_admin, &86400);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_add_and_remove_allowed_token() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+    client.set_admin(&admin);
+
+    // Add token - should succeed
+    client.add_allowed_token(&admin, &token);
+
+    // Remove token - should succeed
+    client.remove_allowed_token(&admin, &token);
+}
+
+#[test]
+fn test_add_allowed_token_unauthorized_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+    client.set_admin(&admin);
+
+    let result = client.try_add_allowed_token(&non_admin, &token);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_set_min_refund_amount_zero_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    // Zero is not a valid positive amount
+    let result = client.try_set_min_refund_amount(&admin, &0i128);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+}

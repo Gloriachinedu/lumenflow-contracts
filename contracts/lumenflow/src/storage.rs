@@ -20,6 +20,13 @@ pub enum DataKey {
     LargePaymentThreshold,
     MaxRefundsPerOrder,
     OrderRefundCount(String),
+    // Token allowlist
+    AllowedToken(Address),
+    // Admin-configurable parameters (issue #1025)
+    PlatformFee,
+    RefundWindowSecs,
+    MinRefundAmount,
+    MultisigExpiryDuration,
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -271,4 +278,50 @@ pub fn set_token_allowed(env: &Env, token: &Address, allowed: bool) {
     } else {
         env.storage().instance().remove(&DataKey::AllowedToken(token.clone()));
     }
+}
+
+// ── Admin-configurable parameters (issue #1025) ───────────────────────────────
+
+pub fn get_platform_fee(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::PlatformFee)
+        .unwrap_or(0) // Default: 0 basis points
+}
+
+pub fn set_platform_fee(env: &Env, fee_bps: u32) {
+    env.storage().instance().set(&DataKey::PlatformFee, &fee_bps);
+}
+
+pub fn get_refund_window(env: &Env) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::RefundWindowSecs)
+        .unwrap_or(30 * 24 * 3600) // Default: 30 days
+}
+
+pub fn set_refund_window(env: &Env, window_secs: u64) {
+    env.storage().instance().set(&DataKey::RefundWindowSecs, &window_secs);
+}
+
+pub fn get_min_refund_amount(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MinRefundAmount)
+        .unwrap_or(1) // Default: 1 (minimum positive)
+}
+
+pub fn set_min_refund_amount(env: &Env, min_amount: i128) {
+    env.storage().instance().set(&DataKey::MinRefundAmount, &min_amount);
+}
+
+pub fn get_multisig_expiry_duration(env: &Env) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MultisigExpiryDuration)
+        .unwrap_or(7 * 24 * 3600) // Default: 7 days
+}
+
+pub fn set_multisig_expiry_duration(env: &Env, duration_secs: u64) {
+    env.storage().instance().set(&DataKey::MultisigExpiryDuration, &duration_secs);
 }
