@@ -6,8 +6,10 @@
   "scripts": {
     "test": "playwright test",
     "test:e2e": "playwright test playwright/refund-lifecycle.spec.ts",
-    "test:visual": "playwright test playwright/visual-regression.spec.ts",
+    "test:visual": "playwright test playwright/visual-regression.spec.ts playwright/dark-mode-visual-regression.spec.ts",
+    "test:visual:dark-mode": "playwright test playwright/dark-mode-visual-regression.spec.ts",
     "test:update-snapshots": "playwright test --update-snapshots",
+    "test:update-snapshots:dark-mode": "playwright test --update-snapshots playwright/dark-mode-visual-regression.spec.ts",
     "test:report": "playwright show-report"
   },
   "devDependencies": {
