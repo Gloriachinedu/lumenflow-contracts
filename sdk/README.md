@@ -6,6 +6,8 @@ The LumenFlow TypeScript SDK provides a convenient wrapper around the LumenFlow 
 
 The SDK maps numeric contract error codes to human-readable English messages and provides a typed `LumenFlowError` object.
 
+Every Soroban `PaymentError` code has a matching exported `*Error` class and is available through `errorFromCode`. Errors retain their numeric `code` and serialize with `JSON.stringify` for structured logs.
+
 ### Usage
 
 ```typescript
