@@ -35,3 +35,45 @@ function handleContractError(error: any) {
   });
 }
 ```
+
+---
+
+## CSP Nonce Injection
+
+When your page enforces a `Content-Security-Policy` with a `script-src 'nonce-<value>'` directive, any inline `<script>` elements created by the SDK must carry the same nonce or they will be blocked by the browser.
+
+### Usage
+
+Call `LumenFlowClient.setCspNonce()` once per page load, passing the server-generated nonce:
+
+```typescript
+import { LumenFlowClient } from '@lumenflow/sdk';
+
+const client = new LumenFlowClient();
+
+// Pass the nonce your server emits in the CSP header / meta tag.
+client.setCspNonce(window.__CSP_NONCE__);
+```
+
+After calling `setCspNonce()`, every `<script>` element the SDK creates dynamically will have its `nonce` property set to this value.
+
+### Behaviour in Node.js
+
+`setCspNonce()` is a **no-op** in Node.js environments (where `window` is not defined). You can safely call it in isomorphic code without wrapping it in a browser check.
+
+### Using CspNonceManager directly
+
+For advanced use cases you can import the low-level manager:
+
+```typescript
+import { cspNonceManager } from '@lumenflow/sdk';
+
+cspNonceManager.setNonce('abc123');
+
+// Create a script element with the nonce already applied:
+const script = cspNonceManager.createNoncedScript('console.log("hello")');
+document.head.appendChild(script!);
+
+// Or inject directly:
+cspNonceManager.injectScript('window.myLib.init()');
+```
