@@ -102,3 +102,67 @@ npm audit
 ```
 
 Only **critical** vulnerabilities fail CI. To investigate a specific advisory, use `npm audit --json` for machine-readable output.
+
+## Fuzz Testing (cargo-fuzz / libFuzzer)
+
+Fuzz tests drive `batch_payment` with boundary conditions generated from a structured byte stream.
+
+### Location
+
+```
+contracts/lumenflow/fuzz/
+├── Cargo.toml
+└── fuzz_targets/
+    └── fuzz_auth.rs    ← batch_payment harness
+```
+
+### Running
+
+```bash
+# Install cargo-fuzz once
+cargo install cargo-fuzz
+
+# Run the harness (60-second budget)
+cargo fuzz run fuzz_auth \
+  --manifest-path contracts/lumenflow/fuzz/Cargo.toml \
+  -- -max_total_time=60
+
+# Run for 1M iterations
+cargo fuzz run fuzz_auth \
+  --manifest-path contracts/lumenflow/fuzz/Cargo.toml \
+  -- -runs=1000000
+```
+
+### What is fuzzed
+
+The `fuzz_auth.rs` harness exercises `batch_payment` with:
+
+| Case | Description |
+|------|-------------|
+| Empty batch (0 items) | Must succeed without panicking |
+| 1 item | Single-item batch boundary |
+| 10 items (max) | Maximum allowed batch size |
+| 11 items | Must return `BatchSizeExceeded` |
+| All-valid items | Must succeed |
+| First item invalid | Must fail gracefully |
+| Last item invalid | Must fail gracefully |
+| All items invalid | Must fail gracefully |
+
+Invalid item strategies:
+- `zero amount` → `InvalidAmount`
+- `negative amount` → `InvalidAmount`
+- `65-char order_id` → `InvalidInput`
+- `257-char memo` → `InvalidMemoLength`
+
+### Reproducing a crash
+
+```bash
+cargo fuzz run fuzz_auth \
+  --manifest-path contracts/lumenflow/fuzz/Cargo.toml \
+  contracts/lumenflow/fuzz/artifacts/fuzz_auth/<crash-file>
+```
+
+### Adding new fuzz targets
+
+Add a new file under `contracts/lumenflow/fuzz/fuzz_targets/` and register it as a `[[bin]]` in `contracts/lumenflow/fuzz/Cargo.toml`.
+

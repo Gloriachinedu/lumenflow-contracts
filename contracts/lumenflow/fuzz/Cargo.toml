@@ -1,0 +1,22 @@
+[package]
+name = "lumenflow-fuzz"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.lumenflow]
+path = ".."
+features = ["testutils"]
+
+# Disable unused warning when running non-fuzz targets
+[[bin]]
+name = "fuzz_auth"
+path = "fuzz_targets/fuzz_auth.rs"
+test = false
+doc = false
