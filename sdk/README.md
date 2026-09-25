@@ -6,6 +6,16 @@ The LumenFlow TypeScript SDK provides a convenient wrapper around the LumenFlow 
 
 The SDK maps numeric contract error codes to human-readable English messages and provides a typed `LumenFlowError` object.
 
+## Paginated payment history
+
+Use `getAllPayments` to consume cursor-based history one page at a time. The generator stops when `next_cursor` is `null`, and breaking the loop stops further requests:
+
+```typescript
+for await (const payments of getAllPayments({ fetchPage })) {
+  processPayments(payments);
+}
+```
+
 ### Usage
 
 ```typescript
