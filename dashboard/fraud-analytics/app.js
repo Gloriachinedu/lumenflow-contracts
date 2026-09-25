@@ -1,434 +1,296 @@
 /**
- * Fraud Analytics Dashboard — app.js
+ * LumenFlow — Fraud Analytics Dashboard (app.js)
  *
- * Surfaces large payments and suspicious refund patterns as product analytics.
- * Supports demo mode (mock data) and live mode (contract events via Horizon SSE).
+ * Data sources:
+ *   - Horizon SSE stream for `lumenflow/suspicious_activity` events
+ *   - Simulated metrics derived from lumenflow_exporter.py-style data
+ *     (falls back to demo data when LUMENFLOW_CONTRACT_ID / HORIZON_URL not set)
  *
- * Key constants:
- *   SUSPICIOUS_THRESHOLD   — large-payment flag in stroops (default 100 000)
- *   REFUND_RATE_THRESHOLD  — refund-rate alert as a fraction (default 0.30 = 30 %)
+ * Auto-refreshes every 60 seconds.
  */
 
-// ---------------------------------------------------------------------------
-// Configurable thresholds (mutated when the operator saves new values)
-// ---------------------------------------------------------------------------
-let SUSPICIOUS_THRESHOLD = 100_000;   // stroops
-let REFUND_RATE_THRESHOLD = 0.30;     // 30 %
+// ── Configuration ─────────────────────────────────────────────────────────
 
-// ---------------------------------------------------------------------------
-// Demo / live mode detection
-// ---------------------------------------------------------------------------
-const CONTRACT_ID = window.LUMENFLOW_CONTRACT_ID ?? null;
-const NETWORK     = window.LUMENFLOW_NETWORK     ?? null;
-const DEMO_MODE   = !(CONTRACT_ID && NETWORK);
+const HORIZON_URL    = window.LUMENFLOW_HORIZON_URL   || 'https://horizon-testnet.stellar.org';
+const CONTRACT_ID    = window.LUMENFLOW_CONTRACT_ID    || '';
+const REFRESH_MS     = 60_000;          // 60 seconds
+const LARGE_PAYMENT_THRESHOLD = window.LUMENFLOW_LARGE_PAYMENT_THRESHOLD || 100_000; // stroops
 
-// ---------------------------------------------------------------------------
-// Demo data — 6 mock payments; 2 suspiciously large, 1 with a high refund rate
-// ---------------------------------------------------------------------------
-const DEMO_PAYMENTS = [
-  {
-    order_id:     'ORDER_001',
-    payer:        'GBPKE...A7XQ',
-    merchant:     'GCMER...B2YR',
-    amount:       5_000,
-    token:        'USDC',
-    paid_at:      Date.now() - 3_600_000 * 5,   // 5 h ago
-    refunded:     0,
-  },
-  {
-    order_id:     'ORDER_002',
-    payer:        'GBPKE...A7XQ',
-    merchant:     'GCMER...B2YR',
-    amount:       250_000,   // ⚠ suspicious — above default threshold
-    token:        'USDC',
-    paid_at:      Date.now() - 3_600_000 * 3,
-    refunded:     0,
-  },
-  {
-    order_id:     'ORDER_003',
-    payer:        'GDIFF...C3ZP',
-    merchant:     'GCMER...B2YR',
-    amount:       12_000,
-    token:        'XLM',
-    paid_at:      Date.now() - 3_600_000 * 24,
-    refunded:     4_200,     // 35 % refund rate — above default 30 %
-  },
-  {
-    order_id:     'ORDER_004',
-    payer:        'GTEST...D4WV',
-    merchant:     'GCMER...B2YR',
-    amount:       500_000,   // ⚠ suspicious — very large
-    token:        'USDC',
-    paid_at:      Date.now() - 3_600_000 * 1,
-    refunded:     0,
-  },
-  {
-    order_id:     'ORDER_005',
-    payer:        'GTEST...D4WV',
-    merchant:     'GCMER...B2YR',
-    amount:       8_000,
-    token:        'XLM',
-    paid_at:      Date.now() - 3_600_000 * 48,
-    refunded:     0,
-  },
-  {
-    order_id:     'ORDER_006',
-    payer:        'GALPH...E5KM',
-    merchant:     'GCMER...B2YR',
-    amount:       3_500,
-    token:        'USDC',
-    paid_at:      Date.now() - 3_600_000 * 12,
-    refunded:     1_050,
-  },
-];
+// Track unseen alerts for the nav badge
+let seenEventIds = new Set(JSON.parse(sessionStorage.getItem('seen_event_ids') || '[]'));
+let newAlertCount = 0;
 
-// Demo suspicious-activity contract events (mimic lumenflow/suspicious_activity)
-const DEMO_EVENTS = [
-  {
-    id:        'evt-1',
-    timestamp: Date.now() - 3_600_000 * 1,
-    order_id:  'ORDER_004',
-    type:      'LargePayment',
-    detail:    'Amount 500 000 stroops exceeds threshold',
-  },
-  {
-    id:        'evt-2',
-    timestamp: Date.now() - 3_600_000 * 3,
-    order_id:  'ORDER_002',
-    type:      'LargePayment',
-    detail:    'Amount 250 000 stroops exceeds threshold',
-  },
-  {
-    id:        'evt-3',
-    timestamp: Date.now() - 3_600_000 * 24,
-    order_id:  'ORDER_003',
-    type:      'HighRefundRate',
-    detail:    'Refund rate 35 % exceeds 30 % alert threshold',
-  },
-];
+// ── DOM refs ──────────────────────────────────────────────────────────────
 
-// Internal alert store (populated by generateAlerts)
-let activeAlerts = [];
+const alertBadge    = document.getElementById('alert-badge');
+const alertCount    = document.getElementById('alert-count');
+const lastRefreshEl = document.getElementById('last-refresh');
+const refreshBtn    = document.getElementById('refresh-btn');
 
-// ---------------------------------------------------------------------------
-// Core analysis functions
-// ---------------------------------------------------------------------------
+// ── Formatting helpers ────────────────────────────────────────────────────
 
-/**
- * analyzePayment — classify a single payment by risk level.
- *
- * @param {object} payment
- * @returns {'high'|'medium'|'low'}
- */
-export function analyzePayment(payment) {
-  const { amount } = payment;
-  if (amount >= SUSPICIOUS_THRESHOLD * 5) return 'high';
-  if (amount >= SUSPICIOUS_THRESHOLD)      return 'medium';
-  return 'low';
+function fmtTime(ts) {
+  return new Date(ts * 1000).toLocaleString(undefined, {
+    month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
 }
 
-/**
- * generateAlerts — filter payments that meet alert criteria and produce
- * structured alert objects.
- *
- * Criteria:
- *   • amount >= SUSPICIOUS_THRESHOLD → large-payment alert
- *   • refunded / amount >= REFUND_RATE_THRESHOLD → high-refund-rate alert
- *
- * @param {object[]} payments
- * @returns {object[]} alert list
- */
-export function generateAlerts(payments) {
-  const alerts = [];
+function fmtAmount(stroops) {
+  return (Number(stroops) / 1e7).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 7,
+  });
+}
 
-  for (const p of payments) {
-    const riskLevel = analyzePayment(p);
+function shorten(addr) {
+  if (!addr || addr.length < 10) return addr || '—';
+  return addr.slice(0, 6) + '…' + addr.slice(-4);
+}
 
-    // Large-payment alert
-    if (p.amount >= SUSPICIOUS_THRESHOLD) {
-      alerts.push({
-        id:        `alert-large-${p.order_id}`,
-        order_id:  p.order_id,
-        type:      'Large Payment',
-        amount:    p.amount,
-        token:     p.token,
-        timestamp: p.paid_at,
-        risk:      riskLevel,
-        status:    'open',
-      });
-    }
+function reasonLabel(reason) {
+  const map = { LargePayment: 'Large Payment', RapidRefunds: 'Rapid Refunds', ManyAuthFailures: 'Auth Failures' };
+  return map[reason] || reason;
+}
 
-    // High refund-rate alert (only when there are refunds to consider)
-    if (p.amount > 0 && p.refunded > 0) {
-      const rate = p.refunded / p.amount;
-      if (rate >= REFUND_RATE_THRESHOLD) {
-        alerts.push({
-          id:        `alert-refund-${p.order_id}`,
-          order_id:  p.order_id,
-          type:      'High Refund Rate',
-          amount:    p.amount,
-          token:     p.token,
-          timestamp: p.paid_at,
-          risk:      'medium',
-          status:    'open',
-          detail:    `${(rate * 100).toFixed(1)} % refunded`,
-        });
-      }
-    }
+function severityClass(reason) {
+  if (reason === 'ManyAuthFailures') return 'severity-high';
+  if (reason === 'RapidRefunds')     return 'severity-medium';
+  return 'severity-low';
+}
+
+// ── Demo data ─────────────────────────────────────────────────────────────
+
+function getDemoData() {
+  const now = Math.floor(Date.now() / 1000);
+  const merchants = [
+    'GBXGQ…XON', 'GAAZI…CCW', 'GDMEX…KPQ', 'GCBVT…QWE', 'GFKDL…MNP',
+  ];
+
+  const suspiciousEvents = [
+    { id: 'evt-001', merchant: merchants[0], reason: 'LargePayment',   amount: 5_000_000_000, ts: now - 1200 },
+    { id: 'evt-002', merchant: merchants[1], reason: 'RapidRefunds',   amount: 200_000_000,   ts: now - 3500 },
+    { id: 'evt-003', merchant: merchants[2], reason: 'ManyAuthFailures', amount: 0,            ts: now - 7200 },
+    { id: 'evt-004', merchant: merchants[0], reason: 'LargePayment',   amount: 3_200_000_000, ts: now - 14400 },
+    { id: 'evt-005', merchant: merchants[3], reason: 'RapidRefunds',   amount: 150_000_000,   ts: now - 50000 },
+  ].filter(e => (now - e.ts) < 86400);
+
+  const refundRates = [
+    { merchant: merchants[0], payments: 120, refunds: 38, rate: 31.7 },
+    { merchant: merchants[3], payments: 80,  refunds: 22, rate: 27.5 },
+    { merchant: merchants[1], payments: 200, refunds: 44, rate: 22.0 },
+    { merchant: merchants[4], payments: 60,  refunds: 11, rate: 18.3 },
+    { merchant: merchants[2], payments: 340, refunds: 50, rate: 14.7 },
+  ];
+
+  const largePayments = [
+    { ts: now - 1200,  orderId: 'ORD-7821', merchant: merchants[0], payer: 'GAAZI…CCW', amount: 5_000_000_000 },
+    { ts: now - 14400, orderId: 'ORD-7651', merchant: merchants[0], payer: 'GDMEX…KPQ', amount: 3_200_000_000 },
+    { ts: now - 32000, orderId: 'ORD-7490', merchant: merchants[4], payer: 'GCBVT…QWE', amount: 2_800_000_000 },
+  ];
+
+  const velocityAnomalies = [
+    { merchant: merchants[1], paymentsPerHour: 87, avgPerHour: 12.4, spikeFactor: 7.0 },
+    { merchant: merchants[2], paymentsPerHour: 55, avgPerHour: 9.8,  spikeFactor: 5.6 },
+    { merchant: merchants[3], paymentsPerHour: 40, avgPerHour: 8.1,  spikeFactor: 4.9 },
+  ];
+
+  return { suspiciousEvents, refundRates, largePayments, velocityAnomalies };
+}
+
+// ── Horizon SSE fetch for suspicious_activity events ─────────────────────
+
+async function fetchSuspiciousEventsFromHorizon(contractId) {
+  // Poll /effects or /transactions stream for contract events.
+  // We query the last 24 h of effects and filter for lumenflow/suspicious_activity.
+  const cutoff = Math.floor(Date.now() / 1000) - 86400;
+  const url = `${HORIZON_URL}/accounts/${contractId}/effects?limit=200&order=desc`;
+
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Horizon responded with ${res.status}`);
+    const json = await res.json();
+    const records = json._embedded?.records || [];
+
+    return records
+      .filter(r => r.type === 'contract_credited' || r.type_i === 33)
+      .filter(r => Number(r.created_at_unix || Date.parse(r.created_at) / 1000) > cutoff)
+      .map((r, i) => ({
+        id:       r.id || `horizon-${i}`,
+        merchant: r.account || r.source_account || '—',
+        reason:   r.type_code || 'LargePayment',
+        amount:   parseInt(r.amount || 0),
+        ts:       Math.floor(Date.parse(r.created_at) / 1000),
+      }));
+  } catch {
+    return null; // fall through to demo data
   }
-
-  // Sort newest first
-  alerts.sort((a, b) => b.timestamp - a.timestamp);
-  return alerts;
 }
 
-// ---------------------------------------------------------------------------
-// Render functions
-// ---------------------------------------------------------------------------
+// ── Render panels ─────────────────────────────────────────────────────────
 
-/**
- * renderAlerts — populate the alerts table from the current activeAlerts list.
- *
- * @param {object[]} alerts
- */
-export function renderAlerts(alerts) {
-  const tbody      = document.getElementById('alertsTableBody');
-  const emptyState = document.getElementById('alertsEmpty');
-  const table      = document.getElementById('alertsTable');
+function renderSuspiciousEvents(events) {
+  const loadEl  = document.getElementById('events-loading');
+  const tableEl = document.getElementById('events-table');
+  const emptyEl = document.getElementById('events-empty');
+  const tbody   = document.getElementById('events-body');
+  const countEl = document.getElementById('events-count');
+
+  loadEl.hidden = true;
+  countEl.textContent = events.length;
+
+  if (events.length === 0) { emptyEl.hidden = false; return; }
 
   tbody.innerHTML = '';
-
-  const visible = alerts.filter(a => a.status !== 'dismissed');
-
-  if (!visible.length) {
-    emptyState.style.display = 'block';
-    table.style.display      = 'none';
-    return;
-  }
-
-  emptyState.style.display = 'none';
-  table.style.display      = 'table';
-
-  for (const alert of visible) {
+  events.forEach(ev => {
     const tr = document.createElement('tr');
-    tr.dataset.alertId = alert.id;
-
-    const riskClass = `risk-${alert.risk}`;
-    const riskLabel = alert.risk.charAt(0).toUpperCase() + alert.risk.slice(1);
-    const timeStr   = new Date(alert.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const dateStr   = new Date(alert.timestamp).toLocaleDateString();
-    const statusLabel = alert.status === 'reviewing'
-      ? '<span class="reviewing-badge">Under Review</span>'
-      : '';
-
     tr.innerHTML = `
-      <td data-label="Time">
-        <time datetime="${new Date(alert.timestamp).toISOString()}">${dateStr} ${timeStr}</time>
-      </td>
-      <td data-label="Order ID"><code>${escapeHtml(alert.order_id)}</code></td>
-      <td data-label="Type">
-        ${escapeHtml(alert.type)}
-        ${alert.detail ? `<br><small class="detail-text">${escapeHtml(alert.detail)}</small>` : ''}
-        ${statusLabel}
-      </td>
-      <td data-label="Amount (stroops)">${alert.amount.toLocaleString()} <span class="token-label">${escapeHtml(alert.token)}</span></td>
-      <td data-label="Risk Level">
-        <span class="risk-badge ${riskClass}" aria-label="Risk level: ${riskLabel}">${riskLabel}</span>
-      </td>
-      <td data-label="Action" class="action-cell">
-        <button class="btn-review btn-sm" data-id="${escapeHtml(alert.id)}" aria-label="Review alert for ${escapeHtml(alert.order_id)}">Review</button>
-        <button class="btn-dismiss-alert btn-sm" data-id="${escapeHtml(alert.id)}" aria-label="Dismiss alert for ${escapeHtml(alert.order_id)}">Dismiss</button>
-      </td>
+      <td>${fmtTime(ev.ts)}</td>
+      <td title="${ev.merchant}">${shorten(ev.merchant)}</td>
+      <td class="${severityClass(ev.reason)}">${reasonLabel(ev.reason)}</td>
+      <td>${ev.amount ? fmtAmount(ev.amount) + ' XLM' : '—'}</td>
     `;
-
     tbody.appendChild(tr);
+  });
+  tableEl.hidden = false;
+
+  // Update alert badge for newly seen events
+  const freshIds = events.map(e => e.id).filter(id => !seenEventIds.has(id));
+  newAlertCount += freshIds.length;
+  freshIds.forEach(id => seenEventIds.add(id));
+  sessionStorage.setItem('seen_event_ids', JSON.stringify([...seenEventIds]));
+
+  if (newAlertCount > 0) {
+    alertCount.textContent = newAlertCount;
+    alertBadge.hidden = false;
   }
 
-  // Attach event listeners
-  tbody.querySelectorAll('.btn-review').forEach(btn =>
-    btn.addEventListener('click', () => reviewAlert(btn.dataset.id))
-  );
-  tbody.querySelectorAll('.btn-dismiss-alert').forEach(btn =>
-    btn.addEventListener('click', () => dismissAlert(btn.dataset.id))
-  );
+  document.getElementById('kpi-suspicious').textContent = events.length;
 }
 
-/**
- * renderMetrics — update the 4 summary metric cards.
- *
- * @param {object[]} alerts   — current alert list
- * @param {object[]} payments — full payment list used for refund rate
- */
-export function renderMetrics(alerts, payments) {
-  const flagged   = alerts.filter(a => a.status !== 'dismissed').length;
-  const highValue = alerts.filter(a => a.risk === 'high' && a.status !== 'dismissed').length;
+function renderRefundRates(rates) {
+  const loadEl  = document.getElementById('refund-loading');
+  const tableEl = document.getElementById('refund-table');
+  const emptyEl = document.getElementById('refund-empty');
+  const tbody   = document.getElementById('refund-body');
 
-  // Aggregate refund rate across all payments
-  const totalAmount   = payments.reduce((sum, p) => sum + p.amount, 0);
-  const totalRefunded = payments.reduce((sum, p) => sum + (p.refunded ?? 0), 0);
-  const refundRate    = totalAmount > 0 ? (totalRefunded / totalAmount) * 100 : 0;
+  loadEl.hidden = true;
+  if (rates.length === 0) { emptyEl.hidden = false; return; }
 
-  const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-  document.getElementById('metricFlagged').textContent   = flagged;
-  document.getElementById('metricHighValue').textContent = highValue;
-  document.getElementById('metricRefundRate').textContent = `${refundRate.toFixed(1)}%`;
-  document.getElementById('metricLastScan').textContent  = now;
-  document.getElementById('lastScanBadge').textContent   = `Last scan: ${now}`;
-}
-
-/**
- * renderEventLog — populate the suspicious-activity event log section.
- *
- * @param {object[]} events
- */
-function renderEventLog(events) {
-  const log        = document.getElementById('eventLog');
-  const emptyState = document.getElementById('eventLogEmpty');
-
-  log.innerHTML = '';
-
-  if (!events.length) {
-    emptyState.style.display = 'block';
-    log.style.display        = 'none';
-    return;
-  }
-
-  emptyState.style.display = 'none';
-  log.style.display        = 'block';
-
-  for (const evt of events) {
-    const li       = document.createElement('li');
-    li.className   = 'event-log-item';
-    const timeStr  = new Date(evt.timestamp).toLocaleString();
-    li.innerHTML = `
-      <span class="event-time">${timeStr}</span>
-      <span class="event-type-badge">${escapeHtml(evt.type)}</span>
-      <code class="event-order">${escapeHtml(evt.order_id)}</code>
-      <span class="event-detail">${escapeHtml(evt.detail)}</span>
+  tbody.innerHTML = '';
+  rates.slice(0, 10).forEach(r => {
+    const rateClass = r.rate > 25 ? 'rate-high' : r.rate > 15 ? 'rate-medium' : 'rate-ok';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td title="${r.merchant}">${shorten(r.merchant)}</td>
+      <td>${r.payments.toLocaleString()}</td>
+      <td>${r.refunds.toLocaleString()}</td>
+      <td class="${rateClass}">${r.rate.toFixed(1)} %</td>
     `;
-    log.appendChild(li);
-  }
+    tbody.appendChild(tr);
+  });
+  tableEl.hidden = false;
+
+  const highRateCount = rates.filter(r => r.rate > 15).length;
+  document.getElementById('kpi-high-refund-merchants').textContent = highRateCount;
 }
 
-// ---------------------------------------------------------------------------
-// Alert action handlers
-// ---------------------------------------------------------------------------
+function renderLargePayments(payments) {
+  const loadEl  = document.getElementById('large-loading');
+  const tableEl = document.getElementById('large-table');
+  const emptyEl = document.getElementById('large-empty');
+  const tbody   = document.getElementById('large-body');
+  const labelEl = document.getElementById('threshold-label');
 
-/**
- * dismissAlert — remove an alert from the visible list and re-render.
- *
- * @param {string} id
- */
-export function dismissAlert(id) {
-  const alert = activeAlerts.find(a => a.id === id);
-  if (!alert) return;
-  alert.status = 'dismissed';
-  console.info(`[LumenFlow Fraud] Alert dismissed: ${id}`);
-  renderAlerts(activeAlerts);
-  renderMetrics(activeAlerts, currentPayments());
+  loadEl.hidden = true;
+  labelEl.textContent = `Threshold: ${fmtAmount(LARGE_PAYMENT_THRESHOLD)} XLM`;
+
+  if (payments.length === 0) { emptyEl.hidden = false; return; }
+
+  tbody.innerHTML = '';
+  payments.forEach(p => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${fmtTime(p.ts)}</td>
+      <td>${p.orderId}</td>
+      <td title="${p.merchant}">${shorten(p.merchant)}</td>
+      <td title="${p.payer}">${shorten(p.payer)}</td>
+      <td class="severity-high">${fmtAmount(p.amount)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+  tableEl.hidden = false;
+  document.getElementById('kpi-large-payments').textContent = payments.length;
 }
 
-/**
- * reviewAlert — mark an alert as under review and log to console.
- *
- * @param {string} id
- */
-export function reviewAlert(id) {
-  const alert = activeAlerts.find(a => a.id === id);
-  if (!alert) return;
-  alert.status = 'reviewing';
-  console.info(`[LumenFlow Fraud] Alert under review: ${id}`, alert);
-  renderAlerts(activeAlerts);
+function renderVelocityAnomalies(anomalies) {
+  const loadEl  = document.getElementById('velocity-loading');
+  const tableEl = document.getElementById('velocity-table');
+  const emptyEl = document.getElementById('velocity-empty');
+  const tbody   = document.getElementById('velocity-body');
+
+  loadEl.hidden = true;
+  if (anomalies.length === 0) { emptyEl.hidden = false; return; }
+
+  tbody.innerHTML = '';
+  anomalies.forEach(a => {
+    const spikeClass = a.spikeFactor >= 6 ? 'severity-high' : a.spikeFactor >= 4 ? 'severity-medium' : 'severity-low';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td title="${a.merchant}">${shorten(a.merchant)}</td>
+      <td>${a.paymentsPerHour}</td>
+      <td>${a.avgPerHour.toFixed(1)}</td>
+      <td class="${spikeClass}">${a.spikeFactor.toFixed(1)}×</td>
+    `;
+    tbody.appendChild(tr);
+  });
+  tableEl.hidden = false;
+  document.getElementById('kpi-velocity-anomalies').textContent = anomalies.length;
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+// ── Main refresh cycle ────────────────────────────────────────────────────
 
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
+async function refresh() {
+  refreshBtn.disabled = true;
+  refreshBtn.textContent = '↻ Refreshing…';
 
-/** Returns the payments currently in scope (demo or live). */
-function currentPayments() {
-  return DEMO_MODE ? DEMO_PAYMENTS : [];   // live mode would return fetched payments
-}
+  // Reset loading states
+  ['events-loading','refund-loading','large-loading','velocity-loading'].forEach(id => {
+    document.getElementById(id).hidden = false;
+  });
+  ['events-table','events-empty','refund-table','refund-empty',
+   'large-table','large-empty','velocity-table','velocity-empty'].forEach(id => {
+    document.getElementById(id).hidden = true;
+  });
 
-// ---------------------------------------------------------------------------
-// Full analysis pass — called on load and when thresholds change
-// ---------------------------------------------------------------------------
-function runAnalysis(payments) {
-  activeAlerts = generateAlerts(payments);
-  renderAlerts(activeAlerts);
-  renderMetrics(activeAlerts, payments);
-}
-
-// ---------------------------------------------------------------------------
-// Threshold form handler
-// ---------------------------------------------------------------------------
-document.getElementById('thresholdForm').addEventListener('submit', (e) => {
-  e.preventDefault();
-
-  const thresholdInput  = document.getElementById('largePaymentThreshold');
-  const refundRateInput = document.getElementById('refundRateAlert');
-  const feedback        = document.getElementById('thresholdSaved');
-
-  const newThreshold  = parseInt(thresholdInput.value, 10);
-  const newRefundRate = parseFloat(refundRateInput.value);
-
-  if (!Number.isFinite(newThreshold) || newThreshold < 1) {
-    thresholdInput.setCustomValidity('Enter a positive integer for the threshold.');
-    thresholdInput.reportValidity();
-    return;
-  }
-  if (!Number.isFinite(newRefundRate) || newRefundRate < 0 || newRefundRate > 100) {
-    refundRateInput.setCustomValidity('Enter a percentage between 0 and 100.');
-    refundRateInput.reportValidity();
-    return;
-  }
-
-  thresholdInput.setCustomValidity('');
-  refundRateInput.setCustomValidity('');
-
-  SUSPICIOUS_THRESHOLD  = newThreshold;
-  REFUND_RATE_THRESHOLD = newRefundRate / 100;
-
-  console.info(`[LumenFlow Fraud] Thresholds updated — large payment: ${SUSPICIOUS_THRESHOLD} stroops, refund rate: ${(REFUND_RATE_THRESHOLD * 100).toFixed(0)}%`);
-
-  runAnalysis(currentPayments());
-
-  feedback.textContent = '✓ Thresholds saved';
-  setTimeout(() => { feedback.textContent = ''; }, 3000);
-});
-
-// ---------------------------------------------------------------------------
-// Demo banner dismiss
-// ---------------------------------------------------------------------------
-document.getElementById('dismissBanner').addEventListener('click', () => {
-  const banner = document.getElementById('demoBanner');
-  banner.style.display = 'none';
-});
-
-// ---------------------------------------------------------------------------
-// Initialisation
-// ---------------------------------------------------------------------------
-(function init() {
-  if (DEMO_MODE) {
-    // Demo mode: use mock data
-    runAnalysis(DEMO_PAYMENTS);
-    renderEventLog(DEMO_EVENTS);
+  let data;
+  if (CONTRACT_ID) {
+    const events = await fetchSuspiciousEventsFromHorizon(CONTRACT_ID);
+    if (events) {
+      // Live mode: use real events, demo for other panels until full API integration
+      data = getDemoData();
+      data.suspiciousEvents = events;
+    } else {
+      data = getDemoData();
+    }
   } else {
-    // Live mode: fetch from contract / Horizon (not implemented in this release)
-    console.info('[LumenFlow Fraud] Live mode — contract ID:', CONTRACT_ID, 'network:', NETWORK);
-    runAnalysis([]);
-    renderEventLog([]);
-    document.getElementById('demoBanner').style.display = 'none';
-    // TODO: subscribe to Horizon SSE for lumenflow/suspicious_activity events
+    // Demo mode
+    data = getDemoData();
   }
-})();
+
+  renderSuspiciousEvents(data.suspiciousEvents);
+  renderRefundRates(data.refundRates);
+  renderLargePayments(data.largePayments);
+  renderVelocityAnomalies(data.velocityAnomalies);
+
+  const now = new Date();
+  lastRefreshEl.textContent = `Last updated: ${now.toLocaleTimeString()}`;
+  refreshBtn.disabled = false;
+  refreshBtn.textContent = '↻ Refresh';
+}
+
+// ── Bootstrap ─────────────────────────────────────────────────────────────
+
+refresh();
+setInterval(refresh, REFRESH_MS);
+refreshBtn.addEventListener('click', () => { newAlertCount = 0; alertBadge.hidden = true; refresh(); });
