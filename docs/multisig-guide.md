@@ -65,7 +65,7 @@ The `required_signatures` parameter (threshold) should be chosen based on your t
 
 1. **Signer List Immutability:** Once a multisig payment is initiated, the list of authorized signers and the threshold cannot be changed.
 2. **Signature Replay Protection:** Signatures are specific to the `payment_id`. Ensure `payment_id` is unique across all transactions.
-3. **Expiration:** Unlike standard payments, multisig payments remain in `Pending` state until executed or archived by an admin. Ensure you have a process to monitor and complete pending multisigs.
+3. **Expiration:** Multisig payments expire after a platform-configurable duration (default: 7 days) set via `set_multisig_expiry_duration`. The expiry deadline is stored on-chain in the payment record. `execute_multisig_payment` will reject execution after the deadline. Expired records are retained for auditing until an admin archives them. For the rationale behind this design and alternatives that were considered, see [ADR-006: Multisig Payment Expiry Design](adr/ADR-006-multisig-expiry.md).
 4. **Auth Requirements:**
    - `initiate_multisig_payment`: Requires `initiator` auth.
    - `sign_multisig_payment`: Requires `signer` auth.
