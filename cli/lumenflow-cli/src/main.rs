@@ -2,12 +2,20 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 
 // ── CLI definition ────────────────────────────────────────────────────────────
 
 // ── CLI structure ─────────────────────────────────────────────────────────────
+
+/// Maximum number of payments per batch call, as defined by the contract.
+const BATCH_SIZE: usize = 10;
+
+// ---------------------------------------------------------------------------
+// CLI structure
+// ---------------------------------------------------------------------------
 
 #[derive(Parser)]
 #[command(name = "lumenflow")]
@@ -393,7 +401,7 @@ pub fn load_config(path: Option<PathBuf>) -> Result<Config> {
         config.source_account = Some(v);
     }
 
-    Ok(config)
+    Ok(resolved)
 }
 
 fn network_preset(name: &str) -> Option<(&'static str, &'static str)> {
@@ -487,6 +495,104 @@ fn apply_env_overrides(base: RawConfig) -> RawConfig {
         };
         let errors = validate_config(&config);
         assert!(errors.is_empty());
+    }
+
+    // --- CSV parsing tests ---
+
+    #[test]
+    fn test_parse_valid_csv() -> Result<()> {
+        let path = ".test_valid_payments.csv";
+        write_csv(
+            path,
+            &format!(
+                "order_id,merchant_address,amount,memo\nORD001,{},1000,Test memo\n",
+                valid_address()
+            ),
+        );
+        let rows = parse_payment_csv(&PathBuf::from(path))?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].order_id, "ORD001");
+        assert_eq!(rows[0].amount, 1000);
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_csv_missing_header() {
+        let path = ".test_missing_header.csv";
+        write_csv(path, "order_id,merchant_address,amount\nORD001,GXXX,100\n");
+        let result = parse_payment_csv(&PathBuf::from(path));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("memo"));
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn test_parse_csv_invalid_amount() {
+        let path = ".test_invalid_amount.csv";
+        write_csv(
+            path,
+            &format!(
+                "order_id,merchant_address,amount,memo\nORD001,{},not_a_number,Test\n",
+                valid_address()
+            ),
+        );
+        let result = parse_payment_csv(&PathBuf::from(path));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not a valid integer"));
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn test_parse_csv_invalid_address() {
+        let path = ".test_invalid_addr.csv";
+        write_csv(
+            path,
+            "order_id,merchant_address,amount,memo\nORD001,BADADDR,1000,Test\n",
+        );
+        let result = parse_payment_csv(&PathBuf::from(path));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("BADADDR"));
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn test_parse_csv_empty_file() {
+        let path = ".test_empty.csv";
+        write_csv(path, "");
+        let result = parse_payment_csv(&PathBuf::from(path));
+        assert!(result.is_err());
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn test_parse_csv_header_only() {
+        let path = ".test_header_only.csv";
+        write_csv(path, "order_id,merchant_address,amount,memo\n");
+        let result = parse_payment_csv(&PathBuf::from(path));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("no payment rows"));
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn test_batch_chunking() -> Result<()> {
+        let path = ".test_batch_chunking.csv";
+        // Build 15 valid rows
+        let addr = valid_address();
+        let mut content = "order_id,merchant_address,amount,memo\n".to_string();
+        for i in 0..15 {
+            content.push_str(&format!("ORD{:03},{},{},Memo{}\n", i, addr, i + 1, i));
+        }
+        write_csv(path, &content);
+        let rows = parse_payment_csv(&PathBuf::from(path))?;
+        assert_eq!(rows.len(), 15);
+        let batches: Vec<&[PaymentRow]> = rows.chunks(BATCH_SIZE).collect();
+        assert_eq!(batches.len(), 2); // 10 + 5
+        assert_eq!(batches[0].len(), 10);
+        assert_eq!(batches[1].len(), 5);
+        fs::remove_file(path)?;
+        Ok(())
     }
 }
 
