@@ -1,0 +1,179 @@
+# Toolchain Matrix CI — resolves issue #847
+#
+# Runs three independent matrix jobs to verify that the project builds and
+# tests correctly across the range of toolchain versions we want to support:
+#
+#   • rust-matrix      — stable, beta, and the pinned 1.87.0
+#   • node-matrix      — Node.js 18, 20, and 22 (SDK test suite)
+#   • terraform-matrix — Terraform 1.6.x, 1.7.x, 1.8.x (smoke-test; no .tf files yet)
+#
+# Each job includes a version-verification step that fails fast if the runner
+# ends up with the wrong toolchain version.
+#
+# All third-party actions are pinned to their full commit SHAs for supply-chain
+# security. SHA comments identify the human-readable tag at pin time.
+
+name: Toolchain Matrix
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+# ---------------------------------------------------------------------------
+# Job 1 — Rust toolchain matrix
+# ---------------------------------------------------------------------------
+jobs:
+  rust-matrix:
+    name: Rust ${{ matrix.toolchain }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Run all cells; don't cancel others on a single failure so we can see
+      # which toolchain versions are affected.
+      fail-fast: false
+      matrix:
+        toolchain:
+          - stable
+          - beta
+          - "1.87.0"   # pinned version used in production CI
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      # Install the Rust toolchain for the current matrix cell.
+      - name: Install Rust ${{ matrix.toolchain }}
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          targets: wasm32-unknown-unknown
+
+      # Edge-case / failure guard: verify that rustc reports the toolchain we
+      # requested.  For named channels (stable/beta) we just confirm rustc runs;
+      # for the pinned version we match the exact string.
+      - name: Verify Rust toolchain version
+        run: |
+          RUSTC_VERSION=$(rustc --version)
+          echo "Active toolchain: $RUSTC_VERSION"
+          if [ "${{ matrix.toolchain }}" = "1.87.0" ]; then
+            echo "$RUSTC_VERSION" | grep -F "1.87.0" || \
+              { echo "ERROR: expected rustc 1.87.0, got: $RUSTC_VERSION"; exit 1; }
+          fi
+
+      - name: Cache cargo registry
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684  # v4.2.3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.toolchain }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-${{ matrix.toolchain }}-
+
+      # Normal path: run the full test suite.
+      - name: Run tests
+        run: cargo test --locked --all-features
+
+  # ---------------------------------------------------------------------------
+  # Job 2 — Node.js toolchain matrix (SDK)
+  # ---------------------------------------------------------------------------
+  node-matrix:
+    name: Node.js ${{ matrix.node-version }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version:
+          - "18"
+          - "20"
+          - "22"
+
+    defaults:
+      run:
+        working-directory: sdk   # all steps run inside the sdk/ directory
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      # Set up the Node.js version for the current matrix cell.
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: sdk/package-lock.json
+
+      # Edge-case / failure guard: verify the active Node version matches the
+      # requested major version.
+      - name: Verify Node.js version
+        run: |
+          NODE_VERSION=$(node --version)
+          echo "Active Node.js: $NODE_VERSION"
+          echo "$NODE_VERSION" | grep -E "^v${{ matrix.node-version }}\." || \
+            { echo "ERROR: expected Node.js ${{ matrix.node-version }}.x, got: $NODE_VERSION"; exit 1; }
+
+      # Normal path: install dependencies and run the SDK test suite.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run SDK tests
+        run: npm test
+
+  # ---------------------------------------------------------------------------
+  # Job 3 — Terraform toolchain matrix (smoke test)
+  #
+  # There are no .tf files in this repository yet; these jobs validate that the
+  # specified Terraform versions can be installed and invoked correctly.  When
+  # infrastructure code is added the jobs can be extended to run plan/validate.
+  # ---------------------------------------------------------------------------
+  terraform-matrix:
+    name: Terraform ${{ matrix.terraform-version }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        terraform-version:
+          - "1.6.*"
+          - "1.7.*"
+          - "1.8.*"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      # Install the Terraform CLI for the current matrix cell.
+      - name: Set up Terraform ${{ matrix.terraform-version }}
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269ef065  # v3.1.2
+        with:
+          terraform_version: ${{ matrix.terraform-version }}
+
+      # Normal path: confirm terraform is executable and print its version.
+      - name: Run terraform version
+        run: terraform version
+
+      # Edge-case / failure guard: verify the installed version matches the
+      # requested minor version series (e.g., "1.6.*" -> major.minor = "1.6").
+      - name: Verify Terraform version
+        run: |
+          TF_VERSION=$(terraform version -json | grep -oP '"terraform_version"\s*:\s*"\K[^"]+')
+          echo "Installed Terraform: $TF_VERSION"
+          # Extract "X.Y" from the matrix pattern "X.Y.*"
+          EXPECTED_PREFIX="${{ matrix.terraform-version }}"
+          EXPECTED_PREFIX="${EXPECTED_PREFIX%.*}"   # strip trailing ".*"
+          echo "$TF_VERSION" | grep -E "^${EXPECTED_PREFIX}\." || \
+            { echo "ERROR: expected Terraform ${EXPECTED_PREFIX}.x, got: $TF_VERSION"; exit 1; }
