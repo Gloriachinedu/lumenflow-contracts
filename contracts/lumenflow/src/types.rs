@@ -27,6 +27,20 @@ pub struct Merchant {
     pub verified: bool,
     pub registered_at: u64,
     pub total_received: i128,
+    /// Number of merchants that registered using this merchant's referral address.
+    pub referral_count: u32,
+}
+
+/// Summary entry returned by `get_referral_stats`. Contains the referring
+/// merchant's address, how many merchants they have referred, and the
+/// configured referral reward in basis points.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReferralStats {
+    pub referrer: Address,
+    pub referral_count: u32,
+    /// Referral reward in basis points (e.g. 50 = 0.5 % fee reduction).
+    pub reward_bps: u32,
 }
 
 // ── Payment ───────────────────────────────────────────────────────────────────
@@ -47,6 +61,7 @@ pub struct PaymentOrder {
     pub payer: Address,
     pub token: Address,
     pub amount: i128,
+    pub version: u32,
     pub status: PaymentStatus,
     pub paid_at: u64,
     pub refunded_amount: i128,
@@ -85,6 +100,9 @@ pub struct BatchPaymentItem {
     pub token_address: Address,
     pub amount: i128,
     pub memo: String,
+    /// Optional tags for this batch item. Maximum 5 tags, each 1–32 characters.
+    /// Uses the same validation rules as `process_payment_with_signature`.
+    pub tags: Option<Vec<String>>,
     pub signature: Bytes,
     pub merchant_public_key: Bytes,
 }
@@ -139,7 +157,6 @@ pub struct MultisigPayment {
     pub collected: Vec<SignatureEntry>,
     pub executed: bool,
     pub cancelled: bool,
-    pub initiator: Address,
     pub created_at: u64,
     pub expires_at: Option<u64>,
 }
@@ -198,6 +215,21 @@ pub struct PaymentPage {
     pub total_matching: u32,
 }
 
+// ── Merchant registration commitment (commit-reveal, issue #614) ─────────────
+
+/// A pending commitment created by `commit_merchant_registration`.
+/// Stored until the merchant calls `reveal_merchant_registration`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantCommitment {
+    /// The address that submitted the commitment.
+    pub merchant_address: Address,
+    /// SHA-256 hash of the pre-image: `merchant_address_bytes ++ name_bytes ++ nonce_bytes`.
+    pub commitment_hash: Bytes,
+    /// Ledger sequence at which this commitment was submitted.
+    pub committed_at_ledger: u32,
+}
+
 // ── Stats ─────────────────────────────────────────────────────────────────────
 
 #[contracttype]
@@ -223,15 +255,84 @@ pub struct MerchantStats {
     pub total_refund_volume: i128,
 }
 
+// ── Escrow ────────────────────────────────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EscrowStatus {
+    /// Funds are locked and awaiting the unlock_at timestamp.
+    Locked,
+    /// Funds have been released to the merchant.
+    Released,
+    /// Funds have been returned to the payer (cancelled before unlock).
+    Cancelled,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowRecord {
+    pub order_id: String,
+    pub payer: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    /// Unix timestamp after which release_escrow can be called.
+    pub unlock_at: u64,
+    pub status: EscrowStatus,
+    pub created_at: u64,
+}
+
 // ── Dispute ───────────────────────────────────────────────────────────────────
+
+/// Full lifecycle state machine for a dispute.
+///
+/// ```text
+/// Open → UnderReview → Resolved(MerchantFavor | PayerFavor)
+///      ↘              ↗
+///        Escalated ──→
+/// ```
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DisputeStatus {
+    /// Dispute has been opened; awaiting admin review.
+    Open,
+    /// Admin has marked the dispute under active review.
+    UnderReview,
+    /// Admin has resolved the dispute in favour of one party.
+    Resolved,
+    /// Admin has escalated the dispute (e.g. to an external arbitration layer).
+    Escalated,
+}
+
+/// Final outcome recorded when a dispute is resolved.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DisputeOutcome {
+    /// Resolved in the merchant's favour; no forced refund is issued.
+    MerchantFavor,
+    /// Resolved in the payer's favour; a forced refund is executed.
+    PayerFavor,
+}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DisputeRecord {
-    pub refund_id: String,
+    /// Unique identifier for this dispute.
+    pub dispute_id: String,
+    /// The order being disputed.
     pub order_id: String,
+    /// The refund associated with this dispute (if any). May be empty if
+    /// `initiate_dispute` is called before a refund exists.
+    pub refund_id: String,
+    /// The party that opened the dispute (payer or merchant).
     pub initiator: Address,
+    /// Human-readable reason; maximum 256 characters.
     pub reason: String,
+    pub status: DisputeStatus,
+    /// Set when the dispute is resolved.
+    pub outcome: Option<DisputeOutcome>,
+    /// Optional resolution or escalation notes written by the admin.
+    pub resolution: Option<String>,
     pub created_at: u64,
 }
 
@@ -243,4 +344,141 @@ pub enum SuspiciousActivityReason {
     LargePayment = 1,
     RapidRefunds = 2,
     ManyAuthFailures = 3,
+}
+
+// -- Subscriptions -------------------------------------------------------------
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SubscriptionStatus {
+    Active,
+    Cancelled,
+    Completed,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubscriptionPlan {
+    pub plan_id: String,
+    pub token: Address,
+    pub amount: i128,
+    pub interval_secs: u64,
+    pub max_cycles: u32,
+    pub created_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Subscription {
+    pub subscription_id: String,
+    pub plan_id: String,
+    pub merchant: Address,
+    pub subscriber: Address,
+    pub status: SubscriptionStatus,
+    pub cycles_charged: u32,
+    /// Timestamp the interval is measured from: subscribe time until the first
+    /// charge, then the time of the most recent charge.
+    pub last_charged_at: u64,
+    pub created_at: u64,
+}
+
+// ── Event payload types ───────────────────────────────────────────────────────
+//
+// Each struct below is the canonical schema for a contract event's data field.
+// Using `#[contracttype]` ensures the XDR encoding is stable and can be decoded
+// off-chain against generated SDK bindings.
+
+/// Data payload for `lumenflow/payment_processed`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaymentProcessedEvent {
+    pub order_id: String,
+    pub payer: Address,
+    pub merchant: Address,
+    pub amount: i128,
+}
+
+/// Data payload for `lumenflow/refund_initiated`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefundInitiatedEvent {
+    pub refund_id: String,
+    pub order_id: String,
+    pub initiator: Address,
+    pub amount: i128,
+}
+
+/// Data payload for `lumenflow/refund_approved`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefundApprovedEvent {
+    pub refund_id: String,
+    pub order_id: String,
+    pub merchant: Address,
+    pub amount: i128,
+}
+
+/// Data payload for `lumenflow/refund_rejected`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefundRejectedEvent {
+    pub refund_id: String,
+    pub order_id: String,
+    pub merchant: Address,
+    pub amount: i128,
+}
+
+/// Data payload for `lumenflow/refund_executed`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefundExecutedEvent {
+    pub refund_id: String,
+    pub order_id: String,
+    pub payer: Address,
+    pub merchant: Address,
+    pub amount: i128,
+    pub token: Address,
+}
+
+/// Data payload for `lumenflow/multisig_initiated`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MultisigInitiatedEvent {
+    pub payment_id: String,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub required_signatures: u32,
+}
+
+/// Data payload for `lumenflow/multisig_executed`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MultisigExecutedEvent {
+    pub payment_id: String,
+    pub payer: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+}
+
+/// Data payload for `lumenflow/payment_request_paid`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaymentRequestPaidEvent {
+    pub request_id: String,
+    pub payer: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+}
+
+/// Data payload for `lumenflow/payment_status_updated`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaymentStatusUpdatedEvent {
+    pub order_id: String,
+    pub status: PaymentStatus,
+    pub refunded_amount: i128,
+    pub original_amount: i128,
 }
