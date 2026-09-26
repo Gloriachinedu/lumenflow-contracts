@@ -1647,11 +1647,22 @@ impl PaymentProcessingContract {
     /// * `admin` - Must be the configured administrator address.
     ///
     /// # Returns
-    /// The number of payment records removed.
+    /// A [`CleanupResult`] with the number of records removed and a `has_more` flag.
+    ///
+    /// # Arguments
+    /// * `admin`      - Must be the configured administrator address.
+    /// * `batch_size` - Optional limit on how many records to remove per call.
+    ///   When `None` the function uses a default cap of `100` to stay within
+    ///   Soroban instruction limits. The accepted range is `1..=100`; values
+    ///   outside this range are clamped to the nearest bound.
     ///
     /// # Errors
     /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
-    pub fn cleanup_expired_payments(env: Env, admin: Address) -> Result<u32, PaymentError> {
+    pub fn cleanup_expired_payments(
+        env: Env,
+        admin: Address,
+        batch_size: Option<u32>,
+    ) -> Result<CleanupResult, PaymentError> {
         require_not_paused(&env)?;
         require_admin_rate_limited(&env, &admin)?;
         let cutoff = env
@@ -1660,9 +1671,10 @@ impl PaymentProcessingContract {
             .saturating_sub(storage::get_cleanup_period(&env));
 
         let merchant_list = storage::get_merchant_list(&env);
-        let mut removed: u32 = 0;
+        let mut cleaned: u32 = 0;
+        let mut has_more: bool = false;
 
-        for merchant_addr in merchant_list.iter() {
+        'outer: for merchant_addr in merchant_list.iter() {
             let ids = storage::get_merchant_payment_ids(&env, &merchant_addr);
             for id in ids.iter() {
                 if let Some(p) = storage::get_payment(&env, &id) {
@@ -1675,7 +1687,7 @@ impl PaymentProcessingContract {
                         storage::remove_order_refund_index(&env, &id);
 
                         storage::remove_payment(&env, &id);
-                        removed += 1;
+                        cleaned += 1;
                     }
                 }
             }

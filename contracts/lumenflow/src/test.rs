@@ -2680,8 +2680,8 @@ fn test_cleanup_expired_payments() {
     client.set_payment_cleanup_period(&admin, &1);
     env.ledger().with_mut(|l| l.timestamp += 10);
 
-    let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 1);
+    let removed = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(removed.cleaned, 1);
 }
 
 #[test]
@@ -4235,8 +4235,8 @@ fn test_cleanup_respects_period_does_not_remove_recent_payments() {
     make_payment(&env, &client, &merchant, &payer, &token, "RECENT_001", 500);
     env.ledger().with_mut(|l| l.timestamp += 50);
 
-    let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 0, "recent payment must not be removed");
+    let removed = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(removed.cleaned, 0, "recent payment must not be removed");
 
     // The payment should still be retrievable.
     let p = client.get_payment_by_id(&payer, &str(&env, "RECENT_001"));
@@ -4257,8 +4257,8 @@ fn test_cleanup_only_removes_payments_older_than_period() {
     // NEW_PAY is created after the cutoff — it should survive.
     make_payment(&env, &client, &merchant, &payer, &token, "NEW_PAY", 200);
 
-    let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 1, "only the expired payment should be removed");
+    let removed = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(removed.cleaned, 1, "only the expired payment should be removed");
 
     // NEW_PAY must still exist.
     let p = client.get_payment_by_id(&payer, &str(&env, "NEW_PAY"));
@@ -4273,8 +4273,8 @@ fn test_cleanup_with_no_expired_payments_returns_zero() {
     client.set_payment_cleanup_period(&admin, &86_400);
     make_payment(&env, &client, &merchant, &payer, &token, "SAFE_001", 300);
 
-    let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 0);
+    let removed = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(removed.cleaned, 0);
 }
 
 #[test]
@@ -4286,8 +4286,8 @@ fn test_cleanup_empty_contract_returns_zero() {
     client.set_payment_cleanup_period(&admin, &1);
     env.ledger().with_mut(|l| l.timestamp += 10);
 
-    let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 0);
+    let removed = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(removed.cleaned, 0);
 }
 
 #[test]
@@ -5125,7 +5125,7 @@ fn test_cleanup_expired_payments_unauthorized() {
     let admin = Address::generate(&env);
     let non_admin = Address::generate(&env);
     client.set_admin(&admin);
-    let result = client.try_cleanup_expired_payments(&non_admin);
+    let result = client.try_cleanup_expired_payments(&non_admin, &None);
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
 
