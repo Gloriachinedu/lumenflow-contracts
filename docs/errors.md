@@ -63,6 +63,7 @@ This document lists all the error codes returned by the LumenFlow contract, alon
 | `PaginationLimitExceeded` | 51 | The requested limit for pagination exceeds the maximum allowed (100). | Use a limit of 100 or less. |
 | `BatchSizeExceeded` | 52 | The batch operation exceeds the maximum allowed items. | Reduce the number of items in the batch. |
 | `InvalidTags` | 53 | The provided tags exceed length or count limits. | Ensure tags are within the allowed limits (e.g., max 5 tags, max 20 chars per tag). |
+| `SerializedPayloadTooLarge` | 54 | The serialized payload for a batch item exceeds the maximum allowed size (1 024 bytes). | Reduce the size of memo, order_id, or other string fields in the batch item. |
 
 ## Subscription Errors
 
@@ -75,6 +76,10 @@ This document lists all the error codes returned by the LumenFlow contract, alon
 | `SubscriptionNotActive` | 64 | The subscription is not active. | Ensure the subscription is not cancelled or completed. |
 | `SubscriptionMaxCyclesReached` | 65 | The subscription has reached its maximum number of charging cycles. | Create a new subscription if needed. |
 | `SubscriptionIntervalNotElapsed` | 66 | The required interval between subscription charges has not elapsed. | Wait for the next billing cycle. |
+## Regression coverage
+
+The regression suite in [contracts/lumenflow/src/test_error_codes.rs](../contracts/lumenflow/src/test_error_codes.rs) exercises the main contract error variants with focused tests named after the pattern `test_error_{code_name}_is_triggered`.
+
 ## Error Handling Examples
 
 These examples describe common contract error codes and how to resolve them in client integrations.

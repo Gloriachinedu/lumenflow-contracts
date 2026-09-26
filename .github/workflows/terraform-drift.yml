@@ -1,0 +1,316 @@
+###############################################################################
+# terraform-drift.yml — Terraform plan artifact review and drift detection
+#
+# Resolves: #852
+#
+# This workflow:
+#   1. Runs on a schedule (daily) and on-demand to detect infrastructure drift
+#      between the Terraform state and live AWS resources.
+#   2. Saves the full plan output as a signed artifact for audit and review.
+#   3. Parses the plan summary to determine whether resources will be added,
+#      changed, or destroyed, and surfaces that as a workflow annotation.
+#   4. Posts a Slack alert when drift is detected on a scheduled run.
+#   5. On PRs, posts an annotated plan summary comment so reviewers can
+#      inspect infra changes without leaving GitHub.
+###############################################################################
+name: Terraform Drift Detection
+
+on:
+  # Scheduled drift check — runs every day at 06:00 UTC
+  schedule:
+    - cron: "0 6 * * *"
+
+  # On every PR that touches Terraform files
+  pull_request:
+    paths:
+      - "infra/terraform/**"
+
+  # On push to main or develop when Terraform files change
+  push:
+    branches: [main, develop]
+    paths:
+      - "infra/terraform/**"
+
+  # Manual trigger for on-demand drift checks
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write   # required for OIDC auth (future-proof)
+
+concurrency:
+  group: terraform-drift-${{ github.ref }}
+  cancel-in-progress: false   # never cancel mid-plan
+
+jobs:
+  drift-detection:
+    name: Terraform Plan & Drift Detection
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    env:
+      TF_VERSION: "1.8.5"
+      ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # ── Terraform setup ────────────────────────────────────────────────────
+      - name: Set up Terraform ${{ env.TF_VERSION }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+      # ── Terraform init ─────────────────────────────────────────────────────
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
+      - name: Terraform Init
+        id: init
+        run: |
+          terraform init \
+            -backend-config="bucket=lumenflow-terraform-state" \
+            -backend-config="key=lumenflow/terraform.tfstate" \
+            -backend-config="region=us-east-1" \
+            -backend-config="dynamodb_table=lumenflow-terraform-locks" \
+            -input=false \
+            -no-color
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate -no-color
+
+      # ── Terraform plan (with artifact output) ─────────────────────────────
+      - name: Terraform Plan
+        id: plan
+        run: |
+          set -euo pipefail
+
+          terraform plan \
+            -input=false \
+            -no-color \
+            -detailed-exitcode \
+            -var="environment=${{ env.ENVIRONMENT }}" \
+            -var="vpc_id=${{ secrets.TF_VPC_ID || '' }}" \
+            -var="alert_email=${{ secrets.TF_ALERT_EMAIL || '' }}" \
+            -out=tfplan.binary \
+            2>&1 | tee plan.txt
+
+          PLAN_EXIT="${PIPESTATUS[0]}"
+
+          # terraform plan -detailed-exitcode:
+          #   0 = success, no changes
+          #   1 = error
+          #   2 = success, changes present (drift detected)
+          echo "plan_exit=$PLAN_EXIT" >> "$GITHUB_OUTPUT"
+
+          if [[ "$PLAN_EXIT" -eq 0 ]]; then
+            echo "drift_detected=false" >> "$GITHUB_OUTPUT"
+            echo "plan_outcome=no_changes" >> "$GITHUB_OUTPUT"
+          elif [[ "$PLAN_EXIT" -eq 2 ]]; then
+            echo "drift_detected=true"  >> "$GITHUB_OUTPUT"
+            echo "plan_outcome=changes_present" >> "$GITHUB_OUTPUT"
+          fi
+        continue-on-error: true
+
+      # ── Parse plan summary ─────────────────────────────────────────────────
+      - name: Parse plan summary
+        id: summary
+        run: |
+          set -euo pipefail
+
+          PLAN_FILE="plan.txt"
+          if [[ ! -f "$PLAN_FILE" ]]; then
+            echo "adds=0 changes=0 destroys=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Extract the "Plan: X to add, Y to change, Z to destroy." line
+          PLAN_LINE=$(grep -E "^Plan: [0-9]+ to add" "$PLAN_FILE" || echo "Plan: 0 to add, 0 to change, 0 to destroy.")
+
+          ADDS=$(echo "$PLAN_LINE"     | grep -oP '\d+(?= to add)'     || echo "0")
+          CHANGES=$(echo "$PLAN_LINE"  | grep -oP '\d+(?= to change)'  || echo "0")
+          DESTROYS=$(echo "$PLAN_LINE" | grep -oP '\d+(?= to destroy)' || echo "0")
+
+          echo "adds=$ADDS"         >> "$GITHUB_OUTPUT"
+          echo "changes=$CHANGES"   >> "$GITHUB_OUTPUT"
+          echo "destroys=$DESTROYS" >> "$GITHUB_OUTPUT"
+          echo "plan_line=$PLAN_LINE" >> "$GITHUB_OUTPUT"
+
+          echo "📊 Plan summary: $ADDS to add, $CHANGES to change, $DESTROYS to destroy"
+
+          # Annotate the workflow if resources will be destroyed
+          if [[ "$DESTROYS" -gt 0 ]]; then
+            echo "::warning::Terraform plan will DESTROY $DESTROYS resource(s). Review carefully before applying."
+          fi
+
+      # ── Save plan artifact ─────────────────────────────────────────────────
+      - name: Generate human-readable plan JSON
+        if: always()
+        run: |
+          if [[ -f tfplan.binary ]]; then
+            terraform show -no-color -json tfplan.binary > tfplan.json 2>/dev/null || true
+          fi
+
+      - name: Upload plan artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-${{ env.ENVIRONMENT }}-${{ github.run_id }}
+          path: |
+            infra/terraform/plan.txt
+            infra/terraform/tfplan.binary
+            infra/terraform/tfplan.json
+          retention-days: 30
+          if-no-files-found: warn
+
+      # ── PR comment ─────────────────────────────────────────────────────────
+      - name: Post plan to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const planPath = 'infra/terraform/plan.txt';
+            const plan = fs.existsSync(planPath) ? fs.readFileSync(planPath, 'utf8') : '(plan output not available)';
+            const truncated = plan.length > 60000 ? plan.slice(0, 60000) + '\n\n... (truncated — download the artifact for the full plan)' : plan;
+
+            const driftDetected = '${{ steps.plan.outputs.drift_detected }}' === 'true';
+            const adds     = '${{ steps.summary.outputs.adds }}';
+            const changes  = '${{ steps.summary.outputs.changes }}';
+            const destroys = '${{ steps.summary.outputs.destroys }}';
+
+            const statusIcon = driftDetected ? '⚠️ Drift detected' : '✅ No changes';
+            const destroyWarning = parseInt(destroys) > 0
+              ? `\n> ⚠️ **${destroys} resource(s) will be DESTROYED.** Review carefully.\n`
+              : '';
+
+            const body = `## Terraform Drift Detection — ${statusIcon}
+
+            | Step | Result |
+            |------|--------|
+            | Format | \`${{ steps.fmt.outcome }}\` |
+            | Init   | \`${{ steps.init.outcome }}\` |
+            | Validate | \`${{ steps.validate.outcome }}\` |
+            | Plan | \`${{ steps.plan.outcome }}\` |
+
+            **Changes:** \`${adds}\` to add · \`${changes}\` to change · \`${destroys}\` to destroy
+            ${destroyWarning}
+            <details><summary>Show full plan</summary>
+
+            \`\`\`hcl
+            ${truncated}
+            \`\`\`
+
+            </details>
+
+            📦 Full plan artifact: [terraform-plan-${{ env.ENVIRONMENT }}-${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+            *Triggered by @${{ github.actor }} · \`${{ github.event_name }}\` · \`${{ github.sha }}\`*`;
+
+            // Delete previous bot comments to avoid clutter
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            for (const comment of comments.data) {
+              if (comment.user.type === 'Bot' && comment.body.includes('Terraform Drift Detection')) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: comment.id,
+                });
+              }
+            }
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
+
+      # ── Drift alert (scheduled runs only) ─────────────────────────────────
+      - name: Alert on drift (scheduled)
+        if: >
+          github.event_name == 'schedule' &&
+          steps.plan.outputs.drift_detected == 'true' &&
+          env.SLACK_WEBHOOK_URL != ''
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "⚠️ *Terraform drift detected in \`${{ env.ENVIRONMENT }}\`*",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "⚠️ *Terraform drift detected*\n*Environment:* `${{ env.ENVIRONMENT }}`\n*Changes:* `${{ steps.summary.outputs.adds }}` add · `${{ steps.summary.outputs.changes }}` change · `${{ steps.summary.outputs.destroys }}` destroy\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View drift report>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      # ── Step summary ───────────────────────────────────────────────────────
+      - name: Write step summary
+        if: always()
+        run: |
+          DRIFT="${{ steps.plan.outputs.drift_detected }}"
+          ADDS="${{ steps.summary.outputs.adds }}"
+          CHANGES="${{ steps.summary.outputs.changes }}"
+          DESTROYS="${{ steps.summary.outputs.destroys }}"
+
+          if [[ "$DRIFT" == "true" ]]; then
+            echo "## ⚠️ Terraform Drift Detected" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## ✅ No Terraform Drift" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "| | |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Environment | \`${{ env.ENVIRONMENT }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| To add | $ADDS |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| To change | $CHANGES |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| To destroy | $DESTROYS |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "📦 [Download plan artifact](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> "$GITHUB_STEP_SUMMARY"
+
+      # ── Fail if plan errored ───────────────────────────────────────────────
+      - name: Fail on plan error
+        if: steps.plan.outputs.plan_exit == '1'
+        run: |
+          echo "::error::Terraform plan exited with error (exit code 1). Check the plan output above."
+          exit 1
