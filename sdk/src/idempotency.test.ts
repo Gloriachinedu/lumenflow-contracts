@@ -1,201 +1,178 @@
-/**
- * idempotency.test.ts
- *
- * Unit tests for automatic idempotency key generation and deduplication.
- */
-
-import {
-  generateIdempotencyKey,
-  submitPayment,
-  IdempotencyStore,
-  PaymentRequest,
-  PaymentResult,
-  PaymentExecutor,
-} from "./idempotency";
+import { getCached, setCached, evictCached, withIdempotency, CacheEntry } from "./idempotency";
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Helper: directly poke the in-memory Map that backs the module when
+// sessionStorage is absent (Node test environment).  We access it through the
+// public API rather than internal state so tests stay black-box.
 // ---------------------------------------------------------------------------
 
-const baseRequest: PaymentRequest = {
-  merchantAddress: "GMERCHANT123",
-  tokenAddress: "GTOKEN456",
-  amount: 1000,
-  memo: "Test payment",
-};
-
-function makeExecutor(override?: Partial<Omit<PaymentResult, "idempotencyKey">>): PaymentExecutor {
-  return jest.fn().mockResolvedValue({ success: true, ledger: 100, orderId: "ORD_001", ...override });
-}
-
-// ---------------------------------------------------------------------------
-// generateIdempotencyKey()
-// ---------------------------------------------------------------------------
-
-describe("generateIdempotencyKey()", () => {
-  it("returns a non-empty string", () => {
-    const key = generateIdempotencyKey();
-    expect(typeof key).toBe("string");
-    expect(key.length).toBeGreaterThan(0);
-  });
-
-  it("returns a valid UUID v4 format", () => {
-    const key = generateIdempotencyKey();
-    // UUID v4: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
-    expect(key).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-    );
-  });
-
-  it("returns a different key on each call", () => {
-    const keys = new Set(Array.from({ length: 50 }, () => generateIdempotencyKey()));
-    expect(keys.size).toBe(50);
-  });
+beforeEach(() => {
+  // Clear every key the tests may have written by evicting known keys.
+  // Because we run in Node (no sessionStorage) the in-memory Map is used.
+  [
+    "key-first",
+    "key-second",
+    "key-expired",
+    "key-no-key",
+    "key-evict",
+    "key-a",
+    "key-b",
+  ].forEach((k) => evictCached(k));
 });
 
 // ---------------------------------------------------------------------------
-// submitPayment() — key resolution
+// getCached / setCached
 // ---------------------------------------------------------------------------
 
-describe("submitPayment() — idempotency key resolution", () => {
-  let store: IdempotencyStore;
-
-  beforeEach(() => {
-    store = new IdempotencyStore();
+describe("getCached / setCached", () => {
+  it("returns undefined for a key that was never set", () => {
+    expect(getCached("key-first")).toBeUndefined();
   });
 
-  it("auto-generates a key when none is provided", async () => {
-    const executor = makeExecutor();
-    const result = await submitPayment(baseRequest, {}, executor, store);
-    expect(typeof result.idempotencyKey).toBe("string");
-    expect(result.idempotencyKey.length).toBeGreaterThan(0);
+  it("returns the stored value immediately after setCached", () => {
+    setCached("key-first", 42);
+    expect(getCached("key-first")).toBe(42);
   });
 
-  it("exposes the auto-generated key in the returned PaymentResult", async () => {
-    const executor = makeExecutor();
-    const result = await submitPayment(baseRequest, {}, executor, store);
-    expect(result.idempotencyKey).toBeTruthy();
+  it("stores and retrieves complex objects", () => {
+    const obj = { status: "ok", orderId: "ORDER-1" };
+    setCached("key-second", obj);
+    expect(getCached("key-second")).toEqual(obj);
   });
 
-  it("uses a caller-supplied idempotency key when provided", async () => {
-    const executor = makeExecutor();
-    const customKey = "my-custom-order-uuid";
-    const result = await submitPayment(baseRequest, { idempotencyKey: customKey }, executor, store);
-    expect(result.idempotencyKey).toBe(customKey);
-  });
+  it("returns undefined and evicts an expired entry", () => {
+    // Manually write an already-expired entry by manipulating via JSON
+    // We use a known storage key so we can bypass setCached's TTL.
+    // Since we are in Node the backing store is the module-level Map.
+    // We call setCached then fast-forward by reading and re-writing the raw
+    // JSON with a past timestamp.  Because we can't reach the Map directly we
+    // use evictCached + re-insert via a thin trick:
+    //
+    // Strategy: call withIdempotency with a mocked Date so the entry is
+    // immediately expired when we read it back.
+    const originalNow = Date.now;
+    try {
+      // Write with "current" time set to 10 minutes ago
+      const past = Date.now() - 10 * 60 * 1_000;
+      Date.now = () => past;
+      setCached("key-expired", "stale-value");
 
-  it("passes the idempotency key to the executor", async () => {
-    const executor = makeExecutor();
-    const customKey = "deterministic-key";
-    await submitPayment(baseRequest, { idempotencyKey: customKey }, executor, store);
-    expect(executor).toHaveBeenCalledWith(baseRequest, customKey);
-  });
+      // Restore real time — entry is now in the past
+      Date.now = originalNow;
 
-  it("auto-generated keys are unique across multiple calls", async () => {
-    const keys: string[] = [];
-    for (let i = 0; i < 20; i++) {
-      const s = new IdempotencyStore();
-      const result = await submitPayment(baseRequest, {}, makeExecutor(), s);
-      keys.push(result.idempotencyKey);
+      expect(getCached("key-expired")).toBeUndefined();
+    } finally {
+      Date.now = originalNow;
     }
-    const unique = new Set(keys);
-    expect(unique.size).toBe(20);
   });
 });
 
 // ---------------------------------------------------------------------------
-// submitPayment() — deduplication
+// evictCached
 // ---------------------------------------------------------------------------
 
-describe("submitPayment() — deduplication", () => {
-  let store: IdempotencyStore;
-
-  beforeEach(() => {
-    store = new IdempotencyStore();
+describe("evictCached", () => {
+  it("removes an existing entry so subsequent getCached returns undefined", () => {
+    setCached("key-evict", "value");
+    evictCached("key-evict");
+    expect(getCached("key-evict")).toBeUndefined();
   });
 
-  it("returns the cached result for a duplicate key without re-executing", async () => {
-    const executor = makeExecutor({ orderId: "ORD_ORIGINAL" });
-    const key = "dup-key";
-
-    const first = await submitPayment(baseRequest, { idempotencyKey: key }, executor, store);
-    const second = await submitPayment(baseRequest, { idempotencyKey: key }, executor, store);
-
-    expect(second).toEqual(first);
-    // Executor should only have been called once.
-    expect(executor).toHaveBeenCalledTimes(1);
-  });
-
-  it("stores the result in the idempotency store after a successful submission", async () => {
-    const key = "store-key";
-    await submitPayment(baseRequest, { idempotencyKey: key }, makeExecutor(), store);
-    expect(store.has(key)).toBe(true);
-  });
-
-  it("different keys result in independent executions", async () => {
-    const executor = makeExecutor();
-    await submitPayment(baseRequest, { idempotencyKey: "key-a" }, executor, store);
-    await submitPayment(baseRequest, { idempotencyKey: "key-b" }, executor, store);
-    expect(executor).toHaveBeenCalledTimes(2);
+  it("is a no-op for keys that do not exist", () => {
+    expect(() => evictCached("key-nonexistent")).not.toThrow();
   });
 });
 
 // ---------------------------------------------------------------------------
-// submitPayment() — result shape
+// withIdempotency
 // ---------------------------------------------------------------------------
 
-describe("submitPayment() — result shape", () => {
-  it("result includes success, idempotencyKey, and executor-provided fields", async () => {
-    const store = new IdempotencyStore();
-    const executor = makeExecutor({ ledger: 42, orderId: "ORD_42" });
-    const result = await submitPayment(
-      baseRequest,
-      { idempotencyKey: "shape-key" },
-      executor,
-      store
-    );
-
-    expect(result.success).toBe(true);
-    expect(result.idempotencyKey).toBe("shape-key");
-    expect(result.ledger).toBe(42);
-    expect(result.orderId).toBe("ORD_42");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// IdempotencyStore
-// ---------------------------------------------------------------------------
-
-describe("IdempotencyStore", () => {
-  it("has() returns false for unknown keys", () => {
-    const store = new IdempotencyStore();
-    expect(store.has("unknown")).toBe(false);
+describe("withIdempotency", () => {
+  it("calls fn on the first invocation and returns its result", async () => {
+    const fn = jest.fn().mockResolvedValue(undefined);
+    await withIdempotency("key-a", fn);
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 
-  it("get() returns undefined for unknown keys", () => {
-    const store = new IdempotencyStore();
-    expect(store.get("unknown")).toBeUndefined();
+  it("returns cached result on second call without invoking fn again", async () => {
+    const fn = jest.fn().mockResolvedValue(undefined);
+
+    await withIdempotency("key-a", fn);
+    await withIdempotency("key-a", fn);
+
+    // fn must have been called exactly once
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 
-  it("set() and get() round-trip a result", () => {
-    const store = new IdempotencyStore();
-    const result: PaymentResult = { success: true, idempotencyKey: "k1" };
-    store.set("k1", result);
-    expect(store.get("k1")).toEqual(result);
+  it("calls fn again after the cache entry has expired", async () => {
+    const fn = jest.fn().mockResolvedValue(undefined);
+    const originalNow = Date.now;
+
+    try {
+      // First call — set entry 10 minutes in the past
+      const past = Date.now() - 10 * 60 * 1_000;
+      Date.now = () => past;
+      await withIdempotency("key-b", fn);
+
+      // Restore real time so the stored entry is now expired
+      Date.now = originalNow;
+
+      // Second call — entry is expired, fn should be called again
+      await withIdempotency("key-b", fn);
+
+      expect(fn).toHaveBeenCalledTimes(2);
+    } finally {
+      Date.now = originalNow;
+    }
   });
 
-  it("size reflects the number of stored entries", () => {
-    const store = new IdempotencyStore();
-    store.set("a", { success: true, idempotencyKey: "a" });
-    store.set("b", { success: true, idempotencyKey: "b" });
-    expect(store.size).toBe(2);
+  it("does not cache when idempotencyKey is undefined — always calls fn", async () => {
+    const fn = jest.fn().mockResolvedValue(undefined);
+
+    await withIdempotency(undefined, fn);
+    await withIdempotency(undefined, fn);
+
+    expect(fn).toHaveBeenCalledTimes(2);
   });
 
-  it("clear() removes all entries", () => {
-    const store = new IdempotencyStore();
-    store.set("x", { success: true, idempotencyKey: "x" });
-    store.clear();
-    expect(store.size).toBe(0);
-    expect(store.has("x")).toBe(false);
+  it("propagates errors thrown by fn without caching them", async () => {
+    const fn = jest.fn().mockRejectedValue(new Error("RPC failure"));
+
+    await expect(withIdempotency("key-a", fn)).rejects.toThrow("RPC failure");
+
+    // Entry must NOT be cached — second call must invoke fn again
+    await expect(withIdempotency("key-a", fn)).rejects.toThrow("RPC failure");
+
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("caches non-undefined return values (e.g. objects)", async () => {
+    const result = { orderId: "ORDER-1", status: "ok" };
+    const fn = jest.fn().mockResolvedValue(result);
+
+    const first = await withIdempotency("key-a", fn);
+    const second = await withIdempotency("key-a", fn);
+
+    expect(first).toEqual(result);
+    expect(second).toEqual(result);
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats distinct keys independently", async () => {
+    const fn1 = jest.fn().mockResolvedValue(undefined);
+    const fn2 = jest.fn().mockResolvedValue(undefined);
+
+    await withIdempotency("key-a", fn1);
+    await withIdempotency("key-b", fn2);
+
+    // Each key's fn is called exactly once; they do not share cache
+    expect(fn1).toHaveBeenCalledTimes(1);
+    expect(fn2).toHaveBeenCalledTimes(1);
+
+    // Repeating with key-a hits cache, key-b still hits cache too
+    await withIdempotency("key-a", fn1);
+    await withIdempotency("key-b", fn2);
+    expect(fn1).toHaveBeenCalledTimes(1);
+    expect(fn2).toHaveBeenCalledTimes(1);
   });
 });
