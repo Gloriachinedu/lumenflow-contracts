@@ -124,6 +124,11 @@ enum Commands {
         #[arg(long)]
         merchant_public_key: String,
     },
+    /// Merchant management operations
+    Merchant {
+        #[command(subcommand)]
+        action: MerchantCommands,
+    },
     /// Admin diagnostics and maintenance operations
     Admin {
         #[command(subcommand)]
@@ -138,6 +143,25 @@ enum AdminCommands {
         /// Address to inspect (merchant or payer)
         #[arg(long)]
         address: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum MerchantCommands {
+    /// List registered merchants (admin only, cursor-based pagination)
+    List {
+        /// Admin address
+        #[arg(long, env = "LUMENFLOW_ADMIN_KEY")]
+        admin_key: String,
+        /// Maximum number of merchants to return per page (default: 10)
+        #[arg(long, default_value = "10")]
+        limit: u32,
+        /// Pagination cursor (address of last merchant from previous page)
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Output format: text (default) or json
+        #[arg(long, default_value = "text")]
+        output: String,
     },
 }
 
@@ -1052,6 +1076,80 @@ fn main() -> Result<()> {
                 bail!("{} payment(s) failed. See table above for details.", failed);
             }
         }
+        Commands::Merchant { action } => match action {
+            MerchantCommands::List {
+                admin_key,
+                limit,
+                cursor,
+                output,
+            } => {
+                let use_json = output.to_lowercase() == "json";
+
+                let mut cmd = base_invoke(&config)?;
+                // Override source account with the admin key for this call.
+                let mut admin_cmd = Command::new("stellar");
+                let contract_id_val = config
+                    .contract_id
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .context(
+                        "Missing contract ID. Set LUMENFLOW_CONTRACT_ID or contract_id in .lumenflow.toml",
+                    )?;
+
+                admin_cmd.args(["contract", "invoke", "--id", contract_id_val,
+                    "--source-account", admin_key]);
+
+                if let Some(rpc) = config.rpc_url.as_deref().filter(|s| !s.is_empty()) {
+                    admin_cmd.args(["--rpc-url", rpc]);
+                }
+                if let Some(passphrase) = config.network_passphrase.as_deref().filter(|s| !s.is_empty()) {
+                    admin_cmd.args(["--network-passphrase", passphrase]);
+                } else if let Some(net) = config.network.as_deref().filter(|s| !s.is_empty()) {
+                    admin_cmd.args(["--network", net]);
+                } else {
+                    admin_cmd.args(["--network", "testnet"]);
+                }
+
+                let cursor_val = cursor.as_deref().unwrap_or("null");
+                admin_cmd.args([
+                    "--",
+                    "get_merchants",
+                    "--admin",
+                    admin_key,
+                    "--cursor",
+                    cursor_val,
+                    "--limit",
+                    &limit.to_string(),
+                ]);
+
+                let output_result = admin_cmd.output()
+                    .context("failed to invoke get_merchants")?;
+
+                if !output_result.status.success() {
+                    let stderr = String::from_utf8_lossy(&output_result.stderr);
+                    bail!("get_merchants failed: {}", stderr.trim());
+                }
+
+                let stdout = String::from_utf8_lossy(&output_result.stdout);
+                let raw = stdout.trim();
+
+                if use_json {
+                    // Pass through the raw JSON from the contract, or wrap it.
+                    println!("{}", raw);
+                } else {
+                    // Pretty-print the merchant list.
+                    println!("Merchant list (network: {}, limit: {}, cursor: {}):",
+                        config.network.as_deref().unwrap_or("testnet"),
+                        limit,
+                        cursor.as_deref().unwrap_or("(start)"),
+                    );
+                    println!("{}", raw);
+                }
+
+                // Suppress unused variable warning — cmd was replaced by admin_cmd above.
+                drop(cmd);
+            }
+        },
         Commands::Admin { action } => match action {
             AdminCommands::AccountStats { address } => {
                 let mut cmd = base_invoke(&config)?;
@@ -1621,5 +1719,77 @@ mod tests {
         use clap::CommandFactory;
         let m = Cli::command().try_get_matches_from(["lumenflow", "nonexistent"]);
         assert!(m.is_err(), "unknown subcommand should fail");
+    }
+
+    #[test]
+    fn test_merchant_list_args_parse() {
+        let cli = Cli::try_parse_from([
+            "lumenflow",
+            "merchant",
+            "list",
+            "--admin-key",
+            "SADMIN",
+        ])
+        .expect("merchant list should parse with --admin-key");
+
+        match cli.command {
+            Commands::Merchant {
+                action: MerchantCommands::List {
+                    admin_key,
+                    limit,
+                    cursor,
+                    output,
+                },
+            } => {
+                assert_eq!(admin_key, "SADMIN");
+                assert_eq!(limit, 10);
+                assert!(cursor.is_none());
+                assert_eq!(output, "text");
+            }
+            _ => panic!("expected Commands::Merchant {{ List }}"),
+        }
+    }
+
+    #[test]
+    fn test_merchant_list_with_all_flags() {
+        let cli = Cli::try_parse_from([
+            "lumenflow",
+            "merchant",
+            "list",
+            "--admin-key",
+            "SADMIN",
+            "--limit",
+            "25",
+            "--cursor",
+            "GCURSOR",
+            "--output",
+            "json",
+        ])
+        .expect("merchant list with all flags should parse");
+
+        match cli.command {
+            Commands::Merchant {
+                action: MerchantCommands::List {
+                    limit,
+                    cursor,
+                    output,
+                    ..
+                },
+            } => {
+                assert_eq!(limit, 25);
+                assert_eq!(cursor.as_deref(), Some("GCURSOR"));
+                assert_eq!(output, "json");
+            }
+            _ => panic!("expected Commands::Merchant {{ List }}"),
+        }
+    }
+
+    #[test]
+    fn test_merchant_list_missing_admin_key_fails() {
+        use clap::CommandFactory;
+        // Without --admin-key and without LUMENFLOW_ADMIN_KEY env var, should fail.
+        std::env::remove_var("LUMENFLOW_ADMIN_KEY");
+        let m = Cli::command().try_get_matches_from(["lumenflow", "merchant", "list"]);
+        assert!(m.is_err(), "merchant list without --admin-key should fail");
     }
 }
