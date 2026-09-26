@@ -161,4 +161,8 @@ pub enum PaymentError {
     DisputeRefundNotRejected = 112,
     /// The dispute has already been resolved. Remediation: No further action needed.
     DisputeAlreadyResolved = 113,
+    /// The dispute must be in Open or UnderReview state for this operation.
+    DisputeNotOpen = 114,
+    /// The dispute has already been escalated and cannot be escalated again.
+    DisputeAlreadyEscalated = 115,
 }
