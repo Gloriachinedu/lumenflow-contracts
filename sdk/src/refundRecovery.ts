@@ -53,6 +53,27 @@ export interface RefundOps {
   executeRefund(refundId: string): Promise<void>;
 }
 
+/** Options controlling the exponential backoff behaviour on transient errors. */
+export interface BackoffOptions {
+  /**
+   * Base delay in milliseconds for the first retry.
+   * Each subsequent attempt doubles this value up to `maxDelayMs`.
+   * Default: 1000 (1 second).
+   */
+  baseDelayMs?: number;
+  /**
+   * Maximum delay in milliseconds between retries.
+   * Default: 30000 (30 seconds).
+   */
+  maxDelayMs?: number;
+  /**
+   * When true, a random jitter of up to ±25% of the computed delay is added
+   * to avoid thundering-herd behaviour.
+   * Default: true.
+   */
+  jitter?: boolean;
+}
+
 export interface RecoverRefundParams {
   refundId: string;
   orderId: string;
@@ -69,6 +90,51 @@ export interface RecoverRefundParams {
    * vs. permanent. Defaults to {@link defaultIsTransient}.
    */
   isTransient?: (err: unknown) => boolean;
+  /**
+   * Exponential backoff configuration for transient-error retries.
+   * Defaults to base=1s, max=30s, jitter=true.
+   */
+  backoff?: BackoffOptions;
+  /**
+   * Override the sleep implementation (useful in tests to avoid real delays).
+   * Defaults to `(ms) => new Promise(resolve => setTimeout(resolve, ms))`.
+   */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/** Thrown when all retry attempts for a step have been exhausted. */
+export class RetryExhaustedError extends Error {
+  constructor(
+    message: string,
+    readonly refundId: string,
+    readonly step: RefundStep,
+    readonly attempts: number,
+  ) {
+    super(message);
+    this.name = 'RetryExhaustedError';
+  }
+}
+
+/**
+ * Compute the delay for the nth retry (0-indexed) using exponential backoff
+ * with optional jitter.
+ *
+ * @param attempt - 0-based retry index (0 = first retry after initial failure)
+ * @param baseDelayMs - base delay in ms (default: 1000)
+ * @param maxDelayMs  - maximum delay in ms (default: 30000)
+ * @param jitter      - whether to apply ±25% random jitter (default: true)
+ */
+export function computeBackoffDelay(
+  attempt: number,
+  baseDelayMs = 1000,
+  maxDelayMs = 30_000,
+  jitter = true,
+): number {
+  const exponential = Math.min(baseDelayMs * Math.pow(2, attempt), maxDelayMs);
+  if (!jitter) return exponential;
+  // ±25% uniform jitter
+  const jitterFactor = 0.75 + Math.random() * 0.5;
+  return Math.min(Math.round(exponential * jitterFactor), maxDelayMs);
 }
 
 export interface RecoverRefundResult {
@@ -154,7 +220,15 @@ export async function recoverRefund(
     targetPhase = 'executed',
     maxRetriesPerStep = 3,
     isTransient = defaultIsTransient,
+    backoff = {},
+    sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
   } = params;
+
+  const {
+    baseDelayMs = 1000,
+    maxDelayMs = 30_000,
+    jitter = true,
+  } = backoff;
 
   const target = PHASE_ORDER[targetPhase];
   const stepsApplied: RefundStep[] = [];
@@ -192,15 +266,16 @@ export async function recoverRefund(
   /**
    * Runs one contract call, tolerating the "the write landed but the client
    * saw a network error" case: after any failure it re-reads on-chain state and
-   * accepts the step if the refund advanced. Transient errors are retried;
-   * permanent (contract) errors abort immediately.
+   * accepts the step if the refund advanced. Transient errors are retried with
+   * exponential backoff and jitter; permanent (contract) errors abort immediately.
+   * Throws {@link RetryExhaustedError} if all retry attempts are exhausted.
    */
   const runStep = async (
     step: RefundStep,
     invoke: () => Promise<void>,
     reachedTarget: (s: RefundStatus | null) => boolean,
   ): Promise<void> => {
-    for (let attempt = 1; attempt <= maxRetriesPerStep + 1; attempt++) {
+    for (let attempt = 0; attempt <= maxRetriesPerStep; attempt++) {
       try {
         await invoke();
         stepsApplied.push(step);
@@ -220,9 +295,22 @@ export async function recoverRefund(
             observed ?? undefined,
           );
         }
-        if (!isTransient(err) || attempt === maxRetriesPerStep + 1) {
+        // Non-transient (contract) errors fail immediately without retry.
+        if (!isTransient(err)) {
           throw err;
         }
+        // Last attempt — throw RetryExhaustedError instead of retrying.
+        if (attempt === maxRetriesPerStep) {
+          throw new RetryExhaustedError(
+            `step '${step}' for refund ${refundId} exhausted ${maxRetriesPerStep + 1} attempt(s)`,
+            refundId,
+            step,
+            maxRetriesPerStep + 1,
+          );
+        }
+        // Transient error and more retries remain — back off before next attempt.
+        const delay = computeBackoffDelay(attempt, baseDelayMs, maxDelayMs, jitter);
+        await sleep(delay);
       }
     }
   };
