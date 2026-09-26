@@ -7,6 +7,8 @@ mod helper;
 mod storage;
 pub mod types;
 
+pub mod invariant_refund;
+
 #[cfg(test)]
 mod test;
 #[cfg(test)]
