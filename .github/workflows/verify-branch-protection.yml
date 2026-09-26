@@ -1,0 +1,43 @@
+name: Verify Branch Protection
+
+on:
+  schedule:
+    # Run daily at 06:00 UTC to detect accidental removal
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: Verify Branch Protection
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4
+        with:
+          persist-credentials: false
+
+      - name: Check required status checks are configured
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Fetching branch protection for main ..."
+          PROTECTION=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            /repos/${{ github.repository }}/branches/main/protection \
+            2>&1 || echo "ERROR")
+
+          if echo "$PROTECTION" | grep -q "ERROR\|Branch not protected\|Not Found"; then
+            echo "::error::Branch protection is NOT configured on main!"
+            exit 1
+          fi
+
+          # Verify required status checks include our CI jobs
+          for JOB in "Lint" "Test" "Auth Tests" "Build WASM"; do
+            if ! echo "$PROTECTION" | grep -q "$JOB"; then
+              echo "::warning::Required status check '$JOB' may not be listed"
+            fi
+          done
+
+          echo "Branch protection is active."

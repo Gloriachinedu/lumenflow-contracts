@@ -1,237 +1,81 @@
-/**
- * eventPoller.test.ts
- *
- * Unit tests for event subscription and cleanup behaviour.
- * Uses Jest fake timers to control polling intervals without real I/O.
- */
+import { fetchContractEvents, pollContractEvents } from './eventPoller';
+import { LumenFlowError, PaymentErrorCode } from './errors';
 
-import {
-  subscribeToEvents,
-  LumenFlowEvent,
-  EventFetcher,
-  Unsubscribe,
-} from "./eventPoller";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function makeEvent(name: string, ledger: number): LumenFlowEvent {
-  return {
-    name,
-    ledger,
-    timestamp: new Date().toISOString(),
-    payload: {},
-  };
+declare global {
+  var fetch: jest.MockedFunction<typeof fetch>;
 }
 
-/** Resolves on the next tick so async poll() can complete. */
-const nextTick = () => new Promise<void>((resolve) => setImmediate(resolve));
+describe('fetchContractEvents', () => {
+  const BASE = { rpcUrl: 'https://rpc.example.com', contractId: 'CONTRACT_ID' };
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-describe("subscribeToEvents()", () => {
   beforeEach(() => {
-    jest.useFakeTimers();
+    global.fetch = jest.fn();
   });
 
-  afterEach(() => {
-    jest.useRealTimers();
+  it('throws InvalidInput for missing rpcUrl', async () => {
+    await expect(fetchContractEvents({ ...BASE, rpcUrl: '' })).rejects.toMatchObject({
+      code: PaymentErrorCode.InvalidInput,
+    });
   });
 
-  // ── Basic delivery ────────────────────────────────────────────────────────
-
-  it("invokes the callback with events returned by the fetcher", async () => {
-    const events = [makeEvent("lumenflow/payment_processed", 100)];
-    const fetcher: EventFetcher = jest.fn().mockResolvedValueOnce(events);
-    const callback = jest.fn();
-
-    subscribeToEvents(callback, {}, fetcher);
-
-    // Let the initial async poll complete.
-    await nextTick();
-
-    expect(callback).toHaveBeenCalledTimes(1);
-    expect(callback).toHaveBeenCalledWith(events);
+  it('throws InvalidInput for missing contractId', async () => {
+    await expect(fetchContractEvents({ ...BASE, contractId: '' })).rejects.toMatchObject({
+      code: PaymentErrorCode.InvalidInput,
+    });
   });
 
-  it("does not invoke the callback when the fetcher returns an empty array", async () => {
-    const fetcher: EventFetcher = jest.fn().mockResolvedValue([]);
-    const callback = jest.fn();
+  it('returns parsed event list from RPC', async () => {
+    const event = { id: '1', type: 'contract', contractId: 'CONTRACT_ID', ledger: 42, topic: ['lumenflow', 'payment_processed', 'GMerchant'], value: ['ORDER_1', 'GPayer', 100] };
+    global.fetch.mockResolvedValue({ json: async () => ({ result: { events: [event] } }) } as unknown as Response);
 
-    subscribeToEvents(callback, {}, fetcher);
-    await nextTick();
-
-    expect(callback).not.toHaveBeenCalled();
+    const events = await fetchContractEvents(BASE);
+    expect(events).toEqual([event]);
   });
 
-  // ── Interval polling ──────────────────────────────────────────────────────
+  it('warns and discards malformed events by default', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation();
+    global.fetch.mockResolvedValue({ json: async () => ({ result: { events: [{ type: 'contract' }] } }) } as unknown as Response);
 
-  it("polls on the configured interval", async () => {
-    const fetcher: EventFetcher = jest.fn().mockResolvedValue([]);
-    subscribeToEvents(jest.fn(), { pollingIntervalMs: 1000 }, fetcher);
-
-    await nextTick(); // initial poll
-    expect(fetcher).toHaveBeenCalledTimes(1);
-
-    jest.advanceTimersByTime(1000);
-    await nextTick();
-    expect(fetcher).toHaveBeenCalledTimes(2);
-
-    jest.advanceTimersByTime(1000);
-    await nextTick();
-    expect(fetcher).toHaveBeenCalledTimes(3);
+    await expect(fetchContractEvents(BASE)).resolves.toEqual([]);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 
-  // ── Unsubscribe ───────────────────────────────────────────────────────────
+  it('throws on malformed events in strict mode', async () => {
+    global.fetch.mockResolvedValue({ json: async () => ({ result: { events: [{ id: '1', type: 'contract', contractId: 'CONTRACT_ID', ledger: 42, topic: ['lumenflow'] }] } }) } as unknown as Response);
 
-  it("returns an unsubscribe function", () => {
-    const unsubscribe = subscribeToEvents(jest.fn(), {}, jest.fn().mockResolvedValue([]));
-    expect(typeof unsubscribe).toBe("function");
+    await expect(fetchContractEvents({ ...BASE, strict: true })).rejects.toThrow('event name');
   });
 
-  it("stops polling after unsubscribe() is called", async () => {
-    const fetcher: EventFetcher = jest.fn().mockResolvedValue([]);
-    const unsubscribe = subscribeToEvents(jest.fn(), { pollingIntervalMs: 500 }, fetcher);
-
-    await nextTick();
-    unsubscribe();
-
-    const countAfterStop = (fetcher as jest.Mock).mock.calls.length;
-
-    jest.advanceTimersByTime(2000);
-    await nextTick();
-
-    expect((fetcher as jest.Mock).mock.calls.length).toBe(countAfterStop);
+  it('returns empty list when RPC result has no events', async () => {
+    global.fetch.mockResolvedValue({ json: async () => ({ result: {} }) } as unknown as Response);
+    const events = await fetchContractEvents(BASE);
+    expect(events).toEqual([]);
   });
 
-  it("unsubscribe() is safe to call multiple times", async () => {
-    const unsubscribe = subscribeToEvents(jest.fn(), {}, jest.fn().mockResolvedValue([]));
-    await nextTick();
-    expect(() => {
-      unsubscribe();
-      unsubscribe();
-      unsubscribe();
-    }).not.toThrow();
-  });
+  it('rethrows network errors as LumenFlowError', async () => {
+    global.fetch.mockRejectedValue(new Error('network failure'));
 
-  it("does not invoke the callback after unsubscribe()", async () => {
-    const events = [makeEvent("lumenflow/merchant_registered", 200)];
-    let resolveFetch!: (v: LumenFlowEvent[]) => void;
-    const fetcher: EventFetcher = jest.fn().mockReturnValue(
-      new Promise<LumenFlowEvent[]>((resolve) => {
-        resolveFetch = resolve;
-      })
-    );
-    const callback = jest.fn();
-
-    const unsubscribe = subscribeToEvents(callback, {}, fetcher);
-    unsubscribe(); // unsubscribe before the in-flight poll resolves
-    resolveFetch(events);
-    await nextTick();
-
-    expect(callback).not.toHaveBeenCalled();
-  });
-
-  // ── Ledger cursor advancement ─────────────────────────────────────────────
-
-  it("advances the ledger cursor so subsequent polls start after the last seen ledger", async () => {
-    const batch1 = [makeEvent("lumenflow/payment_processed", 100)];
-    const batch2 = [makeEvent("lumenflow/refund_initiated", 150)];
-
-    const fetcher: EventFetcher = jest
-      .fn()
-      .mockResolvedValueOnce(batch1)
-      .mockResolvedValueOnce(batch2);
-
-    subscribeToEvents(jest.fn(), { pollingIntervalMs: 500 }, fetcher);
-    await nextTick();
-
-    jest.advanceTimersByTime(500);
-    await nextTick();
-
-    // Second call should use ledger 100 as the cursor.
-    expect((fetcher as jest.Mock).mock.calls[1][0]).toBe(100);
-  });
-
-  // ── eventPrefix filter ────────────────────────────────────────────────────
-
-  it("passes eventPrefix to the fetcher", async () => {
-    const fetcher: EventFetcher = jest.fn().mockResolvedValue([]);
-    subscribeToEvents(jest.fn(), { eventPrefix: "lumenflow/refund" }, fetcher);
-    await nextTick();
-
-    expect((fetcher as jest.Mock).mock.calls[0][1]).toBe("lumenflow/refund");
-  });
-
-  // ── AbortSignal ───────────────────────────────────────────────────────────
-
-  it("stops polling when the AbortSignal is aborted", async () => {
-    const controller = new AbortController();
-    const fetcher: EventFetcher = jest.fn().mockResolvedValue([]);
-
-    subscribeToEvents(jest.fn(), { pollingIntervalMs: 500, signal: controller.signal }, fetcher);
-    await nextTick();
-
-    controller.abort();
-
-    const countAfterAbort = (fetcher as jest.Mock).mock.calls.length;
-    jest.advanceTimersByTime(2000);
-    await nextTick();
-
-    expect((fetcher as jest.Mock).mock.calls.length).toBe(countAfterAbort);
-  });
-
-  it("returns a no-op unsubscribe immediately if signal is already aborted", async () => {
-    const controller = new AbortController();
-    controller.abort();
-
-    const fetcher: EventFetcher = jest.fn().mockResolvedValue([]);
-    const unsubscribe: Unsubscribe = subscribeToEvents(
-      jest.fn(),
-      { signal: controller.signal },
-      fetcher
-    );
-
-    jest.advanceTimersByTime(5000);
-    await nextTick();
-
-    // Fetcher should never have been called.
-    expect(fetcher).not.toHaveBeenCalled();
-    expect(() => unsubscribe()).not.toThrow();
-  });
-
-  // ── Error resilience ──────────────────────────────────────────────────────
-
-  it("does not stop polling after a fetcher error", async () => {
-    const fetcher: EventFetcher = jest
-      .fn()
-      .mockRejectedValueOnce(new Error("network error"))
-      .mockResolvedValue([]);
-
-    subscribeToEvents(jest.fn(), { pollingIntervalMs: 500 }, fetcher);
-    await nextTick();
-
-    jest.advanceTimersByTime(500);
-    await nextTick();
-
-    expect(fetcher).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not stop polling when the callback throws", async () => {
-    const events = [makeEvent("lumenflow/admin_set", 50)];
-    const fetcher: EventFetcher = jest.fn().mockResolvedValue(events);
-    const callback = jest.fn().mockImplementation(() => {
-      throw new Error("callback error");
+    await expect(fetchContractEvents(BASE)).rejects.toMatchObject({
+      code: PaymentErrorCode.InvalidInput,
     });
 
-    subscribeToEvents(callback, { pollingIntervalMs: 500 }, fetcher);
-    await nextTick();
-    jest.advanceTimersByTime(500);
-    await nextTick();
+    await expect(fetchContractEvents(BASE)).rejects.toThrow('network failure');
+  });
+});
 
-    expect(fetcher).toHaveBeenCalledTimes(2);
+describe('pollContractEvents', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  it('returns stop function that clears interval', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ json: async () => ({ result: { events: [] } }) } as unknown as Response);
+    const callback = jest.fn();
+    const stop = pollContractEvents({ rpcUrl: 'https://rpc.example.com', contractId: 'CONTRACT_ID' }, 1000, callback);
+
+    await jest.advanceTimersByTimeAsync(1000);
+    await Promise.resolve();
+    expect(callback).toHaveBeenCalled();
+    stop();
   });
 });
