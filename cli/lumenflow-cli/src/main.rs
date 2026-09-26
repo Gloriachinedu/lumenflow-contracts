@@ -594,6 +594,88 @@ fn apply_env_overrides(base: RawConfig) -> RawConfig {
         fs::remove_file(path)?;
         Ok(())
     }
+
+    #[test]
+    fn test_profile_selection() -> Result<()> {
+        let temp_config = ".test_lumenflow_profiles.toml";
+        fs::write(
+            temp_config,
+            r#"
+network = "testnet"
+contract_id = "CDEFAULT"
+
+[profiles.local]
+network = "local"
+contract_id = "CLOCAL"
+rpc_url = "http://localhost:8000/soroban/rpc"
+
+[profiles.testnet]
+network = "testnet"
+contract_id = "CTESTNET"
+
+[profiles.mainnet]
+network = "mainnet"
+contract_id = "CMAINNET"
+"#,
+        )?;
+
+        // No profile → use top-level defaults
+        let cfg = load_config(Some(PathBuf::from(temp_config)), None)?;
+        assert_eq!(cfg.network.as_deref(), Some("testnet"));
+        assert_eq!(cfg.contract_id.as_deref(), Some("CDEFAULT"));
+        assert!(cfg.active_profile.is_none());
+
+        // Select "local" profile
+        let cfg_local = load_config(Some(PathBuf::from(temp_config)), Some("local".into()))?;
+        assert_eq!(cfg_local.network.as_deref(), Some("local"));
+        assert_eq!(cfg_local.contract_id.as_deref(), Some("CLOCAL"));
+        assert_eq!(
+            cfg_local.rpc_url.as_deref(),
+            Some("http://localhost:8000/soroban/rpc")
+        );
+        assert_eq!(cfg_local.active_profile.as_deref(), Some("local"));
+
+        // Select "mainnet" profile
+        let cfg_main = load_config(Some(PathBuf::from(temp_config)), Some("mainnet".into()))?;
+        assert_eq!(cfg_main.network.as_deref(), Some("mainnet"));
+        assert_eq!(cfg_main.contract_id.as_deref(), Some("CMAINNET"));
+
+        fs::remove_file(temp_config)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_invalid_profile_returns_error() -> Result<()> {
+        let temp_config = ".test_lumenflow_badprofile.toml";
+        fs::write(temp_config, "[profiles.local]\nnetwork = \"local\"")?;
+        let result = load_config(Some(PathBuf::from(temp_config)), Some("nonexistent".into()));
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("nonexistent"));
+        fs::remove_file(temp_config)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_default_profile_from_config() -> Result<()> {
+        let temp_config = ".test_lumenflow_defaultprofile.toml";
+        fs::write(
+            temp_config,
+            r#"
+default_profile = "testnet"
+network = "local"
+
+[profiles.testnet]
+network = "testnet"
+contract_id = "CTESTNET"
+"#,
+        )?;
+        let cfg = load_config(Some(PathBuf::from(temp_config)), None)?;
+        assert_eq!(cfg.network.as_deref(), Some("testnet"));
+        assert_eq!(cfg.active_profile.as_deref(), Some("testnet"));
+        fs::remove_file(temp_config)?;
+        Ok(())
+    }
 }
 
 fn resolve_config(file_env: RawConfig, cli: &Cli) -> ResolvedConfig {
