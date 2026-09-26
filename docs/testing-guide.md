@@ -2,6 +2,20 @@
 
 This guide explains the Soroban contract test architecture used in the LumenFlow repository.
 
+## RPC chaos testing
+
+The opt-in chaos harness uses Toxiproxy to exercise SDK and CLI behavior when the RPC path is degraded. Start the proxy and create an RPC route locally:
+
+```bash
+docker compose up -d toxiproxy
+curl -X POST http://localhost:8474/proxies \
+    -H 'content-type: application/json' \
+    -d '{"name":"lumenflow-rpc","listen":"0.0.0.0:18000","upstream":"host.docker.internal:8000"}'
+CHAOS_TESTS=1 node --test tests/chaos/rpc-chaos.test.mjs
+```
+
+The tests inject RPC timeouts, 5-second latency, and truncated responses. The SDK retry suite covers recovery from transient failures and the CLI reports persistent failures in its result table. HTTP 503 responses should be supplied by a fault-injecting RPC fixture; Toxiproxy itself is a transport proxy and does not generate application-layer status codes. True 50% packet loss requires host network emulation such as `tc netem` and is intentionally kept outside the default Docker setup.
+
 ## Soroban testutils overview
 
 Soroban provides a `testutils` module for contract unit testing in Rust. It includes:
@@ -53,6 +67,27 @@ let suspicious_event = events.iter().find(|e| {
 assert!(suspicious_event.is_some());
 ```
 
+## Frontend unit tests
+
+The static frontend ships pure helper modules (e.g. `frontend/validation.js`)
+that are unit-tested with the Node.js built-in test runner — no extra
+dependencies:
+
+```bash
+cd frontend
+npm run test:unit        # runs tests/unit/*.test.mjs
+```
+
+Tests live in `frontend/tests/unit/` as ESM (`*.test.mjs`) and import the module
+under test directly. Keep them focused on logic that does not need a DOM;
+DOM-driven form behavior is covered by the Playwright specs under
+`frontend/tests/` and `tests/playwright/`.
+
+`frontend/tests/unit/validation.test.mjs` covers the shared form validators,
+including edge cases: non-string input, length boundaries (`ORDER_ID_MAX_LENGTH`
+and one over), whitespace trimming, base32-alphabet enforcement for Stellar
+keys, and the `integer` / `allowZero` / `required` / `prefixes` option flags.
+
 ## Common pitfalls
 
 - Do not assume `mock_all_auths()` tests auth logic. For auth-related code paths, add explicit integration-style tests.
@@ -103,66 +138,47 @@ npm audit
 
 Only **critical** vulnerabilities fail CI. To investigate a specific advisory, use `npm audit --json` for machine-readable output.
 
-## Fuzz Testing (cargo-fuzz / libFuzzer)
+## Coverage thresholds by subsystem
 
-Fuzz tests drive `batch_payment` with boundary conditions generated from a structured byte stream.
+Overall project coverage must stay at or above **80%** (`codecov.yml`). In
+addition, each subsystem has its own published target that is scored
+independently via Codecov `component_management`, so a regression in one area is
+visible even when the aggregate number still passes:
 
-### Location
+| Subsystem | Paths | Target |
+|---|---|---|
+| Soroban contracts | `contracts/**` | 85% |
+| TypeScript SDK | `sdk/src/**` | 80% |
+| Web frontend | `frontend/**` | 70% |
+| Merchant dashboard | `dashboard/**` | 70% |
 
-```
-contracts/lumenflow/fuzz/
-├── Cargo.toml
-└── fuzz_targets/
-    └── fuzz_auth.rs    ← batch_payment harness
-```
+Raise a target as coverage improves; never lower one silently.
 
-### Running
+## Fuzz tests for malformed signatures and payloads
 
-```bash
-# Install cargo-fuzz once
-cargo install cargo-fuzz
+`sdk/src/tests/signatureFuzz.test.ts` feeds large volumes of randomised and
+adversarial input (a seeded PRNG keeps failures reproducible) into the payload
+builders and ed25519 verification. It asserts that malformed field
+combinations, corrupt contract IDs, random / bit-flipped / truncated signatures,
+and tampered payloads are all rejected deterministically rather than crashing or
+silently accepting a bad signature.
 
-# Run the harness (60-second budget)
-cargo fuzz run fuzz_auth \
-  --manifest-path contracts/lumenflow/fuzz/Cargo.toml \
-  -- -max_total_time=60
+## Failure-injection tests for upstream Horizon outages
 
-# Run for 1M iterations
-cargo fuzz run fuzz_auth \
-  --manifest-path contracts/lumenflow/fuzz/Cargo.toml \
-  -- -runs=1000000
-```
+`sdk/src/tests/horizonOutage.test.ts` injects Horizon SSE connection errors and
+Soroban RPC transient failures (503/504, timeouts, `ECONNRESET`). It verifies
+the event stream reconnects with capped exponential backoff, stops cleanly when
+unsubscribed mid-outage, resumes delivery once the outage clears, and that
+`withRetry` retries transient errors but surfaces permanent ones immediately.
 
-### What is fuzzed
+## Restore drills
 
-The `fuzz_auth.rs` harness exercises `batch_payment` with:
-
-| Case | Description |
-|------|-------------|
-| Empty batch (0 items) | Must succeed without panicking |
-| 1 item | Single-item batch boundary |
-| 10 items (max) | Maximum allowed batch size |
-| 11 items | Must return `BatchSizeExceeded` |
-| All-valid items | Must succeed |
-| First item invalid | Must fail gracefully |
-| Last item invalid | Must fail gracefully |
-| All items invalid | Must fail gracefully |
-
-Invalid item strategies:
-- `zero amount` → `InvalidAmount`
-- `negative amount` → `InvalidAmount`
-- `65-char order_id` → `InvalidInput`
-- `257-char memo` → `InvalidMemoLength`
-
-### Reproducing a crash
+A backup that has never been restored is untested. `scripts/restore-drill.mjs`
+performs a full round trip — snapshot → serialize → restore → byte-for-byte
+compare — and fails loudly on corruption, truncation, or silent tampering.
 
 ```bash
-cargo fuzz run fuzz_auth \
-  --manifest-path contracts/lumenflow/fuzz/Cargo.toml \
-  contracts/lumenflow/fuzz/artifacts/fuzz_auth/<crash-file>
+node scripts/restore-drill.mjs                       # drill critical repo config
+node scripts/restore-drill.mjs codecov.yml Makefile  # drill specific files
+npm run test:roadmap                                 # runs scripts/*.test.mjs, incl. the drill tests
 ```
-
-### Adding new fuzz targets
-
-Add a new file under `contracts/lumenflow/fuzz/fuzz_targets/` and register it as a `[[bin]]` in `contracts/lumenflow/fuzz/Cargo.toml`.
-

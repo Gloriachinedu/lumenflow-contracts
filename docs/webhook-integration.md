@@ -38,6 +38,16 @@ https://horizon-testnet.stellar.org/contracts/{CONTRACT_ID}/events?cursor=now&to
 
 ## 2. Verifying Event Authenticity
 
+For webhook deliveries signed by an integration secret, verify the raw request body before parsing it. The SDK expects the `X-LumenFlow-Signature` value in the form `sha256=<64 lowercase or uppercase hex characters>`:
+
+```typescript
+import { verifyWebhookSignature } from "@lumenflow/sdk";
+
+const valid = verifyWebhookSignature(rawBody, request.headers["x-lumenflow-signature"], process.env.WEBHOOK_SECRET);
+```
+
+`rawBody` must be the original request bytes. The helper uses HMAC-SHA256 and a timing-safe comparison, returns `false` for a bad secret or payload, and throws for an empty secret or malformed signature.
+
 Events delivered via Horizon are signed by the Stellar network validators. To verify an event is genuine:
 
 1. **Check the contract ID** — confirm `contract_id` in the event matches your deployed contract address.
@@ -49,26 +59,138 @@ Events delivered via Horizon are signed by the Stellar network validators. To ve
 
 ---
 
-## 3. Example Node.js Webhook Server
+## 3. Example Node.js Webhook Server — Filtered by Merchant
+
+LumenFlow payment and refund events include the **merchant address as `topic[2]`**. You can pass this directly as the `topic3` query parameter on the Horizon SSE stream to receive only events for a specific merchant, eliminating client-side filtering.
+
+### Horizon SSE — merchant-filtered stream
+
+```
+GET https://horizon-testnet.stellar.org/contracts/{CONTRACT_ID}/events
+    ?cursor=now
+    &topic1=lumenflow
+    &topic2=payment_processed
+    &topic3=<merchant-address-xdr-base64>
+```
+
+To compute the base64 XDR of a Stellar address:
+
+```javascript
+import { Address } from '@stellar/stellar-sdk';
+
+const merchantXdr = Address.fromString('G...MERCHANT_ADDR')
+  .toScVal()
+  .toXDR('base64');
+
+const url =
+  `${HORIZON_URL}/contracts/${CONTRACT_ID}/events` +
+  `?cursor=now&topic1=lumenflow&topic2=payment_processed&topic3=${encodeURIComponent(merchantXdr)}`;
+```
 
 The following example uses the `eventsource` package to consume the SSE stream and forward events to your webhook endpoint.
+
+Incoming requests are verified against the `X-Stellar-Signature` header using the Horizon public key and the raw request body. Requests with an invalid or missing signature are rejected with HTTP 401. See [docs/webhook-security.md](./webhook-security.md) for a detailed explanation of the verification algorithm.
 
 ### Install dependencies
 
 ```bash
-npm install eventsource node-fetch
+npm install eventsource node-fetch @stellar/stellar-sdk
 ```
+
+A `WEBHOOK_SECRET` environment variable holding the Horizon ed25519 public key (hex-encoded, 32 bytes) is **required**. The server will not start without it.
 
 ### `webhook-server.js`
 
 ```js
 const EventSource = require("eventsource");
 const fetch = require("node-fetch");
+const { Address, scValToNative, xdr } = require("@stellar/stellar-sdk");
 
-const CONTRACT_ID = process.env.CONTRACT_ID; // your deployed contract address
-const WEBHOOK_URL = process.env.WEBHOOK_URL; // your backend endpoint
-const HORIZON_URL =
-  process.env.HORIZON_URL || "https://horizon-testnet.stellar.org";
+const CONTRACT_ID   = process.env.CONTRACT_ID;    // deployed contract address
+const MERCHANT_ADDR = process.env.MERCHANT_ADDR;  // your merchant's Stellar address
+const WEBHOOK_URL   = process.env.WEBHOOK_URL;    // your backend endpoint
+const HORIZON_URL   = process.env.HORIZON_URL || "https://horizon-testnet.stellar.org";
+
+// Encode the merchant address as base64 XDR for the topic3 filter
+const merchantTopicXdr = Address.fromString(MERCHANT_ADDR).toScVal().toXDR("base64");
+
+if (!CONTRACT_ID) throw new Error("CONTRACT_ID environment variable is required");
+if (!WEBHOOK_URL) throw new Error("WEBHOOK_URL environment variable is required");
+if (!WEBHOOK_SECRET) throw new Error("WEBHOOK_SECRET environment variable is required (Horizon ed25519 public key, hex)");
+
+// Decode the public key once at startup
+const PUBLIC_KEY = Buffer.from(WEBHOOK_SECRET, "hex");
+if (PUBLIC_KEY.length !== 32) {
+  throw new Error("WEBHOOK_SECRET must be a 32-byte ed25519 public key encoded as hex");
+}
+
+// ── Signature verification ───────────────────────────────────────────────────
+
+/**
+ * Verifies the X-Stellar-Signature header against the raw request body.
+ *
+ * @param {Buffer} rawBody  - Raw (unparsed) request body bytes
+ * @param {string} sigHeader - Value of the X-Stellar-Signature header
+ * @returns {boolean} true if the signature is valid
+ */
+function verifySignature(rawBody, sigHeader) {
+  if (!sigHeader) return false;
+  let sigBytes;
+  try {
+    sigBytes = Buffer.from(sigHeader, "hex");
+  } catch {
+    return false;
+  }
+  if (sigBytes.length !== 64) return false;
+  return nacl.sign.detached.verify(
+    new Uint8Array(rawBody),
+    new Uint8Array(sigBytes),
+    new Uint8Array(PUBLIC_KEY)
+  );
+}
+
+// ── HTTP receiver ────────────────────────────────────────────────────────────
+// Listens for forwarded Horizon events posted by a proxy / relay service.
+
+const PORT = process.env.PORT || 3001;
+
+const server = http.createServer((req, res) => {
+  if (req.method !== "POST") {
+    res.writeHead(405).end("Method Not Allowed");
+    return;
+  }
+
+  const chunks = [];
+  req.on("data", (chunk) => chunks.push(chunk));
+  req.on("end", async () => {
+    const rawBody = Buffer.concat(chunks);
+    const sigHeader = req.headers["x-stellar-signature"];
+
+    if (!verifySignature(rawBody, sigHeader)) {
+      console.warn("Rejected request: invalid or missing X-Stellar-Signature");
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Invalid signature" }));
+      return;
+    }
+
+    let event;
+    try {
+      event = JSON.parse(rawBody.toString("utf8"));
+    } catch {
+      res.writeHead(400).end("Bad Request");
+      return;
+    }
+
+    await handleEvent(event);
+    res.writeHead(200).end("OK");
+  });
+});
+
+server.listen(PORT, () => {
+  console.log(`Webhook receiver listening on port ${PORT}`);
+});
+
+// ── Horizon SSE consumer ─────────────────────────────────────────────────────
 
 // Resume from a saved cursor, or start from now
 let cursor = process.env.CURSOR || "now";
@@ -76,9 +198,18 @@ let cursor = process.env.CURSOR || "now";
 // In-memory idempotency store (use Redis/DB in production)
 const processed = new Set();
 
-function connect() {
-  const url = `${HORIZON_URL}/contracts/${CONTRACT_ID}/events?cursor=${cursor}&topic1=lumenflow`;
-  const es = new EventSource(url);
+function buildUrl(eventType) {
+  const params = new URLSearchParams({
+    cursor,
+    topic1: "lumenflow",
+    topic2: eventType,
+    topic3: merchantTopicXdr,
+  });
+  return `${HORIZON_URL}/contracts/${CONTRACT_ID}/events?${params}`;
+}
+
+function connect(eventType) {
+  const es = new EventSource(buildUrl(eventType));
 
   es.addEventListener("message", async (msg) => {
     const event = JSON.parse(msg.data);
@@ -87,44 +218,61 @@ function connect() {
     // Idempotency check
     if (processed.has(token)) return;
     processed.add(token);
+    cursor = token; // persist so we can resume after restart
 
-    // Persist cursor so we can resume after restart
-    cursor = token;
+    // Decode the data payload
+    const rawVal = xdr.ScVal.fromXDR(event.value.xdr, "base64");
+    const data   = scValToNative(rawVal);
 
-    const eventName = event.topic[1]; // e.g. "payment_processed"
-    const data = event.value;
-
-    console.log(`[${eventName}]`, data);
+    // For payment_processed: data = [order_id, payer, amount]
+    // merchant_address is in event.topic[2], already filtered by Horizon
+    console.log(`[${eventType}] merchant=${MERCHANT_ADDR}`, data);
 
     try {
       await fetch(WEBHOOK_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ event: eventName, data, ledger: event.ledger }),
+        body: JSON.stringify({
+          event:    eventType,
+          merchant: MERCHANT_ADDR,
+          data,
+          ledger:   event.ledger,
+          token,
+        }),
       });
     } catch (err) {
       console.error("Webhook delivery failed:", err.message);
-      // Implement retry logic here (exponential back-off recommended)
     }
   });
 
   es.addEventListener("error", (err) => {
-    console.error("SSE error, reconnecting in 5s:", err.message);
+    console.error(`SSE error (${eventType}), reconnecting in 5s:`, err.message);
     es.close();
-    setTimeout(connect, 5000);
+    setTimeout(() => connect(eventType), 5000);
   });
 }
 
-connect();
+// Subscribe to all merchant-specific event types
+[
+  "payment_processed",
+  "refund_initiated",
+  "refund_approved",
+  "refund_rejected",
+  "refund_executed",
+].forEach(connect);
 ```
 
 ### Running the server
 
 ```bash
 CONTRACT_ID=<your-contract-id> \
+MERCHANT_ADDR=G...YOUR_MERCHANT_ADDRESS \
 WEBHOOK_URL=https://your-backend.example.com/lumenflow-events \
+WEBHOOK_SECRET=<horizon-ed25519-public-key-hex> \
 node webhook-server.js
 ```
+
+> **Security note:** Never commit `WEBHOOK_SECRET` to source control. Store it as an environment variable or in your secrets manager. See [docs/secrets-and-local-env.md](./secrets-and-local-env.md) for guidance.
 
 ---
 
@@ -160,27 +308,83 @@ For `payment_processed` events, the `order_id` in the event data is unique per p
 
 ## 5. LumenFlow Events Reference
 
-| Event | Trigger | Key data |
-|-------|---------|----------|
-| `payment_processed` | Payment completed | `order_id`, `payer`, `merchant`, `amount` |
-| `refund_initiated` | Refund request opened | `refund_id` |
-| `refund_approved` | Refund approved | `refund_id` |
-| `refund_rejected` | Refund rejected | `refund_id` |
-| `refund_executed` | Refund transfer completed | `refund_id` |
-| `refund_disputed` | Dispute raised on a refund | `refund_id`, `payer` |
-| `dispute_resolved` | Admin resolved a dispute | `refund_id`, `outcome` |
-| `payment_note_added` | Merchant added a note to a payment | `order_id` |
-| `multisig_initiated` | Multisig payment created | `payment_id` |
-| `multisig_executed` | Multisig payment executed | `payment_id` |
-| `merchant_registered` | New merchant registered | `merchant_address` |
-| `payment_archived` | Payment record removed | `order_id` |
+Payment and refund events expose the merchant address as **`topic[2]`** for server-side filtering.
+
+| Event | topic[1] | topic[2] | Data |
+|-------|----------|----------|------|
+| `payment_processed` | `payment_processed` | `merchant_address` ✦ | `(order_id, payer, amount)` |
+| `refund_initiated` | `refund_initiated` | `merchant_address` ✦ | `(refund_id, order_id)` |
+| `refund_approved` | `refund_approved` | `merchant_address` ✦ | `(refund_id, order_id)` |
+| `refund_rejected` | `refund_rejected` | `merchant_address` ✦ | `(refund_id, order_id)` |
+| `refund_executed` | `refund_executed` | `merchant_address` ✦ | `(refund_id, order_id)` |
+| `multisig_initiated` | `multisig_initiated` | — | `payment_id` |
+| `multisig_executed` | `multisig_executed` | — | `payment_id` |
+| `merchant_registered` | `merchant_registered` | — | `merchant_address` |
+| `payment_archived` | `payment_archived` | — | `order_id` |
+| `contract_paused` | `contract_paused` | — | `()` or `(reason, lock_until)` |
+| `contract_unpaused` | `contract_unpaused` | — | `()` or `("multisig_override",)` |
+
+✦ Filterable via `topic3` on Horizon SSE or the `topics[2]` filter in Soroban RPC.
 
 For the full events reference see [events-reference.md](./events-reference.md).
 
 ---
 
-## 6. Further Resources
+## 6. SDK Helper — `WebhookRelay`
+
+The TypeScript SDK ships a `WebhookRelay` that implements the retry and
+deduplication rules described above so you don't have to re-derive them.
+
+```ts
+import { WebhookRelay, MemoryDedupeStore } from '@lumenflow/sdk';
+
+const relay = new WebhookRelay({
+  // POST the event to your downstream endpoint; return the HTTP status.
+  deliver: async (event) => {
+    const res = await fetch(WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(event),
+    });
+    return { status: res.status };
+  },
+  // Swap MemoryDedupeStore for a Redis/DB-backed store in production.
+  store: new MemoryDedupeStore(),
+  maxAttempts: 4,
+});
+
+// For each event from the Horizon SSE / RPC poll:
+await relay.relay({ pagingToken: event.paging_token, type, topic, value: data, ledger });
+```
+
+Semantics:
+
+| Situation | Behaviour |
+|-----------|-----------|
+| Event already in the dedupe store | Dropped, returns `{ status: 'duplicate' }`, webhook not called |
+| Downstream returns 2xx | Key recorded, returns `{ status: 'delivered', attempts }` |
+| Downstream returns 408 / 425 / 429 / 5xx, or the request throws | Retried with exponential backoff up to `maxAttempts` |
+| Downstream returns any other 4xx (401, 422, …) | Fails fast with `WebhookDeliveryError` — never retried |
+| Retry budget exhausted | Throws `WebhookDeliveryError`; the key is **not** recorded, so the event is redelivered on the next poll |
+
+Because a key is only recorded after a successful POST, delivery is
+**at-least-once** — your downstream handler must stay idempotent on the event
+key (see [Idempotency Considerations](#4-idempotency-considerations)).
+
+---
+
+## 7. Further Resources
 
 - [Stellar Horizon API — Contract Events](https://developers.stellar.org/docs/data/horizon/api-reference/resources/contract-events)
 - [Soroban Events](https://developers.stellar.org/docs/learn/encyclopedia/contract-development/events)
 - [Stellar Friendbot (testnet funding)](https://friendbot.stellar.org)
+
+
+## Troubleshooting
+
+LumenFlow does not expose custom webhooks. Integrators should watch on-chain activity via Stellar Horizon API contract events or Soroban events.
+
+### Failure / Edge Cases
+- No events received: confirm correct contract ID and network (testnet vs mainnet).
+- Missed events during downtime: track the last processed ledger and backfill via Horizon's paginated event history.
+- Friendbot is testnet-only funding, not for production integration.
