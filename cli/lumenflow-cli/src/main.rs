@@ -549,12 +549,62 @@ fn prompt_key() -> Result<String> {
     Ok(key.trim().to_string())
 }
 
+/// Returns true when stdin is connected to a real terminal (i.e. not CI/pipe).
+fn is_interactive_tty() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal()
+}
+
+/// Resolve the source account secret key, in priority order:
+///
+/// 1. `--key-file <FILE>` — read the key from a file (never echoed)
+/// 2. `--prompt-key`      — prompt interactively with hidden input
+/// 3. Auto-prompt         — when the key is still missing and stdin is a TTY,
+///                          prompt with hidden input automatically
+/// 4. CI error            — when the key is missing and stdin is NOT a TTY,
+///                          return an actionable error asking for an explicit flag
+///
+/// Sensitive values are never logged or echoed to stdout/stderr.
 fn resolve_source(config: &mut Config, key_file: Option<&PathBuf>, use_prompt: bool) -> Result<()> {
     if let Some(path) = key_file {
         config.source_account = Some(load_key_from_file(path)?);
-    } else if use_prompt {
-        config.source_account = Some(prompt_key()?);
+        return Ok(());
     }
+
+    if use_prompt {
+        config.source_account = Some(prompt_key()?);
+        return Ok(());
+    }
+
+    // If the key is already set (from config file or env var), nothing to do.
+    if config.source_account.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false) {
+        return Ok(());
+    }
+
+    // Key is missing. Auto-detect whether we can prompt interactively.
+    if is_interactive_tty() {
+        eprintln!(
+            "Note: --source-account not provided. \
+             Prompting for secret key (input will be hidden)."
+        );
+        config.source_account = Some(prompt_key()?);
+    } else {
+        // Non-interactive (CI, pipe). Return a clear, actionable error.
+        bail!(
+            "Missing source account secret key.\n\
+             In non-interactive (CI) environments, provide the key explicitly:\n\
+             \n\
+             Option 1 — environment variable:\n\
+             \x20 LUMENFLOW_SOURCE=<secret-key> lumenflow ...\n\
+             \n\
+             Option 2 — flag (not recommended; appears in shell history):\n\
+             \x20 lumenflow --source-account <secret-key> ...\n\
+             \n\
+             Option 3 — key file (recommended for CI):\n\
+             \x20 lumenflow --key-file /path/to/keyfile ..."
+        );
+    }
+
     Ok(())
 }
 
