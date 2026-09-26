@@ -1126,6 +1126,7 @@ impl PaymentProcessingContract {
         require_positive(amount)?;
         require_valid_id(&order_id)?;
         validate_tags(&tags)?;
+        require_valid_memo(&memo)?;
 
         if !storage::is_token_allowed(&env, &token_address) {
             return Err(PaymentError::TokenNotAllowed);
@@ -1291,6 +1292,7 @@ impl PaymentProcessingContract {
         require_positive(amount)?;
         require_valid_id(&order_id)?;
         validate_tags(&tags)?;
+        require_valid_memo(&memo)?;
 
         // Replay-protection: nonce must equal the stored value
         let expected = storage::get_nonce(&env, &payer);

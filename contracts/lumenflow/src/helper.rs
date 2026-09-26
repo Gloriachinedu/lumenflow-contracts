@@ -247,3 +247,14 @@ pub fn validate_merchant_category(category: &MerchantCategory) -> Result<(), Pay
     }
     Ok(())
 }
+
+/// Validate that a memo does not exceed MAX_MEMO_LENGTH (256 bytes).
+///
+/// Returns [`PaymentError::InvalidMemoLength`] if the memo is too long.
+pub fn require_valid_memo(memo: &String) -> Result<(), PaymentError> {
+    if memo.len() > MAX_MEMO_LENGTH {
+        Err(PaymentError::InvalidMemoLength)
+    } else {
+        Ok(())
+    }
+}
