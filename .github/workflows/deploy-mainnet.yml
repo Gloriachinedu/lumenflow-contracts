@@ -201,22 +201,84 @@ jobs:
           path: smoke-results/
           retention-days: 90
 
-      # ── Rollback on failure ────────────────────────────────────────────────────
-      - name: Pause contract on smoke test failure
-        if: failure() && steps.deploy.outputs.contract_id != ''
+      # ── Automated rollback on smoke test failure ──────────────────────────────
+      # Invokes rollback.sh when the smoke test returns non-zero.
+      # The step is idempotent: rollback.sh is safe to re-run because it only
+      # calls set_active_slot on the router (a single atomic storage write) and
+      # guards against rolling back to an unconfigured slot.
+      - name: Auto-rollback on smoke test failure
+        id: auto_rollback
+        if: failure() && steps.smoke.conclusion == 'failure' && steps.deploy.outputs.contract_id != ''
         env:
-          MAINNET_SOURCE_ACCOUNT: ${{ secrets.MAINNET_SOURCE_ACCOUNT }}
+          NETWORK: mainnet
+          SOURCE_ACCOUNT: ${{ secrets.MAINNET_SOURCE_ACCOUNT }}
+          ROUTER_CONTRACT_ID: ${{ secrets.MAINNET_ROUTER_CONTRACT_ID }}
+          ADMIN_ADDRESS: ${{ secrets.MAINNET_ADMIN_ADDRESS }}
         run: |
-          echo "::error::Mainnet smoke test failed — pausing contract to prevent live traffic"
-          stellar contract invoke \
-            --id "${{ steps.deploy.outputs.contract_id }}" \
-            --network mainnet \
-            --source-account "$MAINNET_SOURCE_ACCOUNT" \
-            -- pause_contract \
-            --admin "${{ secrets.MAINNET_ADMIN_ADDRESS }}" \
-            || echo "::warning::Pause failed — immediate manual intervention required"
+          set -euo pipefail
+          echo "::error::Mainnet smoke test failed — triggering automated rollback"
+          chmod +x scripts/rollback.sh
 
-          echo "## ⏸ Contract paused (post-deploy failure)" >> "$GITHUB_STEP_SUMMARY"
+          # Capture rollback output for the step summary
+          mkdir -p smoke-results
+          ROLLBACK_EXIT=0
+          bash scripts/rollback.sh 2>&1 | tee smoke-results/rollback-mainnet.log || ROLLBACK_EXIT=$?
+
+          if [[ $ROLLBACK_EXIT -eq 0 ]]; then
+            echo "rollback_result=success" >> "$GITHUB_OUTPUT"
+            echo "## ⏪ Auto-rollback SUCCEEDED" >> "$GITHUB_STEP_SUMMARY"
+            echo "The deployment was automatically rolled back after smoke test failure." >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "**Smoke test log:** see artifact \`mainnet-smoke-results-${{ github.run_id }}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "**Next steps:**" >> "$GITHUB_STEP_SUMMARY"
+            echo "1. Inspect the smoke test log for the root cause." >> "$GITHUB_STEP_SUMMARY"
+            echo "2. Fix the issue and create a new release." >> "$GITHUB_STEP_SUMMARY"
+            echo "3. Do NOT re-deploy until the smoke test passes on testnet." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "rollback_result=failed" >> "$GITHUB_OUTPUT"
+            echo "## 🚨 Auto-rollback FAILED — MANUAL INTERVENTION REQUIRED" >> "$GITHUB_STEP_SUMMARY"
+            echo "rollback.sh exited with code $ROLLBACK_EXIT. Review the rollback log in artifact \`mainnet-smoke-results-${{ github.run_id }}\`." >> "$GITHUB_STEP_SUMMARY"
+            # Fallback: pause the contract to stop live traffic
+            stellar contract invoke \
+              --id "${{ steps.deploy.outputs.contract_id }}" \
+              --network mainnet \
+              --source-account "$SOURCE_ACCOUNT" \
+              -- pause_contract \
+              --admin "$ADMIN_ADDRESS" \
+              || echo "::warning::Pause also failed — immediate manual intervention required"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Attempted to pause the contract as a fallback." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload rollback log
+        if: always() && steps.auto_rollback.conclusion != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mainnet-rollback-results-${{ github.run_id }}
+          path: smoke-results/rollback-mainnet.log
+          retention-days: 90
+
+      - name: Notify Slack — auto-rollback triggered
+        if: steps.auto_rollback.conclusion != 'skipped'
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "⏪ *Mainnet auto-rollback triggered after smoke test failure*",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "⏪ *Mainnet auto-rollback triggered*\n*Result:* `${{ steps.auto_rollback.outputs.rollback_result }}`\n*Contract:* `${{ steps.deploy.outputs.contract_id }}`\n*Commit:* `${{ github.sha }}`\n*Triggered by:* @${{ github.actor }}\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run — inspect rollback log>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
 
       - name: Notify Slack — mainnet deploy succeeded
         if: success()

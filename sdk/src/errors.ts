@@ -86,9 +86,9 @@ export const ERROR_MESSAGES: Record<PaymentErrorCode, string> = {
 
 export class LumenFlowError extends Error {
   public readonly code: PaymentErrorCode;
-  public readonly details?: any;
+  public readonly details?: unknown;
 
-  constructor(code: PaymentErrorCode, details?: any) {
+  constructor(code: PaymentErrorCode, details?: unknown) {
     const message = ERROR_MESSAGES[code] || `An unknown error occurred (code: ${code})`;
     super(message);
     this.name = "LumenFlowError";
@@ -143,4 +143,57 @@ export class LumenFlowError extends Error {
     }
     return json;
   }
+
+  toJSON() {
+    return { name: this.name, code: this.code, message: this.message, ...(this.details === undefined ? {} : { details: this.details }) };
+  }
+}
+
+abstract class ContractError extends LumenFlowError {
+  protected constructor(code: PaymentErrorCode, details?: unknown) { super(code, details); }
+}
+
+export class UnauthorizedError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.Unauthorized, details); } }
+export class AdminAlreadySetError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.AdminAlreadySet, details); } }
+export class InvalidAdminAddressError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.InvalidAdminAddress, details); } }
+export class MerchantNotFoundError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.MerchantNotFound, details); } }
+export class MerchantAlreadyRegisteredError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.MerchantAlreadyRegistered, details); } }
+export class MerchantInactiveError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.MerchantInactive, details); } }
+export class PaymentNotFoundError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.PaymentNotFound, details); } }
+export class PaymentAlreadyExistsError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.PaymentAlreadyExists, details); } }
+export class InvalidAmountError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.InvalidAmount, details); } }
+export class InvalidSignatureError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.InvalidSignature, details); } }
+export class PaymentExpiredError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.PaymentExpired, details); } }
+export class InsufficientBalanceError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.InsufficientBalance, details); } }
+export class TokenNotAllowedError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.TokenNotAllowed, details); } }
+export class RefundNotFoundError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.RefundNotFound, details); } }
+export class RefundAlreadyExistsError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.RefundAlreadyExists, details); } }
+export class RefundWindowExpiredError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.RefundWindowExpired, details); } }
+export class RefundExceedsOriginalError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.RefundExceedsOriginal, details); } }
+export class RefundNotApprovedError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.RefundNotApproved, details); } }
+export class RefundAlreadyCompletedError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.RefundAlreadyCompleted, details); } }
+export class TooManyRefundsError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.TooManyRefunds, details); } }
+export class MultisigNotFoundError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.MultisigNotFound, details); } }
+export class MultisigAlreadySignedError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.MultisigAlreadySigned, details); } }
+export class MultisigAlreadyExecutedError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.MultisigAlreadyExecuted, details); } }
+export class InsufficientSignaturesError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.InsufficientSignatures, details); } }
+export class InvalidInputError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.InvalidInput, details); } }
+export class PaginationLimitExceededError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.PaginationLimitExceeded, details); } }
+export class BatchSizeExceededError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.BatchSizeExceeded, details); } }
+export class InvalidTagsError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.InvalidTags, details); } }
+
+export const ERROR_TYPES: Record<PaymentErrorCode, new (details?: unknown) => LumenFlowError> = {
+  [PaymentErrorCode.Unauthorized]: UnauthorizedError, [PaymentErrorCode.AdminAlreadySet]: AdminAlreadySetError, [PaymentErrorCode.InvalidAdminAddress]: InvalidAdminAddressError,
+  [PaymentErrorCode.MerchantNotFound]: MerchantNotFoundError, [PaymentErrorCode.MerchantAlreadyRegistered]: MerchantAlreadyRegisteredError, [PaymentErrorCode.MerchantInactive]: MerchantInactiveError,
+  [PaymentErrorCode.PaymentNotFound]: PaymentNotFoundError, [PaymentErrorCode.PaymentAlreadyExists]: PaymentAlreadyExistsError, [PaymentErrorCode.InvalidAmount]: InvalidAmountError,
+  [PaymentErrorCode.InvalidSignature]: InvalidSignatureError, [PaymentErrorCode.PaymentExpired]: PaymentExpiredError, [PaymentErrorCode.InsufficientBalance]: InsufficientBalanceError, [PaymentErrorCode.TokenNotAllowed]: TokenNotAllowedError,
+  [PaymentErrorCode.RefundNotFound]: RefundNotFoundError, [PaymentErrorCode.RefundAlreadyExists]: RefundAlreadyExistsError, [PaymentErrorCode.RefundWindowExpired]: RefundWindowExpiredError,
+  [PaymentErrorCode.RefundExceedsOriginal]: RefundExceedsOriginalError, [PaymentErrorCode.RefundNotApproved]: RefundNotApprovedError, [PaymentErrorCode.RefundAlreadyCompleted]: RefundAlreadyCompletedError, [PaymentErrorCode.TooManyRefunds]: TooManyRefundsError,
+  [PaymentErrorCode.MultisigNotFound]: MultisigNotFoundError, [PaymentErrorCode.MultisigAlreadySigned]: MultisigAlreadySignedError, [PaymentErrorCode.MultisigAlreadyExecuted]: MultisigAlreadyExecutedError, [PaymentErrorCode.InsufficientSignatures]: InsufficientSignaturesError,
+  [PaymentErrorCode.InvalidInput]: InvalidInputError, [PaymentErrorCode.PaginationLimitExceeded]: PaginationLimitExceededError, [PaymentErrorCode.BatchSizeExceeded]: BatchSizeExceededError, [PaymentErrorCode.InvalidTags]: InvalidTagsError,
+};
+
+export function errorFromCode(code: number, details?: unknown): LumenFlowError {
+  const ErrorType = ERROR_TYPES[code as PaymentErrorCode];
+  return ErrorType ? new ErrorType(details) : new LumenFlowError(code as PaymentErrorCode, details);
 }

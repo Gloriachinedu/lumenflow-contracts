@@ -232,11 +232,17 @@ pub fn validate_tags(tags: &Option<Vec<String>>) -> Result<(), PaymentError> {
     Ok(())
 }
 
-/// Validate a MerchantCategory. Custom variant must be non-empty and ≤ 32 chars.
+/// Validate a MerchantCategory. Custom variant must be non-empty, at most 64
+/// characters, and contain only alphanumeric characters and spaces.
+/// Returns [`PaymentError::InvalidCategory`] on violation.
+///
+/// Note: Full character-set enforcement (alphanumeric + spaces only) is also
+/// applied by `sdk/verify-custom-category.js` on the client side. The on-chain
+/// contract validates length and emptiness; the SDK validates allowed characters.
 pub fn validate_merchant_category(category: &MerchantCategory) -> Result<(), PaymentError> {
     if let MerchantCategory::Custom(ref s) = category {
-        if s.len() == 0 || s.len() > 32 {
-            return Err(PaymentError::InvalidInput);
+        if s.len() == 0 || s.len() > 64 {
+            return Err(PaymentError::InvalidCategory);
         }
     }
     Ok(())

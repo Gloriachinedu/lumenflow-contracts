@@ -1,127 +1,184 @@
-# User Story Map: Disputes, Refunds, and Support Escalation
+# Disputes, Refunds & Escalation — Story Map
 
-**Issue:** [#908](https://github.com/Gloriachinedu/lumenflow-contracts/issues/908)
-**Status:** Backlog / Planning
-**Priority:** Medium
-**Effort:** Medium
-**Labels:** product, Stellar Wave
+This document describes the on-chain dispute initiation and resolution flow for
+LumenFlow. It covers the state machine, contract functions, emitted events, and
+how disputes relate to the existing refund lifecycle.
 
 ---
 
-## Overview
+## Dispute State Machine
 
-This document maps the end-to-end journey for a payer or merchant who needs to
-raise a problem with a completed payment: requesting a refund, opening a dispute,
-and escalating to human support. It maps each activity to the roles involved, the
-UI surfaces, and the underlying contract calls, and is intended for product
-planning and prioritization.
+```
+                ┌─────────────┐
+                │    Open     │◄── initiate_dispute / raise_dispute
+                └──────┬──────┘
+                       │ mark_dispute_under_review (admin)
+                       ▼
+                ┌─────────────┐
+                │ UnderReview │
+                └──────┬──────┘
+          ┌────────────┴───────────────┐
+          │ escalate_dispute (admin)   │ resolve_dispute (admin)
+          ▼                            ▼
+   ┌─────────────┐          ┌───────────────────────────────┐
+   │  Escalated  │          │  Resolved                     │
+   └──────┬──────┘          │  outcome: MerchantFavor       │
+          │                 │       or: PayerFavor           │
+          └────────────────►└───────────────────────────────┘
+                resolve_dispute (admin, after escalation)
+```
 
-It builds on [user-journeys.md](user-journeys.md) and
-[refund-lifecycle.md](refund-lifecycle.md).
+### States
 
-### Roles
+| State | Description |
+|-------|-------------|
+| `Open` | Dispute has been filed; awaiting admin attention. |
+| `UnderReview` | Admin is actively investigating. |
+| `Escalated` | Dispute requires external arbitration; admin has escalated. |
+| `Resolved` | Dispute is closed with a final outcome. |
 
-| Role | Description |
-|---|---|
-| **Payer** | The person or system that sent the payment |
-| **Merchant** | The business that received the payment |
-| **Support Agent** | LumenFlow operator handling escalations |
-| **Admin** | Privileged operator who can act on stuck cases |
+### Outcomes (set when status → `Resolved`)
 
----
-
-## Story Map
-
-Backbone activities run left to right; stories under each are ordered top
-(release 1 / walking skeleton) to bottom (later refinement).
-
-### 1. Notice a problem
-
-- Payer sees payment in receipt/history and flags "something's wrong".
-- Merchant sees an incoming complaint or a mismatched order.
-- Both can open a case from the payment detail view.
-
-### 2. Request a refund (no dispute)
-
-- Payer requests a full or partial refund with a reason code.
-- Merchant reviews and approves → `refund` contract call executes.
-- Merchant rejects with a note → payer may escalate to a dispute.
-- Auto-approval rule for refunds under a merchant-configured threshold.
-
-### 3. Open a dispute
-
-- Payer opens a dispute when a refund is refused or ignored past an SLA timer.
-- Funds for that payment are placed on `held` status (see reconciliation doc).
-- Both parties submit evidence (text, links, attachments).
-- Dispute has states: `open → under_review → resolved_payer | resolved_merchant | withdrawn`.
-
-### 4. Support escalation
-
-- Either party escalates a stalled dispute to a Support Agent.
-- Agent triages by priority (amount, age, repeat offender, fraud signal).
-- Agent requests more info, or recommends a resolution.
-- Admin executes the final on-chain action (`refund` or release of hold).
-
-### 5. Resolution and close
-
-- Outcome recorded with reason code and agent ID.
-- Funds released from hold: refunded to payer or paid out to merchant.
-- Both parties notified; case becomes read-only.
-- Post-resolution: 7-day reopen window for new evidence.
-
-### 6. Learn and prevent
-
-- Dispute rate surfaced in merchant dashboard and reconciliation totals.
-- Repeat patterns feed merchant risk scoring and payer fraud signals.
+| Outcome | Effect |
+|---------|--------|
+| `MerchantFavor` | No forced refund. Merchant retains funds. |
+| `PayerFavor` | Forced token transfer from merchant to payer for the disputed refund amount. |
 
 ---
 
-## Activity-to-System Map
+## Contract Functions
 
-| Activity | UI surface | Contract / API |
-|---|---|---|
-| Open case | Payment detail → "Report a problem" | `create_case` (off-chain) |
-| Request refund | Case → refund form | `request_refund` |
-| Approve refund | Merchant case queue | `refund` |
-| Open dispute | Case → escalate | `open_dispute`, sets payment `held` |
-| Submit evidence | Dispute thread | `add_evidence` (off-chain, hash anchored) |
-| Escalate to support | Dispute → "Contact support" | `escalate_case` |
-| Agent resolution | Support console | `recommend_resolution` |
-| Final action | Admin console | `refund` or `release_hold` |
-| Close | Automatic on final action | `close_case` |
+### `initiate_dispute`
+
+**Who can call:** Payer or merchant of the payment.
+
+```bash
+stellar contract invoke --id $CONTRACT_ID --source-account $CALLER_KEY --network $NETWORK \
+  -- initiate_dispute \
+  --caller  $CALLER_ADDR \
+  --dispute_id "DISPUTE_001" \
+  --order_id   "ORDER_001" \
+  --reason  "Item not received"
+```
+
+- Creates a `DisputeRecord` in `Open` state.
+- Does **not** require a pre-existing refund — the dispute can be filed directly against a payment.
+- Emits `lumenflow/dispute_initiated`.
+- Only payer or merchant of the referenced order may call this.
+
+### `raise_dispute` *(legacy — refund-based)*
+
+**Who can call:** Payer of the original payment.
+
+Requires the associated refund to already be in `Rejected` state. Use
+`initiate_dispute` for the primary dispute flow.
+
+### `mark_dispute_under_review`
+
+**Who can call:** Admin only.
+
+```bash
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- mark_dispute_under_review \
+  --admin $ADMIN_ADDR \
+  --dispute_id "DISPUTE_001"
+```
+
+Transitions `Open → UnderReview`. Emits `lumenflow/dispute_under_review`.
+
+### `escalate_dispute`
+
+**Who can call:** Admin only.
+
+```bash
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- escalate_dispute \
+  --admin $ADMIN_ADDR \
+  --dispute_id "DISPUTE_001" \
+  --notes "Referred to external arbitration panel"
+```
+
+Transitions `Open | UnderReview → Escalated`. Emits `lumenflow/dispute_escalated`.
+
+### `resolve_dispute`
+
+**Who can call:** Admin only.
+
+```bash
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- resolve_dispute \
+  --admin $ADMIN_ADDR \
+  --dispute_id "DISPUTE_001" \
+  --resolution "Evidence reviewed; refund approved" \
+  --force_refund true
+```
+
+- `force_refund = true` → outcome: `PayerFavor`, forced token transfer executed.
+- `force_refund = false` → outcome: `MerchantFavor`, no transfer.
+- Emits `lumenflow/dispute_resolved`.
+
+### `get_dispute`
+
+```bash
+stellar contract invoke --id $CONTRACT_ID --source-account $CALLER_KEY --network $NETWORK \
+  -- get_dispute \
+  --dispute_id "DISPUTE_001"
+```
+
+Returns the full `DisputeRecord` including current status, outcome, and resolution notes.
 
 ---
 
-## Failure, Permission, and Boundary Cases
+## Events
 
-| Case | Expected behaviour |
-|---|---|
-| Refund amount exceeds original payment | Rejected at validation; case stays open |
-| Payer opens dispute on an already-refunded payment | Blocked with a clear message; no hold placed |
-| Merchant never responds to a refund request | SLA timer expires; payer may open a dispute automatically |
-| Both parties go silent during `under_review` | Case auto-escalates to Support Agent after the review SLA |
-| Non-party tries to view a case | Unauthorized; cases visible only to payer, merchant, and assigned agents/admin |
-| Hold placed but asset issuer clawed back funds | Case flagged `funds_unavailable`; resolved manually by Admin |
-| Reopen requested after the 7-day window | Denied; a new case must be opened |
-| Duplicate cases for one payment | Second attempt links to the existing open case rather than creating a new one |
+| Event | Trigger | Data |
+|-------|---------|------|
+| `lumenflow/dispute_initiated` | `initiate_dispute` called | `(dispute_id, order_id, caller, reason)` |
+| `lumenflow/dispute_raised` | `raise_dispute` called (legacy) | `(dispute_id, refund_id, order_id)` |
+| `lumenflow/dispute_under_review` | `mark_dispute_under_review` | `(dispute_id,)` |
+| `lumenflow/dispute_escalated` | `escalate_dispute` | `(dispute_id, notes)` |
+| `lumenflow/dispute_resolved` | `resolve_dispute` | `(dispute_id, resolution, force_refund)` |
 
 ---
 
-## Testing
+## Relationship to Refund Lifecycle
 
-- Normal path: payer requests a refund, merchant approves, funds return to payer,
-  case closes.
-- Edge case: merchant ignores the request past the SLA, payer opens a dispute,
-  the payment moves to `held`, and an agent resolves it in the payer's favour.
-- Failure case: a non-party request to read a case is rejected before any case
-  data is returned.
+```
+Payment → initiate_refund → Pending
+                          ↓
+                       Rejected ──► raise_dispute (legacy) ──► DisputeRecord
+                          │
+                          └──► initiate_dispute (new, direct) ──► DisputeRecord
+                                      ↓
+                              Open → UnderReview → Resolved | Escalated
+```
+
+`initiate_dispute` can be called independently of the refund flow. It addresses
+the case where a payer wants to raise a dispute without first going through the
+refund approval cycle — for example, if a merchant is unresponsive.
 
 ---
 
-## Security and Privacy
+## Access Control Summary
 
-- Evidence attachments are stored per [artifact-retention.md](artifact-retention.md)
-  and referenced by hash on-chain, not by content.
-- Case visibility is strictly limited to the parties and assigned staff.
-- Reason codes and outcomes are retained for audit; free-text evidence is purged
-  after the retention window once the case is closed.
+| Function | Payer | Merchant | Admin |
+|----------|-------|----------|-------|
+| `initiate_dispute` | ✓ | ✓ | — |
+| `raise_dispute` | ✓ | — | — |
+| `mark_dispute_under_review` | — | — | ✓ |
+| `escalate_dispute` | — | — | ✓ |
+| `resolve_dispute` | — | — | ✓ |
+| `get_dispute` | ✓ | ✓ | ✓ |
+
+---
+
+## Error Codes
+
+| Code | Constant | Description |
+|------|----------|-------------|
+| 110 | `DisputeNotFound` | No dispute exists with the given ID. |
+| 111 | `DisputeAlreadyExists` | A dispute with this ID already exists. |
+| 112 | `DisputeRefundNotRejected` | `raise_dispute` requires the refund to be `Rejected`. |
+| 113 | `DisputeAlreadyResolved` | Cannot modify a resolved dispute. |
+| 114 | `DisputeNotOpen` | `mark_dispute_under_review` requires `Open` state. |
+| 115 | `DisputeAlreadyEscalated` | Cannot escalate an already-escalated dispute. |

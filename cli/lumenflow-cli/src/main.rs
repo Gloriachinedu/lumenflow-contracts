@@ -2,12 +2,20 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 
 // ── CLI definition ────────────────────────────────────────────────────────────
 
 // ── CLI structure ─────────────────────────────────────────────────────────────
+
+/// Maximum number of payments per batch call, as defined by the contract.
+const BATCH_SIZE: usize = 10;
+
+// ---------------------------------------------------------------------------
+// CLI structure
+// ---------------------------------------------------------------------------
 
 #[derive(Parser)]
 #[command(name = "lumenflow")]
@@ -124,6 +132,11 @@ enum Commands {
         #[arg(long)]
         merchant_public_key: String,
     },
+    /// Merchant management operations
+    Merchant {
+        #[command(subcommand)]
+        action: MerchantCommands,
+    },
     /// Admin diagnostics and maintenance operations
     Admin {
         #[command(subcommand)]
@@ -138,6 +151,25 @@ enum AdminCommands {
         /// Address to inspect (merchant or payer)
         #[arg(long)]
         address: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum MerchantCommands {
+    /// List registered merchants (admin only, cursor-based pagination)
+    List {
+        /// Admin address
+        #[arg(long, env = "LUMENFLOW_ADMIN_KEY")]
+        admin_key: String,
+        /// Maximum number of merchants to return per page (default: 10)
+        #[arg(long, default_value = "10")]
+        limit: u32,
+        /// Pagination cursor (address of last merchant from previous page)
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Output format: text (default) or json
+        #[arg(long, default_value = "text")]
+        output: String,
     },
 }
 
@@ -185,6 +217,18 @@ enum RefundCommands {
         /// Refund ID to look up
         #[arg(short, long)]
         refund_id: String,
+    },
+    /// List all refunds for a given order (payer, merchant, or admin)
+    List {
+        /// Order ID to list refunds for
+        #[arg(short, long)]
+        order_id: String,
+        /// Caller address (payer, merchant, or admin — must be authorised on the contract)
+        #[arg(long)]
+        caller: String,
+        /// Output format: table (default) or json
+        #[arg(long, default_value = "table")]
+        output: String,
     },
 }
 
@@ -357,7 +401,7 @@ pub fn load_config(path: Option<PathBuf>) -> Result<Config> {
         config.source_account = Some(v);
     }
 
-    Ok(config)
+    Ok(resolved)
 }
 
 fn network_preset(name: &str) -> Option<(&'static str, &'static str)> {
@@ -404,6 +448,233 @@ fn apply_env_overrides(base: RawConfig) -> RawConfig {
         source_account: std::env::var("LUMENFLOW_SOURCE")
             .ok()
             .or(base.source_account),
+    }
+
+    #[test]
+    fn test_validate_config_invalid_network() {
+        let config = Config {
+            network: Some("devnet".to_string()),
+            contract_id: None,
+            source_account: None,
+        };
+        let errors = validate_config(&config);
+        assert!(!errors.is_empty());
+        assert!(errors[0].contains("network"));
+    }
+
+    #[test]
+    fn test_validate_config_invalid_contract_id() {
+        let config = Config {
+            network: Some("testnet".to_string()),
+            contract_id: Some("BADCONTRACT".to_string()),
+            source_account: None,
+        };
+        let errors = validate_config(&config);
+        assert!(!errors.is_empty());
+        assert!(errors[0].contains("contract_id"));
+    }
+
+    #[test]
+    fn test_validate_config_invalid_secret_key() {
+        let config = Config {
+            network: Some("mainnet".to_string()),
+            contract_id: None,
+            source_account: Some("NOTASECRETKEY".to_string()),
+        };
+        let errors = validate_config(&config);
+        assert!(!errors.is_empty());
+        assert!(errors[0].contains("source_account"));
+    }
+
+    #[test]
+    fn test_validate_config_valid() {
+        let config = Config {
+            network: Some("testnet".to_string()),
+            contract_id: Some("C".to_string() + &"A".repeat(55)),
+            source_account: Some("S".to_string() + &"A".repeat(55)),
+        };
+        let errors = validate_config(&config);
+        assert!(errors.is_empty());
+    }
+
+    // --- CSV parsing tests ---
+
+    #[test]
+    fn test_parse_valid_csv() -> Result<()> {
+        let path = ".test_valid_payments.csv";
+        write_csv(
+            path,
+            &format!(
+                "order_id,merchant_address,amount,memo\nORD001,{},1000,Test memo\n",
+                valid_address()
+            ),
+        );
+        let rows = parse_payment_csv(&PathBuf::from(path))?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].order_id, "ORD001");
+        assert_eq!(rows[0].amount, 1000);
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_csv_missing_header() {
+        let path = ".test_missing_header.csv";
+        write_csv(path, "order_id,merchant_address,amount\nORD001,GXXX,100\n");
+        let result = parse_payment_csv(&PathBuf::from(path));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("memo"));
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn test_parse_csv_invalid_amount() {
+        let path = ".test_invalid_amount.csv";
+        write_csv(
+            path,
+            &format!(
+                "order_id,merchant_address,amount,memo\nORD001,{},not_a_number,Test\n",
+                valid_address()
+            ),
+        );
+        let result = parse_payment_csv(&PathBuf::from(path));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not a valid integer"));
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn test_parse_csv_invalid_address() {
+        let path = ".test_invalid_addr.csv";
+        write_csv(
+            path,
+            "order_id,merchant_address,amount,memo\nORD001,BADADDR,1000,Test\n",
+        );
+        let result = parse_payment_csv(&PathBuf::from(path));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("BADADDR"));
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn test_parse_csv_empty_file() {
+        let path = ".test_empty.csv";
+        write_csv(path, "");
+        let result = parse_payment_csv(&PathBuf::from(path));
+        assert!(result.is_err());
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn test_parse_csv_header_only() {
+        let path = ".test_header_only.csv";
+        write_csv(path, "order_id,merchant_address,amount,memo\n");
+        let result = parse_payment_csv(&PathBuf::from(path));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("no payment rows"));
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn test_batch_chunking() -> Result<()> {
+        let path = ".test_batch_chunking.csv";
+        // Build 15 valid rows
+        let addr = valid_address();
+        let mut content = "order_id,merchant_address,amount,memo\n".to_string();
+        for i in 0..15 {
+            content.push_str(&format!("ORD{:03},{},{},Memo{}\n", i, addr, i + 1, i));
+        }
+        write_csv(path, &content);
+        let rows = parse_payment_csv(&PathBuf::from(path))?;
+        assert_eq!(rows.len(), 15);
+        let batches: Vec<&[PaymentRow]> = rows.chunks(BATCH_SIZE).collect();
+        assert_eq!(batches.len(), 2); // 10 + 5
+        assert_eq!(batches[0].len(), 10);
+        assert_eq!(batches[1].len(), 5);
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_profile_selection() -> Result<()> {
+        let temp_config = ".test_lumenflow_profiles.toml";
+        fs::write(
+            temp_config,
+            r#"
+network = "testnet"
+contract_id = "CDEFAULT"
+
+[profiles.local]
+network = "local"
+contract_id = "CLOCAL"
+rpc_url = "http://localhost:8000/soroban/rpc"
+
+[profiles.testnet]
+network = "testnet"
+contract_id = "CTESTNET"
+
+[profiles.mainnet]
+network = "mainnet"
+contract_id = "CMAINNET"
+"#,
+        )?;
+
+        // No profile → use top-level defaults
+        let cfg = load_config(Some(PathBuf::from(temp_config)), None)?;
+        assert_eq!(cfg.network.as_deref(), Some("testnet"));
+        assert_eq!(cfg.contract_id.as_deref(), Some("CDEFAULT"));
+        assert!(cfg.active_profile.is_none());
+
+        // Select "local" profile
+        let cfg_local = load_config(Some(PathBuf::from(temp_config)), Some("local".into()))?;
+        assert_eq!(cfg_local.network.as_deref(), Some("local"));
+        assert_eq!(cfg_local.contract_id.as_deref(), Some("CLOCAL"));
+        assert_eq!(
+            cfg_local.rpc_url.as_deref(),
+            Some("http://localhost:8000/soroban/rpc")
+        );
+        assert_eq!(cfg_local.active_profile.as_deref(), Some("local"));
+
+        // Select "mainnet" profile
+        let cfg_main = load_config(Some(PathBuf::from(temp_config)), Some("mainnet".into()))?;
+        assert_eq!(cfg_main.network.as_deref(), Some("mainnet"));
+        assert_eq!(cfg_main.contract_id.as_deref(), Some("CMAINNET"));
+
+        fs::remove_file(temp_config)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_invalid_profile_returns_error() -> Result<()> {
+        let temp_config = ".test_lumenflow_badprofile.toml";
+        fs::write(temp_config, "[profiles.local]\nnetwork = \"local\"")?;
+        let result = load_config(Some(PathBuf::from(temp_config)), Some("nonexistent".into()));
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("nonexistent"));
+        fs::remove_file(temp_config)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_default_profile_from_config() -> Result<()> {
+        let temp_config = ".test_lumenflow_defaultprofile.toml";
+        fs::write(
+            temp_config,
+            r#"
+default_profile = "testnet"
+network = "local"
+
+[profiles.testnet]
+network = "testnet"
+contract_id = "CTESTNET"
+"#,
+        )?;
+        let cfg = load_config(Some(PathBuf::from(temp_config)), None)?;
+        assert_eq!(cfg.network.as_deref(), Some("testnet"));
+        assert_eq!(cfg.active_profile.as_deref(), Some("testnet"));
+        fs::remove_file(temp_config)?;
+        Ok(())
     }
 }
 
@@ -478,12 +749,62 @@ fn prompt_key() -> Result<String> {
     Ok(key.trim().to_string())
 }
 
+/// Returns true when stdin is connected to a real terminal (i.e. not CI/pipe).
+fn is_interactive_tty() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal()
+}
+
+/// Resolve the source account secret key, in priority order:
+///
+/// 1. `--key-file <FILE>` — read the key from a file (never echoed)
+/// 2. `--prompt-key`      — prompt interactively with hidden input
+/// 3. Auto-prompt         — when the key is still missing and stdin is a TTY,
+///                          prompt with hidden input automatically
+/// 4. CI error            — when the key is missing and stdin is NOT a TTY,
+///                          return an actionable error asking for an explicit flag
+///
+/// Sensitive values are never logged or echoed to stdout/stderr.
 fn resolve_source(config: &mut Config, key_file: Option<&PathBuf>, use_prompt: bool) -> Result<()> {
     if let Some(path) = key_file {
         config.source_account = Some(load_key_from_file(path)?);
-    } else if use_prompt {
-        config.source_account = Some(prompt_key()?);
+        return Ok(());
     }
+
+    if use_prompt {
+        config.source_account = Some(prompt_key()?);
+        return Ok(());
+    }
+
+    // If the key is already set (from config file or env var), nothing to do.
+    if config.source_account.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false) {
+        return Ok(());
+    }
+
+    // Key is missing. Auto-detect whether we can prompt interactively.
+    if is_interactive_tty() {
+        eprintln!(
+            "Note: --source-account not provided. \
+             Prompting for secret key (input will be hidden)."
+        );
+        config.source_account = Some(prompt_key()?);
+    } else {
+        // Non-interactive (CI, pipe). Return a clear, actionable error.
+        bail!(
+            "Missing source account secret key.\n\
+             In non-interactive (CI) environments, provide the key explicitly:\n\
+             \n\
+             Option 1 — environment variable:\n\
+             \x20 LUMENFLOW_SOURCE=<secret-key> lumenflow ...\n\
+             \n\
+             Option 2 — flag (not recommended; appears in shell history):\n\
+             \x20 lumenflow --source-account <secret-key> ...\n\
+             \n\
+             Option 3 — key file (recommended for CI):\n\
+             \x20 lumenflow --key-file /path/to/keyfile ..."
+        );
+    }
+
     Ok(())
 }
 
@@ -767,6 +1088,52 @@ fn main() -> Result<()> {
     let network = config.network.as_deref().unwrap_or("testnet");
     let contract_id = config.contract_id.as_deref().unwrap_or("N/A");
 
+    let use_json = cli.output.to_lowercase() == "json";
+
+    // Run config validation before any command (except validate-config itself, which handles its own output)
+    if !matches!(cli.command, Commands::ValidateConfig) {
+        let errors = validate_config(&config);
+        if !errors.is_empty() {
+            if use_json {
+                let json = serde_json::json!({
+                    "success": false,
+                    "error": "Configuration validation failed",
+                    "fields": errors
+                });
+                eprintln!("{}", serde_json::to_string_pretty(&json)?);
+            } else {
+                eprintln!("Configuration validation failed:");
+                for e in &errors {
+                    eprintln!("  - {}", e);
+                }
+            }
+            bail!("Invalid configuration. Run `lumenflow validate-config` for details.");
+        }
+    }
+
+    let use_json = cli.output.to_lowercase() == "json";
+
+    // Run config validation before any command (except validate-config itself, which handles its own output)
+    if !matches!(cli.command, Commands::ValidateConfig) {
+        let errors = validate_config(&config);
+        if !errors.is_empty() {
+            if use_json {
+                let json = serde_json::json!({
+                    "success": false,
+                    "error": "Configuration validation failed",
+                    "fields": errors
+                });
+                eprintln!("{}", serde_json::to_string_pretty(&json)?);
+            } else {
+                eprintln!("Configuration validation failed:");
+                for e in &errors {
+                    eprintln!("  - {}", e);
+                }
+            }
+            bail!("Invalid configuration. Run `lumenflow validate-config` for details.");
+        }
+    }
+
     match &cli.command {
         Commands::Pay {
             merchant,
@@ -816,6 +1183,104 @@ fn main() -> Result<()> {
                 }
                 RefundCommands::Status { refund_id } => {
                     println!("Querying status of refund {}...", refund_id);
+                }
+                RefundCommands::List {
+                    order_id,
+                    caller,
+                    output,
+                } => {
+                    // Invoke get_refunds_for_order on the contract and display the results.
+                    let mut cmd = base_invoke(&config)?;
+                    cmd.args([
+                        "--",
+                        "get_refunds_for_order",
+                        "--caller",
+                        caller,
+                        "--order_id",
+                        order_id,
+                    ]);
+
+                    let out = cmd
+                        .output()
+                        .context("Failed to invoke get_refunds_for_order")?;
+
+                    if !out.status.success() {
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        bail!("get_refunds_for_order failed: {}", stderr.trim());
+                    }
+
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    let raw = stdout.trim();
+
+                    if output.to_lowercase() == "json" {
+                        // Pass through the raw JSON from the contract invocation
+                        println!("{}", raw);
+                    } else {
+                        // Parse the JSON and render a human-readable table
+                        match serde_json::from_str::<serde_json::Value>(raw) {
+                            Ok(serde_json::Value::Array(refunds)) if refunds.is_empty() => {
+                                println!("No refunds found for order {}.", order_id);
+                            }
+                            Ok(serde_json::Value::Array(refunds)) => {
+                                // Column widths (minimum = header length)
+                                let w_id     = refunds.iter()
+                                    .map(|r| r["refund_id"].as_str().unwrap_or("-").len())
+                                    .max().unwrap_or(0).max("refund_id".len());
+                                let w_status = refunds.iter()
+                                    .map(|r| r["status"].as_str().unwrap_or("-").len())
+                                    .max().unwrap_or(0).max("status".len());
+                                let w_amount = refunds.iter()
+                                    .map(|r| r["amount"].to_string().len())
+                                    .max().unwrap_or(0).max("amount".len());
+                                let w_reason = refunds.iter()
+                                    .map(|r| r["reason"].as_str().unwrap_or("-").len())
+                                    .max().unwrap_or(0).max("reason".len());
+                                let w_init   = refunds.iter()
+                                    .map(|r| r["initiator"].as_str().unwrap_or("-").len())
+                                    .max().unwrap_or(0).max("initiator".len());
+
+                                let sep = format!(
+                                    "+-{}-+-{}-+-{}-+-{}-+-{}-+",
+                                    "-".repeat(w_id),
+                                    "-".repeat(w_status),
+                                    "-".repeat(w_amount),
+                                    "-".repeat(w_reason),
+                                    "-".repeat(w_init),
+                                );
+
+                                println!("{}", sep);
+                                println!(
+                                    "| {:<w_id$} | {:<w_status$} | {:<w_amount$} | {:<w_reason$} | {:<w_init$} |",
+                                    "refund_id", "status", "amount", "reason", "initiator",
+                                    w_id = w_id, w_status = w_status, w_amount = w_amount,
+                                    w_reason = w_reason, w_init = w_init,
+                                );
+                                println!("{}", sep);
+
+                                for r in &refunds {
+                                    let refund_id = r["refund_id"].as_str().unwrap_or("-");
+                                    let status    = r["status"].as_str().unwrap_or("-");
+                                    let amount    = r["amount"].to_string();
+                                    let reason    = r["reason"].as_str().unwrap_or("-");
+                                    let initiator = r["initiator"].as_str().unwrap_or("-");
+                                    println!(
+                                        "| {:<w_id$} | {:<w_status$} | {:<w_amount$} | {:<w_reason$} | {:<w_init$} |",
+                                        refund_id, status, amount, reason, initiator,
+                                        w_id = w_id, w_status = w_status, w_amount = w_amount,
+                                        w_reason = w_reason, w_init = w_init,
+                                    );
+                                }
+
+                                println!("{}", sep);
+                                println!("{} refund(s) for order {}.", refunds.len(), order_id);
+                            }
+                            _ => {
+                                // Contract returned something other than a JSON array
+                                // (e.g. raw Soroban XDR output or an error). Print as-is.
+                                println!("{}", raw);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -982,6 +1447,80 @@ fn main() -> Result<()> {
                 bail!("{} payment(s) failed. See table above for details.", failed);
             }
         }
+        Commands::Merchant { action } => match action {
+            MerchantCommands::List {
+                admin_key,
+                limit,
+                cursor,
+                output,
+            } => {
+                let use_json = output.to_lowercase() == "json";
+
+                let mut cmd = base_invoke(&config)?;
+                // Override source account with the admin key for this call.
+                let mut admin_cmd = Command::new("stellar");
+                let contract_id_val = config
+                    .contract_id
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .context(
+                        "Missing contract ID. Set LUMENFLOW_CONTRACT_ID or contract_id in .lumenflow.toml",
+                    )?;
+
+                admin_cmd.args(["contract", "invoke", "--id", contract_id_val,
+                    "--source-account", admin_key]);
+
+                if let Some(rpc) = config.rpc_url.as_deref().filter(|s| !s.is_empty()) {
+                    admin_cmd.args(["--rpc-url", rpc]);
+                }
+                if let Some(passphrase) = config.network_passphrase.as_deref().filter(|s| !s.is_empty()) {
+                    admin_cmd.args(["--network-passphrase", passphrase]);
+                } else if let Some(net) = config.network.as_deref().filter(|s| !s.is_empty()) {
+                    admin_cmd.args(["--network", net]);
+                } else {
+                    admin_cmd.args(["--network", "testnet"]);
+                }
+
+                let cursor_val = cursor.as_deref().unwrap_or("null");
+                admin_cmd.args([
+                    "--",
+                    "get_merchants",
+                    "--admin",
+                    admin_key,
+                    "--cursor",
+                    cursor_val,
+                    "--limit",
+                    &limit.to_string(),
+                ]);
+
+                let output_result = admin_cmd.output()
+                    .context("failed to invoke get_merchants")?;
+
+                if !output_result.status.success() {
+                    let stderr = String::from_utf8_lossy(&output_result.stderr);
+                    bail!("get_merchants failed: {}", stderr.trim());
+                }
+
+                let stdout = String::from_utf8_lossy(&output_result.stdout);
+                let raw = stdout.trim();
+
+                if use_json {
+                    // Pass through the raw JSON from the contract, or wrap it.
+                    println!("{}", raw);
+                } else {
+                    // Pretty-print the merchant list.
+                    println!("Merchant list (network: {}, limit: {}, cursor: {}):",
+                        config.network.as_deref().unwrap_or("testnet"),
+                        limit,
+                        cursor.as_deref().unwrap_or("(start)"),
+                    );
+                    println!("{}", raw);
+                }
+
+                // Suppress unused variable warning — cmd was replaced by admin_cmd above.
+                drop(cmd);
+            }
+        },
         Commands::Admin { action } => match action {
             AdminCommands::AccountStats { address } => {
                 let mut cmd = base_invoke(&config)?;
@@ -1551,5 +2090,77 @@ mod tests {
         use clap::CommandFactory;
         let m = Cli::command().try_get_matches_from(["lumenflow", "nonexistent"]);
         assert!(m.is_err(), "unknown subcommand should fail");
+    }
+
+    #[test]
+    fn test_merchant_list_args_parse() {
+        let cli = Cli::try_parse_from([
+            "lumenflow",
+            "merchant",
+            "list",
+            "--admin-key",
+            "SADMIN",
+        ])
+        .expect("merchant list should parse with --admin-key");
+
+        match cli.command {
+            Commands::Merchant {
+                action: MerchantCommands::List {
+                    admin_key,
+                    limit,
+                    cursor,
+                    output,
+                },
+            } => {
+                assert_eq!(admin_key, "SADMIN");
+                assert_eq!(limit, 10);
+                assert!(cursor.is_none());
+                assert_eq!(output, "text");
+            }
+            _ => panic!("expected Commands::Merchant {{ List }}"),
+        }
+    }
+
+    #[test]
+    fn test_merchant_list_with_all_flags() {
+        let cli = Cli::try_parse_from([
+            "lumenflow",
+            "merchant",
+            "list",
+            "--admin-key",
+            "SADMIN",
+            "--limit",
+            "25",
+            "--cursor",
+            "GCURSOR",
+            "--output",
+            "json",
+        ])
+        .expect("merchant list with all flags should parse");
+
+        match cli.command {
+            Commands::Merchant {
+                action: MerchantCommands::List {
+                    limit,
+                    cursor,
+                    output,
+                    ..
+                },
+            } => {
+                assert_eq!(limit, 25);
+                assert_eq!(cursor.as_deref(), Some("GCURSOR"));
+                assert_eq!(output, "json");
+            }
+            _ => panic!("expected Commands::Merchant {{ List }}"),
+        }
+    }
+
+    #[test]
+    fn test_merchant_list_missing_admin_key_fails() {
+        use clap::CommandFactory;
+        // Without --admin-key and without LUMENFLOW_ADMIN_KEY env var, should fail.
+        std::env::remove_var("LUMENFLOW_ADMIN_KEY");
+        let m = Cli::command().try_get_matches_from(["lumenflow", "merchant", "list"]);
+        assert!(m.is_err(), "merchant list without --admin-key should fail");
     }
 }

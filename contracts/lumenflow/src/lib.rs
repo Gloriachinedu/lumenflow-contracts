@@ -7,6 +7,8 @@ mod helper;
 mod storage;
 pub mod types;
 
+pub mod invariant_refund;
+
 #[cfg(test)]
 mod test;
 #[cfg(test)]
@@ -22,12 +24,12 @@ use helper::{
     verify_signature,
 };
 use types::{
-    BatchPaymentItem, EscrowRecord, EscrowStatus, GlobalStats, Merchant, MerchantCategory,
-    MerchantPage, MerchantStats, MultisigExecutedEvent, MultisigInitiatedEvent, MultisigPayment,
-    PaymentFilter, PaymentOrder, PaymentPage, PaymentRequest, PaymentStatus,
-    PaymentStatusUpdatedEvent, PaymentSummary, RefundRecord, RefundStatus, SignatureEntry,
-    SortField, SortOrder, StatusFilter, Subscription, SubscriptionPlan, SubscriptionStatus,
-    SuspiciousActivityReason, MerchantCommitment,
+    BatchPaymentItem, DisputeOutcome, DisputeStatus, EscrowRecord, EscrowStatus, GlobalStats,
+    Merchant, MerchantCategory, MerchantCommitment, MerchantPage, MerchantStats,
+    MultisigExecutedEvent, MultisigInitiatedEvent, MultisigPayment, PaymentFilter, PaymentOrder,
+    PaymentPage, PaymentRequest, PaymentStatus, PaymentStatusUpdatedEvent, PaymentSummary,
+    RefundRecord, RefundStatus, SignatureEntry, SortField, SortOrder, StatusFilter, Subscription,
+    SubscriptionPlan, SubscriptionStatus, SuspiciousActivityReason,
 };
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -543,6 +545,121 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Add a token to the contract allowed-token list. Admin only.
+    pub fn add_allowed_token(
+        env: Env,
+        admin: Address,
+        token: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_token_allowed(&env, &token, true);
+        Ok(())
+    }
+
+    /// Remove a token from the contract allowed-token list. Admin only.
+    pub fn remove_allowed_token(
+        env: Env,
+        admin: Address,
+        token: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_token_allowed(&env, &token, false);
+        Ok(())
+    }
+
+    /// Set the platform fee in basis points (e.g. 100 = 1%). Admin only.
+    /// Emits a `lumenflow/config_updated` event with the old and new values.
+    pub fn set_platform_fee(
+        env: Env,
+        admin: Address,
+        fee_bps: u32,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        let old_value = storage::get_platform_fee(&env);
+        storage::set_platform_fee(&env, fee_bps);
+        env.events().publish(
+            ("lumenflow", "config_updated"),
+            (
+                String::from_str(&env, "platform_fee"),
+                old_value as i128,
+                fee_bps as i128,
+                admin,
+                env.ledger().timestamp(),
+            ),
+        );
+        Ok(())
+    }
+
+    /// Set the refund window in seconds. Admin only.
+    /// Emits a `lumenflow/config_updated` event with the old and new values.
+    pub fn set_refund_window(
+        env: Env,
+        admin: Address,
+        window_secs: u64,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        let old_value = storage::get_refund_window(&env);
+        storage::set_refund_window(&env, window_secs);
+        env.events().publish(
+            ("lumenflow", "config_updated"),
+            (
+                String::from_str(&env, "refund_window"),
+                old_value as i128,
+                window_secs as i128,
+                admin,
+                env.ledger().timestamp(),
+            ),
+        );
+        Ok(())
+    }
+
+    /// Set the minimum allowed refund amount. Admin only.
+    /// Emits a `lumenflow/config_updated` event with the old and new values.
+    pub fn set_min_refund_amount(
+        env: Env,
+        admin: Address,
+        min_amount: i128,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        require_positive(min_amount)?;
+        let old_value = storage::get_min_refund_amount(&env);
+        storage::set_min_refund_amount(&env, min_amount);
+        env.events().publish(
+            ("lumenflow", "config_updated"),
+            (
+                String::from_str(&env, "min_refund_amount"),
+                old_value,
+                min_amount,
+                admin,
+                env.ledger().timestamp(),
+            ),
+        );
+        Ok(())
+    }
+
+    /// Set the multisig payment expiry duration in seconds. Admin only.
+    /// Emits a `lumenflow/config_updated` event with the old and new values.
+    pub fn set_multisig_expiry_duration(
+        env: Env,
+        admin: Address,
+        duration_secs: u64,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        let old_value = storage::get_multisig_expiry_duration(&env);
+        storage::set_multisig_expiry_duration(&env, duration_secs);
+        env.events().publish(
+            ("lumenflow", "config_updated"),
+            (
+                String::from_str(&env, "multisig_expiry_duration"),
+                old_value as i128,
+                duration_secs as i128,
+                admin,
+                env.ledger().timestamp(),
+            ),
+        );
+        Ok(())
+    }
+
     // ── Merchant management ───────────────────────────────────────────────────
 
     /// Phase 1 of commit-reveal merchant registration (issue #614).
@@ -785,6 +902,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         merchant_address.require_auth();
         require_non_empty_string(&name)?;
+        validate_merchant_category(&category)?;
 
         let mut merchant =
             storage::get_merchant(&env, &merchant_address).ok_or(PaymentError::MerchantNotFound)?;
@@ -1649,11 +1767,22 @@ impl PaymentProcessingContract {
     /// * `admin` - Must be the configured administrator address.
     ///
     /// # Returns
-    /// The number of payment records removed.
+    /// A [`CleanupResult`] with the number of records removed and a `has_more` flag.
+    ///
+    /// # Arguments
+    /// * `admin`      - Must be the configured administrator address.
+    /// * `batch_size` - Optional limit on how many records to remove per call.
+    ///   When `None` the function uses a default cap of `100` to stay within
+    ///   Soroban instruction limits. The accepted range is `1..=100`; values
+    ///   outside this range are clamped to the nearest bound.
     ///
     /// # Errors
     /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
-    pub fn cleanup_expired_payments(env: Env, admin: Address) -> Result<u32, PaymentError> {
+    pub fn cleanup_expired_payments(
+        env: Env,
+        admin: Address,
+        batch_size: Option<u32>,
+    ) -> Result<CleanupResult, PaymentError> {
         require_not_paused(&env)?;
         require_admin_rate_limited(&env, &admin)?;
         let cutoff = env
@@ -1662,9 +1791,10 @@ impl PaymentProcessingContract {
             .saturating_sub(storage::get_cleanup_period(&env));
 
         let merchant_list = storage::get_merchant_list(&env);
-        let mut removed: u32 = 0;
+        let mut cleaned: u32 = 0;
+        let mut has_more: bool = false;
 
-        for merchant_addr in merchant_list.iter() {
+        'outer: for merchant_addr in merchant_list.iter() {
             let ids = storage::get_merchant_payment_ids(&env, &merchant_addr);
             for id in ids.iter() {
                 if let Some(p) = storage::get_payment(&env, &id) {
@@ -1677,7 +1807,7 @@ impl PaymentProcessingContract {
                         storage::remove_order_refund_index(&env, &id);
 
                         storage::remove_payment(&env, &id);
-                        removed += 1;
+                        cleaned += 1;
                     }
                 }
             }
@@ -2285,6 +2415,7 @@ impl PaymentProcessingContract {
             initiator: caller,
             reason,
             status: types::DisputeStatus::Open,
+            outcome: None,
             resolution: None,
             created_at: now,
         };
@@ -2335,12 +2466,17 @@ impl PaymentProcessingContract {
         let mut dispute =
             storage::get_dispute(&env, &dispute_id).ok_or(PaymentError::DisputeNotFound)?;
 
-        if matches!(dispute.status, types::DisputeStatus::Resolved) {
+        if matches!(dispute.status, DisputeStatus::Resolved) {
             return Err(PaymentError::DisputeAlreadyResolved);
         }
 
         // Effects: update dispute state before any external calls
-        dispute.status = types::DisputeStatus::Resolved;
+        dispute.status = DisputeStatus::Resolved;
+        dispute.outcome = Some(if force_refund {
+            DisputeOutcome::PayerFavor
+        } else {
+            DisputeOutcome::MerchantFavor
+        });
         dispute.resolution = Some(resolution.clone());
         storage::set_dispute(&env, &dispute);
 
@@ -2404,6 +2540,172 @@ impl PaymentProcessingContract {
     /// * [`PaymentError::DisputeNotFound`] — no dispute exists with `dispute_id`.
     pub fn get_dispute(env: Env, dispute_id: String) -> Result<types::DisputeRecord, PaymentError> {
         storage::get_dispute(&env, &dispute_id).ok_or(PaymentError::DisputeNotFound)
+    }
+
+    /// Initiate a payment dispute on-chain (payer or merchant).
+    ///
+    /// Creates a [`DisputeRecord`] in `Open` state linked to the given `order_id`.
+    /// This is the primary entry point for the dispute flow:
+    ///
+    /// ```text
+    /// Open → UnderReview → Resolved(MerchantFavor | PayerFavor)
+    ///      ↘              ↗
+    ///        Escalated ──→
+    /// ```
+    ///
+    /// Unlike [`raise_dispute`] (which requires a rejected refund), `initiate_dispute`
+    /// can be called at any point by the payer or merchant to flag a payment for
+    /// admin attention. The admin is notified via the `lumenflow/dispute_initiated`
+    /// event and can subsequently call [`mark_dispute_under_review`],
+    /// [`escalate_dispute`], or [`resolve_dispute`].
+    ///
+    /// # Arguments
+    /// * `caller`     - Must be the payer or merchant of `order_id`. Must sign.
+    /// * `dispute_id` - Unique, non-empty identifier (max 64 chars).
+    /// * `order_id`   - The payment order being disputed. Must exist.
+    /// * `reason`     - Human-readable reason; maximum 256 characters.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::ContractPaused`] — contract is paused.
+    /// * [`PaymentError::InvalidInput`] — `dispute_id` is empty/too long or `reason` exceeds 256 chars.
+    /// * [`PaymentError::DisputeAlreadyExists`] — a dispute with this ID already exists.
+    /// * [`PaymentError::PaymentNotFound`] — no payment exists for `order_id`.
+    /// * [`PaymentError::Unauthorized`] — caller is neither payer nor merchant of the payment.
+    pub fn initiate_dispute(
+        env: Env,
+        caller: Address,
+        dispute_id: String,
+        order_id: String,
+        reason: String,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        caller.require_auth();
+        require_valid_id(&dispute_id)?;
+
+        if reason.len() == 0 || reason.len() > 256 {
+            return Err(PaymentError::InvalidInput);
+        }
+
+        if storage::get_dispute(&env, &dispute_id).is_some() {
+            return Err(PaymentError::DisputeAlreadyExists);
+        }
+
+        let payment =
+            storage::get_payment(&env, &order_id).ok_or(PaymentError::PaymentNotFound)?;
+
+        // Only payer or merchant may open a dispute
+        if caller != payment.payer && caller != payment.merchant_address {
+            return Err(PaymentError::Unauthorized);
+        }
+
+        let now = env.ledger().timestamp();
+        let dispute = types::DisputeRecord {
+            dispute_id: dispute_id.clone(),
+            order_id: order_id.clone(),
+            refund_id: String::from_str(&env, ""),   // no specific refund required
+            initiator: caller.clone(),
+            reason: reason.clone(),
+            status: DisputeStatus::Open,
+            outcome: None,
+            resolution: None,
+            created_at: now,
+        };
+        storage::set_dispute(&env, &dispute);
+
+        // Notify admin via event
+        env.events().publish(
+            ("lumenflow", "dispute_initiated"),
+            (dispute_id, order_id, caller, reason),
+        );
+        Ok(())
+    }
+
+    /// Admin: mark a dispute as under active review.
+    ///
+    /// Transitions the dispute from `Open` to `UnderReview`. This signals to
+    /// both parties that the admin is actively investigating.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — caller is not the admin.
+    /// * [`PaymentError::DisputeNotFound`] — no dispute with `dispute_id`.
+    /// * [`PaymentError::DisputeNotOpen`] — dispute is not in `Open` state.
+    pub fn mark_dispute_under_review(
+        env: Env,
+        admin: Address,
+        dispute_id: String,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        require_admin_rate_limited(&env, &admin)?;
+
+        let mut dispute =
+            storage::get_dispute(&env, &dispute_id).ok_or(PaymentError::DisputeNotFound)?;
+
+        if !matches!(dispute.status, DisputeStatus::Open) {
+            return Err(PaymentError::DisputeNotOpen);
+        }
+
+        dispute.status = DisputeStatus::UnderReview;
+        storage::set_dispute(&env, &dispute);
+
+        env.events().publish(
+            ("lumenflow", "dispute_under_review"),
+            (dispute_id,),
+        );
+        Ok(())
+    }
+
+    /// Admin: escalate a dispute that cannot be resolved internally.
+    ///
+    /// Transitions the dispute from `Open` or `UnderReview` to `Escalated`.
+    /// Once escalated, a dispute cannot be escalated again and can only be
+    /// finalised via [`resolve_dispute`].
+    ///
+    /// # Arguments
+    /// * `admin`      - Contract administrator. Must sign.
+    /// * `dispute_id` - The dispute to escalate.
+    /// * `notes`      - Optional escalation notes (max 256 chars).
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — caller is not the admin.
+    /// * [`PaymentError::DisputeNotFound`] — no dispute with `dispute_id`.
+    /// * [`PaymentError::DisputeAlreadyResolved`] — dispute is already resolved.
+    /// * [`PaymentError::DisputeAlreadyEscalated`] — dispute is already escalated.
+    pub fn escalate_dispute(
+        env: Env,
+        admin: Address,
+        dispute_id: String,
+        notes: Option<String>,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        require_admin_rate_limited(&env, &admin)?;
+
+        let mut dispute =
+            storage::get_dispute(&env, &dispute_id).ok_or(PaymentError::DisputeNotFound)?;
+
+        match dispute.status {
+            DisputeStatus::Resolved => return Err(PaymentError::DisputeAlreadyResolved),
+            DisputeStatus::Escalated => return Err(PaymentError::DisputeAlreadyEscalated),
+            _ => {}
+        }
+
+        if let Some(ref n) = notes {
+            if n.len() > 256 {
+                return Err(PaymentError::InvalidInput);
+            }
+        }
+
+        dispute.status = DisputeStatus::Escalated;
+        dispute.resolution = notes.clone();
+        storage::set_dispute(&env, &dispute);
+
+        env.events().publish(
+            ("lumenflow", "dispute_escalated"),
+            (dispute_id, notes),
+        );
+        Ok(())
     }
 
     // ── Multi-signature payments ──────────────────────────────────────────────

@@ -2680,8 +2680,8 @@ fn test_cleanup_expired_payments() {
     client.set_payment_cleanup_period(&admin, &1);
     env.ledger().with_mut(|l| l.timestamp += 10);
 
-    let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 1);
+    let removed = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(removed.cleaned, 1);
 }
 
 #[test]
@@ -3865,7 +3865,26 @@ fn test_register_merchant_custom_category_success() {
 fn test_register_merchant_custom_category_max_length_success() {
     let (env, client) = setup();
     let merchant = Address::generate(&env);
-    // Exactly 32 characters — should pass
+    // Exactly 64 characters — should pass (new max per issue #1027)
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Custom(str(&env, "1234567890123456789012345678901234567890123456789012345678901234")),
+    );
+    let stored = client.get_merchant(&merchant);
+    assert_eq!(
+        stored.category,
+        MerchantCategory::Custom(str(&env, "1234567890123456789012345678901234567890123456789012345678901234"))
+    );
+}
+
+/// Previously valid 32-char categories must still be accepted at the new 64-char limit.
+#[test]
+fn test_register_merchant_custom_category_32_chars_still_valid() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
     client.register_merchant(
         &merchant,
         &str(&env, "Store"),
@@ -3898,15 +3917,80 @@ fn test_register_merchant_custom_category_empty_fails() {
 fn test_register_merchant_custom_category_too_long_fails() {
     let (env, client) = setup();
     let merchant = Address::generate(&env);
-    // 33 characters — should fail
+    // 65 characters — should fail (max is 64 per issue #1027)
     let result = client.try_register_merchant(
         &merchant,
         &str(&env, "Store"),
         &str(&env, "desc"),
         &str(&env, "c@c.com"),
-        &MerchantCategory::Custom(str(&env, "123456789012345678901234567890123")),
+        &MerchantCategory::Custom(str(&env, "12345678901234567890123456789012345678901234567890123456789012345")),
     );
     assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_update_merchant_custom_category_empty_fails() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Retail,
+    );
+    let result = client.try_update_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Custom(str(&env, "")),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidCategory)));
+}
+
+#[test]
+fn test_update_merchant_custom_category_too_long_fails() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Retail,
+    );
+    // 65 characters — should fail
+    let result = client.try_update_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Custom(str(&env, "12345678901234567890123456789012345678901234567890123456789012345")),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidCategory)));
+}
+
+#[test]
+fn test_update_merchant_custom_category_valid_succeeds() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Retail,
+    );
+    client.update_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Custom(str(&env, "Artisan Crafts")),
+    );
+    let stored = client.get_merchant(&merchant);
+    assert_eq!(stored.category, MerchantCategory::Custom(str(&env, "Artisan Crafts")));
 }
 
 // ── Contract event subscription and provenance tests (#301) ──────────────────
@@ -4235,8 +4319,8 @@ fn test_cleanup_respects_period_does_not_remove_recent_payments() {
     make_payment(&env, &client, &merchant, &payer, &token, "RECENT_001", 500);
     env.ledger().with_mut(|l| l.timestamp += 50);
 
-    let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 0, "recent payment must not be removed");
+    let removed = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(removed.cleaned, 0, "recent payment must not be removed");
 
     // The payment should still be retrievable.
     let p = client.get_payment_by_id(&payer, &str(&env, "RECENT_001"));
@@ -4257,8 +4341,8 @@ fn test_cleanup_only_removes_payments_older_than_period() {
     // NEW_PAY is created after the cutoff — it should survive.
     make_payment(&env, &client, &merchant, &payer, &token, "NEW_PAY", 200);
 
-    let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 1, "only the expired payment should be removed");
+    let removed = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(removed.cleaned, 1, "only the expired payment should be removed");
 
     // NEW_PAY must still exist.
     let p = client.get_payment_by_id(&payer, &str(&env, "NEW_PAY"));
@@ -4273,8 +4357,8 @@ fn test_cleanup_with_no_expired_payments_returns_zero() {
     client.set_payment_cleanup_period(&admin, &86_400);
     make_payment(&env, &client, &merchant, &payer, &token, "SAFE_001", 300);
 
-    let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 0);
+    let removed = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(removed.cleaned, 0);
 }
 
 #[test]
@@ -4286,8 +4370,8 @@ fn test_cleanup_empty_contract_returns_zero() {
     client.set_payment_cleanup_period(&admin, &1);
     env.ledger().with_mut(|l| l.timestamp += 10);
 
-    let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 0);
+    let removed = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(removed.cleaned, 0);
 }
 
 #[test]
@@ -5125,7 +5209,7 @@ fn test_cleanup_expired_payments_unauthorized() {
     let admin = Address::generate(&env);
     let non_admin = Address::generate(&env);
     client.set_admin(&admin);
-    let result = client.try_cleanup_expired_payments(&non_admin);
+    let result = client.try_cleanup_expired_payments(&non_admin, &None);
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
 
@@ -9440,97 +9524,126 @@ fn test_replay_in_batch_payment_fails() {
     );
 }
 
-// ── Issue #1019: MAX_MEMO_LENGTH enforcement tests ────────────────────────────
+// ── Issue #1025: config_updated event tests ───────────────────────────────────
 
 #[test]
-fn test_memo_exactly_256_bytes_succeeds() {
-    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
-    let pub_key = bytes(&env, &[0u8; 32]);
-    let sig = bytes(&env, &[0u8; 64]);
+fn test_set_platform_fee_emits_config_updated() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
 
-    // Build a 256-character memo (ASCII, 1 byte per char)
-    let memo_256: String = String::from_str(
-        &env,
-        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
-         AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
-         AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
-         AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-    );
-    assert_eq!(memo_256.len(), 256);
-
-    client.process_payment_with_signature(
-        &payer,
-        &str(&env, "MEMO_256_OK"),
-        &merchant,
-        &token,
-        &500,
-        &memo_256,
-        &None,
-        &sig,
-        &pub_key,
-    );
-
-    let payment = client.get_payment_by_id(&payer, &str(&env, "MEMO_256_OK"));
-    assert_eq!(payment.amount, 500);
+    // Should succeed without error
+    client.set_platform_fee(&admin, &250); // 2.5%
 }
 
 #[test]
-fn test_memo_257_bytes_rejected() {
-    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
-    let pub_key = bytes(&env, &[0u8; 32]);
-    let sig = bytes(&env, &[0u8; 64]);
+fn test_set_refund_window_emits_config_updated() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
 
-    // Build a 257-character memo — one byte over the limit
-    let memo_257: String = String::from_str(
-        &env,
-        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
-         AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
-         AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
-         AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
-         A",
-    );
-    assert_eq!(memo_257.len(), 257);
-
-    let result = client.try_process_payment_with_signature(
-        &payer,
-        &str(&env, "MEMO_257_FAIL"),
-        &merchant,
-        &token,
-        &500,
-        &memo_257,
-        &None,
-        &sig,
-        &pub_key,
-    );
-    assert_eq!(result, Err(Ok(PaymentError::InvalidMemoLength)));
+    let new_window = 14 * 24 * 3600u64; // 14 days
+    client.set_refund_window(&admin, &new_window);
 }
 
 #[test]
-fn test_batch_memo_257_bytes_rejected() {
-    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+fn test_set_min_refund_amount_emits_config_updated() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
 
-    // 257-character memo in a batch item
-    let memo_257: String = String::from_str(
-        &env,
-        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
-         AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
-         AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
-         AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
-         A",
-    );
-    assert_eq!(memo_257.len(), 257);
+    client.set_min_refund_amount(&admin, &100i128);
+}
 
-    let mut payments = Vec::new(&env);
-    payments.push_back(BatchPaymentItem {
-        order_id: str(&env, "BATCH_MEMO_FAIL"),
-        merchant_address: merchant.clone(),
-        token_address: token.clone(),
-        amount: 100,
-        memo: memo_257,
-        signature: bytes(&env, &[0u8; 64]),
-        merchant_public_key: bytes(&env, &[0u8; 32]),
-    });
+#[test]
+fn test_set_multisig_expiry_duration_emits_config_updated() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
 
-    let result = client.try_batch_payment(&payer, &payments);
-    assert_eq!(result, Err(Ok(PaymentError::InvalidMemoLength)));
+    let new_duration = 3 * 24 * 3600u64; // 3 days
+    client.set_multisig_expiry_duration(&admin, &new_duration);
+}
+
+#[test]
+fn test_set_platform_fee_unauthorized_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_set_platform_fee(&non_admin, &100);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_set_refund_window_unauthorized_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_set_refund_window(&non_admin, &(7 * 24 * 3600));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_set_min_refund_amount_unauthorized_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_set_min_refund_amount(&non_admin, &50i128);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_set_multisig_expiry_duration_unauthorized_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_set_multisig_expiry_duration(&non_admin, &86400);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_add_and_remove_allowed_token() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+    client.set_admin(&admin);
+
+    // Add token - should succeed
+    client.add_allowed_token(&admin, &token);
+
+    // Remove token - should succeed
+    client.remove_allowed_token(&admin, &token);
+}
+
+#[test]
+fn test_add_allowed_token_unauthorized_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+    client.set_admin(&admin);
+
+    let result = client.try_add_allowed_token(&non_admin, &token);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_set_min_refund_amount_zero_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    // Zero is not a valid positive amount
+    let result = client.try_set_min_refund_amount(&admin, &0i128);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
 }

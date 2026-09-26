@@ -68,13 +68,68 @@
       color: #6c47ff;
     }
 
+    /* ── Verified merchant badge ──────────────────────────────────────────── */
     .verified-badge {
+      position: relative;
       display: inline-flex;
       align-items: center;
       gap: 0.25rem;
       font-size: 0.7rem;
       color: #6c47ff;
       font-weight: 600;
+      cursor: default;
+      /* Ensure the badge never shows in an unverified state */
+    }
+
+    /* Tooltip */
+    .verified-badge::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1a1a2e;
+      color: #fff;
+      font-size: 0.65rem;
+      font-weight: 500;
+      white-space: nowrap;
+      padding: 0.3rem 0.55rem;
+      border-radius: 6px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.15s;
+      z-index: 10;
+    }
+    .verified-badge:hover::after,
+    .verified-badge:focus::after {
+      opacity: 1;
+    }
+
+    /* Dark mode */
+    @media (prefers-color-scheme: dark) {
+      body {
+        background: #0f0f1a;
+        color: #e8e8f0;
+      }
+      .receipt {
+        background: #1a1a2e;
+        box-shadow: 0 2px 16px rgba(0,0,0,0.4);
+      }
+      .receipt-header { border-bottom-color: #2e2e4a; }
+      .receipt-header h1 { color: #a78bfa; }
+      .field label { color: #9090b0; }
+      .field .value.amount { color: #a78bfa; }
+      .divider { border-top-color: #2e2e4a; }
+      .badge-completed { background: #0d3321; color: #4ade80; }
+      .badge-refunded  { background: #2d1a00; color: #fb923c; }
+      .badge-partial   { background: #2a1f00; color: #fbbf24; }
+      .verified-badge  { color: #a78bfa; }
+      .verified-badge::after { background: #e8e8f0; color: #1a1a2e; }
+      .refund-item { background: #12122a; border-color: #2e2e4a; }
+      .refund-item .refund-reason { color: #9090b0; }
+      .btn-primary { background: #7c5af5; }
+      .btn-outline { background: #1a1a2e; color: #a78bfa; border-color: #7c5af5; }
+      .state-box p { color: #9090b0; }
     }
 
     .refunds-section h2 {
@@ -374,7 +429,15 @@
       <label>Merchant</label>
       <div class="value">
         <span id="field-merchant-name"></span>
-        <span id="verified-badge" class="verified-badge" style="display:none">✔ Verified</span>
+        <span
+            id="verified-badge"
+            class="verified-badge"
+            role="img"
+            aria-label="Platform-verified merchant"
+            data-tooltip="Platform-verified merchant"
+            tabindex="0"
+            style="display:none"
+          >&#10003; Verified</span>
       </div>
       <div class="help-text">The business that received this payment.</div>
     </div>
