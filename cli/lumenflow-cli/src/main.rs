@@ -911,6 +911,29 @@ fn main() -> Result<()> {
         }
     }
 
+    let use_json = cli.output.to_lowercase() == "json";
+
+    // Run config validation before any command (except validate-config itself, which handles its own output)
+    if !matches!(cli.command, Commands::ValidateConfig) {
+        let errors = validate_config(&config);
+        if !errors.is_empty() {
+            if use_json {
+                let json = serde_json::json!({
+                    "success": false,
+                    "error": "Configuration validation failed",
+                    "fields": errors
+                });
+                eprintln!("{}", serde_json::to_string_pretty(&json)?);
+            } else {
+                eprintln!("Configuration validation failed:");
+                for e in &errors {
+                    eprintln!("  - {}", e);
+                }
+            }
+            bail!("Invalid configuration. Run `lumenflow validate-config` for details.");
+        }
+    }
+
     match &cli.command {
         Commands::Pay {
             merchant,
