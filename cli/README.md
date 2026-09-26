@@ -114,6 +114,35 @@ lumenflow history --merchant GBUYUAI75XXWDZEKLY66CFYKQPET5JR4EAPL7STQKQCRLKJ74SC
 
 ---
 
+### `merchant list` — List registered merchants (admin only)
+
+Lists all registered merchants with cursor-based pagination. Requires an admin key.
+
+```bash
+lumenflow merchant list --admin-key $ADMIN_KEY
+```
+
+With pagination and JSON output:
+
+```bash
+lumenflow merchant list \
+  --admin-key $ADMIN_KEY \
+  --limit 25 \
+  --cursor GLAST_MERCHANT_ADDRESS \
+  --output json
+```
+
+| Flag          | Env var               | Required | Description                                          |
+|---------------|-----------------------|----------|------------------------------------------------------|
+| `--admin-key` | `LUMENFLOW_ADMIN_KEY` | Yes      | Admin secret key or address                          |
+| `--limit`     |                       | No       | Max merchants per page (default: 10)                 |
+| `--cursor`    |                       | No       | Pagination cursor (address from previous page)       |
+| `--output`    |                       | No       | Output format: `text` (default) or `json`            |
+
+Output fields per merchant: `address`, `name`, `category`, `is_verified`, `is_active`.
+
+---
+
 ### `stats` — Global statistics (admin only)
 
 ```bash
