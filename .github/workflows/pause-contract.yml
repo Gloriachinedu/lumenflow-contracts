@@ -1,0 +1,111 @@
+name: Emergency Pause / Unpause Contract
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options:
+          - pause
+          - unpause
+      network:
+        description: 'Network'
+        required: true
+        type: choice
+        default: testnet
+        options:
+          - testnet
+          - mainnet
+      contract_id:
+        description: 'Contract ID (C...)'
+        required: true
+        type: string
+      reason:
+        description: 'Reason for pause/unpause (for audit log)'
+        required: true
+        type: string
+
+jobs:
+  pause-unpause:
+    name: ${{ inputs.action == 'pause' && 'Emergency Pause' || 'Emergency Unpause' }} — ${{ inputs.network }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.network }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Stellar CLI
+        run: |
+          curl -fsSL https://github.com/stellar/stellar-cli/releases/download/v22.8.1/stellar-cli-22.8.1-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /usr/local/bin stellar
+
+      - name: Log action
+        run: |
+          echo "## Contract ${{ inputs.action == 'pause' && 'Pause' || 'Unpause' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Field | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Action | **${{ inputs.action }}** |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Network | ${{ inputs.network }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Contract | \`${{ inputs.contract_id }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Initiated by | @${{ github.actor }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Reason | ${{ inputs.reason }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Timestamp | $(date -u) |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Execute pause
+        if: inputs.action == 'pause'
+        env:
+          CONTRACT_ID: ${{ inputs.contract_id }}
+          NETWORK:     ${{ inputs.network }}
+          ADMIN_KEY:   ${{ inputs.network == 'mainnet' && secrets.MAINNET_ADMIN_KEY || secrets.TESTNET_ADMIN_KEY }}
+          ADMIN_ADDRESS: ${{ inputs.network == 'mainnet' && secrets.MAINNET_ADMIN_ADDRESS || secrets.TESTNET_ADMIN_ADDRESS }}
+        run: |
+          echo "==> Pausing contract $CONTRACT_ID on $NETWORK..."
+          stellar contract invoke \
+            --id "$CONTRACT_ID" \
+            --source-account "$ADMIN_KEY" \
+            --network "$NETWORK" \
+            -- pause_contract \
+            --admin "$ADMIN_ADDRESS"
+          echo "✅ Contract paused successfully."
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "✅ **Contract paused successfully.**" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Execute unpause
+        if: inputs.action == 'unpause'
+        env:
+          CONTRACT_ID: ${{ inputs.contract_id }}
+          NETWORK:     ${{ inputs.network }}
+          ADMIN_KEY:   ${{ inputs.network == 'mainnet' && secrets.MAINNET_ADMIN_KEY || secrets.TESTNET_ADMIN_KEY }}
+          ADMIN_ADDRESS: ${{ inputs.network == 'mainnet' && secrets.MAINNET_ADMIN_ADDRESS || secrets.TESTNET_ADMIN_ADDRESS }}
+        run: |
+          echo "==> Unpausing contract $CONTRACT_ID on $NETWORK..."
+          stellar contract invoke \
+            --id "$CONTRACT_ID" \
+            --source-account "$ADMIN_KEY" \
+            --network "$NETWORK" \
+            -- unpause_contract \
+            --admin "$ADMIN_ADDRESS"
+          echo "✅ Contract unpaused successfully."
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "✅ **Contract unpaused successfully.**" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post-action read-only smoke test
+        env:
+          CONTRACT_ID:   ${{ inputs.contract_id }}
+          ADMIN_ADDRESS: ${{ inputs.network == 'mainnet' && secrets.MAINNET_ADMIN_ADDRESS || secrets.TESTNET_ADMIN_ADDRESS }}
+          CALLER_KEY:    ${{ inputs.network == 'mainnet' && secrets.MAINNET_CALLER_KEY || secrets.TESTNET_ADMIN_KEY }}
+          NETWORK:       ${{ inputs.network }}
+        run: |
+          # Only run smoke test after unpause; skip for pause (contract is intentionally paused)
+          if [[ "${{ inputs.action }}" == "unpause" ]]; then
+            echo "==> Running post-unpause read-only smoke test..."
+            chmod +x scripts/smoke_test_readonly.sh
+            ./scripts/smoke_test_readonly.sh
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "✅ **Post-unpause smoke test passed.**" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Skipping smoke test (contract is paused by design)."
+          fi
