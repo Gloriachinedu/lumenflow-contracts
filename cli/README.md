@@ -106,6 +106,75 @@ lumenflow refund init --order-id ORDER_001 --amount 5000000
 
 ---
 
+### `refund approve` — Approve a pending refund (merchant or admin)
+
+```bash
+lumenflow refund approve --refund-id REFUND_001 --caller <merchant-address>
+```
+
+---
+
+### `refund reject` — Reject a pending refund (merchant or admin)
+
+```bash
+lumenflow refund reject --refund-id REFUND_001 --caller <merchant-address>
+```
+
+---
+
+### `refund execute` — Execute an approved refund (merchant)
+
+```bash
+lumenflow refund execute --refund-id REFUND_001
+```
+
+---
+
+### `refund status` — Get the status of a single refund
+
+```bash
+lumenflow refund status --refund-id REFUND_001
+```
+
+---
+
+### `refund list` — List all refunds for an order
+
+Lists all refunds associated with a given order. The caller must be the
+payer, merchant, or admin authorised on the contract.
+
+```bash
+lumenflow refund list --order-id ORDER_001 --caller <caller-address>
+```
+
+**Output (default — table format):**
+
+```
++------------+-----------+--------+------------------+-----------------------------------------+
+| refund_id  | status    | amount | reason           | initiator                               |
++------------+-----------+--------+------------------+-----------------------------------------+
+| REFUND_001 | Approved  | 500    | Customer request | GPAYER...                               |
+| REFUND_002 | Completed | 250    | Damaged item     | GMERCHANT...                            |
++------------+-----------+--------+------------------+-----------------------------------------+
+2 refund(s) for order ORDER_001.
+```
+
+**JSON output** (pipe-friendly, for scripting):
+
+```bash
+lumenflow refund list --order-id ORDER_001 --caller <caller-address> --output json
+```
+
+| Flag          | Short | Required | Description                                         |
+|---------------|-------|----------|-----------------------------------------------------|
+| `--order-id`  | `-o`  | Yes      | Order ID to list refunds for                        |
+| `--caller`    |       | Yes      | Caller address (payer, merchant, or admin)          |
+| `--output`    |       | No       | Output format: `table` (default) or `json`          |
+
+The output includes: `refund_id`, `status`, `amount`, `reason`, `initiator`.
+
+---
+
 ### `history` — View payment history
 
 ```bash
