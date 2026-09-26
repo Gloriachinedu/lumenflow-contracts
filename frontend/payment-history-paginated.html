@@ -3,7 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://horizon.stellar.org; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none';" />
   <title>Payment History (Paginated) – LumenFlow</title>
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#6c47ff" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="LumenFlow" />
+  <link rel="apple-touch-icon" href="icons/icon.svg" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -182,7 +190,7 @@
 
 <!-- Pagination controls and infinite-scroll status -->
 <div class="pagination-bar" id="pagination-bar">
-  <div class="page-meta" id="page-meta"></div>
+  <div class="page-meta" id="page-meta" aria-live="polite" aria-atomic="true"></div>
 
   <div class="page-controls">
     <button class="btn load-more-btn" id="load-more-btn" type="button" onclick="loadNextPage()">
@@ -205,15 +213,29 @@
 </div>
 <div id="load-more-sentinel" class="load-more-sentinel" aria-hidden="true"></div>
 
+<script type="module">
+  import { formatNumber } from './lumenflow-shared.js';
+  window.LF = window.LF || {};
+  window.LF.formatNumber = formatNumber;
+</script>
 <script>
-  // ── Pagination state ───────────────────────────────────────────────────────
-  let nextCursor = new URLSearchParams(window.location.search).get('cursor');
-  let pageSize = 5;
-  let isLoading = false;
-  let hasMore = true;
-  const loadedOrderIds = new Set();
+  // ── Format helper ──────────────────────────────────────────────────────────
+  function fmtAmount(amount) {
+    const n = Number(amount);
+    const fmtFn = window.LF && window.LF.formatNumber
+      ? (v, opts) => window.LF.formatNumber(v, opts)
+      : (v, opts) => new Intl.NumberFormat(undefined, opts).format(v);
+    return fmtFn(n, { minimumFractionDigits: 2, maximumFractionDigits: 7 }) + ' XLM';
+  }
 
-  // ── Mock data simulating contract paginated API ────────────────────────────
+  // ── Pagination state ───────────────────────────────────────────────────────
+  // cursorStack[0] = null (first page), cursorStack[n] = cursor to fetch page n
+  let cursorStack = [null];
+  let currentIdx  = 0;
+  let pageSize    = 5;
+  let isLoading   = false;
+
+  // ── Mock data simulating the contract's paginated API ─────────────────────
   const ALL_PAYMENTS = [
     { order_id: 'ORDER_001', merchant_address: 'GDUT...XZ1A', amount: 1000, status: 'Completed',         paid_at: '2026-06-01' },
     { order_id: 'ORDER_002', merchant_address: 'GCMR...Y9KP', amount: 4500, status: 'PartiallyRefunded', paid_at: '2026-06-03' },
@@ -232,48 +254,100 @@
   /**
    * Simulates the contract's paginated query.
    * Replace with a real Soroban RPC call when CONTRACT_ID is available.
-   *
-   * Returns: { payments: [...], next_cursor: string|null }
+   * @param {string|null} cursor  - order_id to start from (null = first page)
+   * @param {number}      limit
+   * @returns {{ payments: object[], next_cursor: string|null }}
    */
   async function fetchPage(cursor, limit) {
-    await new Promise(r => setTimeout(r, 120)); // simulate latency
-
-    const startIdx = cursor ? ALL_PAYMENTS.findIndex(p => p.order_id === cursor) : 0;
-    const slice = ALL_PAYMENTS.slice(startIdx, startIdx + limit);
-    const remaining = ALL_PAYMENTS.slice(startIdx + limit);
+    await new Promise(r => setTimeout(r, 150)); // simulate network latency
+    const startIdx    = cursor ? ALL_PAYMENTS.findIndex(p => p.order_id === cursor) : 0;
+    const slice       = ALL_PAYMENTS.slice(startIdx, startIdx + limit);
+    const remaining   = ALL_PAYMENTS.slice(startIdx + limit);
     const next_cursor = remaining.length > 0 ? remaining[0].order_id : null;
-
     return { payments: slice, next_cursor };
   }
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  // ── Status badge ───────────────────────────────────────────────────────────
   function statusBadge(status) {
     const map = {
-      Completed:         ['badge-completed',      'Completed'],
-      PartiallyRefunded: ['badge-partial',         'Partial Refund'],
-      FullyRefunded:     ['badge-fully-refunded',  'Fully Refunded'],
+      Completed:         ['badge-completed',     'Completed'],
+      PartiallyRefunded: ['badge-partial',        'Partial Refund'],
+      FullyRefunded:     ['badge-fully-refunded', 'Fully Refunded'],
     };
     const [cls, label] = map[status] || ['', status];
     return `<span class="badge ${cls}">${label}</span>`;
   }
 
-  function setLoading(on) {
-    isLoading = on;
-    const indicator = document.getElementById('loading-indicator');
-    const button = document.getElementById('load-more-btn');
-    indicator.hidden = !on;
-    indicator.style.display = on ? 'flex' : 'none';
-    button.disabled = on || !hasMore;
+  // ── URL sync ───────────────────────────────────────────────────────────────
+  /**
+   * Updates the browser URL query string with the current cursor and page size
+   * so the page can be bookmarked or shared at the current position.
+   */
+  function syncUrl() {
+    const params = new URLSearchParams();
+    const cursor = cursorStack[currentIdx];
+    if (cursor)       params.set('cursor',   cursor);
+    if (pageSize !== 5) params.set('limit', String(pageSize));
+    const qs = params.toString();
+    window.history.replaceState({}, '', qs ? `?${qs}` : window.location.pathname);
   }
 
-  function updateCursorInUrl() {
-    const url = new URL(window.location.href);
-    if (nextCursor) url.searchParams.set('cursor', nextCursor);
-    else url.searchParams.delete('cursor');
-    window.history.replaceState({}, '', url);
+  /**
+   * Reads `?cursor=` and `?limit=` from the URL on first load so a bookmarked
+   * URL restores the correct page.  Because we don't have the full cursor
+   * history we treat the URL cursor as a direct jump to that page (page number
+   * is shown as "–" until the user navigates).
+   */
+  function initFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    const cursor = params.get('cursor') || null;
+    const limit  = parseInt(params.get('limit') || '5', 10);
+
+    if ([5, 10, 25].includes(limit)) {
+      pageSize = limit;
+      document.getElementById('page-size').value = String(limit);
+    }
+
+    if (cursor) {
+      // We can't reconstruct the full back-stack from a single cursor, so start
+      // fresh from that cursor. The user can still go forward; Prev is disabled
+      // because we don't have anything to go back to.
+      cursorStack = [cursor];
+      currentIdx  = 0;
+    }
   }
 
-  function appendPayments(payments) {
+  // ── Loading state ──────────────────────────────────────────────────────────
+  function showLoadingState() {
+    const tbody = document.getElementById('table-body');
+    // Spinner row replaces table content during fetch
+    tbody.innerHTML = `
+      <tr class="empty-row">
+        <td colspan="5" style="padding:2rem;text-align:center;color:#888;">
+          <span aria-live="polite" role="status">⏳ Loading page ${currentIdx + 1}…</span>
+        </td>
+      </tr>`;
+    document.getElementById('prev-btn').disabled = true;
+    document.getElementById('next-btn').disabled = true;
+    document.getElementById('page-meta').textContent = `Page ${currentIdx + 1} · loading…`;
+  }
+
+  // ── Main load ──────────────────────────────────────────────────────────────
+  async function loadPage() {
+    if (isLoading) return;
+    isLoading = true;
+
+    showLoadingState();
+
+    const cursor = cursorStack[currentIdx];
+    const { payments, next_cursor } = await fetchPage(cursor, pageSize);
+
+    // Store next cursor if we haven't visited this position before
+    if (next_cursor && cursorStack.length === currentIdx + 1) {
+      cursorStack.push(next_cursor);
+    }
+
+    // Render rows
     const tbody = document.getElementById('table-body');
     const newPayments = payments.filter(payment => {
       if (loadedOrderIds.has(payment.order_id)) return false;
@@ -283,38 +357,50 @@
 
     if (newPayments.length === 0 && loadedOrderIds.size === 0) {
       tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No payments found.</td></tr>';
-      return 0;
+    } else {
+      tbody.innerHTML = payments.map(p => `
+        <tr>
+          <td><span class="order-id">${p.order_id}</span></td>
+          <td>${p.merchant_address}</td>
+          <td class="amount">${fmtAmount(p.amount)}</td>
+          <td>${statusBadge(p.status)}</td>
+          <td>${p.paid_at}</td>
+        </tr>`).join('');
     }
 
-    if (tbody.querySelector('.empty-row')) tbody.innerHTML = '';
-    tbody.insertAdjacentHTML('beforeend', newPayments.map(p => `
-      <tr>
-        <td><span class="order-id">${p.order_id}</span></td>
-        <td>${p.merchant_address}</td>
-        <td class="amount">${p.amount.toLocaleString()} XLM</td>
-        <td>${statusBadge(p.status)}</td>
-        <td>${p.paid_at}</td>
-      </tr>`).join(''));
-    return newPayments.length;
-  }
-
-  async function loadNextPage() {
-    if (isLoading || !hasMore) return;
-    setLoading(true);
-
-    const { payments, next_cursor } = await fetchPage(nextCursor, pageSize);
-    const addedCount = appendPayments(payments);
-    nextCursor = next_cursor;
-    hasMore = Boolean(nextCursor) && addedCount > 0;
-    updateCursorInUrl();
-
-    // Update meta text
+    // Page indicator: "Page 2 · 5 records"
+    const pageNum = currentIdx + 1;
     document.getElementById('page-meta').textContent =
       loadedOrderIds.size === 0
         ? 'No records'
-        : `Showing ${loadedOrderIds.size} record${loadedOrderIds.size !== 1 ? 's' : ''}`;
+        : `Page ${pageNum} · ${payments.length} record${payments.length !== 1 ? 's' : ''}`;
 
-    setLoading(false);
+    // Update navigation button states
+    document.getElementById('prev-btn').disabled = currentIdx === 0;
+    document.getElementById('next-btn').disabled = !next_cursor;
+
+    // Sync URL so the current page is bookmarkable
+    syncUrl();
+
+    isLoading = false;
+  }
+
+  // Track whether the initial load has completed (we don't move focus on first load)
+  let _focusMgmtInitialized = false;
+
+  // ── Navigation ─────────────────────────────────────────────────────────────
+  function prevPage() {
+    if (currentIdx > 0) {
+      currentIdx--;
+      loadPage();
+    }
+  }
+
+  function nextPage() {
+    if (currentIdx + 1 < cursorStack.length) {
+      currentIdx++;
+      loadPage();
+    }
   }
 
   function changePageSize() {
@@ -326,12 +412,24 @@
     loadNextPage();
   }
 
+  // ── Browser back/forward button support ───────────────────────────────────
+  window.addEventListener('popstate', () => {
+    initFromUrl();
+    loadPage();
+  });
+
   // ── Init ───────────────────────────────────────────────────────────────────
-  const observer = new IntersectionObserver(entries => {
-    if (entries.some(entry => entry.isIntersecting)) loadNextPage();
-  }, { rootMargin: '240px' });
-  observer.observe(document.getElementById('load-more-sentinel'));
-  loadNextPage();
+  initFromUrl();
+  loadPage();
+</script>
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker
+        .register('./sw.js', { scope: './' })
+        .catch((err) => console.warn('[PWA] Service worker registration failed:', err));
+    });
+  }
 </script>
 </body>
 </html>
