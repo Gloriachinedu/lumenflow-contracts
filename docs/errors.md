@@ -63,6 +63,7 @@ This document lists all the error codes returned by the LumenFlow contract, alon
 | `PaginationLimitExceeded` | 51 | The requested limit for pagination exceeds the maximum allowed (100). | Use a limit of 100 or less. |
 | `BatchSizeExceeded` | 52 | The batch operation exceeds the maximum allowed items. | Reduce the number of items in the batch. |
 | `InvalidTags` | 53 | The provided tags exceed length or count limits. | Ensure tags are within the allowed limits (e.g., max 5 tags, max 20 chars per tag). |
+| `SerializedPayloadTooLarge` | 54 | The serialized payload for a batch item exceeds the maximum allowed size (1 024 bytes). | Reduce the size of memo, order_id, or other string fields in the batch item. |
 
 ## Subscription Errors
 
@@ -75,3 +76,63 @@ This document lists all the error codes returned by the LumenFlow contract, alon
 | `SubscriptionNotActive` | 64 | The subscription is not active. | Ensure the subscription is not cancelled or completed. |
 | `SubscriptionMaxCyclesReached` | 65 | The subscription has reached its maximum number of charging cycles. | Create a new subscription if needed. |
 | `SubscriptionIntervalNotElapsed` | 66 | The required interval between subscription charges has not elapsed. | Wait for the next billing cycle. |
+## Regression coverage
+
+The regression suite in [contracts/lumenflow/src/test_error_codes.rs](../contracts/lumenflow/src/test_error_codes.rs) exercises the main contract error variants with focused tests named after the pattern `test_error_{code_name}_is_triggered`.
+
+## Error Handling Examples
+
+These examples describe common contract error codes and how to resolve them in client integrations.
+
+### Invalid signature or merchant payload issues
+
+If the contract returns `PaymentError::InvalidSignature` (code `23`), the client should:
+
+- Rebuild the signed payload exactly as the contract expects.
+- Use the merchant's Ed25519 private key to sign the payload.
+- Verify that the payload includes `order_id` and `amount` in the correct canonical format.
+- Retry with a fresh signature if the original request failed.
+
+### Duplicate order IDs
+
+If the contract returns `PaymentError::PaymentAlreadyExists` (code `21`), the client should:
+
+- Generate a unique `order_id` for each payment.
+- Avoid retrying the same order ID unless the previous transaction was confirmed to have failed.
+- If the payment was already created, use the existing record or query `get_payment_summary`.
+
+### Authorization and role errors
+
+If the contract returns `PaymentError::Unauthorized` (code `1`), the client should:
+
+- Ensure the caller address is the correct signer for the requested entrypoint.
+- Confirm the caller is the configured admin for admin-only calls.
+- For merchant actions, verify the merchant address matches the authenticated signer.
+
+### Missing or invalid inputs
+
+If the contract returns `PaymentError::InvalidInput` (code `50`), the client should:
+
+- Confirm string fields are non-empty and within the allowed length limits.
+- Confirm IDs are unique, non-empty, and at most 64 characters.
+- Confirm `limit` values are between 1 and 100 for pagination calls.
+
+### Not found errors
+
+If the contract returns `PaymentError::PaymentNotFound` (code `20`) or `PaymentError::MerchantNotFound` (code `10`), the client should:
+
+- Verify the requested `order_id` or merchant address is correct.
+- If appropriate, re-register the merchant or create the missing payment request.
+- For read calls, present a user-friendly message that the requested item does not exist.
+
+### Refund and lifecycle errors
+
+If the contract returns `PaymentError::RefundWindowExpired` (code `32`), the client should:
+
+- Inform the user that the refund window has closed.
+- Offer alternative support channels for manual dispute resolution.
+
+If the contract returns `PaymentError::RefundExceedsOriginal` (code `33`), the client should:
+
+- Ensure the cumulative refund amount does not exceed the original payment amount.
+- Adjust the refund request to a valid amount.
