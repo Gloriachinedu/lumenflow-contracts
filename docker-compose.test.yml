@@ -1,0 +1,66 @@
+# docker-compose.test.yml
+#
+# Spins up the local environment needed to run the Playwright E2E test suite.
+#
+# Usage:
+#   docker compose -f docker-compose.test.yml up -d
+#   npm --prefix tests test:e2e
+#   docker compose -f docker-compose.test.yml down
+#
+# Services:
+#   mock-contract  – Lightweight HTTP API that mimics the LumenFlow Soroban
+#                    contract RPC responses so tests run without a live node.
+#   frontend       – Static file server for the /frontend directory.
+
+version: "3.9"
+
+services:
+  # ---------------------------------------------------------------------------
+  # Mock contract API
+  #
+  # Provides endpoints consumed by tests/playwright/helpers/contract-mock.ts:
+  #   POST /mock/reset                         – reset all state
+  #   POST /mock/seed/payment                  – seed a payment record
+  #   POST /mock/seed/merchant                 – seed a merchant record
+  #   POST /mock/seed/refund                   – seed a refund record
+  #   POST /mock/contract/initiate_refund      – simulate initiate_refund
+  #   POST /mock/contract/approve_refund       – simulate approve_refund
+  #   POST /mock/contract/execute_refund       – simulate execute_refund
+  #   GET  /mock/contract/get_refund           – read refund state
+  # ---------------------------------------------------------------------------
+  mock-contract:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ./tests/mock-server:/app
+    command: >
+      sh -c "npm install --silent && node server.js"
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # Frontend static file server
+  # ---------------------------------------------------------------------------
+  frontend:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+    command: npx serve . -p 3000 --no-clipboard
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:3000"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      mock-contract:
+        condition: service_healthy
