@@ -405,6 +405,53 @@ fn apply_env_overrides(base: RawConfig) -> RawConfig {
             .ok()
             .or(base.source_account),
     }
+
+    #[test]
+    fn test_validate_config_invalid_network() {
+        let config = Config {
+            network: Some("devnet".to_string()),
+            contract_id: None,
+            source_account: None,
+        };
+        let errors = validate_config(&config);
+        assert!(!errors.is_empty());
+        assert!(errors[0].contains("network"));
+    }
+
+    #[test]
+    fn test_validate_config_invalid_contract_id() {
+        let config = Config {
+            network: Some("testnet".to_string()),
+            contract_id: Some("BADCONTRACT".to_string()),
+            source_account: None,
+        };
+        let errors = validate_config(&config);
+        assert!(!errors.is_empty());
+        assert!(errors[0].contains("contract_id"));
+    }
+
+    #[test]
+    fn test_validate_config_invalid_secret_key() {
+        let config = Config {
+            network: Some("mainnet".to_string()),
+            contract_id: None,
+            source_account: Some("NOTASECRETKEY".to_string()),
+        };
+        let errors = validate_config(&config);
+        assert!(!errors.is_empty());
+        assert!(errors[0].contains("source_account"));
+    }
+
+    #[test]
+    fn test_validate_config_valid() {
+        let config = Config {
+            network: Some("testnet".to_string()),
+            contract_id: Some("C".to_string() + &"A".repeat(55)),
+            source_account: Some("S".to_string() + &"A".repeat(55)),
+        };
+        let errors = validate_config(&config);
+        assert!(errors.is_empty());
+    }
 }
 
 fn resolve_config(file_env: RawConfig, cli: &Cli) -> ResolvedConfig {
@@ -766,6 +813,29 @@ fn main() -> Result<()> {
 
     let network = config.network.as_deref().unwrap_or("testnet");
     let contract_id = config.contract_id.as_deref().unwrap_or("N/A");
+
+    let use_json = cli.output.to_lowercase() == "json";
+
+    // Run config validation before any command (except validate-config itself, which handles its own output)
+    if !matches!(cli.command, Commands::ValidateConfig) {
+        let errors = validate_config(&config);
+        if !errors.is_empty() {
+            if use_json {
+                let json = serde_json::json!({
+                    "success": false,
+                    "error": "Configuration validation failed",
+                    "fields": errors
+                });
+                eprintln!("{}", serde_json::to_string_pretty(&json)?);
+            } else {
+                eprintln!("Configuration validation failed:");
+                for e in &errors {
+                    eprintln!("  - {}", e);
+                }
+            }
+            bail!("Invalid configuration. Run `lumenflow validate-config` for details.");
+        }
+    }
 
     match &cli.command {
         Commands::Pay {
