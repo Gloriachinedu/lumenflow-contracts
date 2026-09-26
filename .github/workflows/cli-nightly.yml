@@ -1,93 +1,255 @@
-name: CLI Nightly Build
+name: Nightly CLI Builds
 
 on:
   schedule:
     # Run at 02:00 UTC every day
     - cron: "0 2 * * *"
+  # Allow manual trigger for testing
   workflow_dispatch:
 
 permissions:
   contents: write
 
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
 jobs:
-  cli-nightly:
-    name: Nightly CLI (${{ matrix.target }})
-    runs-on: ${{ matrix.runner }}
+  build:
+    name: Build CLI — ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-latest
-            use_cross: false
-          - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-latest
-            use_cross: true
+            os: ubuntu-latest
+            binary: lumenflow-cli
+            archive: tar.gz
+
           - target: x86_64-apple-darwin
-            runner: macos-latest
-            use_cross: false
-          - target: aarch64-apple-darwin
-            runner: macos-latest
-            use_cross: false
+            os: macos-latest
+            binary: lumenflow-cli
+            archive: tar.gz
+
+          - target: x86_64-pc-windows-gnu
+            os: ubuntu-latest
+            binary: lumenflow-cli.exe
+            archive: zip
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # master
+        uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: stable
+          toolchain: 1.87.0
           targets: ${{ matrix.target }}
 
+      - name: Install cross-compilation tools (Windows target)
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+
       - name: Cache cargo registry
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-nightly-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-${{ matrix.target }}-cargo-nightly-
+          key: ${{ runner.os }}-cargo-nightly-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-nightly-${{ matrix.target }}-
+            ${{ runner.os }}-cargo-nightly-
 
-      - name: Install cross (for aarch64 cross-compilation)
-        if: matrix.use_cross
-        run: cargo install cross --locked --version 0.2.5
-
-      - name: Build CLI (native)
-        if: "!matrix.use_cross"
+      - name: Build CLI binary
         run: |
           cargo build \
-            --target ${{ matrix.target }} \
+            --locked \
             --release \
-            --package lumenflow-cli
-        working-directory: cli/lumenflow-cli
+            --package lumenflow-cli \
+            --target ${{ matrix.target }}
 
-      - name: Build CLI (cross)
-        if: matrix.use_cross
+      - name: Determine build date and short SHA
+        id: meta
+        shell: bash
         run: |
-          cross build \
-            --target ${{ matrix.target }} \
-            --release \
-            --package lumenflow-cli
-        working-directory: cli/lumenflow-cli
+          echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+          echo "sha=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
 
-      - name: Package binary (Unix)
-        if: runner.os != 'Windows'
+      - name: Package binary (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
         run: |
-          DATE=$(date -u +%Y%m%d)
-          BINARY=target/${{ matrix.target }}/release/lumenflow-cli
-          ARCHIVE=lumenflow-cli-nightly-${DATE}-${{ matrix.target }}.tar.gz
-          tar -czf "$ARCHIVE" -C "$(dirname $BINARY)" "$(basename $BINARY)"
-          sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+          BINARY_PATH="target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          ARCHIVE="lumenflow-cli-nightly-${{ steps.meta.outputs.date }}-${{ steps.meta.outputs.sha }}-${{ matrix.target }}.tar.gz"
+          tar -czf "$ARCHIVE" -C "$(dirname "$BINARY_PATH")" "${{ matrix.binary }}"
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
 
-      - name: Upload nightly build artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      - name: Package binary (zip)
+        if: matrix.archive == 'zip'
+        shell: bash
+        run: |
+          BINARY_PATH="target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          ARCHIVE="lumenflow-cli-nightly-${{ steps.meta.outputs.date }}-${{ steps.meta.outputs.sha }}-${{ matrix.target }}.zip"
+          zip -j "$ARCHIVE" "$BINARY_PATH"
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
+
+      - name: Upload artifact (7-day retention)
+        uses: actions/upload-artifact@v4
         with:
           name: lumenflow-cli-nightly-${{ matrix.target }}
           path: |
-            lumenflow-cli-nightly-*-${{ matrix.target }}.tar.gz
-            lumenflow-cli-nightly-*-${{ matrix.target }}.tar.gz.sha256
+            ${{ env.ARCHIVE }}
+            ${{ env.ARCHIVE }}.sha256
           retention-days: 7
+
+      - name: Upload to S3 (optional — requires AWS_ACCESS_KEY_ID secret)
+        if: env.AWS_ACCESS_KEY_ID != ''
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+        run: |
+          aws s3 cp "${{ env.ARCHIVE }}" \
+            "s3://lumenflow-artifacts-prod/nightly/${{ steps.meta.outputs.date }}/${{ env.ARCHIVE }}"
+          aws s3 cp "${{ env.ARCHIVE }}.sha256" \
+            "s3://lumenflow-artifacts-prod/nightly/${{ steps.meta.outputs.date }}/${{ env.ARCHIVE }}.sha256"
+
+  # ── CLI integration tests ──────────────────────────────────────────────────
+  # Runs scripts/cli-integration-test.sh against a local Soroban node spun up
+  # via docker compose. Failures block the nightly build.
+  # Only runs on the linux build matrix target (integration tests are
+  # platform-agnostic; no need to repeat on macOS/Windows).
+  integration-test:
+    name: CLI Integration Tests
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.87.0
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-integration-
+
+      - name: Set up Node.js (for generate_smoke_keypair.sh)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Stellar CLI
+        run: |
+          curl -fsSL \
+            https://github.com/stellar/stellar-cli/releases/download/v22.8.1/stellar-cli-22.8.1-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /usr/local/bin stellar
+          stellar --version
+
+      - name: Download linux CLI binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lumenflow-cli-nightly-x86_64-unknown-linux-gnu
+          path: /tmp/cli-artifact
+
+      - name: Extract CLI binary
+        run: |
+          cd /tmp/cli-artifact
+          ARCHIVE=$(ls lumenflow-cli-nightly-*.tar.gz | head -1)
+          tar -xzf "$ARCHIVE"
+          chmod +x lumenflow-cli
+          echo "CLI_BIN=/tmp/cli-artifact/lumenflow-cli" >> "$GITHUB_ENV"
+
+      - name: Start local Soroban node
+        run: |
+          docker compose up -d stellar
+          echo "Waiting for Soroban RPC to become ready…"
+          WAIT=0
+          until curl -sf http://localhost:8000/soroban/rpc \
+              -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' \
+              -H 'Content-Type: application/json' > /dev/null 2>&1; do
+            sleep 3
+            WAIT=$((WAIT + 3))
+            if [[ $WAIT -ge 120 ]]; then
+              echo "::error::Soroban RPC did not become ready within 120 s"
+              docker compose logs stellar
+              exit 1
+            fi
+          done
+          echo "Soroban RPC ready after ${WAIT}s"
+
+      - name: Run CLI integration tests
+        id: cli_tests
+        env:
+          KEEP_NODE: "1"   # node is torn down by the step below
+        run: |
+          chmod +x scripts/cli-integration-test.sh
+          mkdir -p integration-test-results
+          bash scripts/cli-integration-test.sh 2>&1 | tee integration-test-results/cli-integration.log
+          echo "## ✅ CLI Integration Tests Passed" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload integration test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-integration-test-results-${{ github.run_id }}
+          path: integration-test-results/
+          retention-days: 14
+
+      - name: Stop local Soroban node
+        if: always()
+        run: docker compose down -v
+
+      - name: Report failure in step summary
+        if: failure() && steps.cli_tests.conclusion == 'failure'
+        run: |
+          echo "## ❌ CLI Integration Tests FAILED" >> "$GITHUB_STEP_SUMMARY"
+          echo "See artifact \`cli-integration-test-results-${{ github.run_id }}\` for the full log." >> "$GITHUB_STEP_SUMMARY"
+
+  notify-failure:
+    name: Notify Slack on Failure
+    runs-on: ubuntu-latest
+    needs: [build, integration-test]
+    if: failure()
+    steps:
+      - name: Post to #ci-alerts Slack channel
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "❌ *Nightly CLI build/integration tests failed*",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "❌ *Nightly CLI build or integration tests failed*\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>\n\nDate: `${{ github.run_id }}`\nCommit: `${{ github.sha }}`"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_CI_ALERTS_WEBHOOK }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
