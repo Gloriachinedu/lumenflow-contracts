@@ -1,12 +1,14 @@
 version: 2
 updates:
+  # Rust / Cargo — workspace root
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
       interval: "weekly"
     reviewers:
-      - "maintainer-team" # As requested in the issue description
+      - "maintainer-team"
 
+  # Rust / Cargo — main contract
   - package-ecosystem: "cargo"
     directory: "/contracts/lumenflow"
     schedule:
@@ -14,8 +16,33 @@ updates:
     reviewers:
       - "maintainer-team"
 
+  # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
+    schedule:
+      interval: "weekly"
+    reviewers:
+      - "maintainer-team"
+
+  # npm — root (Playwright e2e tests)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    reviewers:
+      - "maintainer-team"
+
+  # npm — TypeScript SDK
+  - package-ecosystem: "npm"
+    directory: "/sdk"
+    schedule:
+      interval: "weekly"
+    reviewers:
+      - "maintainer-team"
+
+  # npm — Frontend static pages
+  - package-ecosystem: "npm"
+    directory: "/frontend"
     schedule:
       interval: "weekly"
     reviewers:

@@ -1,30 +1,55 @@
 # Support
 
-Welcome to the LumenFlow community! We are here to help you succeed in building and integrating scalable, secure smart contracts on Soroban.
+Welcome to the LumenFlow community! We are here to help you succeed in building
+and integrating scalable, secure smart contracts on Soroban.
 
 ## Where to get help
 
-If you have questions, need guidance, or want to discuss LumenFlow with other developers, please use the following channels:
+Use the channel that best matches your need:
 
-1. **Discord Community:** For general chat, quick questions, and community support, join our [Discord Server](https://discord.gg/lumenflow).
-2. **GitHub Discussions:** For architectural discussions, long-form questions, and knowledge sharing, visit our [GitHub Discussions](https://github.com/Gloriachinedu/lumenflow-contracts/discussions) page.
+### GitHub Discussions (preferred for async help)
 
-Please avoid using GitHub Issues for general support questions.
+GitHub Discussions is the primary space for community questions and knowledge
+sharing. Please use the category that best fits your topic:
+
+| Category | Use for |
+|----------|---------|
+| [🙋 Q&A](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/q-a) | General questions about LumenFlow — how it works, what's supported, usage patterns |
+| [🛠️ Developer Help](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/developer-help) | SDK integration, contract deployment, tooling, and debugging help |
+| [💡 Feature Requests](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/feature-requests) | Propose new features, vote on existing ones, discuss direction |
+| [🎉 Show and Tell](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/show-and-tell) | Share what you have built on top of LumenFlow |
+| [📢 Announcements](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/announcements) | Official releases, breaking changes, and project news (maintainers only) |
+
+### Discord
+
+For real-time chat, quick questions, and community conversations, join our
+[Discord Server](https://discord.gg/lumenflow).
 
 ## Where to report bugs
 
-If you've found a bug in the code, please report it via [GitHub Issues](https://github.com/Gloriachinedu/lumenflow-contracts/issues).
+If you have found a confirmed bug in the contract code, please open a
+[GitHub Issue](https://github.com/PrincessnJoy/lumenflow-contracts/issues)
+using the **Bug Report** template.
 
-When reporting a bug, please:
+> **Not sure if it's a bug?** Ask in
+> [Developer Help](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/developer-help)
+> first — it may be a configuration issue or expected behaviour.
+
+When reporting a confirmed bug:
 - Use the provided **Bug Report** template.
-- Provide a clear and descriptive title.
+- Provide a clear, descriptive title.
 - Include detailed steps to reproduce the issue.
-- Mention your environment (OS, Rust version, Stellar CLI version, etc.).
+- Mention your environment (OS, Rust version, Stellar CLI version, network).
 
 ## Feature Requests
 
-Have an idea for a new feature? We'd love to hear it! Please submit feature requests through [GitHub Issues](https://github.com/Gloriachinedu/lumenflow-contracts/issues) using the **Feature Request** template.
+Have an idea for a new feature? Start the conversation in
+[Feature Requests discussions](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/feature-requests)
+to get community feedback. Once there is consensus, a maintainer will open a
+tracking issue linked to the roadmap.
 
 ## Security Vulnerabilities
 
-If you discover a security vulnerability, please do NOT report it in public channels (Discord, Discussions, or public GitHub Issues). Instead, refer to our [SECURITY.md](SECURITY.md) for instructions on responsible disclosure.
+If you discover a security vulnerability, do **NOT** report it in public channels
+(Discord, Discussions, or public GitHub Issues). Instead, see
+[SECURITY.md](SECURITY.md) for responsible disclosure instructions.
