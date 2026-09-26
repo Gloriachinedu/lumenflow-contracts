@@ -785,6 +785,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         merchant_address.require_auth();
         require_non_empty_string(&name)?;
+        validate_merchant_category(&category)?;
 
         let mut merchant =
             storage::get_merchant(&env, &merchant_address).ok_or(PaymentError::MerchantNotFound)?;
