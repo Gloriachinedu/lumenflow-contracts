@@ -1,29 +1,49 @@
-export interface Payment {
-  [field: string]: unknown;
+import { LumenFlowError, PaymentErrorCode } from './errors';
+
+export interface PaginatedPage<T> {
+  items: T[];
+  nextCursor?: string | null;
 }
 
-export interface PaymentPage<TPayment extends Payment = Payment> {
-  payments: TPayment[];
-  next_cursor: string | null;
+export interface FetchAllPagesOptions<T> {
+  fetchPage: (cursor?: string | null) => Promise<PaginatedPage<T>>;
+  initialCursor?: string | null;
+  maxPages?: number;
 }
 
-export interface GetAllPaymentsOptions<TPayment extends Payment = Payment> {
-  fetchPage: (cursor: string | null) => Promise<PaymentPage<TPayment>>;
-  cursor?: string | null;
-}
-
-export async function* getAllPayments<TPayment extends Payment = Payment>(
-  options: GetAllPaymentsOptions<TPayment>,
-): AsyncIterableIterator<TPayment[]> {
-  let cursor = options.cursor ?? null;
+export async function fetchAllPages<T>(options: FetchAllPagesOptions<T>): Promise<T[]> {
+  const pages: T[] = [];
+  let cursor = options.initialCursor ?? null;
+  let pageCount = 0;
+  const maxPages = options.maxPages ?? 100;
 
   while (true) {
-    const page = await options.fetchPage(cursor);
-    yield page.payments;
-
-    if (page.next_cursor === null) {
-      return;
+    if (pageCount >= maxPages) {
+      throw new LumenFlowError(PaymentErrorCode.PaginationLimitExceeded, 'Pagination exceeded maximum page count');
     }
-    cursor = page.next_cursor;
+
+    const page = await options.fetchPage(cursor);
+    if (!page || !Array.isArray(page.items)) {
+      throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'Invalid pagination response: items array is required');
+    }
+
+    pages.push(...page.items);
+    pageCount += 1;
+
+    if (!page.nextCursor) {
+      break;
+    }
+
+    if (page.nextCursor === cursor) {
+      throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'Pagination returned the same cursor twice');
+    }
+
+    cursor = page.nextCursor;
   }
+
+  return pages;
+}
+
+export async function fetchAllPayments<T>(fetchPage: (cursor?: string | null) => Promise<PaginatedPage<T>>): Promise<T[]> {
+  return fetchAllPages({ fetchPage });
 }

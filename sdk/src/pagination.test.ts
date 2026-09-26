@@ -1,41 +1,54 @@
-import { getAllPayments, PaymentPage } from "./pagination";
+import { fetchAllPages, fetchAllPayments, PaginatedPage } from './pagination';
+import { LumenFlowError, PaymentErrorCode } from './errors';
 
-type TestPayment = { order_id: string };
+describe('fetchAllPages', () => {
+  it('aggregates pages until no nextCursor remains', async () => {
+    const pages: Array<PaginatedPage<number>> = [
+      { items: [1, 2], nextCursor: 'cursor-1' },
+      { items: [3], nextCursor: 'cursor-2' },
+      { items: [4, 5], nextCursor: null },
+    ];
+    const fetchPage = jest
+      .fn()
+      .mockResolvedValueOnce(pages[0])
+      .mockResolvedValueOnce(pages[1])
+      .mockResolvedValueOnce(pages[2]);
 
-async function collect<T extends { [field: string]: unknown }>(
-  iterator: AsyncIterableIterator<T[]>,
-): Promise<T[][]> {
-  const pages: T[][] = [];
-  for await (const page of iterator) pages.push(page);
-  return pages;
-}
-
-describe("getAllPayments", () => {
-  it("yields a single page", async () => {
-    const fetchPage = jest.fn().mockResolvedValue({ payments: [{ order_id: "1" }], next_cursor: null } satisfies PaymentPage<TestPayment>);
-    await expect(collect(getAllPayments({ fetchPage }))).resolves.toEqual([[{ order_id: "1" }]]);
-    expect(fetchPage).toHaveBeenCalledTimes(1);
-    expect(fetchPage).toHaveBeenCalledWith(null);
+    const results = await fetchAllPages({ fetchPage });
+    expect(results).toEqual([1, 2, 3, 4, 5]);
+    expect(fetchPage).toHaveBeenCalledTimes(3);
+    expect(fetchPage).toHaveBeenNthCalledWith(1, null);
+    expect(fetchPage).toHaveBeenNthCalledWith(2, 'cursor-1');
+    expect(fetchPage).toHaveBeenNthCalledWith(3, 'cursor-2');
   });
 
-  it("follows cursors and yields each page", async () => {
-    const pages: Record<string, PaymentPage<TestPayment>> = {
-      start: { payments: [{ order_id: "1" }], next_cursor: "next" },
-      next: { payments: [{ order_id: "2" }], next_cursor: null },
-    };
-    const fetchPage = jest.fn((cursor: string | null) => Promise.resolve(pages[cursor ?? "start"]));
-    await expect(collect(getAllPayments({ fetchPage }))).resolves.toEqual([[{ order_id: "1" }], [{ order_id: "2" }]]);
-    expect(fetchPage.mock.calls.map(([cursor]) => cursor)).toEqual([null, "next"]);
+  it('throws when page items are missing', async () => {
+    const fetchPage = jest.fn().mockResolvedValue({ nextCursor: null } as any);
+    await expect(fetchAllPages({ fetchPage })).rejects.toMatchObject({
+      code: PaymentErrorCode.InvalidInput,
+    });
   });
 
-  it("does not fetch remaining pages after an early break", async () => {
-    const fetchPage = jest.fn()
-      .mockResolvedValueOnce({ payments: [{ order_id: "1" }], next_cursor: "next" })
-      .mockResolvedValueOnce({ payments: [{ order_id: "2" }], next_cursor: null });
-    for await (const page of getAllPayments({ fetchPage })) {
-      expect(page).toEqual([{ order_id: "1" }]);
-      break;
-    }
+  it('throws when nextCursor does not advance', async () => {
+    const fetchPage = jest.fn().mockResolvedValue({ items: [1], nextCursor: 'same' });
+    await expect(fetchAllPages({ fetchPage, initialCursor: 'same' })).rejects.toMatchObject({
+      code: PaymentErrorCode.InvalidInput,
+    });
+  });
+
+  it('throws PaginationLimitExceeded when page count exceeds maxPages', async () => {
+    const fetchPage = jest.fn().mockResolvedValue({ items: [], nextCursor: 'cursor' });
+    await expect(fetchAllPages({ fetchPage, maxPages: 1 })).rejects.toMatchObject({
+      code: PaymentErrorCode.PaginationLimitExceeded,
+    });
+  });
+});
+
+describe('fetchAllPayments', () => {
+  it('delegates to fetchAllPages for payment pages', async () => {
+    const fetchPage = jest.fn().mockResolvedValue({ items: ['a'], nextCursor: null });
+    const results = await fetchAllPayments(fetchPage);
+    expect(results).toEqual(['a']);
     expect(fetchPage).toHaveBeenCalledTimes(1);
   });
 });
