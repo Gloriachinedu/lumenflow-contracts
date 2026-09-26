@@ -1,0 +1,9 @@
+{
+  "name": "@lumenflow/contract-tests",
+  "version": "1.0.0",
+  "description": "API contract tests generated from docs/openapi.yaml",
+  "private": true,
+  "scripts": {
+    "test": "node --test"
+  }
+}
