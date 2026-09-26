@@ -1,48 +1,80 @@
-// changelog.config.js
-// Enforces Keep a Changelog (https://keepachangelog.com/en/1.1.0/) format
-// for automated changelog tooling (e.g. auto-changelog, conventional-changelog).
+'use strict'
 
-'use strict';
+// Custom conventional-changelog preset for LumenFlow.
+// Groups: Features, Bug Fixes, Security, Performance, Breaking Changes.
+// Covers all types required by acceptance criteria (#611).
 
 module.exports = {
-  // Standard Keep a Changelog categories — only these are allowed.
-  types: [
-    { type: 'added',      section: 'Added',      hidden: false },
-    { type: 'changed',    section: 'Changed',    hidden: false },
-    { type: 'deprecated', section: 'Deprecated', hidden: false },
-    { type: 'removed',    section: 'Removed',    hidden: false },
-    { type: 'fixed',      section: 'Fixed',      hidden: false },
-    { type: 'security',   section: 'Security',   hidden: false },
-  ],
+  writerOpts: {
+    // Entries under these commit types are included in the changelog.
+    // "security" and "perf" are added on top of the angular defaults.
+    transform: (commit, context) => {
+      const issues = []
 
-  // CHANGELOG.md is written to the repo root.
-  outFile: 'CHANGELOG.md',
+      // Map type → section title
+      const TYPE_MAP = {
+        feat: '🚀 Features',
+        fix: '🐛 Bug Fixes',
+        security: '🔒 Security',
+        perf: '⚡ Performance',
+        revert: '⏪ Reverts',
+        docs: '📝 Documentation',
+        ci: '🤖 CI',
+        build: '🔧 Build'
+      }
 
-  // Prepend new entries above the existing content.
-  append: false,
+      if (!TYPE_MAP[commit.type]) {
+        return  // skip types not in our map
+      }
 
-  // Require an [Unreleased] section at the top of every release.
-  unreleased: true,
+      commit.type = TYPE_MAP[commit.type]
 
-  // Commit URL template (replace with your actual repo if forked).
-  commitUrlFormat:
-    'https://github.com/Gloriachinedu/lumenflow-contracts/commit/{{hash}}',
+      // Detect BREAKING CHANGE notes and tag the entry
+      if (commit.notes) {
+        commit.notes.forEach(note => {
+          if (note.title === 'BREAKING CHANGE') {
+            note.title = '⚠ BREAKING CHANGES'
+          }
+          issues.push(note)
+        })
+      }
 
-  // Compare URL template used for version diff links.
-  compareUrlFormat:
-    'https://github.com/Gloriachinedu/lumenflow-contracts/compare/{{previousTag}}...{{currentTag}}',
+      // Shorten commit hash for display
+      if (typeof commit.hash === 'string') {
+        commit.shortHash = commit.hash.substring(0, 7)
+      }
 
-  // Issue/PR URL template.
-  issueUrlFormat:
-    'https://github.com/Gloriachinedu/lumenflow-contracts/issues/{{id}}',
+      // Turn issue references (#N) into links
+      if (typeof commit.subject === 'string') {
+        commit.subject = commit.subject.replace(/#([0-9]+)/g, (_, issue) => {
+          issues.push(issue)
+          if (!context.repository) return `#${issue}`
+          return `[#${issue}](${context.host}/${context.owner}/${context.repository}/issues/${issue})`
+        })
+      }
 
-  // Use ISO 8601 date format (YYYY-MM-DD) as required by Keep a Changelog.
-  releaseCommitMessageFormat: 'chore(release): {{currentTag}}',
+      return commit
+    },
 
-  // Header inserted at the top of the CHANGELOG.
-  header:
-    '# Changelog\n\n' +
-    'All notable changes to this project will be documented in this file.\n\n' +
-    'The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),\n' +
-    'and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).',
-};
+    // Group changelog sections by the mapped type string above
+    groupBy: 'type',
+
+    // Sort: breaking first, then features, fixes, security, perf, the rest
+    commitGroupsSort: (a, b) => {
+      const order = [
+        '⚠ BREAKING CHANGES',
+        '🚀 Features',
+        '🐛 Bug Fixes',
+        '🔒 Security',
+        '⚡ Performance',
+        '⏪ Reverts',
+        '📝 Documentation',
+        '🤖 CI',
+        '🔧 Build'
+      ]
+      return order.indexOf(a.title) - order.indexOf(b.title)
+    },
+
+    commitsSort: ['scope', 'subject']
+  }
+}
