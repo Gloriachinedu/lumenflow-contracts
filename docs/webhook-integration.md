@@ -38,6 +38,16 @@ https://horizon-testnet.stellar.org/contracts/{CONTRACT_ID}/events?cursor=now&to
 
 ## 2. Verifying Event Authenticity
 
+For webhook deliveries signed by an integration secret, verify the raw request body before parsing it. The SDK expects the `X-LumenFlow-Signature` value in the form `sha256=<64 lowercase or uppercase hex characters>`:
+
+```typescript
+import { verifyWebhookSignature } from "@lumenflow/sdk";
+
+const valid = verifyWebhookSignature(rawBody, request.headers["x-lumenflow-signature"], process.env.WEBHOOK_SECRET);
+```
+
+`rawBody` must be the original request bytes. The helper uses HMAC-SHA256 and a timing-safe comparison, returns `false` for a bad secret or payload, and throws for an empty secret or malformed signature.
+
 Events delivered via Horizon are signed by the Stellar network validators. To verify an event is genuine:
 
 1. **Check the contract ID** — confirm `contract_id` in the event matches your deployed contract address.
