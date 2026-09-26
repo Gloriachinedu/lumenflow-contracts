@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+# ── Secrets scanning (Issue #627) ─────────────────────────────────────────────
+# Run gitleaks before every commit to prevent accidental key commits.
+# Install gitleaks: https://github.com/gitleaks/gitleaks#installing
+if command -v gitleaks &>/dev/null; then
+  echo "🔍 Running gitleaks secrets scan..."
+  if ! gitleaks protect --staged --config .gitleaks.toml --redact; then
+    echo ""
+    echo "🚨 gitleaks detected a potential secret in staged files."
+    echo "   Review the output above. If this is a false positive, add an"
+    echo "   allowlist entry to .gitleaks.toml with a justification comment."
+    echo "   See docs/secrets-and-local-env.md for guidance."
+    exit 1
+  fi
+  echo "✅ No secrets detected in staged files."
+else
+  echo "⚠️  gitleaks is not installed — secrets scan skipped."
+  echo "   Install it to protect against accidental key commits:"
+  echo "   https://github.com/gitleaks/gitleaks#installing"
+  echo "   Or run: brew install gitleaks  (macOS)"
+  echo "           curl -sSfL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_x64.tar.gz | tar -xz -C /usr/local/bin"
+fi
+
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
