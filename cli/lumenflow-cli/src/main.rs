@@ -210,6 +210,18 @@ enum RefundCommands {
         #[arg(short, long)]
         refund_id: String,
     },
+    /// List all refunds for a given order (payer, merchant, or admin)
+    List {
+        /// Order ID to list refunds for
+        #[arg(short, long)]
+        order_id: String,
+        /// Caller address (payer, merchant, or admin — must be authorised on the contract)
+        #[arg(long)]
+        caller: String,
+        /// Output format: table (default) or json
+        #[arg(long, default_value = "table")]
+        output: String,
+    },
 }
 
 // ── Config models and Validation ──────────────────────────────────────────────────
@@ -983,6 +995,104 @@ fn main() -> Result<()> {
                 }
                 RefundCommands::Status { refund_id } => {
                     println!("Querying status of refund {}...", refund_id);
+                }
+                RefundCommands::List {
+                    order_id,
+                    caller,
+                    output,
+                } => {
+                    // Invoke get_refunds_for_order on the contract and display the results.
+                    let mut cmd = base_invoke(&config)?;
+                    cmd.args([
+                        "--",
+                        "get_refunds_for_order",
+                        "--caller",
+                        caller,
+                        "--order_id",
+                        order_id,
+                    ]);
+
+                    let out = cmd
+                        .output()
+                        .context("Failed to invoke get_refunds_for_order")?;
+
+                    if !out.status.success() {
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        bail!("get_refunds_for_order failed: {}", stderr.trim());
+                    }
+
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    let raw = stdout.trim();
+
+                    if output.to_lowercase() == "json" {
+                        // Pass through the raw JSON from the contract invocation
+                        println!("{}", raw);
+                    } else {
+                        // Parse the JSON and render a human-readable table
+                        match serde_json::from_str::<serde_json::Value>(raw) {
+                            Ok(serde_json::Value::Array(refunds)) if refunds.is_empty() => {
+                                println!("No refunds found for order {}.", order_id);
+                            }
+                            Ok(serde_json::Value::Array(refunds)) => {
+                                // Column widths (minimum = header length)
+                                let w_id     = refunds.iter()
+                                    .map(|r| r["refund_id"].as_str().unwrap_or("-").len())
+                                    .max().unwrap_or(0).max("refund_id".len());
+                                let w_status = refunds.iter()
+                                    .map(|r| r["status"].as_str().unwrap_or("-").len())
+                                    .max().unwrap_or(0).max("status".len());
+                                let w_amount = refunds.iter()
+                                    .map(|r| r["amount"].to_string().len())
+                                    .max().unwrap_or(0).max("amount".len());
+                                let w_reason = refunds.iter()
+                                    .map(|r| r["reason"].as_str().unwrap_or("-").len())
+                                    .max().unwrap_or(0).max("reason".len());
+                                let w_init   = refunds.iter()
+                                    .map(|r| r["initiator"].as_str().unwrap_or("-").len())
+                                    .max().unwrap_or(0).max("initiator".len());
+
+                                let sep = format!(
+                                    "+-{}-+-{}-+-{}-+-{}-+-{}-+",
+                                    "-".repeat(w_id),
+                                    "-".repeat(w_status),
+                                    "-".repeat(w_amount),
+                                    "-".repeat(w_reason),
+                                    "-".repeat(w_init),
+                                );
+
+                                println!("{}", sep);
+                                println!(
+                                    "| {:<w_id$} | {:<w_status$} | {:<w_amount$} | {:<w_reason$} | {:<w_init$} |",
+                                    "refund_id", "status", "amount", "reason", "initiator",
+                                    w_id = w_id, w_status = w_status, w_amount = w_amount,
+                                    w_reason = w_reason, w_init = w_init,
+                                );
+                                println!("{}", sep);
+
+                                for r in &refunds {
+                                    let refund_id = r["refund_id"].as_str().unwrap_or("-");
+                                    let status    = r["status"].as_str().unwrap_or("-");
+                                    let amount    = r["amount"].to_string();
+                                    let reason    = r["reason"].as_str().unwrap_or("-");
+                                    let initiator = r["initiator"].as_str().unwrap_or("-");
+                                    println!(
+                                        "| {:<w_id$} | {:<w_status$} | {:<w_amount$} | {:<w_reason$} | {:<w_init$} |",
+                                        refund_id, status, amount, reason, initiator,
+                                        w_id = w_id, w_status = w_status, w_amount = w_amount,
+                                        w_reason = w_reason, w_init = w_init,
+                                    );
+                                }
+
+                                println!("{}", sep);
+                                println!("{} refund(s) for order {}.", refunds.len(), order_id);
+                            }
+                            _ => {
+                                // Contract returned something other than a JSON array
+                                // (e.g. raw Soroban XDR output or an error). Print as-is.
+                                println!("{}", raw);
+                            }
+                        }
+                    }
                 }
             }
         }
