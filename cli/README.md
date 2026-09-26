@@ -1,193 +1,284 @@
-# LumenFlow CLI
+# lumenflow-cli
 
-A command-line interface for interacting with the LumenFlow Soroban smart contract on Stellar.
-
----
+Command-line interface for the LumenFlow Soroban payment contract.
 
 ## Installation
-
-### Pre-built binaries (recommended)
-
-Download the latest release for your platform from the [GitHub Releases](https://github.com/Gloriachinedu/lumenflow-contracts/releases) page:
-
-| Platform | Archive |
-|---|---|
-| Linux x86_64 | `lumenflow-cli-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` |
-| Linux arm64 | `lumenflow-cli-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz` |
-| macOS x86_64 | `lumenflow-cli-vX.Y.Z-x86_64-apple-darwin.tar.gz` |
-| macOS arm64 (M-series) | `lumenflow-cli-vX.Y.Z-aarch64-apple-darwin.tar.gz` |
-| Windows x86_64 | `lumenflow-cli-vX.Y.Z-x86_64-pc-windows-msvc.zip` |
-
-Each archive includes a `.sha256` checksum file. Verify before installing:
-
-```bash
-# Linux arm64 example
-VERSION=v0.1.0
-curl -LO "https://github.com/Gloriachinedu/lumenflow-contracts/releases/download/${VERSION}/lumenflow-cli-${VERSION}-aarch64-unknown-linux-gnu.tar.gz"
-curl -LO "https://github.com/Gloriachinedu/lumenflow-contracts/releases/download/${VERSION}/lumenflow-cli-${VERSION}-aarch64-unknown-linux-gnu.tar.gz.sha256"
-sha256sum --check "lumenflow-cli-${VERSION}-aarch64-unknown-linux-gnu.tar.gz.sha256"
-tar -xzf "lumenflow-cli-${VERSION}-aarch64-unknown-linux-gnu.tar.gz"
-sudo mv lumenflow-cli /usr/local/bin/lumenflow
-```
-
-### Build from source
 
 ```bash
 cargo install --path cli/lumenflow-cli
 ```
 
----
-
 ## Configuration
 
-The CLI reads configuration from `.lumenflow.toml` in the current directory (or the file specified with `--config`). Environment variables override file values.
-
-### Basic configuration
+The CLI reads config from `.lumenflow.toml` in the current directory, with environment variables taking precedence:
 
 ```toml
 # .lumenflow.toml
-network       = "testnet"
-contract_id   = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-source_account = "SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-rpc_url       = "https://soroban-testnet.stellar.org"
+network        = "testnet"   # testnet | mainnet | local
+contract_id    = "C..."      # deployed contract address
+source_account = "S..."      # signing secret key
 ```
 
-### Named profiles
+| Environment variable   | Overrides         |
+|------------------------|-------------------|
+| `LUMENFLOW_NETWORK`    | `network`         |
+| `LUMENFLOW_CONTRACT_ID`| `contract_id`     |
+| `LUMENFLOW_SOURCE`     | `source_account`  |
 
-Profiles let you switch between network environments without editing the file or changing environment variables.
+A custom config path can be passed with `--config <FILE>`.
 
-```toml
-# .lumenflow.toml
+---
 
-# Top-level keys are the global defaults used when no profile is selected
-network        = "testnet"
-contract_id    = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-source_account = "SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+## Sensitive Parameter Handling
 
-# Optionally set the profile used when --profile is not supplied
-default_profile = "testnet"
+The `--source-account` flag accepts a Stellar secret key. Passing secrets as
+CLI flags is discouraged because they appear in shell history. The CLI
+provides safer alternatives.
 
-[profiles.local]
-network     = "local"
-contract_id = "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
-rpc_url     = "http://localhost:8000/soroban/rpc"
+### Priority order for the source account key
 
-[profiles.testnet]
-network     = "testnet"
-contract_id = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-rpc_url     = "https://soroban-testnet.stellar.org"
+1. **`--key-file <FILE>`** — Read the key from a file. The file content is
+   trimmed; the value is never echoed.
+2. **`--prompt-key`** — Prompt interactively with hidden input (no echo),
+   even if a key is already set.
+3. **Auto-prompt (interactive terminal)** — When `--source-account` is
+   omitted and no key is set via config/env, the CLI detects whether stdin
+   is a TTY. If it is, the key is prompted with hidden input automatically.
+4. **`LUMENFLOW_SOURCE` environment variable** — Set the key in the
+   environment; never passes through shell history.
+5. **`source_account` in `.lumenflow.toml`** — Lowest priority; suitable
+   for local development only. Do not commit this file with real keys.
 
-[profiles.mainnet]
-network     = "mainnet"
-contract_id = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
-rpc_url     = "https://soroban.stellar.org"
+### Non-interactive (CI) mode
+
+When stdin is **not** a TTY (e.g. a GitHub Actions runner, a Docker
+container, or a pipe), the CLI will **not** attempt an interactive prompt.
+Instead it returns a clear, actionable error:
+
+```
+Missing source account secret key.
+In non-interactive (CI) environments, provide the key explicitly:
+
+Option 1 — environment variable:
+  LUMENFLOW_SOURCE=<secret-key> lumenflow ...
+
+Option 2 — flag (not recommended; appears in shell history):
+  lumenflow --source-account <secret-key> ...
+
+Option 3 — key file (recommended for CI):
+  lumenflow --key-file /path/to/keyfile ...
 ```
 
-Each profile section can override any of the top-level keys. Keys omitted in a profile fall back to the global defaults.
+### Recommended CI setup
 
-### Selecting a profile
-
-**Via `--profile` flag** (highest precedence after environment variables):
-
-```bash
-lumenflow --profile testnet pay --merchant GXXX --amount 500 --order-id ORD001
-lumenflow --profile mainnet stats
-lumenflow --profile local history --merchant GYYY
+```yaml
+# GitHub Actions example
+- name: Run lumenflow command
+  env:
+    LUMENFLOW_SOURCE: ${{ secrets.LUMENFLOW_SOURCE_ACCOUNT }}
+    LUMENFLOW_CONTRACT_ID: ${{ secrets.CONTRACT_ID }}
+  run: lumenflow stats --admin $ADMIN_ADDRESS
 ```
 
-**Via `LUMENFLOW_PROFILE` environment variable:**
+Using `LUMENFLOW_SOURCE` ensures the secret is injected from the CI
+secrets store and never appears in logs or shell history.
 
-```bash
-export LUMENFLOW_PROFILE=testnet
-lumenflow pay --merchant GXXX --amount 500 --order-id ORD001
-```
+### Security guarantees
 
-**Via `default_profile` in `.lumenflow.toml`:**
-
-```toml
-default_profile = "testnet"
-```
-
-When no profile is specified via flag, env var, or `default_profile`, the top-level keys in `.lumenflow.toml` are used directly.
-
-### Precedence order (highest → lowest)
-
-1. Environment variables (`LUMENFLOW_NETWORK`, `LUMENFLOW_CONTRACT_ID`, `LUMENFLOW_SOURCE`, `LUMENFLOW_RPC_URL`)
-2. `--profile` flag / `LUMENFLOW_PROFILE` env var (selects a profile section)
-3. Selected profile section in `.lumenflow.toml`
-4. Top-level keys in `.lumenflow.toml`
-5. Built-in defaults (`network = "testnet"`)
-
-### Environment variables reference
-
-| Variable | Description |
-|---|---|
-| `LUMENFLOW_PROFILE` | Active profile name (same as `--profile`) |
-| `LUMENFLOW_NETWORK` | Network override (`local`, `testnet`, `mainnet`) |
-| `LUMENFLOW_CONTRACT_ID` | Contract address override |
-| `LUMENFLOW_SOURCE` | Source account secret key override |
-| `LUMENFLOW_RPC_URL` | Soroban RPC URL override |
+- Sensitive values entered via hidden prompt are **never** written to
+  stdout, stderr, log files, or the CI step summary.
+- The `print-config` command redacts the source account:
+  `SABC…WXYZ` (first 4 + last 4 chars only).
+- The `--source-account` CLI flag should only be used for quick local
+  testing. In any shared or automated environment, prefer
+  `LUMENFLOW_SOURCE` or `--key-file`.
 
 ---
 
 ## Commands
 
-### `pay`
+### `pay` — Process a payment
 
-Submit a payment to a merchant.
+#### Interactive mode (guided)
+
+Run `lumenflow pay` with **no flags** to enter interactive mode.  
+You will be prompted for each field one at a time, with real-time validation:
+
+```
+$ lumenflow pay
+
+🌟  LumenFlow Interactive Payment — network: testnet
+(Press Ctrl-C at any time to cancel)
+
+? Merchant address (G…)  GBUYUAI75XXWDZEKLY66CFYKQPET5JR4EAPL7STQKQCRLKJ74SC65VU
+? Token  › XLM (native)
+? Amount (in stroops, e.g. 10000000 = 1 XLM)  10000000
+? Order ID (unique, no spaces)  ORDER_001
+? Memo / reference (optional, press Enter to skip)  Invoice #001
+
+┌──────────────────────────────────────────────────────────┐
+│                   Payment Summary                        │
+├──────────────────────────────────────────────────────────┤
+│  Order:    ORDER_001                                     │
+│  Merchant: GBUYUAI75XXWDZEKLY66CFYKQPET5JR4EAPL7...    │
+│  Amount:   10000000 stroops (1.0000000 XLM)              │
+│  Token:    native                                        │
+│  Memo:     Invoice #001                                  │
+│  Network:  testnet                                       │
+└──────────────────────────────────────────────────────────┘
+
+? Submit this payment? (y/N)
+```
+
+**To exit interactive mode:** press `Ctrl-C` at any prompt, or answer `N` at the confirmation step.
+
+**Validation rules applied in real time:**
+- Merchant / token addresses: 56-character Stellar address starting with `G`
+- Amount: positive integer (stroops)
+- Order ID: non-empty, no whitespace
+
+#### Non-interactive (flag-based) mode
+
+All three required flags must be provided together.  
+Flag-based mode is **fully backwards-compatible** — existing scripts are unaffected.
 
 ```bash
-lumenflow pay --merchant <ADDRESS> --amount <AMOUNT> --order-id <ID>
+lumenflow pay \
+  --merchant GBUYUAI75XXWDZEKLY66CFYKQPET5JR4EAPL7STQKQCRLKJ74SC65VU \
+  --amount 10000000 \
+  --order-id ORDER_001 \
+  --memo "Invoice #001" \
+  --token native
 ```
 
-**Options:**
+| Flag          | Short | Required | Description                         |
+|---------------|-------|----------|-------------------------------------|
+| `--merchant`  | `-m`  | Yes      | Merchant Stellar address (G…)       |
+| `--amount`    | `-a`  | Yes      | Amount in stroops (integer)         |
+| `--order-id`  | `-o`  | Yes      | Unique order identifier             |
+| `--memo`      |       | No       | Payment memo / reference            |
+| `--token`     | `-t`  | No       | Token address (defaults to `native`)|
 
-| Flag | Description |
-|---|---|
-| `-m, --merchant` | Merchant Stellar address |
-| `-a, --amount` | Amount in stroops |
-| `-o, --order-id` | Unique order identifier |
-| `--batch-file <FILE>` | CSV file for batch payments (see below) |
-| `--dry-run` | Print what would be submitted without executing |
+> Providing only some flags (but not all required ones) will print a helpful error
+> directing you to either supply all flags or use interactive mode.
 
-### `pay --batch-file`
+---
 
-Import and submit payments from a CSV file.
+### `refund init` — Initiate a refund
 
 ```bash
-lumenflow pay --batch-file payments.csv
-lumenflow pay --batch-file payments.csv --dry-run
+lumenflow refund init --order-id ORDER_001 --amount 5000000
 ```
 
-CSV format (headers required):
+---
 
-```csv
-order_id,merchant_address,amount,memo
-ORD001,GXXX...,1000,Invoice #1
-ORD002,GYYY...,500,Invoice #2
-```
-
-The CLI validates all rows before submitting. Batches are automatically split into groups of up to 10. Use `--dry-run` to preview without executing.
-
-### `refund init`
-
-Initiate a refund for an existing payment.
+### `refund approve` — Approve a pending refund (merchant or admin)
 
 ```bash
-lumenflow refund init --order-id <ID> --amount <AMOUNT>
+lumenflow refund approve --refund-id REFUND_001 --caller <merchant-address>
 ```
 
-### `history`
+---
 
-View paginated payment history for a merchant.
+### `refund reject` — Reject a pending refund (merchant or admin)
 
 ```bash
-lumenflow history --merchant <ADDRESS>
+lumenflow refund reject --refund-id REFUND_001 --caller <merchant-address>
 ```
 
-### `stats`
+---
 
-View global contract statistics (admin only).
+### `refund execute` — Execute an approved refund (merchant)
+
+```bash
+lumenflow refund execute --refund-id REFUND_001
+```
+
+---
+
+### `refund status` — Get the status of a single refund
+
+```bash
+lumenflow refund status --refund-id REFUND_001
+```
+
+---
+
+### `refund list` — List all refunds for an order
+
+Lists all refunds associated with a given order. The caller must be the
+payer, merchant, or admin authorised on the contract.
+
+```bash
+lumenflow refund list --order-id ORDER_001 --caller <caller-address>
+```
+
+**Output (default — table format):**
+
+```
++------------+-----------+--------+------------------+-----------------------------------------+
+| refund_id  | status    | amount | reason           | initiator                               |
++------------+-----------+--------+------------------+-----------------------------------------+
+| REFUND_001 | Approved  | 500    | Customer request | GPAYER...                               |
+| REFUND_002 | Completed | 250    | Damaged item     | GMERCHANT...                            |
++------------+-----------+--------+------------------+-----------------------------------------+
+2 refund(s) for order ORDER_001.
+```
+
+**JSON output** (pipe-friendly, for scripting):
+
+```bash
+lumenflow refund list --order-id ORDER_001 --caller <caller-address> --output json
+```
+
+| Flag          | Short | Required | Description                                         |
+|---------------|-------|----------|-----------------------------------------------------|
+| `--order-id`  | `-o`  | Yes      | Order ID to list refunds for                        |
+| `--caller`    |       | Yes      | Caller address (payer, merchant, or admin)          |
+| `--output`    |       | No       | Output format: `table` (default) or `json`          |
+
+The output includes: `refund_id`, `status`, `amount`, `reason`, `initiator`.
+
+---
+
+### `history` — View payment history
+
+```bash
+lumenflow history --merchant GBUYUAI75XXWDZEKLY66CFYKQPET5JR4EAPL7STQKQCRLKJ74SC65VU
+```
+
+---
+
+### `merchant list` — List registered merchants (admin only)
+
+Lists all registered merchants with cursor-based pagination. Requires an admin key.
+
+```bash
+lumenflow merchant list --admin-key $ADMIN_KEY
+```
+
+With pagination and JSON output:
+
+```bash
+lumenflow merchant list \
+  --admin-key $ADMIN_KEY \
+  --limit 25 \
+  --cursor GLAST_MERCHANT_ADDRESS \
+  --output json
+```
+
+| Flag          | Env var               | Required | Description                                          |
+|---------------|-----------------------|----------|------------------------------------------------------|
+| `--admin-key` | `LUMENFLOW_ADMIN_KEY` | Yes      | Admin secret key or address                          |
+| `--limit`     |                       | No       | Max merchants per page (default: 10)                 |
+| `--cursor`    |                       | No       | Pagination cursor (address from previous page)       |
+| `--output`    |                       | No       | Output format: `text` (default) or `json`            |
+
+Output fields per merchant: `address`, `name`, `category`, `is_verified`, `is_active`.
+
+---
+
+### `stats` — Global statistics (admin only)
 
 ```bash
 lumenflow stats
@@ -195,11 +286,9 @@ lumenflow stats
 
 ---
 
-## Global flags
+## Help
 
-| Flag | Description |
-|---|---|
-| `-c, --config <FILE>` | Path to config file (default: `.lumenflow.toml`) |
-| `--profile <NAME>` | Named profile to activate |
-| `-h, --help` | Print help |
-| `-V, --version` | Print version |
+```bash
+lumenflow --help
+lumenflow pay --help
+```
