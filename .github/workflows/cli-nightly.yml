@@ -123,10 +123,115 @@ jobs:
           aws s3 cp "${{ env.ARCHIVE }}.sha256" \
             "s3://lumenflow-artifacts-prod/nightly/${{ steps.meta.outputs.date }}/${{ env.ARCHIVE }}.sha256"
 
+  # ── CLI integration tests ──────────────────────────────────────────────────
+  # Runs scripts/cli-integration-test.sh against a local Soroban node spun up
+  # via docker compose. Failures block the nightly build.
+  # Only runs on the linux build matrix target (integration tests are
+  # platform-agnostic; no need to repeat on macOS/Windows).
+  integration-test:
+    name: CLI Integration Tests
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.87.0
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-integration-
+
+      - name: Set up Node.js (for generate_smoke_keypair.sh)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Stellar CLI
+        run: |
+          curl -fsSL \
+            https://github.com/stellar/stellar-cli/releases/download/v22.8.1/stellar-cli-22.8.1-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /usr/local/bin stellar
+          stellar --version
+
+      - name: Download linux CLI binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lumenflow-cli-nightly-x86_64-unknown-linux-gnu
+          path: /tmp/cli-artifact
+
+      - name: Extract CLI binary
+        run: |
+          cd /tmp/cli-artifact
+          ARCHIVE=$(ls lumenflow-cli-nightly-*.tar.gz | head -1)
+          tar -xzf "$ARCHIVE"
+          chmod +x lumenflow-cli
+          echo "CLI_BIN=/tmp/cli-artifact/lumenflow-cli" >> "$GITHUB_ENV"
+
+      - name: Start local Soroban node
+        run: |
+          docker compose up -d stellar
+          echo "Waiting for Soroban RPC to become ready…"
+          WAIT=0
+          until curl -sf http://localhost:8000/soroban/rpc \
+              -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' \
+              -H 'Content-Type: application/json' > /dev/null 2>&1; do
+            sleep 3
+            WAIT=$((WAIT + 3))
+            if [[ $WAIT -ge 120 ]]; then
+              echo "::error::Soroban RPC did not become ready within 120 s"
+              docker compose logs stellar
+              exit 1
+            fi
+          done
+          echo "Soroban RPC ready after ${WAIT}s"
+
+      - name: Run CLI integration tests
+        id: cli_tests
+        env:
+          KEEP_NODE: "1"   # node is torn down by the step below
+        run: |
+          chmod +x scripts/cli-integration-test.sh
+          mkdir -p integration-test-results
+          bash scripts/cli-integration-test.sh 2>&1 | tee integration-test-results/cli-integration.log
+          echo "## ✅ CLI Integration Tests Passed" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload integration test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-integration-test-results-${{ github.run_id }}
+          path: integration-test-results/
+          retention-days: 14
+
+      - name: Stop local Soroban node
+        if: always()
+        run: docker compose down -v
+
+      - name: Report failure in step summary
+        if: failure() && steps.cli_tests.conclusion == 'failure'
+        run: |
+          echo "## ❌ CLI Integration Tests FAILED" >> "$GITHUB_STEP_SUMMARY"
+          echo "See artifact \`cli-integration-test-results-${{ github.run_id }}\` for the full log." >> "$GITHUB_STEP_SUMMARY"
+
   notify-failure:
     name: Notify Slack on Failure
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, integration-test]
     if: failure()
     steps:
       - name: Post to #ci-alerts Slack channel
@@ -134,13 +239,13 @@ jobs:
         with:
           payload: |
             {
-              "text": "❌ *Nightly CLI build failed*",
+              "text": "❌ *Nightly CLI build/integration tests failed*",
               "blocks": [
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "❌ *Nightly CLI build failed*\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>\n\nDate: `${{ github.run_id }}`\nCommit: `${{ github.sha }}`"
+                    "text": "❌ *Nightly CLI build or integration tests failed*\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>\n\nDate: `${{ github.run_id }}`\nCommit: `${{ github.sha }}`"
                   }
                 }
               ]
