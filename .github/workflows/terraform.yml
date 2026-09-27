@@ -16,6 +16,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  id-token: write
 
 jobs:
   terraform:
@@ -38,28 +39,33 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Configure AWS credentials
+        if: github.event_name == 'push'
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            us-east-1
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-east-1
 
       - name: Terraform fmt check
         run: terraform fmt -check -recursive
 
       - name: Terraform Init
         run: |
-          terraform init \
-            -backend-config="bucket=lumenflow-terraform-state" \
-            -backend-config="key=lumenflow/terraform.tfstate" \
-            -backend-config="region=us-east-1" \
-            -backend-config="dynamodb_table=lumenflow-terraform-locks"
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            terraform init -backend=false
+          else
+            terraform init \
+              -backend-config="bucket=lumenflow-terraform-state" \
+              -backend-config="key=lumenflow/terraform.tfstate" \
+              -backend-config="region=us-east-1" \
+              -backend-config="dynamodb_table=lumenflow-terraform-locks"
+          fi
 
       - name: Terraform Validate
         run: terraform validate
 
       - name: Terraform Plan
         id: plan
+        if: github.event_name == 'push'
         run: |
           terraform plan \
             -var="ci_runner_subnet_id=${{ secrets.TF_CI_RUNNER_SUBNET_ID }}" \
@@ -76,7 +82,10 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const plan = fs.readFileSync('infra/terraform/plan.txt', 'utf8');
+            const planPath = 'infra/terraform/plan.txt';
+            const plan = fs.existsSync(planPath)
+              ? fs.readFileSync(planPath, 'utf8')
+              : 'AWS-backed plans are skipped on pull requests. Format and validation checks ran without AWS credentials.';
             const body = `## Terraform Plan\n\`\`\`\n${plan.slice(0, 60000)}\n\`\`\``;
             github.rest.issues.createComment({
               issue_number: context.issue.number,

@@ -23,6 +23,11 @@ output "ci_runner_role_arn" {
   value       = aws_iam_role.ci_runner.arn
 }
 
+output "github_actions_role_arn" {
+  description = "IAM role ARN for GitHub Actions OIDC federation"
+  value       = aws_iam_role.github_actions.arn
+}
+
 output "alerts_topic_arn" {
   description = "SNS topic ARN for monitoring alerts"
   value       = aws_sns_topic.alerts.arn

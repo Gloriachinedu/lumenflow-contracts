@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -111,12 +112,17 @@ jobs:
             ${{ env.ARCHIVE }}.sha256
           retention-days: 7
 
-      - name: Upload to S3 (optional — requires AWS_ACCESS_KEY_ID secret)
-        if: env.AWS_ACCESS_KEY_ID != ''
+      - name: Configure AWS credentials with OIDC
+        if: vars.AWS_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Upload to S3 (optional — requires AWS_ROLE_ARN repository variable)
+        if: vars.AWS_ROLE_ARN != ''
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+          AWS_DEFAULT_REGION: us-east-1
         run: |
           aws s3 cp "${{ env.ARCHIVE }}" \
             "s3://lumenflow-artifacts-prod/nightly/${{ steps.meta.outputs.date }}/${{ env.ARCHIVE }}"
