@@ -1,5 +1,8 @@
 // Minimal wallet adapter helpers for Freighter and Albedo
 // This file is intended as a lightweight adapter used by the dashboard UI.
+// Note: For new code, prefer using the WalletAdapter interface from adapter.ts.
+
+import { FreighterAdapter, WalletAdapter } from './adapter';
 
 export type WalletInfo = {
   type: 'freighter' | 'albedo' | 'none',
@@ -15,7 +18,7 @@ export function loadWallet(): WalletInfo | null {
   try { const s = localStorage.getItem(STORAGE_KEY); return s ? JSON.parse(s) : null; } catch(e){ return null; }
 }
 
-export async function connectFreighter() {
+export async function connectFreighter(): Promise<WalletInfo> {
   if (!(window as any).freighter) throw new Error('Freighter not available');
   const freighter = (window as any).freighter;
   const account = await freighter.getConnectedAccount();
@@ -24,7 +27,7 @@ export async function connectFreighter() {
   return info;
 }
 
-export async function connectAlbedo() {
+export async function connectAlbedo(): Promise<WalletInfo> {
   if (!(window as any).albedo) throw new Error('Albedo not available');
   const albedo = (window as any).albedo;
   const resp = await albedo.publicKey();
@@ -35,4 +38,12 @@ export async function connectAlbedo() {
 
 export function disconnectWallet() {
   try { localStorage.removeItem(STORAGE_KEY); } catch(e){}
+}
+
+/**
+ * Create a FreighterAdapter instance for use with the WalletAdapter interface.
+ * This is the recommended way to use Freighter with the new adapter pattern.
+ */
+export function createFreighterAdapter(): WalletAdapter {
+  return new FreighterAdapter();
 }

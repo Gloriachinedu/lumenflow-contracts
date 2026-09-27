@@ -1,0 +1,64 @@
+name: Translation Update
+description: Report an outdated or incorrect translation, or propose a new one
+labels: ["translation", "documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping keep LumenFlow's documentation accurate across languages!
+
+  - type: dropdown
+    id: language
+    attributes:
+      label: Target Language
+      description: Which language does this translation concern?
+      options:
+        - Spanish (es)
+        - Portuguese (pt)
+        - Other (specify in description)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: Type of Change
+      options:
+        - Correction — existing translation has an error
+        - Update — source document changed and translation is now outdated
+        - New translation — document does not yet have a translation for this language
+    validations:
+      required: true
+
+  - type: input
+    id: source-file
+    attributes:
+      label: Source Document
+      description: Path to the English source file (e.g. `SECURITY.md`, `docs/errors.md`).
+      placeholder: SECURITY.md
+    validations:
+      required: true
+
+  - type: input
+    id: translation-file
+    attributes:
+      label: Translation File
+      description: Path to the translated file, if it already exists (e.g. `SECURITY.es.md`).
+      placeholder: SECURITY.es.md
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe the specific issue or the new content that needs to be translated.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have compared the translation against the current English source document
+          required: true
+        - label: I am a native or fluent speaker of the target language, or I have had the translation reviewed by one
