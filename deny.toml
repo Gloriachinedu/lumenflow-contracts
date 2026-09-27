@@ -1,0 +1,27 @@
+[advisories]
+version = 2
+yanked = "deny"
+# Version 2 denies every vulnerability advisory, including high and critical.
+# No advisories are ignored. Any exception must include an expiry date in its
+# reason, for example: { id = "RUSTSEC-0000-0000", reason = "Expires 2099-01-01: ..." }.
+ignore = []
+
+[licenses]
+version = 2
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+deny = []
+skip = []
+skip-tree = []
