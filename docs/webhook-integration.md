@@ -8,6 +8,12 @@ This guide explains how to receive real-time notifications of LumenFlow contract
 
 LumenFlow emits Soroban contract events for every significant action (payments, refunds, disputes, etc.). Your backend can subscribe to these events via the Horizon HTTP event stream and trigger webhooks or internal workflows.
 
+The Node.js example in this guide is an outbound Horizon event consumer: it
+forwards events to `WEBHOOK_URL`. This repository does not currently contain an
+inbound webhook receiver at `webhook/webhook-server.js` or a receiver package
+and test suite. Issue #1099's request-body limit needs an owning receiver
+implementation before it can be applied and tested safely.
+
 ---
 
 ## 1. Listening to the Horizon Event Stream
