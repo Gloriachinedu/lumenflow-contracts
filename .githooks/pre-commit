@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${SKIP_SECRET_SCAN:-0}" == "1" ]]; then
+  printf '%s\n' 'WARNING: secret scanning skipped because SKIP_SECRET_SCAN=1.' >&2
+  exit 0
+fi
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  printf '%s\n' 'ERROR: gitleaks is required. Install gitleaks or use SKIP_SECRET_SCAN=1 only for an emergency.' >&2
+  exit 1
+fi
+
+gitleaks dir --config .gitleaks.toml .

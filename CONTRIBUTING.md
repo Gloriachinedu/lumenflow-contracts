@@ -42,6 +42,18 @@ To update a pinned action:
 
 ## Development Setup
 
+### Secret Scanning Hook
+
+Install gitleaks, then enable the repository's pre-commit scan:
+
+```bash
+./scripts/install_hooks.sh
+```
+
+The hook scans the repository with `.gitleaks.toml` before each commit. Add
+reviewed false-positive exceptions to that configuration. For emergencies only,
+`SKIP_SECRET_SCAN=1 git commit ...` skips the scan and prints a warning.
+
 ```bash
 # Install Rust stable + WASM target
 rustup target add wasm32-unknown-unknown

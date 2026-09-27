@@ -1,0 +1,10 @@
+title = "LumenFlow secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Add reviewed false positives here, scoped to paths or patterns."
+commits = []
+paths = []
+regexes = []
