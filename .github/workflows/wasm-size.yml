@@ -1,0 +1,335 @@
+name: WASM Size Monitor
+
+# Runs after the main CI build job to record WASM size and check for regressions.
+# On PRs it posts a size-delta comment. On main/develop it commits the updated
+# wasm-size-history.json back to the branch.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  check-wasm-size:
+    name: Check & Record WASM Size
+    runs-on: ubuntu-latest
+    # Skip if a triggered workflow_run failed before producing a WASM artifact
+    if: >
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Fetch full history so we can commit the size record
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref }}
+
+      # ── For PRs: build WASM locally so we have the artifact ─────────────────
+      - name: Install Rust toolchain (PR builds)
+        if: github.event_name == 'pull_request'
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.87.0
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry (PR builds)
+        if: github.event_name == 'pull_request'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-wasm-size-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-wasm-size-
+
+      - name: Build WASM (PR builds)
+        if: github.event_name == 'pull_request'
+        env:
+          CARGO_TARGET_DIR: target/cargo-wasm
+        run: |
+          cargo build \
+            --locked \
+            --target wasm32-unknown-unknown \
+            --release \
+            --package lumenflow
+
+      # ── For workflow_run triggers: download the artifact from CI ─────────────
+      - name: Download WASM artifact (workflow_run)
+        if: github.event_name == 'workflow_run'
+        uses: actions/download-artifact@v4
+        with:
+          name: lumenflow-wasm
+          path: wasm-artifact
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Locate WASM binary
+        id: wasm
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            WASM_PATH="target/cargo-wasm/wasm32-unknown-unknown/release/lumenflow.wasm"
+          else
+            WASM_PATH="wasm-artifact/lumenflow.wasm"
+          fi
+
+          if [ ! -f "$WASM_PATH" ]; then
+            echo "::error::WASM binary not found at $WASM_PATH"
+            exit 1
+          fi
+
+          SIZE=$(wc -c < "$WASM_PATH")
+          echo "path=$WASM_PATH"    >> "$GITHUB_OUTPUT"
+          echo "size_bytes=$SIZE"   >> "$GITHUB_OUTPUT"
+          echo "WASM size: $SIZE bytes"
+
+      # ── Read previous size from history ─────────────────────────────────────
+      - name: Get previous WASM size
+        id: prev
+        run: |
+          PREV=$(python3 -c "
+          import json, sys
+          try:
+              data = json.load(open('wasm-size-history.json'))
+              entries = data.get('entries', [])
+              if entries:
+                  print(entries[-1]['size_bytes'])
+              else:
+                  print(0)
+          except Exception:
+              print(0)
+          ")
+          echo "size_bytes=$PREV" >> "$GITHUB_OUTPUT"
+          echo "Previous WASM size: $PREV bytes"
+
+      # ── Enforce the 5 KB PR increase limit ───────────────────────────────────
+      - name: Check size delta
+        id: delta
+        run: |
+          CURRENT=${{ steps.wasm.outputs.size_bytes }}
+          PREV=${{ steps.prev.outputs.size_bytes }}
+          THRESHOLD=5120   # 5 KB
+
+          DELTA=$((CURRENT - PREV))
+          PCT=$(python3 -c "print(round(($DELTA / max($PREV, 1)) * 100, 2))")
+
+          echo "delta_bytes=$DELTA"  >> "$GITHUB_OUTPUT"
+          echo "delta_pct=$PCT"      >> "$GITHUB_OUTPUT"
+
+          KB=$(python3 -c "print(round($CURRENT / 1024, 2))")
+          echo "size_kb=$KB"         >> "$GITHUB_OUTPUT"
+
+          echo "Delta: $DELTA bytes ($PCT%)"
+
+          # Only fail on PRs — push to main just records the size
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "$DELTA" -gt "$THRESHOLD" ]; then
+            echo "::error::WASM size increased by ${DELTA} bytes (${PCT}%), which exceeds the ${THRESHOLD}-byte PR threshold."
+            echo "failed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "failed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Generate size-trend chart as SVG ─────────────────────────────────────
+      - name: Generate size trend chart
+        run: |
+          python3 - <<'PYEOF'
+          import json, os
+
+          try:
+              data = json.load(open("wasm-size-history.json"))
+          except Exception:
+              data = {"entries": []}
+
+          entries = data.get("entries", [])[-30:]  # Last 30 builds
+          if not entries:
+              # Create a minimal chart with just the current data point
+              entries = [{"date": "today", "size_bytes": int(os.environ.get("CURRENT_SIZE", 0))}]
+
+          dates   = [e.get("date", "")[:10] for e in entries]
+          sizes   = [e.get("size_bytes", 0) for e in entries]
+          limit   = data.get("limit_bytes", 102400)
+
+          W, H    = 800, 300
+          pad     = 50
+          x_step  = (W - 2 * pad) / max(len(entries) - 1, 1)
+          max_sz  = max(sizes + [limit]) * 1.1
+          min_sz  = max(min(sizes) * 0.9, 0)
+
+          def to_x(i):   return pad + i * x_step
+          def to_y(v):   return H - pad - (v - min_sz) / (max_sz - min_sz) * (H - 2 * pad)
+
+          points = " ".join(f"{to_x(i):.1f},{to_y(s):.1f}" for i, s in enumerate(sizes))
+          limit_y = to_y(limit)
+
+          svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" style="background:#1a1a2e;font-family:monospace">
+            <text x="{W//2}" y="20" fill="#e0e0e0" font-size="14" text-anchor="middle">WASM Size Trend (last {len(entries)} builds)</text>
+            <!-- Limit line -->
+            <line x1="{pad}" y1="{limit_y:.1f}" x2="{W-pad}" y2="{limit_y:.1f}" stroke="#ff4444" stroke-dasharray="6,3" stroke-width="1.5"/>
+            <text x="{W-pad+4}" y="{limit_y:.1f}" fill="#ff4444" font-size="10" dominant-baseline="middle">100 KB limit</text>
+            <!-- Size line -->
+            <polyline points="{points}" fill="none" stroke="#00d4ff" stroke-width="2"/>
+          '''
+
+          for i, (d, s) in enumerate(zip(dates, sizes)):
+              sx, sy = to_x(i), to_y(s)
+              svg += f'  <circle cx="{sx:.1f}" cy="{sy:.1f}" r="4" fill="#00d4ff"/>\n'
+              if i % max(1, len(entries) // 6) == 0:
+                  kb = round(s / 1024, 1)
+                  svg += f'  <text x="{sx:.1f}" y="{H-5}" fill="#aaa" font-size="9" text-anchor="middle">{d[-5:]}</text>\n'
+                  svg += f'  <text x="{sx:.1f}" y="{sy-8:.1f}" fill="#00d4ff" font-size="9" text-anchor="middle">{kb}KB</text>\n'
+
+          svg += '</svg>'
+
+          os.makedirs("wasm-size-chart", exist_ok=True)
+          with open("wasm-size-chart/size-trend.svg", "w") as f:
+              f.write(svg)
+          print("Chart written to wasm-size-chart/size-trend.svg")
+          PYEOF
+        env:
+          CURRENT_SIZE: ${{ steps.wasm.outputs.size_bytes }}
+
+      # ── Upload chart as CI artifact ───────────────────────────────────────────
+      - name: Upload size trend chart
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-size-trend-chart
+          path: wasm-size-chart/
+          retention-days: 30
+
+      # ── Post PR comment with size delta ─────────────────────────────────────
+      - name: Post size delta comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const current = ${{ steps.wasm.outputs.size_bytes }};
+            const prev    = ${{ steps.prev.outputs.size_bytes }};
+            const delta   = ${{ steps.delta.outputs.delta_bytes }};
+            const pct     = ${{ steps.delta.outputs.delta_pct }};
+            const kb      = '${{ steps.delta.outputs.size_kb }}';
+            const failed  = '${{ steps.delta.outputs.failed }}' === 'true';
+            const LIMIT   = 102400;
+            const HARD    = 131072;
+
+            const icon    = delta > 0 ? '📈' : delta < 0 ? '📉' : '➡️';
+            const status  = failed
+              ? '❌ **EXCEEDS PR threshold (+5 KB)**'
+              : '✅ Within threshold';
+
+            const marker = '<!-- lumenflow-wasm-size -->';
+            const body   = `${marker}
+            ## ${icon} WASM Size Report
+
+            | | |
+            |---|---|
+            | **Current size** | \`${kb} KB\` (${current.toLocaleString()} bytes) |
+            | **Previous size** | \`${(prev/1024).toFixed(2)} KB\` (${prev.toLocaleString()} bytes) |
+            | **Delta** | \`${delta >= 0 ? '+' : ''}${delta}\` bytes (${pct}%) |
+            | **CI limit** | 100 KB (${LIMIT.toLocaleString()} bytes) |
+            | **Soroban hard limit** | 128 KB (${HARD.toLocaleString()} bytes) |
+            | **Status** | ${status} |
+
+            > Size trend chart is available in the workflow artifacts.
+            `;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c => c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      # ── Update history JSON and commit (main/develop only) ───────────────────
+      - name: Update wasm-size-history.json
+        if: github.event_name == 'workflow_run'
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, datetime
+
+          SIZE     = int(os.environ["WASM_SIZE"])
+          SHA      = os.environ.get("GITHUB_SHA", "unknown")[:8]
+          BRANCH   = os.environ.get("GITHUB_REF_NAME", "unknown")
+          RUN_ID   = os.environ.get("GITHUB_RUN_ID", "")
+          RUN_NUM  = os.environ.get("GITHUB_RUN_NUMBER", "")
+
+          with open("wasm-size-history.json") as f:
+              data = json.load(f)
+
+          data.setdefault("entries", [])
+          data["entries"].append({
+              "date":        datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "size_bytes":  SIZE,
+              "size_kb":     round(SIZE / 1024, 2),
+              "sha":         SHA,
+              "branch":      BRANCH,
+              "run_id":      RUN_ID,
+              "run_number":  RUN_NUM,
+          })
+
+          # Keep last 100 entries
+          data["entries"] = data["entries"][-100:]
+
+          with open("wasm-size-history.json", "w") as f:
+              json.dump(data, f, indent=2)
+
+          print(f"Recorded {SIZE} bytes for {SHA}")
+          PYEOF
+        env:
+          WASM_SIZE: ${{ steps.wasm.outputs.size_bytes }}
+
+      - name: Commit updated wasm-size-history.json
+        if: github.event_name == 'workflow_run'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add wasm-size-history.json
+          git diff --staged --quiet && echo "No changes to commit" && exit 0
+
+          git commit -m "chore: record WASM size ${{ steps.wasm.outputs.size_bytes }}B for ${{ github.sha }}"
+          git push
+
+      # ── Summary ──────────────────────────────────────────────────────────────
+      - name: Write job summary
+        run: |
+          echo "## WASM Size Report" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Key | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Size | ${{ steps.wasm.outputs.size_kb }} KB (${{ steps.wasm.outputs.size_bytes }} bytes) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Delta | ${{ steps.delta.outputs.delta_bytes }} bytes (${{ steps.delta.outputs.delta_pct }}%) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| CI limit | 100 KB |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Hard limit | 128 KB |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if size threshold exceeded
+        if: steps.delta.outputs.failed == 'true'
+        run: |
+          echo "::error::WASM size increased by ${{ steps.delta.outputs.delta_bytes }} bytes, exceeding the 5 KB PR limit."
+          exit 1

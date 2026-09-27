@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# commit-msg hook — validates that the commit message follows Conventional Commits.
+# Installed by scripts/install_hooks.sh.
+#
+# Format:  <type>[(scope)][!]: <subject>
+# Example: feat(payments): add batch processing
+#          fix!: remove deprecated endpoint
+#
+# Valid types: feat, fix, docs, style, refactor, test, ci, chore,
+#              perf, revert, security, build
+set -euo pipefail
+
+COMMIT_MSG_FILE="$1"
+COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
+
+# Strip comment lines (git adds them when --verbose is used)
+FIRST_LINE=$(echo "$COMMIT_MSG" | grep -v '^#' | head -1)
+
+# Conventional Commits regex (type, optional scope, optional breaking !, colon+space, subject)
+CC_REGEX='^(feat|fix|docs|style|refactor|test|ci|chore|perf|revert|security|build)(\([a-z0-9_/-]+\))?(!)?: .+'
+
+if ! echo "$FIRST_LINE" | grep -qE "$CC_REGEX"; then
+  echo ""
+  echo "❌  Commit message does not follow the Conventional Commits format."
+  echo ""
+  echo "    Expected:  <type>[(scope)][!]: <subject>"
+  echo "    Received:  $FIRST_LINE"
+  echo ""
+  echo "    Valid types:"
+  echo "      feat      – new feature"
+  echo "      fix       – bug fix"
+  echo "      security  – security patch"
+  echo "      perf      – performance improvement"
+  echo "      refactor  – code change that is not a feat or fix"
+  echo "      docs      – documentation only"
+  echo "      test      – add or update tests"
+  echo "      ci        – CI/CD changes"
+  echo "      build     – build system or toolchain changes"
+  echo "      chore     – maintenance (version bumps, lock files, etc.)"
+  echo "      style     – formatting, whitespace"
+  echo "      revert    – revert a prior commit"
+  echo ""
+  echo "    Breaking change:  append ! before the colon, e.g. feat!: remove X"
+  echo "    Scope (optional): lowercase, e.g. feat(payments): add Y"
+  echo ""
+  echo "    See CONTRIBUTING.md for full guidance."
+  echo ""
+  exit 1
+fi
+
+# Enforce header length ≤ 100 characters
+if [ "${#FIRST_LINE}" -gt 100 ]; then
+  echo ""
+  echo "❌  Commit message header is too long (${#FIRST_LINE} chars, max 100)."
+  echo "    Move details to the body instead."
+  echo ""
+  exit 1
+fi
+
+exit 0

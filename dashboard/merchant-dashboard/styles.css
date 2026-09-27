@@ -3,9 +3,9 @@ body{font-family:system-ui,Arial,Helvetica,sans-serif;margin:0;padding:16px;colo
 .site-header{display:flex;justify-content:space-between;align-items:center}
 .tabs{margin:12px 0}
 .tab{margin-right:8px}
-button{padding:6px 10px;border:1px solid #ccc;background:#fff;border-radius:4px}
-button:focus{outline:3px solid rgba(11,102,255,.25)}
-.empty{padding:24px;border:1px dashed #ddd;color:#666}
+button{padding:10px 12px;border:1px solid #bfc7d1;background:#fff;border-radius:6px;min-height:44px;min-width:44px;cursor:pointer}
+button:focus{outline:3px solid rgba(11,102,255,.25);box-shadow:0 0 0 3px rgba(11,102,255,0.12)}
+.empty{padding:24px;border:1px dashed #ddd;color:#595959}
 table{width:100%;border-collapse:collapse}
 th,td{padding:8px;border-bottom:1px solid #eee;text-align:left}
 .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);align-items:center;justify-content:center}

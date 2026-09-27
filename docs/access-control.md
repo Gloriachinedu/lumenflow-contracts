@@ -1,56 +1,152 @@
-# Contract Access Control
+# Contract Storage Access Control
 
-This matrix covers every public entry point in `contracts/lumenflow/src/lib.rs`.
-Soroban `require_auth()` rejects a missing authorization at the host level; that
-failure is not a `PaymentError`. Role or ownership checks return
-`PaymentError::Unauthorized`. Other errors listed below are additional checks,
-not authorization failures.
+This document describes the access control model for all contract read (query) and write operations in LumenFlow. It covers which functions are publicly accessible, which require caller authentication, and what error is returned when an unauthorized call is attempted.
 
-| Function | Required caller | Auth mechanism | Error if unauthorized |
-|---|---|---|---|
-| `set_admin` | Address being installed as admin | `admin.require_auth()` | Soroban authorization failure if the address does not authorize; `AdminAlreadySet` if initialized |
-| `set_payment_cleanup_period` | Stored admin | `require_admin` (`require_auth` plus stored-admin comparison) | Soroban authorization failure if unsigned; `PaymentError::Unauthorized` if not the stored admin |
-| `set_large_payment_threshold` | Stored admin | `require_admin` | Soroban authorization failure if unsigned; `PaymentError::Unauthorized` if not the stored admin |
-| `set_max_refunds_per_order` | Stored admin | `require_admin` | Soroban authorization failure if unsigned; `PaymentError::Unauthorized` if not the stored admin |
-| `register_merchant` | Address being registered | `merchant_address.require_auth()` | Soroban authorization failure if unsigned |
-| `deactivate_merchant` | Stored admin | `require_admin` | Soroban authorization failure if unsigned; `PaymentError::Unauthorized` if not the stored admin |
-| `verify_merchant` | Stored admin | `require_admin` | Soroban authorization failure if unsigned; `PaymentError::Unauthorized` if not the stored admin |
-| `unverify_merchant` | Stored admin | `require_admin` | Soroban authorization failure if unsigned; `PaymentError::Unauthorized` if not the stored admin |
-| `get_merchant` | None (public) | None | None |
-| `is_registered` | None (public) | None | None |
-| `process_payment_with_signature` | Payer; merchant also signs the payment payload | `payer.require_auth()` and Ed25519 signature verification | Soroban authorization failure if payer is unsigned; `InvalidSignature` for an invalid merchant signature |
-| `process_payment_with_nonce` | Payer | `payer.require_auth()` | Soroban authorization failure if payer is unsigned |
-| `batch_payment` | Payer; each merchant signs its payment item | `payer.require_auth()` and per-item Ed25519 signature verification | Soroban authorization failure if payer is unsigned; `InvalidSignature` for an invalid merchant signature |
-| `get_payment_by_id` | Authenticated payer, merchant, or stored admin for that payment | `caller.require_auth()`, then payer/merchant/admin identity comparison | Soroban authorization failure if unsigned; `PaymentError::Unauthorized` if caller is not related to the payment and is not admin |
-| `add_payment_note` | Payment's merchant | `merchant.require_auth()`, then merchant identity comparison | Soroban authorization failure if unsigned; `PaymentError::Unauthorized` if not the payment's merchant |
-| `get_payment_summary` | None (public) | None | None |
-| `update_payment_status` | Stored admin or payment's merchant | `require_admin_or` (`require_auth` plus admin/merchant comparison) | Soroban authorization failure if unsigned; `PaymentError::Unauthorized` if neither admin nor merchant |
-| `archive_payment_record` | Stored admin | `require_admin` | Soroban authorization failure if unsigned; `PaymentError::Unauthorized` if not the stored admin |
-| `cleanup_expired_payments` | Stored admin | `require_admin` | Soroban authorization failure if unsigned; `PaymentError::Unauthorized` if not the stored admin |
-| `get_merchant_payment_history` | Merchant whose history is requested | `merchant.require_auth()` | Soroban authorization failure if unsigned |
-| `get_payer_payment_history` | Payer whose history is requested | `payer.require_auth()` | Soroban authorization failure if unsigned |
-| `get_global_payment_stats` | Stored admin | `require_admin` | Soroban authorization failure if unsigned; `PaymentError::Unauthorized` if not the stored admin |
-| `initiate_refund` | Payment's payer or merchant | `caller.require_auth()`, then payer/merchant identity comparison | Soroban authorization failure if unsigned; `PaymentError::Unauthorized` if not the payer or merchant |
-| `approve_refund` | Stored admin or related payment's merchant | `require_admin_or` | Soroban authorization failure if unsigned; `PaymentError::Unauthorized` if neither admin nor merchant |
-| `reject_refund` | Stored admin or related payment's merchant | `require_admin_or` | Soroban authorization failure if unsigned; `PaymentError::Unauthorized` if neither admin nor merchant |
-| `execute_refund` | Related payment's merchant | Token transfer invokes merchant authorization for the transfer from the merchant to the payer | Soroban authorization failure if merchant does not authorize the transfer |
-| `get_refund` | None (public) | None | None |
-| `dispute_refund` | Payer who initiated the refund | `payer.require_auth()`, then refund-initiator identity comparison | Soroban authorization failure if unsigned; `PaymentError::Unauthorized` if not the refund initiator |
-| `resolve_dispute` | Stored admin; merchant authorization is also required by the token transfer when the outcome favors the payer | `require_admin`; token transfer authorization on the merchant source address | Soroban authorization failure if admin or required merchant authorization is missing; `PaymentError::Unauthorized` if caller is not the stored admin |
-| `initiate_multisig_payment` | Payment initiator | `initiator.require_auth()` | Soroban authorization failure if initiator is unsigned |
-| `sign_multisig_payment` | Listed multisig signer | `signer.require_auth()`, then signer-list membership check | Soroban authorization failure if unsigned; `PaymentError::Unauthorized` if not a listed signer |
-| `execute_multisig_payment` | Payer funding the payment | `payer.require_auth()`; token transfer also authorizes the payer as source | Soroban authorization failure if payer is unsigned |
-| `create_subscription_plan` | Existing, active merchant | `merchant.require_auth()`, then merchant lookup and active-status check | Soroban authorization failure if unsigned; `MerchantNotFound` or `MerchantInactive` if not an eligible merchant |
-| `subscribe` | Subscriber | `subscriber.require_auth()` | Soroban authorization failure if subscriber is unsigned |
-| `charge_subscription` | Anyone may trigger the charge; the subscriber must authorize the token transfer | No explicit caller auth; token transfer requires subscriber authorization | Soroban authorization failure if subscriber does not authorize the token transfer |
-| `cancel_subscription` | Subscriber for the subscription | `subscriber.require_auth()`, then subscription-owner comparison | Soroban authorization failure if unsigned; `PaymentError::Unauthorized` if not the subscription owner |
-| `create_payment_request` | Merchant creating the request | `merchant.require_auth()` | Soroban authorization failure if merchant is unsigned |
-| `pay_payment_request` | Payer | `payer.require_auth()`; token transfer also authorizes the payer as source | Soroban authorization failure if payer is unsigned |
+## Overview
 
-`require_admin` and `require_admin_or` are implemented in
-`contracts/lumenflow/src/helper.rs`; the role-mismatch error is
-`PaymentError::Unauthorized` from `contracts/lumenflow/src/error.rs`.
+LumenFlow enforces access control at the contract entry-point level using Soroban's built-in `require_auth()` mechanism combined with application-level identity checks. All sensitive queries require the caller to authenticate and be a recognized participant (payer, merchant, or admin).
 
-Update this matrix whenever a public contract function is added, removed, or its
-authorization behavior changes. Review it against `lib.rs` in every contract
-change pull request.
+Two core helpers in `helper.rs` underpin the access control logic:
+
+| Helper | Behaviour |
+|---|---|
+| `require_admin(env, caller)` | Reads the stored admin address; returns `Unauthorized` if caller does not match or no admin is set |
+| `require_admin_or(env, caller, other)` | Passes if caller is the admin **or** equals `other`; otherwise returns `Unauthorized` |
+
+---
+
+## Public Read Functions
+
+The following functions do **not** require authentication. Any caller may invoke them:
+
+| Function | Returns | Notes |
+|---|---|---|
+| `get_merchant(merchant_address)` | `Merchant` | Full merchant profile including `verified` flag; publicly readable by design so payers can inspect merchant details before paying |
+| `is_registered(merchant_address)` | `bool` | Lightweight registration check; safe to expose publicly |
+| `get_payment_summary(order_id)` | `PaymentSummary` | Subset of payment data (no payer address); exposes only public-safe fields |
+| `get_refund(refund_id)` | `RefundRecord` | Public read; refund IDs are opaque and difficult to enumerate |
+| `get_contract_version()` | `String` | Contract metadata; no sensitive data |
+
+---
+
+## Authenticated Read Functions
+
+The following functions require the caller to authenticate and pass an identity check:
+
+### Payment Queries
+
+| Function | Required Auth | Error if Unauthorized |
+|---|---|---|
+| `get_payment_by_id(caller, order_id)` | Caller must be the **payer**, **merchant**, or **admin** of the payment | `PaymentError::Unauthorized` |
+| `get_merchant_payment_history(merchant, ...)` | Caller must be the **merchant** (own history only) | Auth failure (Soroban host) |
+| `get_payer_payment_history(payer, ...)` | Caller must be the **payer** (own history only) | Auth failure (Soroban host) |
+| `get_global_payment_stats(admin, ...)` | Caller must be the **admin** | `PaymentError::Unauthorized` |
+| `get_merchant_stats(merchant)` | Caller must be the **merchant** | Auth failure (Soroban host) |
+| `get_refunds_for_order(caller, order_id)` | Caller must be the **payer**, **merchant**, or **admin** | `PaymentError::Unauthorized` |
+| `get_multisig_payment(caller, payment_id)` | Caller must be the **admin**, **merchant**, or a **signer** on the multisig | `PaymentError::Unauthorized` |
+
+### Merchant Management (Admin-only)
+
+| Function | Required Auth | Error if Unauthorized |
+|---|---|---|
+| `get_merchants(admin, ...)` | **Admin** only (paginated merchant list) | `PaymentError::Unauthorized` |
+| `deactivate_merchant(admin, ...)` | **Admin** only | `PaymentError::Unauthorized` |
+| `reactivate_merchant(admin, ...)` | **Admin** only | `PaymentError::Unauthorized` |
+| `verify_merchant(admin, ...)` | **Admin** only | `PaymentError::Unauthorized` |
+| `unverify_merchant(admin, ...)` | **Admin** only | `PaymentError::Unauthorized` |
+
+---
+
+## Access Control Enforcement
+
+### Step 1 — Soroban `require_auth()`
+
+For every function that requires a specific caller, that caller's address is passed as a parameter and `address.require_auth()` is called immediately. This causes the Soroban host to validate that the transaction was signed by the appropriate key. If authentication fails, the host aborts the call before any application logic runs.
+
+### Step 2 — Identity Check
+
+After authentication, the contract verifies the caller is the expected participant:
+
+```rust
+// Example: get_payment_by_id
+caller.require_auth();   // Step 1: Soroban auth
+let payment = storage::get_payment(&env, &order_id).ok_or(PaymentError::PaymentNotFound)?;
+let is_admin = storage::get_admin(&env).map_or(false, |a| a == caller);
+if !is_admin && caller != payment.payer && caller != payment.merchant_address {
+    return Err(PaymentError::Unauthorized);  // Step 2: identity check
+}
+```
+
+This two-step approach ensures:
+1. The caller cannot forge their identity (Soroban cryptographic guarantee).
+2. A legitimate caller cannot access another party's private data (application-level guard).
+
+---
+
+## Security Rationale
+
+| Function | Why auth is required |
+|---|---|
+| `get_payment_by_id` | Contains the payer address and full payment metadata. Restricting to payer/merchant/admin prevents information leakage about who paid whom. |
+| `get_merchant_payment_history` | Merchant revenue data is commercially sensitive. Only the merchant and admin should see it. |
+| `get_payer_payment_history` | Payment patterns reveal personal spending behaviour. Only the payer and admin should see it. |
+| `get_global_payment_stats` | Aggregate network data is admin-only to prevent competitive intelligence extraction. |
+| `get_refunds_for_order` | Refund records contain the initiator address and reason. Restricted to parties involved in the payment. |
+| `get_multisig_payment` | Multisig payment details include signer lists and collected signatures. Restricted to participants. |
+| `get_merchants` (paginated) | Full merchant list with all profile data. Admin-only to prevent bulk data scraping. |
+
+---
+
+## Public vs. Restricted — Quick Reference
+
+```
+Public (no auth):
+  get_merchant, is_registered, get_payment_summary,
+  get_refund, get_contract_version
+
+Restricted (caller must auth + identity check):
+  get_payment_by_id         → payer | merchant | admin
+  get_merchant_payment_history → merchant only
+  get_payer_payment_history    → payer only
+  get_global_payment_stats     → admin only
+  get_merchant_stats           → merchant only
+  get_refunds_for_order        → payer | merchant | admin
+  get_multisig_payment         → admin | merchant | signer
+  get_merchants                → admin only
+```
+
+---
+
+## Merchant Isolation
+
+The identity checks above also guarantee **merchant isolation**: a merchant can
+only read or act on its *own* payments, refunds, profile, and statistics. A
+merchant that targets another merchant's resource is rejected with
+`PaymentError::Unauthorized` (or a Soroban host auth failure for the
+`require_auth`-guarded reads).
+
+This is exercised by the integration suite
+[`contracts/lumenflow/tests/merchant_isolation.rs`](../contracts/lumenflow/tests/merchant_isolation.rs):
+
+| Scenario | Expected |
+|---|---|
+| Merchant B approves / rejects Merchant A's refund | `Unauthorized` |
+| Merchant B initiates a refund for Merchant A's payment | `Unauthorized` |
+| Merchant B reads Merchant A's payment via `get_payment_by_id` | `Unauthorized` |
+| Merchant B calls `update_payment_status` on Merchant A's payment | `Unauthorized` |
+| Merchant B calls `deactivate_merchant` on Merchant A | `Unauthorized` |
+| `get_merchant_stats` for a merchant with no activity | all-zero, no cross-merchant totals |
+
+Run it with:
+
+```bash
+cargo test --package lumenflow --test merchant_isolation
+```
+
+---
+
+## Related Documents
+
+- [`docs/auth-model.md`](auth-model.md) — Complete auth table for all contract functions
+- [`contracts/lumenflow/src/helper.rs`](../contracts/lumenflow/src/helper.rs) — `require_admin`, `require_admin_or` implementations
+- [`contracts/lumenflow/src/lib.rs`](../contracts/lumenflow/src/lib.rs) — Contract entry points with inline auth comments
