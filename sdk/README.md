@@ -27,22 +27,144 @@ The CI workflow `.github/workflows/differential-tests.yml` runs the full suite w
 
 ## Quick Start
 
+Get from zero to your first successful payment in under 10 minutes using the testnet.
+
+### Step 1: Install
+
+```bash
+npm install @lumenflow/sdk @stellar/stellar-sdk
+```
+
+> **Need testnet XLM?** Fund your account via the [Stellar Friendbot](https://friendbot.stellar.org/?addr=YOUR_ADDRESS).
+
+### Step 2: Initialize the Client
+
 ```typescript
-import { LumenFlowClient, MerchantCategory } from '@lumenflow/sdk';
+// quickstart.ts
+import { LumenFlowClient } from '@lumenflow/sdk';
 import { Keypair } from '@stellar/stellar-sdk';
 
+// Replace with your deployed testnet contract ID
+const CONTRACT_ID = 'CC...'; // e.g. from scripts/deploy.sh output
+
 const client = new LumenFlowClient({
-  contractId: 'CC...',
+  contractId: CONTRACT_ID,
   rpcUrl: 'https://soroban-testnet.stellar.org',
   networkPassphrase: 'Test SDF Network ; September 2015',
 });
 
-const keypair = Keypair.fromSecret('S...');
+// Set the signer — used to authorize all state-changing contract calls
+const adminKeypair = Keypair.fromSecret('S...'); // your admin account secret
 client.setSigner(async (tx) => {
-  tx.sign(keypair);
+  tx.sign(adminKeypair);
   return tx;
 });
 ```
+
+### Step 3: Register a Merchant
+
+```typescript
+import { LumenFlowClient, MerchantCategory } from '@lumenflow/sdk';
+import { Keypair } from '@stellar/stellar-sdk';
+
+const merchantKeypair = Keypair.fromSecret('S...'); // merchant account secret
+
+// Switch signer to merchant account for registration
+client.setSigner(async (tx) => {
+  tx.sign(merchantKeypair);
+  return tx;
+});
+
+// Check if already registered
+const isRegistered = await client.isRegistered(merchantKeypair.publicKey());
+
+if (!isRegistered) {
+  await client.registerMerchant(
+    merchantKeypair.publicKey(),
+    'My Test Store',
+    'Selling digital goods on Stellar',
+    'support@myteststore.example.com',
+    MerchantCategory.Retail,
+  );
+  console.log('Merchant registered:', merchantKeypair.publicKey());
+}
+```
+
+### Step 4: Submit a Payment
+
+```typescript
+import { LumenFlowClient } from '@lumenflow/sdk';
+import { Keypair } from '@stellar/stellar-sdk';
+import { signPaymentPayload } from '@lumenflow/sdk/signPaymentPayload';
+
+const payerKeypair = Keypair.fromSecret('S...'); // payer account secret
+
+// Switch signer to payer for payment
+client.setSigner(async (tx) => {
+  tx.sign(payerKeypair);
+  return tx;
+});
+
+const orderId = `ORDER_${Date.now()}`;
+const amount = 1000n; // in token's smallest unit (stroops for XLM)
+
+// The contract requires an ed25519 signature over the payment payload.
+// Use signPaymentPayload to build and sign the canonical payload.
+const { signature, publicKey } = await signPaymentPayload({
+  networkPassphrase: 'Test SDF Network ; September 2015',
+  contractId: CONTRACT_ID,
+  merchantAddress: merchantKeypair.publicKey(),
+  orderId,
+  amount,
+  merchantSecretKey: merchantKeypair.rawSecretKey(), // merchant signs the payment
+});
+
+await client.processPaymentWithSignature(
+  payerKeypair.publicKey(),
+  orderId,
+  merchantKeypair.publicKey(),
+  TOKEN_ADDRESS, // e.g. testnet USDC SAC address
+  amount,
+  'Quickstart test payment',
+  null, // tags
+  signature,
+  publicKey,
+);
+
+console.log('Payment submitted! Order ID:', orderId);
+```
+
+### Step 5: Check Payment History
+
+```typescript
+// Retrieve payment history for the merchant
+const history = await client.getMerchantPaymentHistory(
+  merchantKeypair.publicKey(),
+  null,  // cursor (null = start from beginning)
+  10,    // limit
+  null,  // filter
+  'Date',
+  'Descending',
+);
+
+console.log(`Found ${history.payments.length} payment(s):`);
+for (const payment of history.payments) {
+  console.log(`  ${payment.order_id}: ${payment.amount} — ${payment.status}`);
+}
+
+// Look up the specific payment you just submitted
+const receipt = await client.getPaymentSummary(orderId);
+console.log('Receipt:', receipt);
+```
+
+### Full end-to-end example
+
+A complete runnable script combining all steps above is available in the
+[smoke test](../scripts/smoke_test.sh). For TypeScript examples with error
+handling and retry logic, see [`sdk/tests/integration.test.ts`](tests/integration.test.ts).
+
+For batch payments (up to 10 items in one transaction), see
+[`docs/batch-payments.md`](../docs/batch-payments.md).
 
 ---
 

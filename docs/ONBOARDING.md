@@ -2,6 +2,10 @@
 
 Welcome to LumenFlow! This guide takes you from zero to running tests locally and opening your first PR.
 
+> **SDK Quickstart:** If you want to integrate with LumenFlow using TypeScript, jump straight to the
+> [SDK Quickstart Guide](../sdk/README.md#quick-start) — it walks you from installation to your first
+> successful payment in under 10 minutes.
+
 ---
 
 ## Merchant and payer quickstart
