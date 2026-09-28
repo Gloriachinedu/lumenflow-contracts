@@ -95,12 +95,16 @@ jobs:
 
       - name: Terraform Init
         id: init
+        # Uses the S3 + DynamoDB locked backend defined in main.tf.
+        # The dynamodb_table value must match the table name in main.tf
+        # (lumenflow-tfstate-lock) so that concurrent CI runs queue on the
+        # same lock rather than corrupting state. See issue #1058.
         run: |
           terraform init \
-            -backend-config="bucket=lumenflow-terraform-state" \
+            -backend-config="bucket=lumenflow-tfstate" \
             -backend-config="key=lumenflow/terraform.tfstate" \
             -backend-config="region=us-east-1" \
-            -backend-config="dynamodb_table=lumenflow-terraform-locks" \
+            -backend-config="dynamodb_table=lumenflow-tfstate-lock" \
             -input=false \
             -no-color
 
