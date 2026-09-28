@@ -391,6 +391,8 @@ await client.batchPayment(payerAddress, [
 ]);
 ```
 
+> **Error recovery:** If a batch fails, all items are atomically reverted and can be safely retried with the same `order_id` values. For guidance on identifying the offending item, retry logic, and splitting batches for partial-success semantics, see [docs/batch-payments.md — Error Recovery Patterns](../docs/batch-payments.md#16-error-recovery-patterns).
+
 #### `getPaymentById(caller: string, orderId: string): Promise<PaymentOrder>`
 
 Retrieve full payment details. Caller must be the payer, merchant, or admin.
