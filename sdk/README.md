@@ -1154,3 +1154,63 @@ await withRetry(async () => {
   await someApiCall();
 }, config);
 ```
+
+---
+
+## Browser and Environment Compatibility
+
+### Supported Browsers
+
+The `@lumenflow/sdk` uses the [WebCrypto API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Crypto_API) and standard ES2020 features. The following browser versions are officially supported and tested in CI:
+
+| Browser | Minimum Version | Notes |
+|---------|----------------|-------|
+| Chrome  | 90             | Full support |
+| Firefox | 89             | Full support |
+| Safari  | 15             | Full support (WebCrypto available since 15) |
+| Edge    | 90             | Full support (Chromium-based) |
+
+> **Note:** Safari versions below 15 have incomplete WebCrypto support and are **not** supported. Users on older Safari should upgrade their browser.
+
+### Supported Node.js Versions
+
+| Node.js | Support |
+|---------|---------|
+| 18.x (LTS) | ✅ Minimum supported version |
+| 20.x (LTS) | ✅ Fully supported |
+| 22.x (LTS) | ✅ Fully supported |
+
+Node.js 16.x and below are **not** supported.
+
+### Required Polyfills
+
+In environments that do not natively support the following APIs, you must include polyfills before importing the SDK:
+
+| API | Required In | Recommended Polyfill |
+|-----|------------|----------------------|
+| `globalThis` | IE, older Safari | [globalthis](https://www.npmjs.com/package/globalthis) |
+| `TextEncoder` / `TextDecoder` | Node.js < 18, IE | [text-encoding](https://www.npmjs.com/package/text-encoding) |
+| `WebCrypto` (`crypto.subtle`) | Node.js < 15, Safari < 15 | Use Node.js 18+ built-in or a server-side crypto library |
+
+Example — polyfilling `TextEncoder` in a legacy environment:
+
+```typescript
+import 'text-encoding'; // must come before SDK import
+import { LumenFlowClient } from '@lumenflow/sdk';
+```
+
+### Unsupported Environment Detection
+
+The SDK checks for required runtime APIs at initialisation time. If a required API is missing, it throws a descriptive error immediately rather than failing silently at call time:
+
+```
+LumenFlowInitError: The WebCrypto API (crypto.subtle) is not available in this
+environment. Upgrade to a supported browser (Chrome 90+, Firefox 89+, Safari 15+,
+Edge 90+) or Node.js 18+.
+```
+
+This ensures integrators catch configuration problems early in development rather than encountering cryptic errors at runtime.
+
+### CI Browser Matrix
+
+Browser compatibility is continuously validated by the `.github/workflows/compat-matrix.yml` workflow, which runs on every pull request and weekly on Mondays. The matrix tests the SDK against all documented Node.js versions and documented minimum browser targets via Playwright.
