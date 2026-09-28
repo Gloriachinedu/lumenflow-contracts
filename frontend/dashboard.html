@@ -502,5 +502,18 @@
   if (DEMO_MODE) loadDashboard();
   initCopyButtons(document.body);
 </script>
+<!-- CSP violation reporter: logs policy violations to the console in development -->
+<script>
+  document.addEventListener('securitypolicyviolation', function(e) {
+    console.error('[CSP Violation]', {
+      blockedURI: e.blockedURI,
+      violatedDirective: e.violatedDirective,
+      effectiveDirective: e.effectiveDirective,
+      originalPolicy: e.originalPolicy,
+      sourceFile: e.sourceFile,
+      lineNumber: e.lineNumber,
+    });
+  });
+</script>
 </body>
 </html>
