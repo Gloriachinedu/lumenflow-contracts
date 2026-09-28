@@ -143,3 +143,49 @@ Use a dedicated IAM user with a policy scoped to the resources in this module. N
 - State is encrypted at rest in S3 (`AES256`) and in transit via HTTPS.  
 - The CI runner IAM role follows least privilege — it only has read/write access to the artifact bucket.  
 - Public access is blocked on the artifact bucket; use pre-signed URLs or CloudFront for distribution.
+
+---
+
+## CI Runner IAM — Least-Privilege Policy Design
+
+The CI runner EC2 instance uses an IAM role with the minimum permissions required for each workflow type. Policies are **opt-in**: each is only created when the corresponding bucket ARN variable is set. This prevents attaching any policy that isn't needed for your deployment.
+
+### Always-attached policy
+
+| Policy | Purpose |
+|--------|---------|
+| `AmazonSSMManagedInstanceCore` (AWS managed) | Session Manager access for instance troubleshooting; no SSH key required |
+
+### Workflow-scoped policies (opt-in)
+
+| Variable | Policy created | Allowed actions | Scope |
+|----------|---------------|-----------------|-------|
+| `artifacts_bucket_arn` | `lumenflow-ci-runner-deploy-<env>` | `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject`, `s3:ListBucket` | `deploy/*` prefix only |
+| `backup_bucket_arn` | `lumenflow-ci-runner-backup-<env>` | `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket` | Entire backup bucket |
+| `tfstate_bucket_arn` | `lumenflow-ci-runner-terraform-<env>` | `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket` on tfstate bucket; `dynamodb:GetItem`, `dynamodb:PutItem`, `dynamodb:DeleteItem`, `dynamodb:DescribeTable` on `lumenflow-tfstate-lock` table | Tfstate bucket + lock table only |
+
+### Enabling the policies
+
+Pass the bucket ARNs as module inputs in your root `main.tf`:
+
+```hcl
+module "ci_runner" {
+  source = "./modules/ci-runner"
+
+  environment   = var.environment
+  vpc_id        = var.vpc_id
+  subnet_id     = var.subnet_id
+  instance_type = "t3.medium"
+
+  # Enable workflow-scoped IAM policies
+  artifacts_bucket_arn = module.s3.artifacts_bucket_arn
+  backup_bucket_arn    = module.s3.backup_bucket_arn
+  tfstate_bucket_arn   = "arn:aws:s3:::lumenflow-tfstate"
+}
+```
+
+Leave any variable as `""` (the default) to skip that policy entirely.
+
+### What was removed
+
+Previously, the runner had no explicit workflow permissions beyond `AmazonSSMManagedInstanceCore`. Integrators were expected to attach broader policies manually. This update replaces that practice with narrowly scoped policies defined in code, reviewable in PRs, and auditable via CloudTrail.
