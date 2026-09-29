@@ -1353,6 +1353,80 @@ Cancel an active subscription. The subscriber must sign the call.
 
 ## Payment Requests
 
+> **See also:** [`docs/payment-link-guide.md`](payment-link-guide.md) for the merchant-facing guide on generating and sharing payment links.
+
+### Payment Request Flow — Sequence Diagram
+
+The diagram below covers the full payment request lifecycle: happy path, merchant cancellation, payer-side expiry, and admin bulk cleanup.
+
+```mermaid
+sequenceDiagram
+    actor M as Merchant
+    actor P as Payer
+    actor A as Admin
+    participant C as LumenFlow Contract
+
+    %% Happy path
+    rect rgb(220, 252, 231)
+        Note over M,C: Happy Path — request created and paid
+        M->>+C: create_payment_request(merchant, request_id, token, amount, memo, ttl)
+        C-->>-M: Ok(()) + lumenflow/payment_request_created event
+        P->>+C: pay_payment_request(payer, request_id)
+        C->>C: validate payer balance and token
+        C->>C: transfer tokens merchant ← payer
+        C->>C: write PaymentRecord (order_id = request_id)
+        C->>C: mark request Paid / remove Temporary entry
+        C-->>-P: Ok(()) + lumenflow/payment_request_paid event
+    end
+
+    %% Merchant cancellation
+    rect rgb(254, 249, 195)
+        Note over M,C: Merchant cancels an unexpired request
+        M->>+C: cancel_payment_request(caller=merchant, request_id)
+        C->>C: verify caller == merchant, request not yet paid
+        C-->>-M: Ok(()) + lumenflow/payment_request_cancelled event
+    end
+
+    %% Payer opens an expired link
+    rect rgb(254, 226, 226)
+        Note over P,C: Payer attempts to pay an expired request
+        P->>+C: pay_payment_request(payer, request_id)
+        C->>C: check TTL — entry expired (Temporary storage auto-evicted)
+        C-->>-P: Err(PaymentExpired / PaymentNotFound)
+    end
+
+    %% Admin bulk cleanup
+    rect rgb(219, 234, 254)
+        Note over A,C: Admin removes all expired requests in bulk
+        A->>+C: cancel_expired_payment_requests(admin)
+        C->>C: iterate Temporary entries, remove each expired request
+        C->>C: emit lumenflow/payment_request_cancelled per removed entry
+        C-->>-A: Ok(count_removed)
+    end
+```
+
+#### State transitions
+
+| State | Trigger | Next state |
+|---|---|---|
+| *(none)* | `create_payment_request` | **Active** (Temporary storage, TTL countdown) |
+| Active | `pay_payment_request` (before expiry) | **Paid** (Temporary entry removed; PaymentRecord written) |
+| Active | `cancel_payment_request` (merchant) | **Cancelled** (Temporary entry removed) |
+| Active | TTL elapsed / `cancel_expired_payment_requests` | **Expired / Cancelled** |
+
+#### Error codes
+
+| Code | Name | Condition |
+|---|---|---|
+| 20 | [`PaymentNotFound`](errors.md#payment-errors) | `request_id` not found (never created or already expired/paid) |
+| 21 | [`PaymentAlreadyExists`](errors.md#payment-errors) | `request_id` already used |
+| 24 | [`PaymentExpired`](errors.md#payment-errors) | TTL elapsed before `pay_payment_request` was called |
+| 25 | [`InsufficientBalance`](errors.md#payment-errors) | Payer has insufficient token balance |
+| 26 | [`TokenNotAllowed`](errors.md#payment-errors) | Requested token is not on the allowlist |
+| 1  | [`Unauthorized`](errors.md#auth-errors) | Caller is not the merchant (for `cancel_payment_request`) or not admin (for bulk cancel) |
+
+---
+
 ### `create_payment_request`
 
 ```rust

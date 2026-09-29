@@ -2,7 +2,7 @@ import { validateAddress, validateAmount } from './validation.js';
 import {
   DEMO_MODE, CONTRACT_ID, NETWORK,
   renderModeBanner, copyButtonHtml, initCopyButtons,
-  formatTokenAmount, convertToXlm, getTokenMetadata,
+  formatTokenAmount, convertToXlm, getTokenMetadata, formatDate,
 } from './lumenflow-shared.js';
 
 // ── State Management ────────────────────────────────────────────────────────
@@ -92,10 +92,8 @@ function statusBadgeHtml(status) {
   return `<span class="status-badge ${entry.cls}">${entry.label}</span>`;
 }
 
-function formatAmount(amount) {
-  return (Number(amount) / 1e7).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 7 }) + ' XLM';
-}
-function formatDate(ts) { return new Date(Number(ts) * 1000).toLocaleString(); }
+// formatDate is imported from lumenflow-shared.js (Intl.DateTimeFormat, issue #1017)
+// formatTokenAmount is imported from lumenflow-shared.js (Intl.NumberFormat, issue #1017)
 
 // ── Mock data (demo mode) ───────────────────────────────────────────────────
 const MOCK_DATA = [

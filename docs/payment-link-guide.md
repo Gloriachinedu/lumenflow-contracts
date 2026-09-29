@@ -8,6 +8,8 @@ Merchants can generate shareable payment links that pre-fill the payer's payment
 
 A payment link is a URL that encodes the following parameters:
 
+> **For the full payment request lifecycle diagram** (happy path, cancellation, expiry, and error cases), see the [Payment Request Flow sequence diagram in docs/api-reference.md](api-reference.md#payment-request-flow--sequence-diagram).
+
 | Parameter   | Description                              | Required |
 |-------------|------------------------------------------|----------|
 | `merchant`  | Your Stellar merchant address (`G…`)     | Yes      |

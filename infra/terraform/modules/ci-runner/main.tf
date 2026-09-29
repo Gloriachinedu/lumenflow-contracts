@@ -52,6 +52,111 @@ resource "aws_iam_role_policy_attachment" "ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+###############################################################################
+# Least-privilege workflow policies (opt-in via variables)
+###############################################################################
+
+# --- Deploy workflow: write WASM artifacts to the deploy/ prefix only ---------
+resource "aws_iam_policy" "deploy" {
+  count       = var.artifacts_bucket_arn != "" ? 1 : 0
+  name        = "lumenflow-ci-runner-deploy-${var.environment}"
+  description = "Allows the CI runner to read/write only the deploy/ prefix of the artifacts bucket."
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "ArtifactWrite"
+        Effect = "Allow"
+        Action = ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"]
+        Resource = "${var.artifacts_bucket_arn}/deploy/*"
+      },
+      {
+        Sid      = "ArtifactList"
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = var.artifacts_bucket_arn
+        Condition = {
+          StringLike = { "s3:prefix" = ["deploy/*"] }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "deploy" {
+  count      = var.artifacts_bucket_arn != "" ? 1 : 0
+  role       = aws_iam_role.runner.name
+  policy_arn = aws_iam_policy.deploy[0].arn
+}
+
+# --- Backup workflow: read/write the backup bucket only -----------------------
+resource "aws_iam_policy" "backup" {
+  count       = var.backup_bucket_arn != "" ? 1 : 0
+  name        = "lumenflow-ci-runner-backup-${var.environment}"
+  description = "Allows the CI runner to read/write the backup S3 bucket only."
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "BackupReadWrite"
+        Effect = "Allow"
+        Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+        Resource = "${var.backup_bucket_arn}/*"
+      },
+      {
+        Sid      = "BackupList"
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = var.backup_bucket_arn
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "backup" {
+  count      = var.backup_bucket_arn != "" ? 1 : 0
+  role       = aws_iam_role.runner.name
+  policy_arn = aws_iam_policy.backup[0].arn
+}
+
+# --- Terraform workflow: tfstate bucket + DynamoDB lock table only ------------
+resource "aws_iam_policy" "terraform" {
+  count       = var.tfstate_bucket_arn != "" ? 1 : 0
+  name        = "lumenflow-ci-runner-terraform-${var.environment}"
+  description = "Allows the CI runner to read/write Terraform remote state and acquire the DynamoDB state lock."
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "TfstateReadWrite"
+        Effect = "Allow"
+        Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"]
+        Resource = [var.tfstate_bucket_arn, "${var.tfstate_bucket_arn}/*"]
+      },
+      {
+        Sid    = "TfstateLock"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:DescribeTable"
+        ]
+        Resource = "arn:aws:dynamodb:*:*:table/lumenflow-tfstate-lock"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "terraform" {
+  count      = var.tfstate_bucket_arn != "" ? 1 : 0
+  role       = aws_iam_role.runner.name
+  policy_arn = aws_iam_policy.terraform[0].arn
+}
+
 resource "aws_iam_instance_profile" "runner" {
   name = "lumenflow-ci-runner-${var.environment}"
   role = aws_iam_role.runner.name

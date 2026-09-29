@@ -28,6 +28,7 @@ limiting, and boundary cases.
 13. [Boundary and Edge Cases](#13-boundary-and-edge-cases)
 14. [Idempotent Re-submission](#14-idempotent-re-submission)
 15. [CLI Usage](#15-cli-usage)
+16. [Error Recovery Patterns](#16-error-recovery-patterns)
 
 ---
 
@@ -656,7 +657,225 @@ await client.batchPayment({ payer: payerAddress, payments: items });
 
 ---
 
-## Summary: `batch_payment` vs `process_payment_with_signature`
+## 16. Error Recovery Patterns
+
+`batch_payment` is all-or-nothing: every failure leaves zero state changes,
+which means every item — including items that would have succeeded — can be
+safely retried. This section explains how to identify what went wrong and
+recover efficiently.
+
+### 16.1 Understanding the failure response
+
+When `batch_payment` fails, the Soroban transaction reverts and returns a
+single `PaymentError` code. This code tells you **what** went wrong, not
+**which item** caused it:
+
+```typescript
+import { LumenFlowClient } from "@lumenflow/sdk";
+
+const client = new LumenFlowClient({ contractId, rpcUrl, networkPassphrase });
+
+try {
+  await client.batchPayment({ payer: payerAddress, payments: items });
+} catch (err) {
+  // err.code is the PaymentError variant — see section 12 for the full catalogue
+  console.error("Batch failed:", err.code, err.message);
+}
+```
+
+The error code maps directly to the catalogue in section 12. Common codes and
+what they tell you about which item failed:
+
+| Error code | Name | Likely offending item |
+|---|---|---|
+| 23 | `InvalidSignature` | Item whose signature does not match its payload — check each item's signature |
+| 21 | `PaymentAlreadyExists` | An `order_id` that was already committed on-chain or appears twice within the batch |
+| 10 | `MerchantNotFound` | Item referencing an unregistered merchant address |
+| 12 | `MerchantInactive` | Item referencing a deactivated merchant |
+| 26 | `TokenNotAllowed` | Item using a token address not on the admin allow-list |
+| 22 | `InvalidAmount` | Item with `amount ≤ 0` |
+| 53 | `InvalidTags` | Item with > 5 tags, an empty tag, or a tag > 32 chars |
+| 90 | `RateLimitExceeded` | First item for a merchant that exceeds the per-window rate limit |
+| 52 | `BatchSizeExceeded` | Batch has more than 10 items |
+
+See [`docs/errors.md`](errors.md) for the full error reference including HTTP
+status mappings and SDK error classes.
+
+### 16.2 Locating the offending item
+
+Because the contract validates items **in order** (index 0 first), you can
+narrow down the culprit by binary search or sequential scan:
+
+```typescript
+async function findOffendingItem(
+  client: LumenFlowClient,
+  payer: string,
+  items: BatchPaymentItem[],
+): Promise<{ index: number; error: PaymentError } | null> {
+  // Try each item individually to find which one fails
+  for (let i = 0; i < items.length; i++) {
+    try {
+      // Validate the item without submitting by calling getPaymentSummary
+      // or by submitting single-item batches in a dry-run context
+      await client.getPaymentSummary(items[i].order_id);
+      // If this succeeds, the order_id is already committed — flag as duplicate
+      return { index: i, error: PaymentError.PaymentAlreadyExists };
+    } catch {
+      // order_id is available — not a duplicate
+    }
+  }
+  // Fall back to submitting individual items to find the validation error
+  for (let i = 0; i < items.length; i++) {
+    try {
+      await client.batchPayment({ payer, payments: [items[i]] });
+      // Roll back this test payment — use a unique test order_id in practice
+    } catch (err) {
+      return { index: i, error: err.code };
+    }
+  }
+  return null;
+}
+```
+
+> **Tip:** In production, construct each item's signature immediately before
+> building the batch and log the `(index, order_id, error)` tuple whenever a
+> batch fails. This eliminates the need for post-hoc scanning.
+
+### 16.3 Retry logic with safe re-submission
+
+Because the batch either fully succeeds or fully reverts, all original
+`order_id` values remain available after a failure. You do **not** need new
+order IDs to retry — only fix the offending item:
+
+```typescript
+import { LumenFlowClient } from "@lumenflow/sdk";
+
+async function submitBatchWithRetry(
+  client: LumenFlowClient,
+  payer: string,
+  items: BatchPaymentItem[],
+  maxAttempts = 3,
+): Promise<void> {
+  let attempt = 0;
+
+  while (attempt < maxAttempts) {
+    attempt++;
+    try {
+      await client.batchPayment({ payer, payments: items });
+      console.log("Batch succeeded on attempt", attempt);
+      return;
+    } catch (err) {
+      console.warn(`Attempt ${attempt} failed: [${err.code}] ${err.message}`);
+
+      if (attempt >= maxAttempts) throw err;
+
+      // For transient errors (RPC timeout, insufficient fee), wait and retry
+      if (isTransientError(err)) {
+        await sleep(1000 * attempt); // exponential back-off
+        continue;
+      }
+
+      // For validation errors, fix the batch before retrying
+      // (example: rebuild signatures if InvalidSignature)
+      if (err.code === "InvalidSignature") {
+        items = await rebuildSignatures(items);
+      } else {
+        // Non-recoverable without manual intervention
+        throw err;
+      }
+    }
+  }
+}
+
+function isTransientError(err: unknown): boolean {
+  // Network-level or fee-related errors are worth retrying automatically
+  return (err as any)?.code === "NetworkError" || (err as any)?.code === "InsufficientFee";
+}
+```
+
+> ⚠️ **Before retrying**, call `get_payment_summary` for each `order_id` to
+> confirm none were accidentally committed. In normal operation Soroban reverts
+> all writes on failure, but this check guards against edge cases described in
+> section 14.
+
+### 16.4 Splitting a batch for partial-success semantics
+
+If you need some items to succeed even when others fail, use
+`process_payment_with_signature` for each item independently. This gives you
+per-item success/failure at the cost of one transaction per item:
+
+```typescript
+import { LumenFlowClient } from "@lumenflow/sdk";
+
+interface ItemResult {
+  orderId: string;
+  success: boolean;
+  error?: string;
+}
+
+async function submitItemsIndependently(
+  client: LumenFlowClient,
+  payer: string,
+  items: SinglePaymentParams[],
+): Promise<ItemResult[]> {
+  const results: ItemResult[] = [];
+
+  for (const item of items) {
+    try {
+      await client.processPaymentWithSignature(
+        payer,
+        item.orderId,
+        item.merchantAddress,
+        item.tokenAddress,
+        item.amount,
+        item.memo,
+        item.tags ?? null,
+        item.signature,
+        item.merchantPublicKey,
+      );
+      results.push({ orderId: item.orderId, success: true });
+    } catch (err) {
+      results.push({ orderId: item.orderId, success: false, error: (err as Error).message });
+    }
+  }
+
+  const succeeded = results.filter((r) => r.success).length;
+  console.log(`${succeeded}/${items.length} payment(s) succeeded`);
+  return results;
+}
+```
+
+Use `batch_payment` when you need guaranteed all-or-nothing atomicity.
+Use per-item submission when you need partial-success semantics (same as the
+CLI `batch-pay` command — see section 6 and 15 for details).
+
+### 16.5 Handling `PaymentAlreadyExists` on retry
+
+If a retry fails with `PaymentAlreadyExists` for an `order_id` you believe was
+not committed, check the on-chain state first:
+
+```typescript
+async function verifyUncommitted(
+  client: LumenFlowClient,
+  orderIds: string[],
+): Promise<string[]> {
+  const committed: string[] = [];
+  for (const orderId of orderIds) {
+    try {
+      await client.getPaymentSummary(orderId);
+      committed.push(orderId); // already on-chain
+    } catch {
+      // Not found — safe to resubmit
+    }
+  }
+  return committed;
+}
+```
+
+If any `order_id` is already committed, remove it from the retry batch. The
+remaining items can be resubmitted with the same `order_id` values.
+
+---
 
 | Property | `batch_payment` | `process_payment_with_signature` |
 |----------|----------------|----------------------------------|
