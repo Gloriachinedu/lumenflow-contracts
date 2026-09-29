@@ -122,6 +122,7 @@ LumenFlow is a production-grade payment processing smart contract for the [Stell
 - Contributor onboarding video script available in [docs/onboarding-video-script.md](docs/onboarding-video-script.md)
 - Secrets and secure local environment setup in [`docs/secrets-and-local-env.md`](docs/secrets-and-local-env.md)
 - Payment link generator guide in [`docs/payment-link-guide.md`](docs/payment-link-guide.md)
+- **SDK quickstart guide** (install → init → register merchant → submit payment → check history): [`sdk/README.md#quick-start`](sdk/README.md#quick-start)
 
 ## Refund lifecycle overview
 
