@@ -1,5 +1,18 @@
 # Build Artifact Retention & Cleanup
 
+## S3 Backup Retention
+
+The reusable Terraform S3 module applies a lifecycle rule to objects under
+`backups/`. By default, current and noncurrent object versions transition to
+S3 Glacier after 30 days and expire after 365 days. The module's
+`backup_lifecycle` input can override the prefix and both retention periods.
+Expiration must be greater than the transition age.
+
+The lifecycle configuration is managed by Terraform, so applying the updated
+module updates the rule on its bucket, including buckets already in Terraform
+state. Objects outside the configured backup prefix are unaffected by this
+rule.
+
 ## CI Artifact Retention
 
 The LumenFlow CI pipeline uploads the compiled WASM binary as a GitHub Actions artifact after every successful build.

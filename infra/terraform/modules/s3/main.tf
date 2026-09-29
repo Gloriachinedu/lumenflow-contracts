@@ -62,4 +62,31 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
       days = 90
     }
   }
+
+  rule {
+    id     = "retain-backups"
+    status = "Enabled"
+
+    filter {
+      prefix = var.backup_lifecycle.prefix
+    }
+
+    transition {
+      days          = var.backup_lifecycle.transition_days
+      storage_class = "GLACIER"
+    }
+
+    expiration {
+      days = var.backup_lifecycle.expiration_days
+    }
+
+    noncurrent_version_transition {
+      noncurrent_days = var.backup_lifecycle.transition_days
+      storage_class   = "GLACIER"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = var.backup_lifecycle.expiration_days
+    }
+  }
 }
