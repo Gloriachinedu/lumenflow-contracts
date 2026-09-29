@@ -4,7 +4,11 @@
  * Strategy: Cache-first for static assets, network-first for API calls.
  */
 
-const CACHE_NAME = 'lumenflow-v1.0.0';
+// Cache version — bump this value on every deployment to bust stale caches.
+// In a CI/CD pipeline this constant can be replaced at build time with a
+// content hash or build number (e.g. via sed or envsubst).
+const CACHE_VERSION = 'v1.1.0';
+const CACHE_NAME = `lumenflow-${CACHE_VERSION}`;
 
 /**
  * Static assets to pre-cache on service worker install.
@@ -49,6 +53,10 @@ const OFFLINE_RECEIPT_MOCK = {
 };
 
 // ── Install ──────────────────────────────────────────────────────────────────
+// Standard install → activate → claim pattern:
+//   1. Pre-cache all assets into the versioned cache bucket.
+//   2. Call skipWaiting() so the new SW activates without waiting for tabs
+//      that loaded under the previous version to close.
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -72,13 +80,19 @@ self.addEventListener('install', (event) => {
         return cache.put('/__offline_receipt_mock__', mockResponse);
       });
     }).then(() => {
-      // Activate immediately without waiting for existing tabs to close
+      // Skip the waiting phase so this SW version takes over immediately.
+      // Combined with clients.claim() in activate, users see fresh content
+      // within one navigation after a deployment.
       return self.skipWaiting();
     })
   );
 });
 
 // ── Activate ─────────────────────────────────────────────────────────────────
+// Delete every cache whose name does NOT match the current CACHE_NAME.
+// This ensures stale assets from previous deployments are purged the moment
+// the new service worker activates, so users always get fresh content after
+// one navigation.
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
@@ -91,7 +105,11 @@ self.addEventListener('activate', (event) => {
             return caches.delete(name);
           })
       )
-    ).then(() => self.clients.claim())
+    ).then(() => {
+      // Claim all open clients immediately so they use the new SW without
+      // requiring a full page reload.
+      return self.clients.claim();
+    })
   );
 });
 

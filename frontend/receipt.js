@@ -10,17 +10,77 @@ function getOrderId() {
   return new URLSearchParams(window.location.search).get('orderId');
 }
 
-// ── Formatting helpers ────────────────────────────────────────────────────────
+// ── Formatting helpers (issue #1017 — Intl API localization) ─────────────────
 
-function formatAmount(amount, decimals = 7) {
-  return (Number(amount) / Math.pow(10, decimals)).toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: decimals,
-  });
+/**
+ * Detects the user's browser locale.
+ * Falls back to 'en-US' if detection fails (e.g., in headless environments).
+ * @returns {string}
+ */
+function detectLocale() {
+  try {
+    return (navigator.languages && navigator.languages[0]) || navigator.language || 'en-US';
+  } catch (e) {
+    return 'en-US';
+  }
 }
 
+/**
+ * Formats a raw integer amount using Intl.NumberFormat with the user's locale.
+ * Falls back to 'en-US' if locale detection fails.
+ *
+ * @param {bigint|number|string} amount   - Raw amount in smallest unit (e.g. stroops)
+ * @param {number}               decimals - Decimal precision (default 7 for XLM)
+ * @returns {string}
+ */
+function formatAmount(amount, decimals = 7) {
+  const locale = detectLocale();
+  const value = Number(amount) / Math.pow(10, decimals);
+  try {
+    return new Intl.NumberFormat(locale, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: decimals,
+    }).format(value);
+  } catch (e) {
+    // Fallback to en-US if the detected locale is invalid
+    return new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: decimals,
+    }).format(value);
+  }
+}
+
+/**
+ * Formats a Unix timestamp (seconds) using Intl.DateTimeFormat with the
+ * user's browser locale and local timezone.
+ * Falls back to 'en-US' if locale detection fails.
+ *
+ * @param {bigint|number|string} timestamp - Unix seconds (UTC)
+ * @returns {string}
+ */
 function formatDate(timestamp) {
-  return new Date(Number(timestamp) * 1000).toLocaleString();
+  const locale = detectLocale();
+  const date = new Date(Number(timestamp) * 1000);
+  try {
+    return new Intl.DateTimeFormat(locale, {
+      year:   'numeric',
+      month:  'short',
+      day:    'numeric',
+      hour:   '2-digit',
+      minute: '2-digit',
+      timeZoneName: 'short',
+    }).format(date);
+  } catch (e) {
+    // Fallback to en-US if the detected locale is invalid
+    return new Intl.DateTimeFormat('en-US', {
+      year:   'numeric',
+      month:  'short',
+      day:    'numeric',
+      hour:   '2-digit',
+      minute: '2-digit',
+      timeZoneName: 'short',
+    }).format(date);
+  }
 }
 
 function statusBadge(status) {

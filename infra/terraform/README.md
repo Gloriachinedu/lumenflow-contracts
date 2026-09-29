@@ -10,6 +10,60 @@ Terraform configuration for all LumenFlow cloud resources:
 
 ---
 
+## State Locking
+
+LumenFlow uses **S3 remote state with DynamoDB locking** to prevent concurrent Terraform runs from corrupting the state file.
+
+### How it works
+
+| Component | Resource | Purpose |
+|-----------|----------|---------|
+| S3 bucket | `lumenflow-tfstate` | Stores the `terraform.tfstate` file, versioned and encrypted at rest |
+| DynamoDB table | `lumenflow-tfstate-lock` | Holds the distributed lock — only one `terraform apply` can proceed at a time |
+
+The backend block in `main.tf` configures both:
+
+```hcl
+backend "s3" {
+  bucket         = "lumenflow-tfstate"
+  key            = "lumenflow/terraform.tfstate"
+  region         = "us-east-1"
+  dynamodb_table = "lumenflow-tfstate-lock"
+  encrypt        = true
+}
+```
+
+The `aws_dynamodb_table.tfstate_lock` resource in `main.tf` provisions the lock table automatically on the first `terraform apply`. Until then, bootstrap it manually (see the one-time bootstrap section below).
+
+### Concurrent CI protection
+
+Both `terraform-plan.yml` and `terraform-drift.yml` set:
+
+```yaml
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: false
+```
+
+This means GitHub Actions queues workflow runs rather than running them in parallel. Even if two runs start simultaneously, Terraform's DynamoDB lock provides a second layer of protection — the second run will wait up to the lock timeout before failing with a clear error message.
+
+### Troubleshooting a stuck lock
+
+If a CI run was cancelled mid-apply and left a lock in DynamoDB, release it manually:
+
+```bash
+# List existing locks
+aws dynamodb scan \
+  --table-name lumenflow-tfstate-lock \
+  --region us-east-1
+
+# Force-unlock (replace LOCK_ID with the value from the scan above)
+cd infra/terraform
+terraform force-unlock LOCK_ID
+```
+
+---
+
 ## Prerequisites
 
 | Tool | Version | Install |
