@@ -71,4 +71,59 @@ describe('RoutePreloader', () => {
     expect(paymentsLoader).toHaveBeenCalledTimes(1);
     expect(analyticsLoader).not.toHaveBeenCalled();
   });
+
+  it('preloadByIntent treats a route with no preloadOn as hover-only', async () => {
+    const loader = jest.fn().mockResolvedValue({});
+    const manifest = defineRouteManifest({ payments: { path: '/p', name: 'P', loader } });
+    const preloader = new RoutePreloader(manifest);
+
+    preloader.preloadByIntent('visible');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(loader).not.toHaveBeenCalled();
+
+    preloader.preloadByIntent('hover');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(loader).toHaveBeenCalledTimes(1);
+  });
+
+  it('preloadByIntent swallows a rejected loader rather than throwing', async () => {
+    const manifest = defineRouteManifest({
+      broken: { path: '/b', name: 'B', loader: async () => { throw new Error('boom'); } },
+    });
+    const preloader = new RoutePreloader(manifest);
+    expect(() => preloader.preloadByIntent('hover')).not.toThrow();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(preloader.getState('broken')).toBe('error');
+  });
+
+  it('re-rejects with the cached error on a second preload after failure', async () => {
+    const manifest = defineRouteManifest({
+      broken: { path: '/b', name: 'B', loader: async () => { throw new Error('chunk load failed'); } },
+    });
+    const preloader = new RoutePreloader(manifest);
+    await expect(preloader.load('broken')).rejects.toThrow('chunk load failed');
+
+    // Second call should reject with the cached error, not re-invoke the loader.
+    await expect(preloader.preload('broken')).rejects.toThrow('chunk load failed');
+  });
+
+  it('getState returns "idle" for a route that has never been requested', () => {
+    const preloader = new RoutePreloader(makeManifest());
+    expect(preloader.getState('payments')).toBe('idle');
+  });
+
+  it('_reset clears cached state so a route reloads from scratch', async () => {
+    const loader = jest.fn().mockResolvedValue({ default: 'V' });
+    const manifest = defineRouteManifest({ payments: { path: '/p', name: 'P', loader } });
+    const preloader = new RoutePreloader(manifest);
+
+    await preloader.load('payments');
+    expect(preloader.getState('payments')).toBe('ready');
+
+    preloader._reset();
+    expect(preloader.getState('payments')).toBe('idle');
+
+    await preloader.load('payments');
+    expect(loader).toHaveBeenCalledTimes(2);
+  });
 });
