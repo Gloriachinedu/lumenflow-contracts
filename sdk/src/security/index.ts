@@ -7,3 +7,4 @@ export * from "./dataEncryption";
 export * from "./fieldMinimization";
 export * from "./dataDeletion";
 export * from "./csrfProtection";
+export * from "./logRedaction";

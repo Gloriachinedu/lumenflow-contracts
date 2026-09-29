@@ -13,10 +13,16 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# Cancel in-progress CI runs on the same branch when a new commit is pushed.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       CARGO_TARGET_DIR: target/cargo-lint
     steps:
@@ -64,6 +70,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       CARGO_TARGET_DIR: target/cargo-test
     steps:
@@ -294,6 +301,7 @@ jobs:
   build:
     name: Build WASM
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [lint, test]
     env:
       CARGO_TARGET_DIR: target/cargo-wasm

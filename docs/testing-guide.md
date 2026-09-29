@@ -2,6 +2,20 @@
 
 This guide explains the Soroban contract test architecture used in the LumenFlow repository.
 
+## RPC chaos testing
+
+The opt-in chaos harness uses Toxiproxy to exercise SDK and CLI behavior when the RPC path is degraded. Start the proxy and create an RPC route locally:
+
+```bash
+docker compose up -d toxiproxy
+curl -X POST http://localhost:8474/proxies \
+    -H 'content-type: application/json' \
+    -d '{"name":"lumenflow-rpc","listen":"0.0.0.0:18000","upstream":"host.docker.internal:8000"}'
+CHAOS_TESTS=1 node --test tests/chaos/rpc-chaos.test.mjs
+```
+
+The tests inject RPC timeouts, 5-second latency, and truncated responses. The SDK retry suite covers recovery from transient failures and the CLI reports persistent failures in its result table. HTTP 503 responses should be supplied by a fault-injecting RPC fixture; Toxiproxy itself is a transport proxy and does not generate application-layer status codes. True 50% packet loss requires host network emulation such as `tc netem` and is intentionally kept outside the default Docker setup.
+
 ## Soroban testutils overview
 
 Soroban provides a `testutils` module for contract unit testing in Rust. It includes:
@@ -81,6 +95,50 @@ keys, and the `integer` / `allowZero` / `required` / `prefixes` option flags.
 - When working with `String` and `Vec`, use the Soroban SDK helpers such as `String::from_str(&env, "...")` and `Vec::new(&env)`.
 - Remember that ledger time advances are local to the test environment and do not persist across separate `Env` instances.
 - Prefer explicit `try_*` calls when asserting contract errors.
+
+## Property-Based Tests (proptest)
+
+Property-based tests verify that refund invariants hold across **arbitrary** sequences of partial refunds, not just hand-picked examples.
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `contracts/lumenflow/src/invariant_refund.rs` | Pure invariant definitions (no contract dependencies) |
+| `contracts/lumenflow/src/prop_tests.rs` | proptest strategies and property assertions |
+
+### Running
+
+```bash
+cargo test --all-features prop_
+```
+
+This runs all tests whose names start with `prop_`. For full CI coverage use:
+
+```bash
+cargo test --all-features
+```
+
+### Invariants verified
+
+1. **Cumulative refunds ≤ original amount** — the sum of all executed partial refunds never exceeds the original payment amount.
+2. **Refund window respected** — a refund initiated more than 30 days after payment is always rejected with `RefundWindowExpired`.
+3. **Order independence** — the total refunded amount is the same regardless of the order partial refunds are applied.
+4. **Remaining balance non-negative** — at any point, `original_amount - sum(executed_refunds) >= 0`.
+
+### Adding new strategies
+
+New refund invariants can be added to `invariant_refund.rs` and then exercised in `prop_tests.rs` using `proptest!` macros:
+
+```rust
+proptest! {
+    #[test]
+    fn prop_my_new_invariant(amount in 1_i128..=100_000_i128) {
+        // ... exercise the contract or call invariant functions directly
+        prop_assert!(my_invariant(amount));
+    }
+}
+```
 
 ## Dependency Security Audits
 

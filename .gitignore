@@ -33,3 +33,6 @@ coverage/
 
 # Smoke test: ephemeral npm cache for generate_smoke_keypair.sh
 scripts/.smoke_node_modules/
+
+# Local backup bundles (produced by scripts/backup-manager.mjs)
+backup-bundle/

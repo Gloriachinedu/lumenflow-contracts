@@ -48,6 +48,7 @@ TOKEN_ADDRESS="${TOKEN_ADDRESS:-}"
 RESULTS_FILE="${RESULTS_FILE:-/tmp/load-test-results.json}"
 VUS="${VUS:-50}"
 PAYMENTS_PER_VU="${PAYMENTS_PER_VU:-10}"
+LATENCY_THRESHOLD_MS="${LATENCY_THRESHOLD_MS:-5000}"
 
 echo "════════════════════════════════════════════════════════════════"
 echo "  LumenFlow Load Test — High-Frequency Payment Submission"

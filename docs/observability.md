@@ -49,6 +49,7 @@ The pre-built dashboard is at `monitoring/grafana-dashboard.json`. Import it via
 | Avg Payment Amount | `rate(lumenflow_payment_amount_sum[5m]) / rate(lumenflow_payment_amount_count[5m])` | Sudden large spike may correlate with `suspicious_activity` events |
 | Error Rate (time-series) | `rate(lumenflow_errors_total[5m])` | Long-tail view for root-cause analysis |
 | Scrape Health | `lumenflow_scrape_errors_total`, `lumenflow_last_scrape_timestamp_seconds` | Exporter connectivity; alert if stale |
+| Build Info | `lumenflow_build_info{version,commit}` | Deployed release/commit; value is always `1`. Populated from `LUMENFLOW_VERSION` / `LUMENFLOW_COMMIT` injected by the deploy pipeline. Use to confirm which build is live. |
 
 ### Dashboard: LumenFlow Refund Lifecycle
 

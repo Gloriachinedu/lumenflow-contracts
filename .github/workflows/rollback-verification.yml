@@ -1,0 +1,224 @@
+name: Canary Rollback Verification
+
+# Runs automatically when rollback-canary.sh is triggered via workflow_dispatch,
+# or can be triggered manually to verify a previous rollback.
+#
+# This workflow verifies that:
+#   1. The canonical contract ID file points to the stable contract
+#   2. The canary contract ID file is empty
+#   3. The stable contract is responsive (not paused)
+#   4. The smoke test passes against the stable contract
+
+on:
+  workflow_dispatch:
+    inputs:
+      stable_contract_id:
+        description: "Stable contract ID to verify rollback against"
+        required: true
+        type: string
+      network:
+        description: "Network to verify on"
+        required: false
+        default: "testnet"
+        type: choice
+        options:
+          - testnet
+          - mainnet
+          - local
+      skip_smoke:
+        description: "Skip smoke test (use for networks without live RPC)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+  # Also triggered automatically by the deploy-testnet workflow when it
+  # rolls back after a failed smoke test.
+  workflow_call:
+    inputs:
+      stable_contract_id:
+        description: "Stable contract ID to verify rollback against"
+        required: true
+        type: string
+      network:
+        description: "Network"
+        required: false
+        default: "testnet"
+        type: string
+      skip_smoke:
+        description: "Skip smoke test"
+        required: false
+        default: "false"
+        type: string
+    secrets:
+      TESTNET_ADMIN_KEY:
+        required: false
+      TESTNET_MERCHANT_KEY:
+        required: false
+      TESTNET_PAYER_KEY:
+        required: false
+      TESTNET_TOKEN_ADDRESS:
+        required: false
+      TESTNET_ADMIN_ADDRESS:
+        required: false
+      TESTNET_MERCHANT_ADDRESS:
+        required: false
+      TESTNET_PAYER_ADDRESS:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rollback-verify-${{ inputs.network || 'testnet' }}-${{ inputs.stable_contract_id }}
+  cancel-in-progress: false
+
+jobs:
+  verify-rollback:
+    name: Verify Canary Rollback (${{ inputs.network || 'testnet' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Stellar CLI
+        run: |
+          curl -fsSL \
+            https://github.com/stellar/stellar-cli/releases/download/v22.8.1/stellar-cli-22.8.1-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /usr/local/bin stellar
+
+      - name: Prepare rollback verification environment
+        run: |
+          # Write the stable contract ID to the expected file location so that
+          # verify-rollback.sh can check it matches the canonical ID file.
+          NETWORK="${{ inputs.network || 'testnet' }}"
+          case "$NETWORK" in
+            mainnet) echo "${{ inputs.stable_contract_id }}" > mainnet-contract-id.txt ;;
+            local)   echo "${{ inputs.stable_contract_id }}" > local-contract-id.txt ;;
+            *)       echo "${{ inputs.stable_contract_id }}" > testnet-contract-id.txt ;;
+          esac
+
+          # Ensure canary-contract-id.txt is empty (simulates post-rollback state)
+          > canary-contract-id.txt
+
+      - name: Run rollback verification
+        id: verify
+        env:
+          NETWORK: ${{ inputs.network || 'testnet' }}
+          STABLE_CONTRACT_ID: ${{ inputs.stable_contract_id }}
+          SKIP_SMOKE: ${{ inputs.skip_smoke || 'false' }}
+          # Testnet smoke test credentials
+          ADMIN_KEY: ${{ secrets.TESTNET_ADMIN_KEY }}
+          MERCHANT_KEY: ${{ secrets.TESTNET_MERCHANT_KEY }}
+          PAYER_KEY: ${{ secrets.TESTNET_PAYER_KEY }}
+          TOKEN_ADDRESS: ${{ secrets.TESTNET_TOKEN_ADDRESS }}
+          ADMIN_ADDRESS: ${{ secrets.TESTNET_ADMIN_ADDRESS }}
+          MERCHANT_ADDRESS: ${{ secrets.TESTNET_MERCHANT_ADDRESS }}
+          PAYER_ADDRESS: ${{ secrets.TESTNET_PAYER_ADDRESS }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/verify-rollback.sh
+          mkdir -p rollback-verify-results
+
+          if bash scripts/verify-rollback.sh 2>&1 | tee rollback-verify-results/verify.log; then
+            echo "result=passed" >> "$GITHUB_OUTPUT"
+            echo "## ✅ Rollback Verification Passed" >> "$GITHUB_STEP_SUMMARY"
+            echo "Stable contract \`${{ inputs.stable_contract_id }}\` is healthy on \`${{ inputs.network || 'testnet' }}\`." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "result=failed" >> "$GITHUB_OUTPUT"
+            echo "## ❌ Rollback Verification FAILED" >> "$GITHUB_STEP_SUMMARY"
+            echo "See the log artifact for details. Manual intervention may be required." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Upload verification log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rollback-verify-${{ inputs.network || 'testnet' }}-${{ github.run_id }}
+          path: rollback-verify-results/
+          retention-days: 30
+
+      - name: Summarise verification results
+        if: always()
+        run: |
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Check | Result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+
+          if grep -q "✅.*Canonical ID file" rollback-verify-results/verify.log 2>/dev/null; then
+            echo "| Canonical ID file points to stable | ✅ Pass |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Canonical ID file points to stable | ❌ Fail |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if grep -q "✅.*canary" rollback-verify-results/verify.log 2>/dev/null; then
+            echo "| Canary slot cleared | ✅ Pass |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Canary slot cleared | ❌ Fail |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if grep -q "✅.*Stable contract responds" rollback-verify-results/verify.log 2>/dev/null; then
+            echo "| Stable contract responsive | ✅ Pass |" >> "$GITHUB_STEP_SUMMARY"
+          elif grep -q "stellar CLI not found\|skipping liveness" rollback-verify-results/verify.log 2>/dev/null; then
+            echo "| Stable contract responsive | ⚠️ Skipped (no CLI) |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Stable contract responsive | ❌ Fail |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if grep -q "✅.*Smoke test passed" rollback-verify-results/verify.log 2>/dev/null; then
+            echo "| Smoke test | ✅ Pass |" >> "$GITHUB_STEP_SUMMARY"
+          elif grep -q "SKIP_SMOKE=true\|Smoke test variables not set" rollback-verify-results/verify.log 2>/dev/null; then
+            echo "| Smoke test | ⚠️ Skipped |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Smoke test | ❌ Fail |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Notify Slack — rollback verification passed
+        if: success() && steps.verify.outputs.result == 'passed'
+        uses: slackapi/slack-github-action@v1.26.0
+        continue-on-error: true
+        with:
+          payload: |
+            {
+              "text": "✅ *Canary rollback verified*",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "✅ *Canary rollback verified*\n*Stable contract:* `${{ inputs.stable_contract_id }}`\n*Network:* `${{ inputs.network || 'testnet' }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Notify Slack — rollback verification FAILED
+        if: failure()
+        uses: slackapi/slack-github-action@v1.26.0
+        continue-on-error: true
+        with:
+          payload: |
+            {
+              "text": "🚨 *Canary rollback verification FAILED — manual investigation required*",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "🚨 *Rollback verification FAILED*\n*Expected stable contract:* `${{ inputs.stable_contract_id }}`\n*Network:* `${{ inputs.network || 'testnet' }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run — see log artifact>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

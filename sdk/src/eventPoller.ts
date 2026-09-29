@@ -1,4 +1,5 @@
 import { LumenFlowError, PaymentErrorCode } from './errors';
+import { EventCompatError, parseLumenFlowEvent } from './eventCatalog';
 
 export interface ContractEvent {
   id: string;
@@ -14,6 +15,40 @@ export interface EventPollerOptions {
   contractId: string;
   eventTypes?: string[];
   fromLedger?: number;
+  strict?: boolean;
+}
+
+function validateEvent(event: unknown): ContractEvent {
+  if (!event || typeof event !== 'object') {
+    throw new EventCompatError('event payload is not an object');
+  }
+
+  const candidate = event as Record<string, unknown>;
+  if (typeof candidate.id !== 'string' || !candidate.id) {
+    throw new EventCompatError('event id is missing');
+  }
+  if (candidate.type !== 'contract') {
+    throw new EventCompatError('event type must be contract');
+  }
+  if (typeof candidate.contractId !== 'string' || !candidate.contractId) {
+    throw new EventCompatError('event contractId is missing');
+  }
+  if (!Number.isSafeInteger(candidate.ledger) || (candidate.ledger as number) < 0) {
+    throw new EventCompatError('event ledger must be a non-negative integer');
+  }
+  if (!Array.isArray(candidate.topic) || candidate.topic.some((topic) => typeof topic !== 'string')) {
+    throw new EventCompatError('event topic must be an array of strings');
+  }
+
+  parseLumenFlowEvent({ topic: candidate.topic, value: candidate.value });
+  return {
+    id: candidate.id,
+    type: candidate.type,
+    contractId: candidate.contractId,
+    ledger: candidate.ledger as number,
+    topic: candidate.topic,
+    value: candidate.value,
+  };
 }
 
 function buildRpcPayload(options: EventPollerOptions) {
@@ -63,14 +98,16 @@ export async function fetchContractEvents(options: EventPollerOptions): Promise<
   }
 
   const events = data.result?.events ?? [];
-  return events.map((event: any) => ({
-    id: event.id,
-    type: event.type,
-    contractId: event.contractId,
-    ledger: event.ledger,
-    topic: event.topic ?? [],
-    value: event.value,
-  }));
+  const validEvents: ContractEvent[] = [];
+  for (const event of events) {
+    try {
+      validEvents.push(validateEvent(event));
+    } catch (error) {
+      if (options.strict) throw error;
+      console.warn('[LumenFlow] Discarding invalid contract event', error);
+    }
+  }
+  return validEvents;
 }
 
 export function pollContractEvents(

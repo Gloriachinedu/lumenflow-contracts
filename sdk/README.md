@@ -939,6 +939,20 @@ When a limit is exceeded Horizon responds with **HTTP 429 Too Many Requests** an
 
 The SDK includes a production-ready exponential backoff helper in [`src/retry.ts`](src/retry.ts) that is applied automatically to all RPC read operations performed through `LumenFlowClient`. The default policy retries up to **3 attempts** with a base delay of **200 ms**, capped at **5 000 ms**, and **20% jitter** to avoid thundering-herd behaviour.
 
+### Contract event validation
+
+`fetchContractEvents` validates every event against the SDK event catalog before returning it. Malformed events are discarded and logged with `console.warn` by default. Set `strict: true` in the poller options to throw an `EventCompatError` instead:
+
+```ts
+const events = await fetchContractEvents({
+  rpcUrl,
+  contractId,
+  strict: true,
+});
+```
+
+The same validation is applied before `pollContractEvents` invokes its callback, so invalid RPC payloads never reach application code.
+
 You can override the retry policy per call:
 
 ```typescript

@@ -130,6 +130,40 @@
       color: #888;
       font-size: 0.875rem;
     }
+
+    .load-more-sentinel {
+      height: 1px;
+    }
+
+    .load-more-btn,
+    .loading-indicator {
+      display: none;
+      margin: 0.75rem auto;
+    }
+
+    .loading-indicator {
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      color: #888;
+      font-size: 0.875rem;
+    }
+
+    .spinner {
+      width: 1rem;
+      height: 1rem;
+      border: 2px solid #dde1e7;
+      border-top-color: #6c47ff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    @media (prefers-reduced-motion: reduce) {
+      .load-more-btn { display: flex; }
+      .spinner { animation: none; }
+    }
   </style>
 </head>
 <body>
@@ -154,16 +188,13 @@
   </table>
 </div>
 
-<!-- Pagination controls -->
+<!-- Pagination controls and infinite-scroll status -->
 <div class="pagination-bar" id="pagination-bar">
   <div class="page-meta" id="page-meta" aria-live="polite" aria-atomic="true"></div>
 
   <div class="page-controls">
-    <button class="btn" id="prev-btn" onclick="prevPage()" disabled aria-label="Previous page">
-      ← Prev
-    </button>
-    <button class="btn" id="next-btn" onclick="nextPage()" disabled aria-label="Next page">
-      Next →
+    <button class="btn load-more-btn" id="load-more-btn" type="button" onclick="loadNextPage()">
+      Load more
     </button>
   </div>
 
@@ -176,6 +207,11 @@
     </select>
   </div>
 </div>
+<div id="loading-indicator" class="loading-indicator" role="status" aria-live="polite" hidden>
+  <span class="spinner" aria-hidden="true"></span>
+  Loading more payments…
+</div>
+<div id="load-more-sentinel" class="load-more-sentinel" aria-hidden="true"></div>
 
 <script type="module">
   import { formatNumber } from './lumenflow-shared.js';
@@ -313,7 +349,13 @@
 
     // Render rows
     const tbody = document.getElementById('table-body');
-    if (payments.length === 0) {
+    const newPayments = payments.filter(payment => {
+      if (loadedOrderIds.has(payment.order_id)) return false;
+      loadedOrderIds.add(payment.order_id);
+      return true;
+    });
+
+    if (newPayments.length === 0 && loadedOrderIds.size === 0) {
       tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No payments found.</td></tr>';
     } else {
       tbody.innerHTML = payments.map(p => `
@@ -329,7 +371,7 @@
     // Page indicator: "Page 2 · 5 records"
     const pageNum = currentIdx + 1;
     document.getElementById('page-meta').textContent =
-      payments.length === 0
+      loadedOrderIds.size === 0
         ? 'No records'
         : `Page ${pageNum} · ${payments.length} record${payments.length !== 1 ? 's' : ''}`;
 
@@ -363,10 +405,11 @@
 
   function changePageSize() {
     pageSize = parseInt(document.getElementById('page-size').value, 10);
-    // Reset to first page when page size changes
-    cursorStack = [null];
-    currentIdx  = 0;
-    loadPage();
+    nextCursor = null;
+    hasMore = true;
+    loadedOrderIds.clear();
+    document.getElementById('table-body').innerHTML = '';
+    loadNextPage();
   }
 
   // ── Browser back/forward button support ───────────────────────────────────

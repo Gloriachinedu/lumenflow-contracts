@@ -94,6 +94,9 @@
 
     // Table rows
     const tbody = document.getElementById('table-body');
+    const cardsList = document.getElementById('cards-list');
+    tbody.setAttribute('aria-busy', 'false');
+    cardsList.setAttribute('aria-busy', 'false');
     if (page.length === 0) {
       tbody.innerHTML = '<tr><td colspan="5" class="empty">No payments found.</td></tr>';
     } else {
@@ -108,7 +111,6 @@
     }
 
     // Cards
-    const cardsList = document.getElementById('cards-list');
     if (page.length === 0) {
       cardsList.innerHTML = '<div class="empty">No payments found.</div>';
     } else {

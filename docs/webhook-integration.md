@@ -8,6 +8,12 @@ This guide explains how to receive real-time notifications of LumenFlow contract
 
 LumenFlow emits Soroban contract events for every significant action (payments, refunds, disputes, etc.). Your backend can subscribe to these events via the Horizon HTTP event stream and trigger webhooks or internal workflows.
 
+The Node.js example in this guide is an outbound Horizon event consumer: it
+forwards events to `WEBHOOK_URL`. This repository does not currently contain an
+inbound webhook receiver at `webhook/webhook-server.js` or a receiver package
+and test suite. Issue #1099's request-body limit needs an owning receiver
+implementation before it can be applied and tested safely.
+
 ---
 
 ## 1. Listening to the Horizon Event Stream
@@ -37,6 +43,16 @@ https://horizon-testnet.stellar.org/contracts/{CONTRACT_ID}/events?cursor=now&to
 ---
 
 ## 2. Verifying Event Authenticity
+
+For webhook deliveries signed by an integration secret, verify the raw request body before parsing it. The SDK expects the `X-LumenFlow-Signature` value in the form `sha256=<64 lowercase or uppercase hex characters>`:
+
+```typescript
+import { verifyWebhookSignature } from "@lumenflow/sdk";
+
+const valid = verifyWebhookSignature(rawBody, request.headers["x-lumenflow-signature"], process.env.WEBHOOK_SECRET);
+```
+
+`rawBody` must be the original request bytes. The helper uses HMAC-SHA256 and a timing-safe comparison, returns `false` for a bad secret or payload, and throws for an empty secret or malformed signature.
 
 Events delivered via Horizon are signed by the Stellar network validators. To verify an event is genuine:
 
@@ -79,11 +95,15 @@ const url =
 
 The following example uses the `eventsource` package to consume the SSE stream and forward events to your webhook endpoint.
 
+Incoming requests are verified against the `X-Stellar-Signature` header using the Horizon public key and the raw request body. Requests with an invalid or missing signature are rejected with HTTP 401. See [docs/webhook-security.md](./webhook-security.md) for a detailed explanation of the verification algorithm.
+
 ### Install dependencies
 
 ```bash
 npm install eventsource node-fetch @stellar/stellar-sdk
 ```
+
+A `WEBHOOK_SECRET` environment variable holding the Horizon ed25519 public key (hex-encoded, 32 bytes) is **required**. The server will not start without it.
 
 ### `webhook-server.js`
 
@@ -99,6 +119,84 @@ const HORIZON_URL   = process.env.HORIZON_URL || "https://horizon-testnet.stella
 
 // Encode the merchant address as base64 XDR for the topic3 filter
 const merchantTopicXdr = Address.fromString(MERCHANT_ADDR).toScVal().toXDR("base64");
+
+if (!CONTRACT_ID) throw new Error("CONTRACT_ID environment variable is required");
+if (!WEBHOOK_URL) throw new Error("WEBHOOK_URL environment variable is required");
+if (!WEBHOOK_SECRET) throw new Error("WEBHOOK_SECRET environment variable is required (Horizon ed25519 public key, hex)");
+
+// Decode the public key once at startup
+const PUBLIC_KEY = Buffer.from(WEBHOOK_SECRET, "hex");
+if (PUBLIC_KEY.length !== 32) {
+  throw new Error("WEBHOOK_SECRET must be a 32-byte ed25519 public key encoded as hex");
+}
+
+// ── Signature verification ───────────────────────────────────────────────────
+
+/**
+ * Verifies the X-Stellar-Signature header against the raw request body.
+ *
+ * @param {Buffer} rawBody  - Raw (unparsed) request body bytes
+ * @param {string} sigHeader - Value of the X-Stellar-Signature header
+ * @returns {boolean} true if the signature is valid
+ */
+function verifySignature(rawBody, sigHeader) {
+  if (!sigHeader) return false;
+  let sigBytes;
+  try {
+    sigBytes = Buffer.from(sigHeader, "hex");
+  } catch {
+    return false;
+  }
+  if (sigBytes.length !== 64) return false;
+  return nacl.sign.detached.verify(
+    new Uint8Array(rawBody),
+    new Uint8Array(sigBytes),
+    new Uint8Array(PUBLIC_KEY)
+  );
+}
+
+// ── HTTP receiver ────────────────────────────────────────────────────────────
+// Listens for forwarded Horizon events posted by a proxy / relay service.
+
+const PORT = process.env.PORT || 3001;
+
+const server = http.createServer((req, res) => {
+  if (req.method !== "POST") {
+    res.writeHead(405).end("Method Not Allowed");
+    return;
+  }
+
+  const chunks = [];
+  req.on("data", (chunk) => chunks.push(chunk));
+  req.on("end", async () => {
+    const rawBody = Buffer.concat(chunks);
+    const sigHeader = req.headers["x-stellar-signature"];
+
+    if (!verifySignature(rawBody, sigHeader)) {
+      console.warn("Rejected request: invalid or missing X-Stellar-Signature");
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Invalid signature" }));
+      return;
+    }
+
+    let event;
+    try {
+      event = JSON.parse(rawBody.toString("utf8"));
+    } catch {
+      res.writeHead(400).end("Bad Request");
+      return;
+    }
+
+    await handleEvent(event);
+    res.writeHead(200).end("OK");
+  });
+});
+
+server.listen(PORT, () => {
+  console.log(`Webhook receiver listening on port ${PORT}`);
+});
+
+// ── Horizon SSE consumer ─────────────────────────────────────────────────────
 
 // Resume from a saved cursor, or start from now
 let cursor = process.env.CURSOR || "now";
@@ -176,8 +274,11 @@ function connect(eventType) {
 CONTRACT_ID=<your-contract-id> \
 MERCHANT_ADDR=G...YOUR_MERCHANT_ADDRESS \
 WEBHOOK_URL=https://your-backend.example.com/lumenflow-events \
+WEBHOOK_SECRET=<horizon-ed25519-public-key-hex> \
 node webhook-server.js
 ```
+
+> **Security note:** Never commit `WEBHOOK_SECRET` to source control. Store it as an environment variable or in your secrets manager. See [docs/secrets-and-local-env.md](./secrets-and-local-env.md) for guidance.
 
 ---
 

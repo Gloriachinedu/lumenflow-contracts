@@ -313,6 +313,33 @@ Use `scripts/release.sh <version>` to automate steps 1–4. Complete the remaini
 
 Do **not** open a public issue for security vulnerabilities. See [SECURITY.md](SECURITY.md).
 
+## Stale Issue and PR Policy
+
+To keep the issue tracker clean and actionable, LumenFlow uses an automated stale bot
+(`.github/workflows/stale.yml`) that runs daily.
+
+### Issues
+
+| Threshold | Action |
+|-----------|--------|
+| 60 days with no activity | Labelled `stale` with a comment asking for an update |
+| 14 further days with no activity | Automatically closed with an explanatory comment |
+
+### Pull Requests
+
+| Threshold | Action |
+|-----------|--------|
+| 30 days with no activity | Labelled `stale` with a comment asking for an update |
+| 7 further days with no activity | Automatically closed with an explanatory comment |
+
+### Exemptions
+
+Issues and PRs labelled **`pinned`** or **`security`** are never labelled stale or
+automatically closed.
+
+If your issue or PR is closed by the stale bot, feel free to reopen it — there is no
+penalty for reopening work that is still relevant.
+
 ## Questions
 
 Open a [GitHub Discussion](../../discussions) for questions, ideas, or general feedback.

@@ -5,8 +5,9 @@ feat/stellar-address-validation
  */
 
 /**
+}
+
  * Validates a Stellar public key (G-address)
- * 
  * Stellar public keys are 56 characters long, start with 'G',
  * and use base32 encoding with a checksum.
  * 
@@ -68,7 +69,9 @@ export function isValidStellarContractId(value) {
   }
   
   return true;
- * lumenflow-shared.js
+}
+
+/**
  * Shared utilities for LumenFlow frontend pages.
  * Import via: <script type="module" src="lumenflow-shared.js"></script>
  */
@@ -721,33 +724,7 @@ export function renderModeBanner() {
       : 'Displaying mock data. Set <code>LUMENFLOW_CONTRACT_ID</code> to connect to a live contract.';
 
     window.dispatchEvent(new CustomEvent('lf:modechange', { detail: { live: nowLive } }));
-}
-
-// ── Copy to clipboard ─────────────────────────────────────────────────────────
-
-/**
- * Copies `text` to the clipboard using navigator.clipboard when available,
- * falling back to a legacy execCommand approach for older browsers.
- *
- * @param {string} text - The full, untruncated value to copy.
- * @returns {Promise<void>}
- */
-export async function copyToClipboard(text) {
-  if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-  // Legacy fallback
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
-  document.body.appendChild(textarea);
-  textarea.select();
-  try {
-    document.execCommand('copy');
-  } finally {
-    document.body.removeChild(textarea);
-  }
+  });
 }
 
 /**

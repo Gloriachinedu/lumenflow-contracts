@@ -25,11 +25,26 @@ describe('fetchContractEvents', () => {
   });
 
   it('returns parsed event list from RPC', async () => {
-    const event = { id: '1', type: 'contract', contractId: 'CONTRACT_ID', ledger: 42, topic: ['suspicious_activity'], value: { amount: 100 } };
+    const event = { id: '1', type: 'contract', contractId: 'CONTRACT_ID', ledger: 42, topic: ['lumenflow', 'payment_processed', 'GMerchant'], value: ['ORDER_1', 'GPayer', 100] };
     global.fetch.mockResolvedValue({ json: async () => ({ result: { events: [event] } }) } as unknown as Response);
 
     const events = await fetchContractEvents(BASE);
     expect(events).toEqual([event]);
+  });
+
+  it('warns and discards malformed events by default', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation();
+    global.fetch.mockResolvedValue({ json: async () => ({ result: { events: [{ type: 'contract' }] } }) } as unknown as Response);
+
+    await expect(fetchContractEvents(BASE)).resolves.toEqual([]);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('throws on malformed events in strict mode', async () => {
+    global.fetch.mockResolvedValue({ json: async () => ({ result: { events: [{ id: '1', type: 'contract', contractId: 'CONTRACT_ID', ledger: 42, topic: ['lumenflow'] }] } }) } as unknown as Response);
+
+    await expect(fetchContractEvents({ ...BASE, strict: true })).rejects.toThrow('event name');
   });
 
   it('returns empty list when RPC result has no events', async () => {

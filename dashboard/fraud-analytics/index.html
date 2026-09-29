@@ -3,122 +3,146 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Fraud &amp; Suspicious Activity — LumenFlow</title>
+  <title>Fraud Analytics — LumenFlow</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <a href="#content" class="skip-link">Skip to main content</a>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
 
   <header class="site-header">
-    <div class="header-left">
-      <a href="../merchant-dashboard/index.html" class="back-link" aria-label="Back to merchant dashboard">← Dashboard</a>
-      <div>
-        <h1 class="page-title">Fraud &amp; Suspicious Activity</h1>
-        <p class="page-subtitle">Monitor large payments, refund patterns, and flagged activity</p>
+    <div class="header-inner">
+      <h1 class="site-title">LumenFlow <span class="title-sub">Fraud Analytics</span></h1>
+      <nav class="header-nav" aria-label="Dashboard navigation">
+        <a href="../merchant-dashboard/index.html" class="nav-link">Merchant Refunds</a>
+        <a href="index.html" class="nav-link active" aria-current="page">Fraud Analytics</a>
+      </nav>
+      <div class="header-controls">
+        <span id="alert-badge" class="alert-badge" role="status" aria-live="polite" hidden>
+          <span class="alert-icon" aria-hidden="true">⚠</span>
+          <span id="alert-count">0</span> new alerts
+        </span>
+        <span id="last-refresh" class="last-refresh" aria-live="polite"></span>
+        <button id="refresh-btn" class="btn btn-sm" aria-label="Refresh dashboard data">
+          ↻ Refresh
+        </button>
       </div>
     </div>
-    <div id="lastScanBadge" class="last-scan-badge">Last scan: —</div>
   </header>
 
-  <!-- Demo mode banner -->
-  <div id="demoBanner" class="demo-banner" role="status" aria-live="polite">
-    <span>⚠️ <strong>Demo mode</strong> — displaying mock data. Set
-      <code>LUMENFLOW_CONTRACT_ID</code> and <code>LUMENFLOW_NETWORK</code> to switch to live mode.</span>
-    <button id="dismissBanner" class="btn-dismiss" aria-label="Dismiss demo banner">✕</button>
-  </div>
-
-  <main id="content">
-
-    <!-- Metrics row -->
-    <section class="metrics-grid" aria-label="Fraud analytics summary">
-      <div class="metric-card" role="region" aria-labelledby="metric-flagged-label">
-        <div id="metricFlagged" class="metric-value">—</div>
-        <div id="metric-flagged-label" class="metric-label">Flagged Payments</div>
+  <main id="main-content" class="dashboard-main">
+    <!-- KPI summary row -->
+    <section class="kpi-row" aria-label="Key metrics">
+      <div class="kpi-card">
+        <div class="kpi-value" id="kpi-suspicious">—</div>
+        <div class="kpi-label">Suspicious Events (24h)</div>
       </div>
-      <div class="metric-card" role="region" aria-labelledby="metric-high-label">
-        <div id="metricHighValue" class="metric-value">—</div>
-        <div id="metric-high-label" class="metric-label">High-Value Alerts</div>
+      <div class="kpi-card">
+        <div class="kpi-value" id="kpi-large-payments">—</div>
+        <div class="kpi-label">Large Payments (24h)</div>
       </div>
-      <div class="metric-card" role="region" aria-labelledby="metric-refund-label">
-        <div id="metricRefundRate" class="metric-value">—</div>
-        <div id="metric-refund-label" class="metric-label">Refund Rate (%)</div>
+      <div class="kpi-card">
+        <div class="kpi-value" id="kpi-high-refund-merchants">—</div>
+        <div class="kpi-label">High-Refund-Rate Merchants</div>
       </div>
-      <div class="metric-card" role="region" aria-labelledby="metric-scan-label">
-        <div id="metricLastScan" class="metric-value scan-time">—</div>
-        <div id="metric-scan-label" class="metric-label">Last Scan</div>
+      <div class="kpi-card">
+        <div class="kpi-value" id="kpi-velocity-anomalies">—</div>
+        <div class="kpi-label">Velocity Anomalies (24h)</div>
       </div>
     </section>
 
-    <!-- Threshold configuration panel -->
-    <section class="threshold-panel card" aria-labelledby="thresholdTitle">
-      <h2 id="thresholdTitle" class="panel-title">Threshold Configuration</h2>
-      <form id="thresholdForm" class="threshold-form" novalidate>
-        <div class="field-group">
-          <label for="largePaymentThreshold" class="field-label">Large Payment Threshold (stroops)</label>
-          <input
-            id="largePaymentThreshold"
-            type="number"
-            class="field-input"
-            value="100000"
-            min="1"
-            step="1"
-            aria-describedby="thresholdHelp"
-          />
-          <small id="thresholdHelp" class="field-hint">Payments above this amount are flagged for review.</small>
+    <div class="panels-grid">
+      <!-- Recent suspicious_activity events -->
+      <section class="panel" aria-labelledby="panel-events-title">
+        <div class="panel-header">
+          <h2 id="panel-events-title" class="panel-title">Recent Suspicious Activity Events</h2>
+          <span class="panel-badge" id="events-count" aria-live="polite">0</span>
         </div>
-        <div class="field-group">
-          <label for="refundRateAlert" class="field-label">Refund Rate Alert (%)</label>
-          <input
-            id="refundRateAlert"
-            type="number"
-            class="field-input"
-            value="30"
-            min="0"
-            max="100"
-            step="1"
-            aria-describedby="refundRateHelp"
-          />
-          <small id="refundRateHelp" class="field-hint">Alert when a merchant's refund rate exceeds this percentage.</small>
+        <div class="panel-body">
+          <div id="events-loading" class="loading-msg" role="status" aria-live="polite">Loading…</div>
+          <table id="events-table" class="data-table" aria-label="Suspicious activity events" hidden>
+            <thead>
+              <tr>
+                <th scope="col">Time</th>
+                <th scope="col">Merchant</th>
+                <th scope="col">Reason</th>
+                <th scope="col">Amount</th>
+              </tr>
+            </thead>
+            <tbody id="events-body"></tbody>
+          </table>
+          <div id="events-empty" class="empty-msg" hidden>No suspicious events in the last 24 hours.</div>
         </div>
-        <button type="submit" class="btn-primary">Save Thresholds</button>
-        <span id="thresholdSaved" class="save-feedback" role="status" aria-live="polite"></span>
-      </form>
-    </section>
+      </section>
 
-    <!-- Alerts table -->
-    <section class="card" aria-labelledby="alertsTitle">
-      <h2 id="alertsTitle" class="panel-title">Active Alerts</h2>
-      <div id="alertsEmpty" class="empty-state" style="display:none">No alerts detected with current thresholds.</div>
-      <div class="table-wrapper">
-        <table id="alertsTable" class="alert-table" role="table" aria-label="Suspicious activity alerts">
-          <thead>
-            <tr>
-              <th scope="col">Time</th>
-              <th scope="col">Order ID</th>
-              <th scope="col">Type</th>
-              <th scope="col">Amount (stroops)</th>
-              <th scope="col">Risk Level</th>
-              <th scope="col">Action</th>
-            </tr>
-          </thead>
-          <tbody id="alertsTableBody">
-          </tbody>
-        </table>
-      </div>
-    </section>
+      <!-- Top merchants by refund rate -->
+      <section class="panel" aria-labelledby="panel-refund-title">
+        <div class="panel-header">
+          <h2 id="panel-refund-title" class="panel-title">Top Merchants by Refund Rate</h2>
+        </div>
+        <div class="panel-body">
+          <div id="refund-loading" class="loading-msg" role="status" aria-live="polite">Loading…</div>
+          <table id="refund-table" class="data-table" aria-label="Top merchants by refund rate" hidden>
+            <thead>
+              <tr>
+                <th scope="col">Merchant</th>
+                <th scope="col">Payments</th>
+                <th scope="col">Refunds</th>
+                <th scope="col">Rate</th>
+              </tr>
+            </thead>
+            <tbody id="refund-body"></tbody>
+          </table>
+          <div id="refund-empty" class="empty-msg" hidden>No refund data available.</div>
+        </div>
+      </section>
 
-    <!-- Event log -->
-    <section class="card" aria-labelledby="eventLogTitle">
-      <h2 id="eventLogTitle" class="panel-title">
-        Suspicious Activity Event Log
-        <span class="panel-subtitle">Recent <code>lumenflow/suspicious_activity</code> contract events</span>
-      </h2>
-      <ol id="eventLog" class="event-log" reversed aria-live="polite" aria-relevant="additions">
-        <!-- populated by app.js -->
-      </ol>
-      <div id="eventLogEmpty" class="empty-state" style="display:none">No suspicious activity events recorded.</div>
-    </section>
+      <!-- Payments above large_payment_threshold in last 24h -->
+      <section class="panel panel-wide" aria-labelledby="panel-large-title">
+        <div class="panel-header">
+          <h2 id="panel-large-title" class="panel-title">Large Payments — Last 24 Hours</h2>
+          <span class="threshold-note" id="threshold-label"></span>
+        </div>
+        <div class="panel-body">
+          <div id="large-loading" class="loading-msg" role="status" aria-live="polite">Loading…</div>
+          <table id="large-table" class="data-table" aria-label="Large payments in last 24 hours" hidden>
+            <thead>
+              <tr>
+                <th scope="col">Time</th>
+                <th scope="col">Order ID</th>
+                <th scope="col">Merchant</th>
+                <th scope="col">Payer</th>
+                <th scope="col">Amount (XLM)</th>
+              </tr>
+            </thead>
+            <tbody id="large-body"></tbody>
+          </table>
+          <div id="large-empty" class="empty-msg" hidden>No large payments in the last 24 hours.</div>
+        </div>
+      </section>
 
+      <!-- Velocity anomalies -->
+      <section class="panel panel-wide" aria-labelledby="panel-velocity-title">
+        <div class="panel-header">
+          <h2 id="panel-velocity-title" class="panel-title">Velocity Anomalies</h2>
+          <span class="panel-subtitle">Merchants with unusually high payment frequency</span>
+        </div>
+        <div class="panel-body">
+          <div id="velocity-loading" class="loading-msg" role="status" aria-live="polite">Loading…</div>
+          <table id="velocity-table" class="data-table" aria-label="Velocity anomaly merchants" hidden>
+            <thead>
+              <tr>
+                <th scope="col">Merchant</th>
+                <th scope="col">Payments (1h)</th>
+                <th scope="col">Avg / Hour (7d)</th>
+                <th scope="col">Spike Factor</th>
+              </tr>
+            </thead>
+            <tbody id="velocity-body"></tbody>
+          </table>
+          <div id="velocity-empty" class="empty-msg" hidden>No velocity anomalies detected.</div>
+        </div>
+      </section>
+    </div>
   </main>
 
   <script src="app.js" type="module"></script>

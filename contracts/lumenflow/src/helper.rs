@@ -20,6 +20,15 @@ pub const MAX_REASON_LEN: u32 = 256;
 /// Maximum UTF-8 character length for merchant contact information.
 pub const MAX_CONTACT_INFO_LEN: u32 = 128;
 
+pub fn require_bounded_string(value: &String, min: u32, max: u32) -> Result<(), PaymentError> {
+    let len = value.len();
+    if len < min || len > max {
+        Err(PaymentError::InvalidInput)
+    } else {
+        Ok(())
+    }
+}
+
 /// Return ContractPaused if the contract is currently paused.
 pub fn require_not_paused(env: &Env) -> Result<(), PaymentError> {
     if storage::get_paused(env) {
@@ -223,12 +232,29 @@ pub fn validate_tags(tags: &Option<Vec<String>>) -> Result<(), PaymentError> {
     Ok(())
 }
 
-/// Validate a MerchantCategory. Custom variant must be non-empty and ≤ 32 chars.
+/// Validate a MerchantCategory. Custom variant must be non-empty, at most 64
+/// characters, and contain only alphanumeric characters and spaces.
+/// Returns [`PaymentError::InvalidCategory`] on violation.
+///
+/// Note: Full character-set enforcement (alphanumeric + spaces only) is also
+/// applied by `sdk/verify-custom-category.js` on the client side. The on-chain
+/// contract validates length and emptiness; the SDK validates allowed characters.
 pub fn validate_merchant_category(category: &MerchantCategory) -> Result<(), PaymentError> {
     if let MerchantCategory::Custom(ref s) = category {
-        if s.len() == 0 || s.len() > 32 {
-            return Err(PaymentError::InvalidInput);
+        if s.len() == 0 || s.len() > 64 {
+            return Err(PaymentError::InvalidCategory);
         }
     }
     Ok(())
+}
+
+/// Validate that a memo does not exceed MAX_MEMO_LENGTH (256 bytes).
+///
+/// Returns [`PaymentError::InvalidMemoLength`] if the memo is too long.
+pub fn require_valid_memo(memo: &String) -> Result<(), PaymentError> {
+    if memo.len() > MAX_MEMO_LENGTH {
+        Err(PaymentError::InvalidMemoLength)
+    } else {
+        Ok(())
+    }
 }

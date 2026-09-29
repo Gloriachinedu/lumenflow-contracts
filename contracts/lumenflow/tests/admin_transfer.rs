@@ -19,9 +19,8 @@ use soroban_sdk::{
 };
 
 use lumenflow::{
-    error::PaymentError,
-    types::MerchantCategory,
-    PaymentProcessingContract, PaymentProcessingContractClient,
+    error::PaymentError, types::MerchantCategory, PaymentProcessingContract,
+    PaymentProcessingContractClient,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
