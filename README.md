@@ -1063,8 +1063,9 @@ We maintain localized versions of the README to support Spanish and Portuguese r
 
 1. `README.md` — primary project overview and getting started guide.
 2. `SECURITY.md` — responsible disclosure and incident reporting.
-3. `docs/events-reference.md` — event payload definitions and integrations.
-4. `sdk/README.md` — SDK usage and helper method guidance.
+3. `docs/errors.md` — complete error code catalogue, descriptions, and remediation steps.
+4. `docs/events-reference.md` — event payload definitions and integrations.
+5. `sdk/README.md` — SDK usage and helper method guidance.
 
 ## Security
 
