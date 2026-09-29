@@ -157,3 +157,89 @@ History queries are O(n) scans over in-contract index vectors:
 ## Event Emission
 
 Every state-changing operation emits a Soroban event with topic `["lumenflow", "<event_name>"]`. See [`docs/events-reference.md`](events-reference.md) for full payload schemas.
+
+---
+
+## Data Flow Diagram
+
+The diagram below shows how data moves between every layer of the LumenFlow stack for the two primary flows: **payment submission** and **event monitoring/webhook delivery**.
+
+```mermaid
+flowchart TD
+    subgraph Client["Client Layer"]
+        BW["Browser Wallet\n(Freighter)"]
+        FE["Frontend\n(receipt.html / history.html)"]
+    end
+
+    subgraph SDK["SDK / Integration Layer"]
+        JS["stellar-sdk / lumenflow-cli\n(XDR builder)"]
+    end
+
+    subgraph Chain["On-Chain (Soroban)"]
+        RPC["Soroban RPC\n(stellar-rpc)"]
+        CTR["LumenFlow Contract\n(WASM on Stellar)"]
+    end
+
+    subgraph OffChain["Off-Chain Indexing & Delivery"]
+        HOR["Horizon\n(REST + SSE)"]
+        MON["Monitoring Exporter\n(Prometheus / Grafana)"]
+        WH["Webhook Server\n(merchant backend)"]
+    end
+
+    %% Payment submission path
+    FE -- "user fills payment form\n(JSON)" --> BW
+    BW -- "signs XDR transaction\n(ed25519)" --> JS
+    JS -- "submits signed XDR tx\n(HTTP/JSON-RPC)" --> RPC
+    RPC -- "executes contract invocation\n(XDR)" --> CTR
+    CTR -- "stores PaymentRecord\nemits lumenflow/payment_processed\n(Soroban event XDR)" --> RPC
+    RPC -- "transaction result XDR\n(HTTP/JSON-RPC)" --> JS
+    JS -- "decoded result / error\n(JSON)" --> FE
+    FE -- "shows receipt / error\n(HTML)" --> BW
+
+    %% Event stream path
+    CTR -- "Soroban events ingested\nby Horizon\n(XDR → JSON)" --> HOR
+    HOR -- "SSE event stream\n(HTTP/SSE, JSON)" --> MON
+    HOR -- "SSE event stream\n(HTTP/SSE, JSON)" --> WH
+    MON -- "Prometheus metrics\n(HTTP scrape)" --> MON
+    WH -- "webhook POST\n(HTTPS/JSON)" --> WH
+
+    %% Styles
+    classDef client fill:#dbeafe,stroke:#3b82f6
+    classDef sdk fill:#fef9c3,stroke:#ca8a04
+    classDef chain fill:#dcfce7,stroke:#16a34a
+    classDef offchain fill:#fce7f3,stroke:#db2777
+
+    class BW,FE client
+    class JS sdk
+    class RPC,CTR chain
+    class HOR,MON,WH offchain
+```
+
+### Flow descriptions
+
+**Payment submission** (left-to-right, top path):
+
+1. The merchant generates a payment link or the payer navigates to `receipt.html`.  The **Frontend** displays the payment form pre-filled with order details.
+2. The frontend calls the **Browser Wallet** (Freighter) to sign the payment transaction. Freighter constructs the ed25519 signature over the canonical payload (see [`docs/signature-format.md`](signature-format.md)).
+3. The signed XDR transaction is passed to **stellar-sdk** or `lumenflow-cli`, which submits it to the **Soroban RPC** node over HTTP/JSON-RPC.
+4. Soroban RPC executes the call against the **LumenFlow Contract** WASM. The contract validates the signature, writes the `PaymentRecord` to persistent storage, and emits a `lumenflow/payment_processed` Soroban event encoded as XDR.
+5. The transaction result (XDR) is returned through the RPC → SDK → Frontend chain. The frontend decodes the result and shows the payer a receipt or a human-readable error.
+
+**Event monitoring and webhook delivery** (bottom path):
+
+1. Soroban events emitted by the contract are ingested by **Horizon**, which decodes the XDR payloads and makes them available as a JSON event stream over HTTP Server-Sent Events (SSE).
+2. The **Monitoring Exporter** subscribes to the Horizon SSE stream and converts events into Prometheus counters and gauges (e.g. `lumenflow_payments_total`, `lumenflow_refunds_total`). Grafana scrapes these metrics for dashboards and alerts.
+3. The **Webhook Server** (merchant's backend) also subscribes to the Horizon SSE stream and forwards relevant events to the merchant's systems over HTTPS POST. See [`docs/webhook-integration.md`](webhook-integration.md) for the full integration guide.
+
+### Protocol summary
+
+| Segment | Protocol | Format |
+|---|---|---|
+| Frontend → Wallet | in-browser JS API | JSON |
+| Wallet → SDK | in-browser JS API | XDR (signed transaction) |
+| SDK → Soroban RPC | HTTP/JSON-RPC | XDR |
+| Soroban RPC → Contract | Soroban VM | XDR |
+| Contract → Horizon | Stellar network gossip | XDR (events) |
+| Horizon → Monitoring / Webhooks | HTTP SSE | JSON |
+| Monitoring → Grafana | HTTP scrape | Prometheus text |
+| Webhook Server → Merchant backend | HTTPS POST | JSON |
