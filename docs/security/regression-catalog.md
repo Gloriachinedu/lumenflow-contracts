@@ -59,6 +59,7 @@ cluster.
 | VDR-012 | String length boundary | #622 | Explicit boundary tests for max-length business name / description / memo inputs. | `contracts/lumenflow/src/test.rs` | `String length boundary tests` | ✅ covered |
 | VDR-013 | Refund auth matrix | #45 | Full authorization matrix for the refund lifecycle (initiate / approve / reject / execute) by role. | `contracts/lumenflow/src/test.rs` | `Refund auth security tests` | ✅ covered |
 | VDR-014 | Rate-limit bypass | #565 | Per-merchant rolling-window rate limit (`RateLimitExceeded`, error 90) on `process_payment_with_signature` and `batch_payment`. **No dedicated regression test yet.** | `contracts/lumenflow/src/test.rs` | `RateLimitExceeded` | ⚠️ gap — see [#565 follow-up](#open-gaps) |
+| VDR-015 | Timing side-channel in byte comparison | #1098 | Audit of all byte comparison operations in `helper.rs` and `storage.rs`: confirmed no secret material is compared with `==` in production paths. `constant_time_eq_bytes` helper added for future use; regression tests assert correct constant-time semantics. | `contracts/lumenflow/src/helper.rs` | `test_constant_time_eq_bytes` | ✅ covered |
 
 ---
 

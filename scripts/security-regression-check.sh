@@ -50,6 +50,7 @@ VDR-011 | covered | contracts/lumenflow/src/test.rs                        | cle
 VDR-012 | covered | contracts/lumenflow/src/test.rs                        | String length boundary tests                     | String length boundary handling (#622)
 VDR-013 | covered | contracts/lumenflow/src/test.rs                        | Refund auth security tests                       | Refund authorization matrix (#45)
 VDR-014 | gap     | contracts/lumenflow/src/test.rs                        | RateLimitExceeded                                | Per-merchant payment rate-limit bypass (#565) — NO regression test yet
+VDR-015 | covered | contracts/lumenflow/src/helper.rs                      | test_constant_time_eq_bytes                      | Timing side-channel in byte comparison — audit + constant_time_eq_bytes helper (#1098)
 EOF
 
 usage() {
