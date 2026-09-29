@@ -12,6 +12,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  id-token: write
 
 # Ensure only one Terraform workflow runs at a time per branch so that
 # concurrent CI runs queue on the DynamoDB state lock rather than racing.
@@ -41,11 +42,11 @@ jobs:
           terraform_version: "1.8.5"
 
       - name: Configure AWS credentials
+        if: github.event_name == 'push'
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-east-1
 
       - name: Terraform Format Check
         id: fmt
@@ -54,7 +55,12 @@ jobs:
 
       - name: Terraform Init
         id: init
-        run: terraform init -input=false
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            terraform init -backend=false -input=false
+          else
+            terraform init -input=false
+          fi
 
       - name: Terraform Validate
         id: validate
@@ -62,6 +68,7 @@ jobs:
 
       - name: Terraform Plan
         id: plan
+        if: github.event_name == 'push'
         run: |
           terraform plan \
             -input=false \
@@ -157,7 +164,10 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const plan = fs.readFileSync('infra/terraform/plan.txt', 'utf8');
+            const planPath = 'infra/terraform/plan.txt';
+            const plan = fs.existsSync(planPath)
+              ? fs.readFileSync(planPath, 'utf8')
+              : 'AWS-backed plans are skipped on pull requests. Format and validation checks ran without AWS credentials.';
             const truncated = plan.length > 60000
               ? plan.substring(0, 60000) + '\n\n... (truncated)'
               : plan;

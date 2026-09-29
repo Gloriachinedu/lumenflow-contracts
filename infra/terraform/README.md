@@ -170,6 +170,7 @@ terraform destroy
 | `tfstate_lock_table_name` | DynamoDB lock table name |
 | `ci_runner_instance_id` | EC2 runner instance ID |
 | `ci_runner_role_arn` | IAM role ARN for runner |
+| `github_actions_role_arn` | IAM role ARN for GitHub Actions OIDC |
 | `alerts_topic_arn` | SNS topic ARN |
 | `cloudwatch_log_group` | CloudWatch log group name |
 
@@ -177,17 +178,16 @@ terraform destroy
 
 ## CI Integration
 
-A `terraform plan` validation step runs automatically on every pull request that modifies files under `infra/terraform/**`. See `.github/workflows/ci.yml` for the workflow definition.
+Terraform plans run on trusted pushes to `main` or `develop`. Pull requests run
+format and validation checks without AWS credentials or remote state.
 
-To give GitHub Actions permission to run `terraform plan`, add the following repository secrets:
-
-| Secret | Description |
-|--------|-------------|
-| `AWS_ACCESS_KEY_ID` | IAM user or role access key |
-| `AWS_SECRET_ACCESS_KEY` | Corresponding secret key |
-| `AWS_REGION` | Target region (e.g. `us-east-1`) |
-
-Use a dedicated IAM user with a policy scoped to the resources in this module. Never use root credentials.
+The `github-oidc.tf` resources create the GitHub Actions OIDC provider and a
+scoped IAM role. After applying Terraform, set the repository's non-secret
+`AWS_ROLE_ARN` variable to the value of
+`terraform output -raw github_actions_role_arn`. The role trusts only this
+repository's `main` and `develop` branches. Remove the old
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_REGION` repository secrets
+after trusted workflows succeed with OIDC. The role ARN itself is not secret.
 
 ---
 
