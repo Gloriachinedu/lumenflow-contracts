@@ -324,6 +324,102 @@ Unpause the contract. Admin only.
 |------|------|-----------|
 | 1 | [`Unauthorized`](errors.md#auth-errors) | `admin` is not the configured administrator. |
 
+---
+
+### `get_admin_audit_log`
+
+> **Issue #1115** — Structured audit log for all admin actions.
+
+```rust
+pub fn get_admin_audit_log(
+    env: Env,
+    admin: Address,
+    from_ledger: u32,
+    to_ledger: u32,
+    limit: u32,
+) -> Result<Vec<AdminAuditEntry>, PaymentError>
+```
+
+Query the append-only admin audit log. Returns up to `limit` entries (newest first) whose `ledger_sequence` falls within the inclusive range `[from_ledger, to_ledger]`.
+
+The audit log captures every privileged admin action with a tamper-evident on-chain record. Entries are **write-once** — they cannot be modified or deleted. When the log grows beyond the configured maximum (`AdminAuditMaxEntries`, default 10 000), the oldest entries are evicted automatically in FIFO order to bound storage growth.
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `admin` | `Address` | Yes | Must be the configured contract administrator. Must sign the call. |
+| `from_ledger` | `u32` | Yes | Start of the ledger sequence range (inclusive). |
+| `to_ledger` | `u32` | Yes | End of the ledger sequence range (inclusive). Pass `4294967295` (`u32::MAX`) for open-ended queries. |
+| `limit` | `u32` | Yes | Maximum entries to return. Capped at 100. |
+
+#### Returns
+
+`Vec<AdminAuditEntry>` — entries in newest-first order (highest `ledger_sequence` first).
+
+#### Errors
+
+| Code | Name | Condition |
+|------|------|-----------|
+| 1 | [`Unauthorized`](errors.md#auth-errors) | `admin` is not the configured administrator. |
+| 4 | [`InvalidInput`](errors.md#validation-errors) | `from_ledger > to_ledger` or `limit` is 0. |
+
+#### `AdminAuditEntry` fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `index` | `u32` | Sequential log index (0-based, monotonically increasing). |
+| `action` | `AdminActionType` | Enum identifying which admin function was called (see below). |
+| `caller` | `Address` | Admin address that performed the action. |
+| `params` | `String` | Human-readable summary of key parameters for the action. |
+| `timestamp` | `u64` | Unix ledger timestamp at the time of the action. |
+| `ledger_sequence` | `u32` | Ledger sequence number at the time of the action. |
+
+#### `AdminActionType` values
+
+| Variant | Triggered by |
+|---------|-------------|
+| `SetAdmin` | `set_admin` |
+| `TransferAdmin` | `transfer_admin` |
+| `PauseContract` | `pause_contract` |
+| `UnpauseContract` | `unpause_contract` |
+| `AddAllowedToken` | `add_allowed_token` |
+| `RemoveAllowedToken` | `remove_allowed_token` |
+| `SetPlatformFee` | `set_platform_fee` |
+| `SetLargePaymentThreshold` | `set_large_payment_threshold` |
+| `SetPaymentCleanupPeriod` | `set_payment_cleanup_period` |
+| `SetMultisigExpiryDuration` | `set_multisig_expiry_duration` |
+| `SetRefundWindow` | `set_refund_window` |
+| `SetMinRefundAmount` | `set_min_refund_amount` |
+| `DeactivateMerchant` | `deactivate_merchant` |
+| `ReactivateMerchant` | `reactivate_merchant` |
+| `VerifyMerchant` | `verify_merchant` |
+| `UnverifyMerchant` | `unverify_merchant` |
+| `ArchivePaymentRecord` | `archive_payment_record` |
+| `CleanupExpiredPayments` | `cleanup_expired_payments` |
+| `SetPauseGuardians` | `set_pause_guardians` |
+| `UpgradeContract` | `upgrade` |
+| `ConfirmMerchantDataDeletion` | `confirm_merchant_data_deletion` |
+| `Other` | Any admin action not listed above. |
+
+#### Access control
+
+Only the configured admin may call this function. Attempts by any other address will fail with `Unauthorized`.
+
+#### CLI example
+
+```bash
+# Fetch the 20 most recent audit log entries from any ledger
+stellar contract invoke \
+  --id $CONTRACT_ID \
+  --source-account $ADMIN_KEY \
+  --network $NETWORK \
+  -- get_admin_audit_log \
+  --admin $ADMIN_ADDR \
+  --from_ledger 0 \
+  --to_ledger 4294967295 \
+  --limit 20
+```
 
 ---
 

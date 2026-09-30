@@ -30,6 +30,7 @@ use types::{
     PaymentPage, PaymentRequest, PaymentStatus, PaymentStatusUpdatedEvent, PaymentSummary,
     RefundRecord, RefundStatus, SignatureEntry, SortField, SortOrder, StatusFilter, Subscription,
     SubscriptionPlan, SubscriptionStatus, SuspiciousActivityReason,
+    AdminActionType, AdminAuditEntry, EscrowHold, EscrowHoldStatus,
 };
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -54,6 +55,25 @@ impl PaymentProcessingContract {
 
     // ── Admin ─────────────────────────────────────────────────────────────────
 
+    /// Internal helper: append an immutable entry to the admin audit log.
+    fn append_audit(
+        env: &Env,
+        action: AdminActionType,
+        caller: &Address,
+        params: String,
+    ) {
+        let index = storage::get_admin_audit_count(env);
+        let entry = AdminAuditEntry {
+            index,
+            action,
+            caller: caller.clone(),
+            params,
+            timestamp: env.ledger().timestamp(),
+            ledger_sequence: env.ledger().sequence(),
+        };
+        storage::append_admin_audit_entry(env, &entry);
+    }
+
     /// One-time admin initialisation. Can only be called once; subsequent calls fail.
     ///
     /// # Arguments
@@ -72,6 +92,7 @@ impl PaymentProcessingContract {
 
         admin.require_auth();
         storage::set_admin(&env, &admin);
+        Self::append_audit(&env, AdminActionType::SetAdmin, &admin, String::from_str(&env, ""));
         env.events().publish(("lumenflow", "admin_set"), admin);
         Ok(())
     }
@@ -114,8 +135,9 @@ impl PaymentProcessingContract {
         storage::set_admin(&env, &new_admin);
         env.events().publish(
             ("lumenflow", "admin_transferred"),
-            (current_admin, new_admin),
+            (current_admin.clone(), new_admin.clone()),
         );
+        Self::append_audit(&env, AdminActionType::TransferAdmin, &current_admin, String::from_str(&env, ""));
         Ok(())
     }
 
@@ -163,6 +185,7 @@ impl PaymentProcessingContract {
         }
         storage::set_platform_fee_bps(&env, fee_bps);
         storage::set_fee_recipient(&env, &fee_recipient);
+        Self::append_audit(&env, AdminActionType::SetPlatformFee, &admin, String::from_str(&env, ""));
         Ok(())
     }
 
@@ -234,6 +257,7 @@ impl PaymentProcessingContract {
     pub fn pause_contract(env: Env, admin: Address) -> Result<(), PaymentError> {
         require_admin_rate_limited(&env, &admin)?;
         storage::set_paused(&env, true);
+        Self::append_audit(&env, AdminActionType::PauseContract, &admin, String::from_str(&env, ""));
         env.events().publish(("lumenflow", "contract_paused"), ());
         Ok(())
     }
@@ -252,6 +276,7 @@ impl PaymentProcessingContract {
         storage::clear_pause_reason(&env);
         storage::clear_early_unpause_approvals(&env);
         storage::set_paused(&env, false);
+        Self::append_audit(&env, AdminActionType::UnpauseContract, &admin, String::from_str(&env, ""));
         env.events().publish(("lumenflow", "contract_unpaused"), ());
         Ok(())
     }
@@ -466,6 +491,7 @@ impl PaymentProcessingContract {
         }
 
         storage::set_token_allowed(&env, &token, true);
+        Self::append_audit(&env, AdminActionType::AddAllowedToken, &admin, String::from_str(&env, ""));
         env.events().publish(("lumenflow", "token_allowed"), token);
         Ok(())
     }
@@ -481,6 +507,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         require_admin(&env, &admin)?;
         storage::set_token_allowed(&env, &token, false);
+        Self::append_audit(&env, AdminActionType::RemoveAllowedToken, &admin, String::from_str(&env, ""));
         env.events()
             .publish(("lumenflow", "token_disallowed"), token);
         Ok(())
@@ -4106,5 +4133,265 @@ impl PaymentProcessingContract {
     /// * [`PaymentError::EscrowNotFound`] — no escrow exists with `order_id`.
     pub fn get_escrow(env: Env, order_id: String) -> Result<EscrowRecord, PaymentError> {
         storage::get_escrow(&env, &order_id).ok_or(PaymentError::EscrowNotFound)
+    }
+
+    // ── Conditional Escrow (Issue #1111) ──────────────────────────────────────
+
+    /// Lock funds in a conditional escrow hold.
+    ///
+    /// Funds are transferred from `payer` to the contract and held until the
+    /// designated `arbiter` calls [`escrow_release`], or until `timeout_at`
+    /// passes (at which point the merchant or anyone can trigger release), or
+    /// the `payer` cancels via [`escrow_cancel`] before `timeout_at`.
+    ///
+    /// The `condition_hash` is a SHA-256 commitment to an off-chain condition
+    /// document (e.g. a delivery confirmation hash). It is stored immutably
+    /// for auditability but is not evaluated inside the contract.
+    ///
+    /// # Arguments
+    /// * `payer` - The address funding the escrow. Must sign the call.
+    /// * `escrow_id` - Unique identifier for this hold. Max 64 characters.
+    /// * `merchant` - Registered, active merchant that receives funds on release.
+    /// * `token` - Allowed token contract address.
+    /// * `amount` - Positive amount in stroops.
+    /// * `condition_hash` - SHA-256 hash of the off-chain condition (32 bytes).
+    /// * `arbiter` - Address authorised to call `escrow_release` before timeout.
+    /// * `timeout_at` - Unix timestamp after which anyone can trigger release.
+    ///
+    /// # Returns
+    /// The created [`EscrowHold`] on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::InvalidAmount`] — `amount` ≤ 0.
+    /// * [`PaymentError::InvalidInput`] — `escrow_id` empty, `timeout_at` in the past,
+    ///   or `condition_hash` is not exactly 32 bytes.
+    /// * [`PaymentError::TokenNotAllowed`] — `token` not on the allow-list.
+    /// * [`PaymentError::EscrowAlreadyExists`] — a hold with `escrow_id` already exists.
+    /// * [`PaymentError::MerchantNotFound`] — no merchant at `merchant`.
+    /// * [`PaymentError::MerchantInactive`] — merchant is deactivated.
+    pub fn escrow_hold(
+        env: Env,
+        payer: Address,
+        escrow_id: String,
+        merchant: Address,
+        token: Address,
+        amount: i128,
+        condition_hash: Bytes,
+        arbiter: Address,
+        timeout_at: u64,
+    ) -> Result<EscrowHold, PaymentError> {
+        require_not_paused(&env)?;
+        payer.require_auth();
+        require_positive(amount)?;
+        require_valid_id(&escrow_id)?;
+
+        // condition_hash must be exactly 32 bytes (SHA-256).
+        if condition_hash.len() != 32 {
+            return Err(PaymentError::InvalidInput);
+        }
+
+        let now = env.ledger().timestamp();
+        if timeout_at <= now {
+            return Err(PaymentError::InvalidInput);
+        }
+
+        if !storage::is_token_allowed(&env, &token) {
+            return Err(PaymentError::TokenNotAllowed);
+        }
+
+        if storage::get_escrow_hold(&env, &escrow_id).is_some() {
+            return Err(PaymentError::EscrowAlreadyExists);
+        }
+
+        let m = storage::get_merchant(&env, &merchant).ok_or(PaymentError::MerchantNotFound)?;
+        if !m.active {
+            return Err(PaymentError::MerchantInactive);
+        }
+
+        // Lock funds: transfer from payer into this contract.
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&payer, &env.current_contract_address(), &amount);
+
+        let hold = EscrowHold {
+            escrow_id: escrow_id.clone(),
+            payer: payer.clone(),
+            merchant: merchant.clone(),
+            token,
+            amount,
+            condition_hash: condition_hash.clone(),
+            arbiter,
+            timeout_at,
+            status: EscrowHoldStatus::Held,
+            created_at: now,
+        };
+        storage::set_escrow_hold(&env, &hold);
+
+        env.events().publish(
+            ("lumenflow", "escrow_held"),
+            (escrow_id, payer, merchant, amount, condition_hash),
+        );
+        Ok(hold)
+    }
+
+    /// Release a conditional escrow hold to the merchant.
+    ///
+    /// Can be called by the `arbiter` at any time, or by anyone once `timeout_at`
+    /// has passed (fallback timeout release).
+    ///
+    /// # Arguments
+    /// * `caller` - The address triggering the release. Must sign the call.
+    ///   Must be the arbiter, or the call must be after `timeout_at`.
+    /// * `escrow_id` - The escrow to release.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::EscrowNotFound`] — no hold with `escrow_id`.
+    /// * [`PaymentError::EscrowAlreadyFinalised`] — hold is not in `Held` state.
+    /// * [`PaymentError::EscrowNotUnlocked`] — caller is not arbiter and `timeout_at` has not passed.
+    /// * [`PaymentError::Unauthorized`] — caller is not the arbiter and timeout has not elapsed.
+    pub fn escrow_release(env: Env, caller: Address, escrow_id: String) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        caller.require_auth();
+
+        let mut hold =
+            storage::get_escrow_hold(&env, &escrow_id).ok_or(PaymentError::EscrowNotFound)?;
+
+        if !matches!(hold.status, EscrowHoldStatus::Held) {
+            return Err(PaymentError::EscrowAlreadyFinalised);
+        }
+
+        let now = env.ledger().timestamp();
+        let is_arbiter = hold.arbiter == caller;
+        let timeout_passed = now >= hold.timeout_at;
+
+        if !is_arbiter && !timeout_passed {
+            return Err(PaymentError::EscrowNotUnlocked);
+        }
+
+        // Effects before interactions.
+        hold.status = EscrowHoldStatus::Released;
+        storage::set_escrow_hold(&env, &hold);
+
+        // Transfer funds from contract to merchant.
+        let token_client = token::Client::new(&env, &hold.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &hold.merchant,
+            &hold.amount,
+        );
+
+        env.events().publish(
+            ("lumenflow", "escrow_released"),
+            (escrow_id, hold.merchant, hold.amount),
+        );
+        Ok(())
+    }
+
+    /// Cancel a conditional escrow hold and return funds to the payer.
+    ///
+    /// Only the original `payer` may cancel, and only **before** `timeout_at`.
+    /// After the timeout the funds can only be released via [`escrow_release`].
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the payer who created the hold. Must sign the call.
+    /// * `escrow_id` - The escrow to cancel.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::EscrowNotFound`] — no hold with `escrow_id`.
+    /// * [`PaymentError::EscrowAlreadyFinalised`] — hold is not in `Held` state.
+    /// * [`PaymentError::EscrowUnauthorised`] — caller is not the payer.
+    /// * [`PaymentError::EscrowLockExpired`] — `timeout_at` has passed; use `escrow_release`.
+    pub fn escrow_cancel(env: Env, caller: Address, escrow_id: String) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        caller.require_auth();
+
+        let mut hold =
+            storage::get_escrow_hold(&env, &escrow_id).ok_or(PaymentError::EscrowNotFound)?;
+
+        if !matches!(hold.status, EscrowHoldStatus::Held) {
+            return Err(PaymentError::EscrowAlreadyFinalised);
+        }
+
+        if hold.payer != caller {
+            return Err(PaymentError::EscrowUnauthorised);
+        }
+
+        let now = env.ledger().timestamp();
+        if now >= hold.timeout_at {
+            return Err(PaymentError::EscrowLockExpired);
+        }
+
+        // Effects before interactions.
+        hold.status = EscrowHoldStatus::Cancelled;
+        storage::set_escrow_hold(&env, &hold);
+
+        // Return funds to payer.
+        let token_client = token::Client::new(&env, &hold.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &hold.payer,
+            &hold.amount,
+        );
+
+        env.events().publish(
+            ("lumenflow", "escrow_cancelled"),
+            (escrow_id, hold.payer, hold.amount),
+        );
+        Ok(())
+    }
+
+    /// Retrieve a conditional escrow hold by escrow ID.
+    ///
+    /// # Arguments
+    /// * `escrow_id` - The unique hold identifier.
+    ///
+    /// # Returns
+    /// The [`EscrowHold`] on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::EscrowNotFound`] — no hold with `escrow_id`.
+    pub fn get_escrow_hold(env: Env, escrow_id: String) -> Result<EscrowHold, PaymentError> {
+        storage::get_escrow_hold(&env, &escrow_id).ok_or(PaymentError::EscrowNotFound)
+    }
+
+    // ── Admin Audit Log (Issue #1115) ─────────────────────────────────────────
+
+    /// Query the admin audit log filtered by ledger range.
+    ///
+    /// Returns up to `limit` entries (newest first) where the entry's
+    /// `ledger_sequence` falls within `[from_ledger, to_ledger]`.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the contract administrator. Must sign the call.
+    /// * `from_ledger` - Start of the ledger range (inclusive).
+    /// * `to_ledger` - End of the ledger range (inclusive). Pass `u32::MAX` for open-ended.
+    /// * `limit` - Maximum entries to return (capped at 100).
+    ///
+    /// # Returns
+    /// A `Vec<AdminAuditEntry>` (newest first).
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — caller is not the admin.
+    /// * [`PaymentError::InvalidInput`] — `from_ledger > to_ledger` or `limit` is 0.
+    pub fn get_admin_audit_log(
+        env: Env,
+        admin: Address,
+        from_ledger: u32,
+        to_ledger: u32,
+        limit: u32,
+    ) -> Result<Vec<AdminAuditEntry>, PaymentError> {
+        require_admin(&env, &admin)?;
+
+        if from_ledger > to_ledger || limit == 0 {
+            return Err(PaymentError::InvalidInput);
+        }
+
+        let effective_limit = limit.min(100);
+        Ok(storage::query_admin_audit_log(&env, from_ledger, to_ledger, effective_limit))
     }
 }

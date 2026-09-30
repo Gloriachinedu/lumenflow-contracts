@@ -8,7 +8,40 @@ The LumenFlow WASM build is deterministic: given the same source commit, `Cargo.
 
 ## Automated Verification (GitHub Actions)
 
-The **Verify WASM Hash** workflow (`verify-wasm-hash.yml`) can be triggered manually:
+### Nightly Reproducibility Check (Issue #1113)
+
+The **WASM Reproducibility Check** workflow (`.github/workflows/wasm-reproducibility.yml`) runs automatically every night at **02:00 UTC** and can also be triggered manually via `workflow_dispatch`.
+
+It verifies reproducibility by performing **two completely independent builds** and comparing their SHA-256 hashes:
+
+| Job | Description |
+|-----|-------------|
+| `build-a` | First build — uses the Cargo dependency cache for speed. |
+| `build-b` | Second build — **no cache** to ensure a fully clean, independent build. |
+| `compare` | Compares hashes; updates `wasm-size-history.json` on match; alerts on mismatch. |
+
+**On a passing run:**
+- `wasm-size-history.json` is updated with the verified hash, size in bytes, and size in KB.
+- The commit is authored by `github-actions[bot]`.
+
+**On a mismatch:**
+- A GitHub issue is automatically opened with title `🚨 WASM Reproducibility Mismatch Detected`, labelled `bug`, `security`, `ci`.
+- An optional Slack alert is sent if `SLACK_WASM_ALERT_WEBHOOK` is set in repository secrets.
+- The workflow step exits with a non-zero code, marking the run as failed.
+
+**To trigger manually:**
+
+1. Go to **Actions → WASM Reproducibility Check → Run workflow**.
+2. Optionally specify a `ref` (branch, tag, or SHA). Defaults to `main`.
+3. Click **Run workflow**.
+
+**Required repository secrets for Slack alerts (optional):**
+
+| Secret | Description |
+|--------|-------------|
+| `SLACK_WASM_ALERT_WEBHOOK` | Slack incoming webhook URL. If absent the Slack step is skipped. |
+
+### On-Demand Hash Verification
 
 1. Go to **Actions → Verify WASM Hash → Run workflow**.
 2. Set:
