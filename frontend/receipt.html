@@ -357,6 +357,7 @@
 <nav class="lf-nav" aria-label="LumenFlow navigation">
   <span class="lf-nav__brand">⚡ LumenFlow</span>
   <div id="wallet-status-container"></div>
+  <div id="lf-lang-nav"></div>
 </nav>
 
 <main id="receipt-main">
@@ -503,9 +504,16 @@
 
 <script src="./toast.js"></script>
 <script type="module">
+  import { i18n } from './i18n.js';
+  i18n.init().then(() => {
+    i18n.renderSwitcher(document.getElementById('lf-lang-nav'));
+  });
+</script>
+<script type="module">
   import { CONTRACT_ID, RPC_URL, formatAmount, formatDate, renderModeBanner, formatTokenAmount, convertToXlm, getTokenMetadata, copyButtonHtml, initCopyButtons, showLoadingOverlay, hideLoadingOverlay } from './lumenflow-shared.js';
   import { validateOrderId } from './validation.js';
   import { showToast } from './toast.js';
+  import { receiptCache } from './receipt-cache.js';
 
   // ── Routing ────────────────────────────────────────────────────────────────
   // Supports both:
@@ -862,10 +870,42 @@
     document.getElementById('loading').style.display = 'block';
     showLoadingOverlay('Loading payment receipt…');
 
-    const data = await fetchPayment(orderId).catch(e => {
-      showErrorToast(e);
-      return null;
-    });
+    // ── IndexedDB cache integration (#1112) ────────────────────────────────
+    // Strategy:
+    //  1. Try to load fresh data from the network.
+    //  2. If successful, store in IndexedDB cache for offline use.
+    //  3. If offline (fetch fails), serve from IndexedDB cache.
+    //  4. Show a stale banner whenever cached data is served.
+
+    let data = null;
+    let servedFromCache = false;
+
+    try {
+      data = await fetchPayment(orderId);
+      if (data) {
+        // Cache the fresh result (non-blocking — don't await)
+        receiptCache.set(orderId, data).catch(() => {});
+      }
+    } catch (e) {
+      // Network error — try the cache
+      const cached = await receiptCache.get(orderId).catch(() => null);
+      if (cached) {
+        data = cached.data;
+        servedFromCache = true;
+      } else {
+        showErrorToast(e);
+      }
+    }
+
+    // If online fetch returned null (not found), still try the cache as a
+    // fallback in case connectivity was partial
+    if (!data) {
+      const cached = await receiptCache.get(orderId).catch(() => null);
+      if (cached) {
+        data = cached.data;
+        servedFromCache = true;
+      }
+    }
 
     document.getElementById('loading').style.display = 'none';
     hideLoadingOverlay();
@@ -882,6 +922,25 @@
       }
     } else {
       renderReceipt(data);
+      // Show stale banner if this data came from the IndexedDB cache (#1112)
+      if (servedFromCache) {
+        let staleBanner = document.getElementById('cached-receipt-banner');
+        if (!staleBanner) {
+          staleBanner = document.createElement('div');
+          staleBanner.id = 'cached-receipt-banner';
+          staleBanner.setAttribute('role', 'status');
+          staleBanner.setAttribute('aria-live', 'polite');
+          staleBanner.style.cssText = [
+            'background:#fff3cd', 'color:#856404',
+            'border:1px solid #ffc107', 'border-radius:6px',
+            'padding:0.5rem 1rem', 'margin-bottom:1rem',
+            'font-size:0.85rem', 'font-weight:600',
+          ].join(';');
+          staleBanner.textContent = '📦 Cached — may not reflect latest status';
+          const receiptEl = document.getElementById('receipt-content');
+          if (receiptEl) receiptEl.prepend(staleBanner);
+        }
+      }
       // Move focus to receipt heading after async load (issue #790)
       const heading = document.querySelector('#receipt-content h1');
       if (heading) {

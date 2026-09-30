@@ -1,0 +1,117 @@
+{
+  "lang": "en",
+  "dir": "ltr",
+
+  "nav": {
+    "history": "Payment History",
+    "receipt": "Receipt",
+    "multisig": "Multisig Payment",
+    "connectWallet": "Connect Wallet",
+    "darkMode": "Dark",
+    "lightMode": "Light"
+  },
+
+  "langSwitcher": {
+    "label": "Language",
+    "en": "English",
+    "es": "Español",
+    "pt": "Português"
+  },
+
+  "history": {
+    "title": "Payment History",
+    "description": "View and filter your complete LumenFlow payment history.",
+    "filterLabel": "Filter",
+    "sortLabel": "Sort",
+    "loadMore": "Load More",
+    "noResults": "No payments found.",
+    "loading": "Loading…",
+    "orderId": "Order ID",
+    "merchant": "Merchant",
+    "payer": "Payer",
+    "amount": "Amount",
+    "status": "Status",
+    "date": "Date",
+    "memo": "Memo",
+    "statusAny": "Any",
+    "statusCompleted": "Completed",
+    "statusPartiallyRefunded": "Partially Refunded",
+    "statusFullyRefunded": "Fully Refunded"
+  },
+
+  "receipt": {
+    "title": "Payment Receipt",
+    "cachedBanner": "Cached — may not reflect latest status",
+    "offlineBanner": "You are offline. Showing cached receipt.",
+    "expiredBanner": "Link Expired",
+    "payButton": "Pay with Freighter",
+    "orderId": "Order ID",
+    "merchant": "Merchant",
+    "payer": "Payer",
+    "amount": "Amount",
+    "status": "Status",
+    "date": "Date",
+    "memo": "Memo",
+    "refundedAmount": "Refunded Amount",
+    "platformFee": "Platform Fee",
+    "loading": "Loading receipt…",
+    "notFound": "Receipt not found.",
+    "error": "Could not load receipt."
+  },
+
+  "multisig": {
+    "title": "Multisig Payment",
+    "description": "Initiate and manage multi-signature payments.",
+    "paymentId": "Payment ID",
+    "merchant": "Merchant Address",
+    "token": "Token Address",
+    "amount": "Amount (stroops)",
+    "signers": "Signers",
+    "addSigner": "+ Add Signer",
+    "removeSigner": "Remove",
+    "threshold": "Required Signatures",
+    "of": "of",
+    "initiate": "Initiate Multisig Payment",
+    "sign": "Sign",
+    "execute": "Execute",
+    "cancel": "Cancel",
+    "statusPending": "Pending",
+    "statusExecuted": "Executed",
+    "statusExpired": "Expired",
+    "progress": "Signatures",
+    "error": "An error occurred.",
+    "loading": "Loading…"
+  },
+
+  "wallet": {
+    "title": "Connect Wallet",
+    "freighter": "Freighter",
+    "albedo": "Albedo",
+    "close": "Close",
+    "notConnected": "Not connected",
+    "connected": "Connected"
+  },
+
+  "errors": {
+    "networkError": "Network error. Please check your connection.",
+    "contractError": "Contract error.",
+    "walletNotInstalled": "Wallet extension not installed.",
+    "walletConnectFailed": "Wallet connection failed."
+  },
+
+  "common": {
+    "copy": "Copy",
+    "copied": "Copied!",
+    "download": "Download",
+    "close": "Close",
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "yes": "Yes",
+    "no": "No",
+    "ok": "OK",
+    "loading": "Loading…",
+    "error": "Error",
+    "success": "Success",
+    "lumenflow": "LumenFlow"
+  }
+}

@@ -58,6 +58,32 @@ docker compose down -v
 
 ## Install
 
+### SDK (JavaScript / TypeScript)
+
+```bash
+npm install @lumenflow/sdk
+```
+
+```ts
+import { LumenFlowClient } from '@lumenflow/sdk';
+```
+
+See the [SDK quickstart guide](sdk/README.md#quick-start) for full usage.
+
+### CLI (Rust / crates.io)
+
+```bash
+cargo install lumenflow-cli
+```
+
+Verify the installation:
+
+```bash
+lumenflow-cli --version
+```
+
+### Pre-built CLI binaries
+
 Pre-built CLI binaries are published with every [GitHub Release](https://github.com/Gloriachinedu/lumenflow-contracts/releases).
 
 **Linux (x86_64)**
