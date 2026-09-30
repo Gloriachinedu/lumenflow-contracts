@@ -470,3 +470,62 @@ fn test_batch_size_limit_enforced() {
     let result = client.try_batch_payment(&payer, &payments);
     assert_eq!(result, Err(Ok(PaymentError::BatchSizeExceeded)));
 }
+
+// ── 4. Stress test — 1 000 unique payments then 1 000 replay attempts ─────────
+
+/// Submit 1 000 unique order IDs successfully, then replay each one and verify
+/// every replay is rejected with `PaymentAlreadyExists`.
+///
+/// Acceptance criteria (issue #1091):
+///   - All 1 000 unique payments succeed without panics or stack overflows.
+///   - All 1 000 replayed order IDs are rejected with `DuplicateOrderId`
+///     (mapped to `PaymentAlreadyExists` in the contract error type).
+///   - The test completes within CI time limits (no sleeps, no I/O).
+#[test]
+fn test_replay_protection_stress_1000_payments() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Mint enough tokens for all 1 000 payments (1 stroop each).
+    mint(&env, &token, &payer, 1_000);
+
+    const N: u32 = 1_000;
+
+    // ── Phase 1: submit N unique payments ────────────────────────────────────
+    for i in 0..N {
+        let order_id = str(&env, &alloc::format!("STRESS_{i:04}"));
+        client.process_payment_with_signature(
+            &payer,
+            &order_id,
+            &merchant,
+            &token,
+            &1,
+            &str(&env, "stress"),
+            &None,
+            &(i as u64 + 1),
+            &zero_bytes64(&env),
+            &zero_bytes32(&env),
+        );
+    }
+
+    // ── Phase 2: replay each order_id — all must be rejected ─────────────────
+    for i in 0..N {
+        let order_id = str(&env, &alloc::format!("STRESS_{i:04}"));
+        let result = client.try_process_payment_with_signature(
+            &payer,
+            &order_id,
+            &merchant,
+            &token,
+            &1,
+            &str(&env, "replay"),
+            &None,
+            &(i as u64 + 1),
+            &zero_bytes64(&env),
+            &zero_bytes32(&env),
+        );
+        assert_eq!(
+            result,
+            Err(Ok(PaymentError::PaymentAlreadyExists)),
+            "replay of STRESS_{i:04} was not rejected",
+        );
+    }
+}
