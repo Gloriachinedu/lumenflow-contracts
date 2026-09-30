@@ -270,3 +270,45 @@ jobs:
             **SHA-256:** `${{ steps.hash.outputs.sha256 }}`
 
             See [docs/release-hashes.md](docs/release-hashes.md) for the full hash table and verification instructions.
+
+  publish-cli:
+    name: Publish CLI to crates.io
+    runs-on: ubuntu-latest
+    needs: [changelog, container-scan]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c  # master
+        with:
+          toolchain: 1.87.0
+
+      - name: Verify toolchain version
+        run: rustc --version | grep "1.87.0"
+
+      - name: Cache cargo registry
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-crates-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Validate CLI version matches tag
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CLI_VERSION=$(grep '^version' cli/lumenflow-cli/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          echo "Tag version : $TAG_VERSION"
+          echo "CLI version : $CLI_VERSION"
+          if [ "$TAG_VERSION" != "$CLI_VERSION" ]; then
+            echo "ERROR: tag $GITHUB_REF_NAME does not match cli/lumenflow-cli/Cargo.toml version $CLI_VERSION" >&2
+            exit 1
+          fi
+
+      - name: Publish lumenflow-cli to crates.io
+        run: cargo publish --package lumenflow-cli --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

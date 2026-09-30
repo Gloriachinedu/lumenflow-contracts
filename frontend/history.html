@@ -353,6 +353,7 @@
 <nav class="lf-nav" aria-label="LumenFlow navigation">
   <span class="lf-nav__brand">⚡ LumenFlow</span>
   <div id="wallet-status-container"></div>
+  <div id="lf-lang-nav"></div>
 </nav>
 
 <main id="history-main">
@@ -485,6 +486,12 @@
 <script type="module">
   import { initDarkMode } from './dark-mode.js';
   initDarkMode();
+</script>
+<script type="module">
+  import { i18n } from './i18n.js';
+  i18n.init().then(() => {
+    i18n.renderSwitcher(document.getElementById('lf-lang-nav'));
+  });
 </script>
 
 <!-- CSP violation reporter: logs policy violations to the console in development -->

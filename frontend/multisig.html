@@ -243,6 +243,7 @@
 <nav class="lf-nav" aria-label="LumenFlow navigation">
   <span class="lf-nav__brand">⚡ LumenFlow</span>
   <div id="wallet-status-container"></div>
+  <div id="lf-lang-nav"></div>
 </nav>
 
 <main id="multisig-main">
@@ -356,6 +357,12 @@
 </div>
 
 <script src="./toast.js"></script>
+<script type="module">
+  import { i18n } from './i18n.js';
+  i18n.init().then(() => {
+    i18n.renderSwitcher(document.getElementById('lf-lang-nav'));
+  });
+</script>
 <script type="module">
   import { CONTRACT_ID, RPC_URL, renderModeBanner, copyButtonHtml, initCopyButtons, formatAmount, showLoadingOverlay, hideLoadingOverlay } from './lumenflow-shared.js';
   import { validateOrderId, validateAmount, validateAddress, isValidStellarKey } from './validation.js';

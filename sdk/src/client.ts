@@ -76,6 +76,9 @@ export class Client {
    */
   getRetryConfig(): RetryConfig {
     return { ...this.retryConfig };
+  }
+}
+
 import {
   Address,
   Contract,
@@ -88,6 +91,9 @@ import {
   nativeToScVal,
   TimeoutInfinite,
 } from "@stellar/stellar-sdk";
+import packageJson from "../package.json";
+
+export const VERSION: string = packageJson.version;
 
 /**
  * Serialize a {@link MerchantCategory} value to the XDR ScVal form expected
@@ -170,7 +176,7 @@ export interface ClientConfig {
 
 export class LumenFlowClient {
   public readonly contract: Contract;
-  public readonly server: SorobanRpc.Server;
+  public readonly server: rpc.Server;
   public readonly networkPassphrase: string;
   private signer?: Signer;
   private skipVersionCheck: boolean;
@@ -178,7 +184,9 @@ export class LumenFlowClient {
 
   constructor(config: ClientConfig) {
     this.contract = new Contract(config.contractId);
-    this.server = new SorobanRpc.Server(config.rpcUrl);
+    this.server = new rpc.Server(config.rpcUrl, {
+      headers: { "X-SDK-Version": VERSION },
+    });
     this.networkPassphrase = config.networkPassphrase;
     this.signer = config.signer;
     this.skipVersionCheck = config.skipVersionCheck ?? false;
@@ -934,6 +942,6 @@ export class LumenFlowClient {
         return new LumenFlowError(code as PaymentErrorCode, simulation);
       }
     }
-    return new Error(`Simulation failed: ${errmain
+    return new Error(`Simulation failed: ${errorMsg}`);
   }
 }

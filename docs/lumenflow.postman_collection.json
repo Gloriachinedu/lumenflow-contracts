@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "LumenFlow Contract API",
-    "description": "Complete Postman collection for the LumenFlow Soroban smart contract on Stellar. Covers all contract function categories: admin, merchant management, payment processing, refunds, and multi-signature payments.\n\n## Setup\n1. Import this collection into Postman v10+.\n2. Create an environment and set the variables listed below.\n3. Run requests in order within each folder, or use individual requests as needed.\n\n## Environment Variables\n| Variable | Description | Example |\n|---|---|---|\n| `RPC_URL` | Soroban RPC endpoint | `https://soroban-testnet.stellar.org` |\n| `NETWORK_PASSPHRASE` | Stellar network passphrase | `Test SDF Network ; September 2015` |\n| `CONTRACT_ID` | Deployed LumenFlow contract ID | `CAAAA...` |\n| `ADMIN_ADDRESS` | Admin Stellar address | `GAAA...` |\n| `ADMIN_SECRET` | Admin secret key | `SAAA...` |\n| `MERCHANT_ADDRESS` | Merchant Stellar address | `GBBB...` |\n| `MERCHANT_SECRET` | Merchant secret key | `SBBB...` |\n| `PAYER_ADDRESS` | Payer Stellar address | `GCCC...` |\n| `PAYER_SECRET` | Payer secret key | `SCCC...` |\n| `TOKEN_ADDRESS` | SAC token contract address | `CDDD...` |\n| `ORDER_ID` | Example order ID | `ORDER_001` |\n| `REFUND_ID` | Example refund ID | `REFUND_001` |\n| `PAYMENT_ID` | Example multisig payment ID | `MS_001` |",
+    "description": "Complete Postman collection for the LumenFlow Soroban smart contract on Stellar. Covers all contract function categories: admin, merchant management, payment processing, refunds, and multi-signature payments.\n\n## Setup\n1. Import this collection into Postman v10+.\n2. Create an environment and set the variables listed below.\n3. Run requests in order within each folder, or use individual requests as needed.\n\n## Environment Variables\n| Variable | Description | Example |\n|---|---|---|\n| `RPC_URL` | Soroban RPC endpoint | `https://soroban-testnet.stellar.org` |\n| `NETWORK_PASSPHRASE` | Stellar network passphrase | `Test SDF Network ; September 2015` |\n| `CONTRACT_ID` | Deployed LumenFlow contract ID | `CAAAA...` |\n| `ADMIN_ADDRESS` | Admin Stellar address | `GAAA...` |\n| `ADMIN_SECRET` | Admin secret key | `SAAA...` |\n| `MERCHANT_ADDRESS` | Merchant Stellar address | `GBBB...` |\n| `MERCHANT_SECRET` | Merchant secret key | `SBBB...` |\n| `PAYER_ADDRESS` | Payer Stellar address | `GCCC...` |\n| `PAYER_SECRET` | Payer secret key | `SCCC...` |\n| `TOKEN_ADDRESS` | SAC token contract address | `CDDD...` |\n| `ORDER_ID` | Example order ID | `ORDER_001` |\n| `REFUND_ID` | Example refund ID | `REFUND_001` |\n| `PAYMENT_ID` | Example multisig payment ID | `MS_001` |\n| `REQUEST_ID` | Example payment request ID | `REQ_001` |",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "version": {
       "major": 1,
@@ -19,7 +19,8 @@
     { "key": "TOKEN_ADDRESS", "value": "CDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD", "type": "string" },
     { "key": "ORDER_ID", "value": "ORDER_001", "type": "string" },
     { "key": "REFUND_ID", "value": "REFUND_001", "type": "string" },
-    { "key": "PAYMENT_ID", "value": "MS_001", "type": "string" }
+    { "key": "PAYMENT_ID", "value": "MS_001", "type": "string" },
+    { "key": "REQUEST_ID", "value": "REQ_001", "type": "string" }
   ],
   "item": [
 
@@ -406,6 +407,61 @@
           "response": []
         }
       ]
+    },
+
+    {
+      "name": "Payment Requests",
+      "description": "Payment request lifecycle: a merchant creates a request, a payer pays it (or the merchant cancels it before it is paid). Requests auto-expire after their TTL.",
+      "item": [
+        {
+          "name": "Create Payment Request",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 50,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $MERCHANT_SECRET -- create_payment_request --merchant {{MERCHANT_ADDRESS}} --request_id {{REQUEST_ID}} --token {{TOKEN_ADDRESS}} --amount 5000 --memo 'Invoice #001' --ttl 3600>\"\n  }\n}"
+            },
+            "description": "Creates a payment request that a payer can fulfil with `pay_payment_request`. `ttl` is in seconds from the current ledger time.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $MERCHANT_SECRET \\\n  -- create_payment_request \\\n  --merchant $MERCHANT_ADDRESS \\\n  --request_id \"REQ_001\" \\\n  --token $TOKEN_ADDRESS \\\n  --amount 5000 \\\n  --memo \"Invoice #001\" \\\n  --ttl 3600\n```\n\n**Expected response:** `null`\n\n**Errors:** `InvalidAmount`, `InvalidInput` (empty/too-long request_id), `TokenNotAllowed`, `PaymentAlreadyExists`"
+          },
+          "response": []
+        },
+        {
+          "name": "Pay Payment Request",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 51,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $PAYER_SECRET -- pay_payment_request --payer {{PAYER_ADDRESS}} --request_id {{REQUEST_ID}}>\"\n  }\n}"
+            },
+            "description": "Fulfils an outstanding payment request: transfers `amount` from `payer` to the request's merchant, records the payment in history, and removes the request. Emits `lumenflow/payment_request_paid`.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $PAYER_SECRET \\\n  -- pay_payment_request \\\n  --payer $PAYER_ADDRESS \\\n  --request_id \"REQ_001\"\n```\n\n**Expected response:** `null`\n\n**Errors:** `PaymentNotFound`, `PaymentExpired` (request TTL elapsed; the request is removed as a side effect), `PaymentAlreadyExists` (an order with this ID was already recorded)"
+          },
+          "response": []
+        },
+        {
+          "name": "Cancel Payment Request",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 52,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $MERCHANT_SECRET -- cancel_payment_request --caller {{MERCHANT_ADDRESS}} --request_id {{REQUEST_ID}}>\"\n  }\n}"
+            },
+            "description": "Cancels a not-yet-paid request early. Only the merchant that created the request may cancel it. Emits `lumenflow/payment_request_cancelled`.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $MERCHANT_SECRET \\\n  -- cancel_payment_request \\\n  --caller $MERCHANT_ADDRESS \\\n  --request_id \"REQ_001\"\n```\n\n**Expected response:** `null`\n\n**Errors:** `PaymentNotFound`, `Unauthorized` (caller is not the request's merchant)"
+          },
+          "response": []
+        }
+      ]
+    },
+
+    {
+      "name": "GDPR Data Deletion (NOT IMPLEMENTED)",
+      "description": "NOTE FOR MAINTAINERS: PRIVACY.md and docs/data-classification.md document a merchant data-deletion flow (`request_merchant_data_deletion` / `confirm_merchant_data_deletion`), but as of this collection's last update neither function exists in contracts/lumenflow/src/lib.rs. No requests are included here because there is nothing to call yet. Once the contract implements these entry points, add the corresponding requests to this folder and remove this note. Tracked separately from issue #1080 — see the PRIVACY.md / data-classification.md docs-vs-code drift.",
+      "item": []
     }
   ]
 }
