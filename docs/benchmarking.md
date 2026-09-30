@@ -191,3 +191,33 @@ of hot-path costs is stable and useful for prioritising optimisations.
 
 For reproducible comparisons, always run benchmarks on the same machine and
 avoid background load.  Use `--baseline` to compare across branches.
+
+---
+
+## Load Test Baseline (k6 concurrent batch payments)
+
+In addition to the in-memory Criterion benchmarks above, `scripts/load-test.sh`
+runs a k6-based network load test against a deployed contract (see
+`.github/workflows/load-test.yml`). The `concurrent_batch_payments` scenario
+(added in Issue #1084) simulates `BATCH_CLIENTS` (default: 10) concurrent
+clients, each submitting a single `batch_payment` call containing
+`BATCH_ITEMS` (default: 10) items.
+
+**Recorded baseline (testnet, 10 clients x 10 items):**
+
+| Metric | Baseline |
+|--------|---------:|
+| P95 latency | 1200 ms |
+| Throughput | ~8 payments/sec |
+| Error rate | < 1% |
+
+**Regression gate:** CI fails the load test if the measured P95 latency for
+the `concurrent_batch_payments` scenario exceeds the baseline by more than
+**20%** (i.e. > 1440 ms). This is enforced via the `BASELINE_P95_MS` env var
+and a k6 threshold on the `lumenflow_batch_payment_duration` metric, and is
+reported alongside throughput and error rate in the load test JSON output
+and CI job summary.
+
+To re-baseline after an intentional performance change, update
+`BASELINE_P95_MS` in `.github/workflows/load-test.yml` and the table above
+to the new measured value.

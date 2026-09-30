@@ -396,6 +396,18 @@ jobs:
         working-directory: sdk
         run: npm ci --ignore-scripts || npm install --ignore-scripts
 
+      - name: Run SDK unit tests with coverage
+        working-directory: sdk
+        run: npm test -- --coverage
+
+      - name: Upload SDK coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: sdk/coverage/lcov.info
+          flags: sdk
+          name: sdk-coverage
+          fail_ci_if_error: false
+
       - name: Build SDK
         working-directory: sdk
         run: npm run build --if-present
