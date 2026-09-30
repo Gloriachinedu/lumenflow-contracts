@@ -2,9 +2,9 @@ use soroban_sdk::{contracttype, Address, Env, String, Vec};
 
 use crate::error::PaymentError;
 use crate::types::{
-    DisputeRecord, EscrowRecord, GlobalStats, Merchant, MerchantStats, MultisigPayment,
-    MerchantCommitment, PaymentOrder, PaymentRequest, RefundRecord, Subscription,
-    SubscriptionPlan,
+    AdminAuditEntry, DisputeRecord, EscrowRecord, GlobalStats, Merchant, MerchantStats,
+    MultisigPayment, MerchantCommitment, PaymentOrder, PaymentRequest, RefundRecord, Subscription,
+    SubscriptionPlan, EscrowHold,
 };
 
 // ── TTL / limit constants ─────────────────────────────────────────────────────
@@ -149,6 +149,14 @@ pub enum DataKey {
     DeletionRequest(Address),
     ReferralFeeBps,
     MerchantCommitment(Address),
+    /// Conditional escrow hold keyed by escrow_id.
+    EscrowHold(String),
+    /// Admin audit log entry keyed by index.
+    AdminAuditEntry(u32),
+    /// Total count of admin audit log entries (append-only counter).
+    AdminAuditCount,
+    /// Configurable maximum audit log entries before oldest-first eviction.
+    AdminAuditMaxEntries,
 }
 
 /// The schema version this binary was compiled against.
@@ -1174,4 +1182,131 @@ pub fn remove_merchant_commitment(env: &Env, address: &Address) {
     env.storage()
         .temporary()
         .remove(&DataKey::MerchantCommitment(address.clone()));
+}
+
+// ── Conditional Escrow Hold (Issue #1111) ─────────────────────────────────────
+
+/// TTL for escrow hold records — 1 year.
+pub const ESCROW_HOLD_TTL_LEDGERS: u32 = 6_307_200;
+
+pub fn get_escrow_hold(env: &Env, escrow_id: &String) -> Option<EscrowHold> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::EscrowHold(escrow_id.clone()))
+}
+
+pub fn set_escrow_hold(env: &Env, hold: &EscrowHold) {
+    let key = DataKey::EscrowHold(hold.escrow_id.clone());
+    env.storage().persistent().set(&key, hold);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, ESCROW_HOLD_TTL_LEDGERS, ESCROW_HOLD_TTL_LEDGERS);
+}
+
+// ── Admin Audit Log (Issue #1115) ─────────────────────────────────────────────
+//
+// The audit log is append-only: entries are written at indices 0, 1, 2, …
+// and are never modified after writing.  The total entry count is stored
+// separately.  When the log exceeds the configurable maximum the oldest
+// entries (lowest indices) are evicted first.
+
+/// Default maximum number of admin audit log entries retained in persistent
+/// storage.  Oldest-first eviction kicks in beyond this cap.
+pub const DEFAULT_ADMIN_AUDIT_MAX_ENTRIES: u32 = 10_000;
+
+/// TTL for audit log entries — 2 years to support long-duration compliance needs.
+pub const ADMIN_AUDIT_TTL_LEDGERS: u32 = 12_614_400;
+
+/// Return the total number of audit log entries ever written.
+pub fn get_admin_audit_count(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::AdminAuditCount)
+        .unwrap_or(0u32)
+}
+
+fn set_admin_audit_count(env: &Env, count: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::AdminAuditCount, &count);
+}
+
+/// Configured maximum audit log entries before eviction. Admin-configurable.
+pub fn get_admin_audit_max_entries(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::AdminAuditMaxEntries)
+        .unwrap_or(DEFAULT_ADMIN_AUDIT_MAX_ENTRIES)
+}
+
+/// Set the maximum number of audit log entries to retain.  Admin-only; caller
+/// is responsible for authorization.
+pub fn set_admin_audit_max_entries(env: &Env, max: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::AdminAuditMaxEntries, &max);
+}
+
+/// Read a single audit log entry by its 0-based index.
+pub fn get_admin_audit_entry(env: &Env, index: u32) -> Option<AdminAuditEntry> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::AdminAuditEntry(index))
+}
+
+/// Append a new entry to the audit log (append-only, never mutated after write).
+///
+/// When the total entry count exceeds the configured maximum, the oldest entry
+/// (lowest index) is removed before the new one is written.
+pub fn append_admin_audit_entry(env: &Env, entry: &AdminAuditEntry) {
+    let max = get_admin_audit_max_entries(env);
+    let count = get_admin_audit_count(env);
+
+    // Evict the oldest entry when at capacity.
+    if count >= max {
+        let oldest_index = count.saturating_sub(max);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::AdminAuditEntry(oldest_index));
+    }
+
+    let key = DataKey::AdminAuditEntry(entry.index);
+    env.storage().persistent().set(&key, entry);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, ADMIN_AUDIT_TTL_LEDGERS, ADMIN_AUDIT_TTL_LEDGERS);
+
+    set_admin_audit_count(env, count + 1);
+}
+
+/// Return audit log entries whose index falls within `[from_index, to_index]`,
+/// up to `limit` results.  Entries that have been evicted return `None` and are
+/// skipped.
+pub fn query_admin_audit_log(
+    env: &Env,
+    from_ledger: u32,
+    to_ledger: u32,
+    limit: u32,
+) -> soroban_sdk::Vec<AdminAuditEntry> {
+    let count = get_admin_audit_count(env);
+    let mut results = soroban_sdk::Vec::new(env);
+    let mut collected: u32 = 0;
+
+    // Iterate from newest to oldest (highest index first) for efficient range queries.
+    let mut i = count;
+    while i > 0 && collected < limit {
+        i -= 1;
+        if let Some(entry) = get_admin_audit_entry(env, i) {
+            if entry.ledger_sequence >= from_ledger && entry.ledger_sequence <= to_ledger {
+                results.push_back(entry);
+                collected += 1;
+            }
+            // Stop early if we've gone past the from_ledger range.
+            if entry.ledger_sequence < from_ledger {
+                break;
+            }
+        }
+    }
+
+    results
 }

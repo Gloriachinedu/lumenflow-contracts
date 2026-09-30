@@ -30,9 +30,44 @@ node_modules/
 
 # Test coverage output
 coverage/
+lcov.info
+*.lcov
+
+# Test snapshots (cargo-insta / proptest / snapshot-based test artefacts)
+contracts/lumenflow/test_snapshots/
+**/*.snap
+**/*.snap.new
+
+# Playwright test artefacts
+tests/playwright/screenshots/
+test-results/
+playwright-report/
+
+# SDK build output (generated; not committed)
+sdk/dist/
+
+# TypeScript compiled output
+dist/
+*.tsbuildinfo
+
+# Jest coverage reports
+jest_coverage/
+**/__snapshots__/
 
 # Smoke test: ephemeral npm cache for generate_smoke_keypair.sh
 scripts/.smoke_node_modules/
 
 # Local backup bundles (produced by scripts/backup-manager.mjs)
 backup-bundle/
+
+# Terraform state and sensitive variable files
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.backup
+infra/terraform/.terraform/
+infra/terraform/.terraform.lock.hcl
+infra/terraform/terraform.tfvars
+
+# Temporary files
+tmp/
+*.tmp
+*.bak

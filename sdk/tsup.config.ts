@@ -27,8 +27,14 @@ export default defineConfig({
   /**
    * Generate TypeScript declaration files (.d.ts) for both formats.
    * The declarations are placed alongside their respective JS outputs.
+   *
+   * Issue #1114: declarationMap:true causes tsup to also emit .d.ts.map files
+   * so that IDE 'Go to Definition' navigates to the original .ts source rather
+   * than the compiled .d.ts stub.
    */
-  dts: true,
+  dts: {
+    resolve: true,
+  },
   /**
    * Split output into separate directories per format.
    */

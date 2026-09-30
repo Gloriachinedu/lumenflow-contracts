@@ -109,6 +109,24 @@ export const EVENT_CATALOG: readonly CatalogEntry[] = [
   entry('contract_paused', false, []),
   entry('contract_unpaused', false, []),
   entry('contract_upgraded', false, [['new_wasm_hash', 'bytes']]),
+  // ── Conditional Escrow Hold (Issue #1111) ─────────────────────────────────
+  entry('escrow_held', true, [
+    ['escrow_id', 'string'],
+    ['payer', 'address'],
+    ['merchant', 'address'],
+    ['amount', 'i128'],
+    ['condition_hash', 'bytes'],
+  ]),
+  entry('escrow_released', false, [
+    ['escrow_id', 'string'],
+    ['merchant', 'address'],
+    ['amount', 'i128'],
+  ]),
+  entry('escrow_cancelled', false, [
+    ['escrow_id', 'string'],
+    ['payer', 'address'],
+    ['amount', 'i128'],
+  ]),
 ] as const;
 
 const BY_NAME = new Map(EVENT_CATALOG.map((e) => [e.name, e]));

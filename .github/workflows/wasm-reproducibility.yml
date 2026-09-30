@@ -1,0 +1,218 @@
+name: WASM Reproducibility Check
+
+# Issue #1113 — Nightly CI job that builds the WASM twice in independent jobs,
+# compares SHA-256 hashes, updates wasm-size-history.json on a passing run,
+# and opens a GitHub issue (or sends a Slack alert) on mismatch.
+
+on:
+  schedule:
+    # Run every night at 02:00 UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to check (branch, tag, or SHA). Defaults to main.'
+        required: false
+        default: 'main'
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  # ── Build A ──────────────────────────────────────────────────────────────────
+  build-a:
+    name: Build A (first independent build)
+    runs-on: ubuntu-latest
+    outputs:
+      hash: ${{ steps.hash.outputs.hash }}
+      size_bytes: ${{ steps.hash.outputs.size_bytes }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || 'main' }}
+
+      - name: Install Rust toolchain (pinned by rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-repro-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-repro-
+
+      - name: Build WASM (build A)
+        run: |
+          cargo build \
+            --locked \
+            --target wasm32-unknown-unknown \
+            --release \
+            --package lumenflow
+
+      - name: Compute SHA-256 (build A)
+        id: hash
+        run: |
+          HASH=$(sha256sum target/wasm32-unknown-unknown/release/lumenflow.wasm | awk '{print $1}')
+          SIZE=$(wc -c < target/wasm32-unknown-unknown/release/lumenflow.wasm)
+          echo "hash=${HASH}" >> "$GITHUB_OUTPUT"
+          echo "size_bytes=${SIZE}" >> "$GITHUB_OUTPUT"
+          echo "Build A hash: ${HASH}"
+          echo "Build A size: ${SIZE} bytes"
+
+  # ── Build B ──────────────────────────────────────────────────────────────────
+  build-b:
+    name: Build B (second independent build)
+    runs-on: ubuntu-latest
+    outputs:
+      hash: ${{ steps.hash.outputs.hash }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || 'main' }}
+
+      - name: Install Rust toolchain (pinned by rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      # Intentionally NO cache restore to ensure a clean, independent build.
+      - name: Build WASM (build B)
+        run: |
+          cargo build \
+            --locked \
+            --target wasm32-unknown-unknown \
+            --release \
+            --package lumenflow
+
+      - name: Compute SHA-256 (build B)
+        id: hash
+        run: |
+          HASH=$(sha256sum target/wasm32-unknown-unknown/release/lumenflow.wasm | awk '{print $1}')
+          echo "hash=${HASH}" >> "$GITHUB_OUTPUT"
+          echo "Build B hash: ${HASH}"
+
+  # ── Compare ───────────────────────────────────────────────────────────────────
+  compare:
+    name: Compare hashes and update history
+    runs-on: ubuntu-latest
+    needs: [build-a, build-b]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || 'main' }}
+
+      - name: Compare SHA-256 hashes
+        id: compare
+        env:
+          HASH_A: ${{ needs.build-a.outputs.hash }}
+          HASH_B: ${{ needs.build-b.outputs.hash }}
+        run: |
+          echo "Build A: ${HASH_A}"
+          echo "Build B: ${HASH_B}"
+          if [ "${HASH_A}" = "${HASH_B}" ]; then
+            echo "match=true" >> "$GITHUB_OUTPUT"
+            echo "✅ Hashes match — WASM build is reproducible."
+          else
+            echo "match=false" >> "$GITHUB_OUTPUT"
+            echo "❌ Hash MISMATCH — WASM build is NOT reproducible!"
+            echo "  Build A: ${HASH_A}"
+            echo "  Build B: ${HASH_B}"
+          fi
+
+      - name: Update wasm-size-history.json (on match)
+        if: steps.compare.outputs.match == 'true'
+        env:
+          HASH_A: ${{ needs.build-a.outputs.hash }}
+          SIZE_BYTES: ${{ needs.build-a.outputs.size_bytes }}
+        run: |
+          HISTORY_FILE="wasm-size-history.json"
+          DATE=$(date -u '+%Y-%m-%d')
+          SIZE_KB=$(echo "scale=1; ${SIZE_BYTES} / 1024" | bc)
+
+          # Append new entry to the entries array using jq
+          jq --arg date "${DATE}" \
+             --arg hash "${HASH_A}" \
+             --argjson size_bytes "${SIZE_BYTES}" \
+             --argjson size_kb "${SIZE_KB}" \
+             '.entries += [{"date": $date, "sha256": $hash, "size_bytes": $size_bytes, "size_kb": $size_kb}]' \
+             "${HISTORY_FILE}" > tmp_history.json && mv tmp_history.json "${HISTORY_FILE}"
+
+          echo "Updated ${HISTORY_FILE} with hash ${HASH_A} (${SIZE_KB} KB)"
+
+      - name: Commit updated wasm-size-history.json
+        if: steps.compare.outputs.match == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'chore(ci): update wasm-size-history.json [nightly reproducibility]'
+          file_pattern: 'wasm-size-history.json'
+          commit_user_name: 'github-actions[bot]'
+          commit_user_email: 'github-actions[bot]@users.noreply.github.com'
+
+      # ── Alert on mismatch ──────────────────────────────────────────────────
+
+      - name: Open GitHub issue on mismatch
+        if: steps.compare.outputs.match == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const hashA = process.env.HASH_A;
+            const hashB = process.env.HASH_B;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '🚨 WASM Reproducibility Mismatch Detected',
+              body: [
+                '## WASM Reproducibility Check Failed',
+                '',
+                'The nightly reproducibility CI detected a hash mismatch between two independent builds.',
+                '',
+                `| Build | SHA-256 |`,
+                `|-------|---------|`,
+                `| Build A | \`${hashA}\` |`,
+                `| Build B | \`${hashB}\` |`,
+                '',
+                `**Workflow run:** ${runUrl}`,
+                '',
+                '### Next steps',
+                '1. Check that `rust-toolchain.toml` pins the exact toolchain channel.',
+                '2. Verify `Cargo.lock` is committed and no dependency was updated.',
+                '3. Confirm no non-deterministic build flags are present in `Cargo.toml`.',
+                '4. Re-run the workflow manually after any fixes.',
+                '',
+                'See `docs/wasm-verification.md` for the full reproducibility guide.',
+              ].join('\n'),
+              labels: ['bug', 'security', 'ci'],
+            });
+        env:
+          HASH_A: ${{ needs.build-a.outputs.hash }}
+          HASH_B: ${{ needs.build-b.outputs.hash }}
+
+      - name: Send Slack alert on mismatch (optional)
+        if: steps.compare.outputs.match == 'false' && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WASM_ALERT_WEBHOOK }}
+          HASH_A: ${{ needs.build-a.outputs.hash }}
+          HASH_B: ${{ needs.build-b.outputs.hash }}
+        run: |
+          curl -s -X POST "${SLACK_WEBHOOK_URL}" \
+            -H 'Content-Type: application/json' \
+            -d "{
+              \"text\": \"🚨 *WASM Reproducibility MISMATCH* on \`${{ github.repository }}\`\n• Build A: \`${HASH_A}\`\n• Build B: \`${HASH_B}\`\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"
+            }"
+
+      - name: Fail workflow on mismatch
+        if: steps.compare.outputs.match == 'false'
+        run: |
+          echo "❌ WASM hash mismatch — marking workflow as failed."
+          exit 1
