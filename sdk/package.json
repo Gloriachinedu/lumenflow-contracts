@@ -1,33 +1,52 @@
 {
   "name": "@lumenflow/sdk",
-  "version": "0.1.0",
-  "description": "LumenFlow TypeScript SDK",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "scripts": {
-    "build": "tsc",
-    "test": "jest --testPathPattern=src"
+  "version": "0.2.0",
+  "description": "LumenFlow TypeScript SDK — Node.js wrapper for the LumenFlow Soroban contract",
+  "main": "dist/cjs/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/cjs/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    }
   },
-  "keywords": [
-    "stellar",
-    "soroban",
-    "lumenflow",
-    "payments"
-  ],
+  "files": ["dist", "src"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "build:cjs": "tsup --format cjs",
+    "build:esm": "tsup --format esm",
+    "test": "jest",
+    "test:cjs": "CJS_BUILD=1 jest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": ["stellar", "soroban", "lumenflow", "payments", "sdk"],
   "author": "LumenFlow Contributors",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Gloriachinedu/lumenflow-contracts.git",
+    "directory": "sdk"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
+    "@stellar/stellar-sdk": "^17.1.0",
     "tweetnacl": "1.0.3"
   },
   "devDependencies": {
-    "@types/jest": "29.5.12",
-    "@types/node": "20.14.0",
-    "jest": "29.7.0",
-    "ts-jest": "29.1.5",
-    "typescript": "5.4.5"
-  },
-  "jest": {
-    "preset": "ts-jest",
-    "testEnvironment": "node"
+    "@types/jest": "30.0.0",
+    "@types/node": "26.6.3",
+    "jest": "30.5.2",
+    "ts-jest": "29.4.14",
+    "typescript": "7.0.2"
   }
 }

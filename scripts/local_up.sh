@@ -23,3 +23,4 @@ CONTRACT_ID=$(stellar contract deploy \
 
 echo "Contract deployed: ${CONTRACT_ID}"
 echo "Run 'stellar contract invoke --id ${CONTRACT_ID} ...' to interact."
+echo "==> Ready for end-to-end local payment walkthrough."

@@ -1,0 +1,4 @@
+{
+  "_comment": "Known accepted accessibility violations. Each entry must have a documented justification and owner. Review during each release cycle.",
+  "exceptions": []
+}

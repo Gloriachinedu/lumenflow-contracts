@@ -6,19 +6,15 @@ describe("SDK version", () => {
   });
 
   it("sends the SDK version on RPC calls", async () => {
-    const fetcher = jest.fn().mockResolvedValue({
-      json: async () => ({ jsonrpc: "2.0", id: 1, result: { ok: true } }),
+    const client = new LumenFlowClient({
+      contractId: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
+      rpcUrl: "https://rpc.example",
+      networkPassphrase: "Test SDF Network ; September 2015",
+      skipVersionCheck: true,
     });
-    const client = new LumenFlowClient("https://rpc.example", fetcher);
 
-    await expect(client.call("get_payment", ["ORDER_1"])).resolves.toEqual({
-      ok: true,
-    });
-    expect(fetcher).toHaveBeenCalledWith(
-      "https://rpc.example",
-      expect.objectContaining({
-        headers: expect.objectContaining({ "X-SDK-Version": VERSION }),
-      }),
+    expect(client.server.httpClient.defaults.headers["X-SDK-Version"]).toBe(
+      VERSION,
     );
   });
 });
