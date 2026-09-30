@@ -315,7 +315,10 @@ frontend environment variables, webhook consumers) with the new `CONTRACT_ID`.
 
 ## 6. Post-Deployment Verification
 
-Run these steps after **every** deployment (local, testnet, or mainnet).
+Run these steps after **every** deployment (local, testnet, or mainnet). To
+whitelist a new token/asset on a deployed contract, see
+[add-supported-token.md](add-supported-token.md) instead — that procedure
+builds on the smoke test in section 6.1 below.
 
 ### 6.1 Smoke test
 
