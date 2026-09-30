@@ -1,0 +1,117 @@
+{
+  "lang": "es",
+  "dir": "ltr",
+
+  "nav": {
+    "history": "Historial de Pagos",
+    "receipt": "Recibo",
+    "multisig": "Pago Multifirma",
+    "connectWallet": "Conectar Billetera",
+    "darkMode": "Oscuro",
+    "lightMode": "Claro"
+  },
+
+  "langSwitcher": {
+    "label": "Idioma",
+    "en": "English",
+    "es": "Español",
+    "pt": "Português"
+  },
+
+  "history": {
+    "title": "Historial de Pagos",
+    "description": "Consulta y filtra tu historial completo de pagos en LumenFlow.",
+    "filterLabel": "Filtrar",
+    "sortLabel": "Ordenar",
+    "loadMore": "Cargar Más",
+    "noResults": "No se encontraron pagos.",
+    "loading": "Cargando…",
+    "orderId": "ID de Orden",
+    "merchant": "Comerciante",
+    "payer": "Pagador",
+    "amount": "Monto",
+    "status": "Estado",
+    "date": "Fecha",
+    "memo": "Nota",
+    "statusAny": "Cualquiera",
+    "statusCompleted": "Completado",
+    "statusPartiallyRefunded": "Parcialmente Reembolsado",
+    "statusFullyRefunded": "Totalmente Reembolsado"
+  },
+
+  "receipt": {
+    "title": "Recibo de Pago",
+    "cachedBanner": "En caché — puede no reflejar el estado más reciente",
+    "offlineBanner": "Estás sin conexión. Mostrando recibo en caché.",
+    "expiredBanner": "Enlace Expirado",
+    "payButton": "Pagar con Freighter",
+    "orderId": "ID de Orden",
+    "merchant": "Comerciante",
+    "payer": "Pagador",
+    "amount": "Monto",
+    "status": "Estado",
+    "date": "Fecha",
+    "memo": "Nota",
+    "refundedAmount": "Monto Reembolsado",
+    "platformFee": "Comisión de Plataforma",
+    "loading": "Cargando recibo…",
+    "notFound": "Recibo no encontrado.",
+    "error": "No se pudo cargar el recibo."
+  },
+
+  "multisig": {
+    "title": "Pago Multifirma",
+    "description": "Inicia y gestiona pagos con múltiples firmas.",
+    "paymentId": "ID de Pago",
+    "merchant": "Dirección del Comerciante",
+    "token": "Dirección del Token",
+    "amount": "Monto (stroops)",
+    "signers": "Firmantes",
+    "addSigner": "+ Agregar Firmante",
+    "removeSigner": "Eliminar",
+    "threshold": "Firmas Requeridas",
+    "of": "de",
+    "initiate": "Iniciar Pago Multifirma",
+    "sign": "Firmar",
+    "execute": "Ejecutar",
+    "cancel": "Cancelar",
+    "statusPending": "Pendiente",
+    "statusExecuted": "Ejecutado",
+    "statusExpired": "Expirado",
+    "progress": "Firmas",
+    "error": "Ocurrió un error.",
+    "loading": "Cargando…"
+  },
+
+  "wallet": {
+    "title": "Conectar Billetera",
+    "freighter": "Freighter",
+    "albedo": "Albedo",
+    "close": "Cerrar",
+    "notConnected": "No conectado",
+    "connected": "Conectado"
+  },
+
+  "errors": {
+    "networkError": "Error de red. Verifica tu conexión.",
+    "contractError": "Error en el contrato.",
+    "walletNotInstalled": "Extensión de billetera no instalada.",
+    "walletConnectFailed": "Falló la conexión con la billetera."
+  },
+
+  "common": {
+    "copy": "Copiar",
+    "copied": "¡Copiado!",
+    "download": "Descargar",
+    "close": "Cerrar",
+    "confirm": "Confirmar",
+    "cancel": "Cancelar",
+    "yes": "Sí",
+    "no": "No",
+    "ok": "Aceptar",
+    "loading": "Cargando…",
+    "error": "Error",
+    "success": "Éxito",
+    "lumenflow": "LumenFlow"
+  }
+}

@@ -1,0 +1,117 @@
+{
+  "lang": "pt",
+  "dir": "ltr",
+
+  "nav": {
+    "history": "Histórico de Pagamentos",
+    "receipt": "Recibo",
+    "multisig": "Pagamento Multisig",
+    "connectWallet": "Conectar Carteira",
+    "darkMode": "Escuro",
+    "lightMode": "Claro"
+  },
+
+  "langSwitcher": {
+    "label": "Idioma",
+    "en": "English",
+    "es": "Español",
+    "pt": "Português"
+  },
+
+  "history": {
+    "title": "Histórico de Pagamentos",
+    "description": "Consulte e filtre seu histórico completo de pagamentos no LumenFlow.",
+    "filterLabel": "Filtrar",
+    "sortLabel": "Ordenar",
+    "loadMore": "Carregar Mais",
+    "noResults": "Nenhum pagamento encontrado.",
+    "loading": "Carregando…",
+    "orderId": "ID do Pedido",
+    "merchant": "Comerciante",
+    "payer": "Pagador",
+    "amount": "Valor",
+    "status": "Status",
+    "date": "Data",
+    "memo": "Nota",
+    "statusAny": "Qualquer",
+    "statusCompleted": "Concluído",
+    "statusPartiallyRefunded": "Parcialmente Reembolsado",
+    "statusFullyRefunded": "Totalmente Reembolsado"
+  },
+
+  "receipt": {
+    "title": "Recibo de Pagamento",
+    "cachedBanner": "Em cache — pode não refletir o status mais recente",
+    "offlineBanner": "Você está offline. Exibindo recibo em cache.",
+    "expiredBanner": "Link Expirado",
+    "payButton": "Pagar com Freighter",
+    "orderId": "ID do Pedido",
+    "merchant": "Comerciante",
+    "payer": "Pagador",
+    "amount": "Valor",
+    "status": "Status",
+    "date": "Data",
+    "memo": "Nota",
+    "refundedAmount": "Valor Reembolsado",
+    "platformFee": "Taxa de Plataforma",
+    "loading": "Carregando recibo…",
+    "notFound": "Recibo não encontrado.",
+    "error": "Não foi possível carregar o recibo."
+  },
+
+  "multisig": {
+    "title": "Pagamento Multisig",
+    "description": "Inicie e gerencie pagamentos com múltiplas assinaturas.",
+    "paymentId": "ID do Pagamento",
+    "merchant": "Endereço do Comerciante",
+    "token": "Endereço do Token",
+    "amount": "Valor (stroops)",
+    "signers": "Signatários",
+    "addSigner": "+ Adicionar Signatário",
+    "removeSigner": "Remover",
+    "threshold": "Assinaturas Necessárias",
+    "of": "de",
+    "initiate": "Iniciar Pagamento Multisig",
+    "sign": "Assinar",
+    "execute": "Executar",
+    "cancel": "Cancelar",
+    "statusPending": "Pendente",
+    "statusExecuted": "Executado",
+    "statusExpired": "Expirado",
+    "progress": "Assinaturas",
+    "error": "Ocorreu um erro.",
+    "loading": "Carregando…"
+  },
+
+  "wallet": {
+    "title": "Conectar Carteira",
+    "freighter": "Freighter",
+    "albedo": "Albedo",
+    "close": "Fechar",
+    "notConnected": "Não conectado",
+    "connected": "Conectado"
+  },
+
+  "errors": {
+    "networkError": "Erro de rede. Verifique sua conexão.",
+    "contractError": "Erro no contrato.",
+    "walletNotInstalled": "Extensão de carteira não instalada.",
+    "walletConnectFailed": "Falha ao conectar a carteira."
+  },
+
+  "common": {
+    "copy": "Copiar",
+    "copied": "Copiado!",
+    "download": "Baixar",
+    "close": "Fechar",
+    "confirm": "Confirmar",
+    "cancel": "Cancelar",
+    "yes": "Sim",
+    "no": "Não",
+    "ok": "OK",
+    "loading": "Carregando…",
+    "error": "Erro",
+    "success": "Sucesso",
+    "lumenflow": "LumenFlow"
+  }
+}

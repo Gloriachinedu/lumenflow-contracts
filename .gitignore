@@ -1,38 +1,85 @@
-# Rust
+# ── Rust / Cargo ──────────────────────────────────────────────────────────────
 /target/
 **/*.rs.bk
 
 # WASM build artifacts
 *.wasm
 
-# IDE
+# ── IDE / Editor ──────────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *.swo
+*.orig
 
-# OS
+# ── OS artifacts ─────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 
-# Environment
+# ── Environment / Secrets ─────────────────────────────────────────────────────
 .env
 .env.*
 !.env.example
 
-# Stellar CLI
+# ── Stellar CLI ───────────────────────────────────────────────────────────────
 .soroban/
 identity/
 
-# Logs
+# ── Logs ─────────────────────────────────────────────────────────────────────
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── Node / JavaScript ────────────────────────────────────────────────────────
 node_modules/
 
-# Test coverage output
+# Build dist output (SDK)
+dist/
+sdk/dist/
+
+# ── Test artifacts ────────────────────────────────────────────────────────────
+
+# Rust test snapshots (insta / similar snapshot testing libraries)
+contracts/lumenflow/test_snapshots/
+**/__snapshots__/
+**/*.snap
+
+# Playwright screenshots and test results
+tests/playwright/screenshots/
+tests/playwright/test-results/
+tests/playwright/playwright-report/
+**/test-results/
+**/playwright-report/
+
+# Vitest / Jest snapshots
+**/__snapshots__/
+
+# ── Coverage ──────────────────────────────────────────────────────────────────
 coverage/
+lcov.info
+*.lcov
+.nyc_output/
 
-# Smoke test: ephemeral npm cache for generate_smoke_keypair.sh
-scripts/.smoke_node_modules/
-
+# ── Build / CI artifacts ──────────────────────────────────────────────────────
 # Local backup bundles (produced by scripts/backup-manager.mjs)
 backup-bundle/
+
+# Smoke test ephemeral npm cache
+scripts/.smoke_node_modules/
+
+# Terraform state files and sensitive plans
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.backup
+infra/terraform/*.tfplan
+infra/terraform/*.tfvars
+!infra/terraform/terraform.tfvars.example
+
+# Temporary / scratch files
+*.tmp
+*.bak
+*.cache
+
+# ── Package manager lock files (keep these, exclude only redundant artifacts) ─
+# (Cargo.lock and package-lock.json are intentionally committed)
