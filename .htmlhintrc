@@ -1,0 +1,16 @@
+{
+  "doctype-first": true,
+  "doctype-html5": true,
+  "head-script-disabled": false,
+  "style-disabled": false,
+  "inline-style-disabled": false,
+  "tag-pair": true,
+  "tag-self-close": false,
+  "attr-lowercase": true,
+  "attr-value-not-empty": false,
+  "attr-no-duplication": true,
+  "id-unique": true,
+  "src-not-empty": true,
+  "alt-require": true,
+  "spec-char-escape": true
+}

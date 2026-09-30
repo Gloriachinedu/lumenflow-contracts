@@ -1,0 +1,11 @@
+{
+  "name": "lumenflow-mock-contract-server",
+  "version": "1.0.0",
+  "description": "Mock Soroban contract HTTP server for E2E tests",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {}
+}

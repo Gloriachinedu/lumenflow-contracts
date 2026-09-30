@@ -1,0 +1,59 @@
+name: Troubleshooting Entry
+description: Submit a new error entry for the troubleshooting guide
+labels: ["documentation", "troubleshooting"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for contributing to the LumenFlow troubleshooting guide!
+        Please follow the format below so your entry can be merged quickly.
+
+  - type: input
+    id: phase
+    attributes:
+      label: Error Phase
+      description: Which phase does this error occur in?
+      placeholder: "build | deploy | runtime | upgrade"
+    validations:
+      required: true
+
+  - type: input
+    id: title
+    attributes:
+      label: Short Error Title
+      description: A concise title for the error (e.g. "WASM target not installed")
+      placeholder: "e.g. RPC timeout on mainnet deploy"
+    validations:
+      required: true
+
+  - type: textarea
+    id: cause
+    attributes:
+      label: Cause
+      description: What causes this error?
+    validations:
+      required: true
+
+  - type: textarea
+    id: symptoms
+    attributes:
+      label: Symptoms
+      description: Paste the exact error message or log output.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: resolution
+    attributes:
+      label: Resolution
+      description: Step-by-step instructions to resolve the error.
+    validations:
+      required: true
+
+  - type: input
+    id: error_code
+    attributes:
+      label: Related Error Code (optional)
+      description: If this maps to a PaymentError code in error.rs, list it here.
+      placeholder: "e.g. 23 (InvalidSignature)"
