@@ -995,6 +995,23 @@ npm run build
 npm test
 ```
 
+## Version and RPC diagnostics
+
+The installed SDK version is available as `VERSION` for diagnostics and User-Agent metadata:
+
+```typescript
+import { LumenFlowClient, VERSION } from '@lumenflow/sdk';
+
+console.log(VERSION);
+const client = new LumenFlowClient({
+  contractId: 'C...',
+  rpcUrl: 'https://rpc.example',
+  networkPassphrase: 'Test SDF Network ; September 2015',
+});
+```
+
+RPC calls made by `LumenFlowClient` include the same value in the `X-SDK-Version` header.
+
 ## Error Handling
 
 Contract errors surface as `LumenFlowError` with a typed `code` property:
