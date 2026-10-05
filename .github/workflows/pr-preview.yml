@@ -52,7 +52,7 @@ jobs:
 
       - name: Deploy to Netlify (preview)
         id: deploy
-        uses: nwtgck/actions-netlify@v3.0
+        uses: nwtgck/actions-netlify@v4.0
         with:
           publish-dir: frontend
           github-token: ${{ secrets.GITHUB_TOKEN }}
