@@ -84,7 +84,7 @@ jobs:
       # Resolves: #1060
       - name: Set up Infracost
         if: github.event_name == 'pull_request'
-        uses: infracost/actions/setup@v3
+        uses: infracost/actions/setup@v4
         with:
           api-key: ${{ secrets.INFRACOST_API_KEY }}
 
@@ -120,7 +120,7 @@ jobs:
 
       - name: Post Infracost estimate as PR comment
         if: github.event_name == 'pull_request'
-        uses: infracost/actions/comment@v3
+        uses: infracost/actions/comment@v4
         with:
           path: /tmp/infracost-diff.json
           behavior: update
