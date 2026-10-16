@@ -21,6 +21,7 @@
   "sideEffects": false,
   "scripts": {
     "build": "tsup",
+    "typecheck": "tsc --noEmit",
     "build:cjs": "tsup --format cjs",
     "build:esm": "tsup --format esm",
     "test": "jest",
