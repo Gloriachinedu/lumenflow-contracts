@@ -157,6 +157,9 @@ jobs:
       - name: Install lint dependencies
         run: npm ci
 
+      - name: Check locale key parity
+        run: npm run check:i18n
+
       - name: Lint HTML (npm script)
         run: npm run lint:html
 
