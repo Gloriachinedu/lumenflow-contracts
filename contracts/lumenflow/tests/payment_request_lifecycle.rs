@@ -283,3 +283,96 @@ fn test_pay_at_ttl_boundary_succeeds() {
         "request paid exactly at expires_at should succeed, got {result:?}"
     );
 }
+
+// ── TTL validation tests (issue #1251) ───────────────────────────────────────
+
+/// create_payment_request with ttl = 0 must return InvalidTtl.
+#[test]
+fn test_create_payment_request_zero_ttl_returns_invalid_ttl() {
+    let (env, client, _admin, merchant, _payer, token) = setup();
+
+    let result = client.try_create_payment_request(
+        &merchant,
+        &String::from_str(&env, "REQ_ZERO_TTL"),
+        &token,
+        &1_000_i128,
+        &String::from_str(&env, "Zero TTL invoice"),
+        &0_u64,
+    );
+
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::InvalidTtl)),
+        "ttl = 0 must return InvalidTtl"
+    );
+}
+
+/// create_payment_request with a ttl that overflows u64 when added to the
+/// current ledger timestamp must return InvalidTtl.
+#[test]
+fn test_create_payment_request_overflow_ttl_returns_invalid_ttl() {
+    let (env, client, _admin, merchant, _payer, token) = setup();
+
+    // Set the ledger timestamp to a non-zero value so that adding u64::MAX
+    // would overflow.
+    env.ledger().with_mut(|l| l.timestamp = 1_000_000);
+
+    // u64::MAX itself will overflow when added to any non-zero timestamp.
+    let overflow_ttl = u64::MAX;
+
+    let result = client.try_create_payment_request(
+        &merchant,
+        &String::from_str(&env, "REQ_OVERFLOW_TTL"),
+        &token,
+        &1_000_i128,
+        &String::from_str(&env, "Overflow TTL invoice"),
+        &overflow_ttl,
+    );
+
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::InvalidTtl)),
+        "overflow ttl must return InvalidTtl"
+    );
+}
+
+/// create_payment_request with a valid ttl proceeds normally.
+#[test]
+fn test_create_payment_request_valid_ttl_succeeds() {
+    let (env, client, _admin, merchant, _payer, token) = setup();
+
+    let result = client.try_create_payment_request(
+        &merchant,
+        &String::from_str(&env, "REQ_VALID_TTL"),
+        &token,
+        &1_000_i128,
+        &String::from_str(&env, "Valid TTL invoice"),
+        &86_400_u64, // 1 day
+    );
+
+    assert!(
+        result.is_ok(),
+        "valid ttl must succeed, got {result:?}"
+    );
+}
+
+/// create_payment_request with a small but non-zero valid ttl (e.g. 1 second)
+/// proceeds normally.
+#[test]
+fn test_create_payment_request_minimum_valid_ttl_succeeds() {
+    let (env, client, _admin, merchant, _payer, token) = setup();
+
+    let result = client.try_create_payment_request(
+        &merchant,
+        &String::from_str(&env, "REQ_MIN_TTL"),
+        &token,
+        &1_000_i128,
+        &String::from_str(&env, "Minimum TTL invoice"),
+        &1_u64, // 1 second
+    );
+
+    assert!(
+        result.is_ok(),
+        "ttl = 1 (minimum valid) must succeed, got {result:?}"
+    );
+}

@@ -37,6 +37,11 @@ pub enum PaymentError {
     InvalidSignature = 23,
     /// The payment request has expired. Remediation: Create a new payment request.
     PaymentExpired = 24,
+    /// The provided time-to-live (TTL) value is zero, would overflow the ledger
+    /// timestamp type, or would produce a computed expiry timestamp in the past.
+    /// Remediation: Provide a positive TTL that does not overflow u64 when added
+    /// to the current ledger timestamp.
+    InvalidTtl = 27,
     /// The payer does not have enough tokens to complete the payment. Remediation: Ensure the payer has sufficient funds in the specified token.
     InsufficientBalance = 25,
     /// The specified token is not accepted. Remediation: Use a supported token.
