@@ -33,7 +33,13 @@ backend "s3" {
 }
 ```
 
-The `aws_dynamodb_table.tfstate_lock` resource in `main.tf` provisions the lock table automatically on the first `terraform apply`. Until then, bootstrap it manually (see the one-time bootstrap section below).
+The backend must be available before Terraform can plan or apply resources, so create the S3 bucket and DynamoDB table with the one-time bootstrap steps below before `terraform init`. The table is also represented by `aws_dynamodb_table.tfstate_lock` in `main.tf`; after initializing an empty state, import the bootstrapped table before planning or applying:
+
+```bash
+terraform import aws_dynamodb_table.tfstate_lock lumenflow-tfstate-lock
+```
+
+If the table is already tracked in the Terraform state, no import is needed.
 
 ### Concurrent CI protection
 

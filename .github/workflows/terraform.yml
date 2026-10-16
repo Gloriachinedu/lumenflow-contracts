@@ -54,10 +54,10 @@ jobs:
             terraform init -backend=false
           else
             terraform init \
-              -backend-config="bucket=lumenflow-terraform-state" \
+              -backend-config="bucket=lumenflow-tfstate" \
               -backend-config="key=lumenflow/terraform.tfstate" \
               -backend-config="region=us-east-1" \
-              -backend-config="dynamodb_table=lumenflow-terraform-locks"
+              -backend-config="dynamodb_table=lumenflow-tfstate-lock"
           fi
 
       - name: Terraform Validate
