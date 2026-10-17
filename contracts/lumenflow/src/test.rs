@@ -964,7 +964,8 @@ fn test_batch_payment_intra_batch_duplicate_fails() {
         });
     }
     let result = client.try_batch_payment(&payer, &payments);
-    assert_eq!(result, Err(Ok(PaymentError::PaymentAlreadyExists)));
+    // Intra-batch duplicates return the dedicated DuplicateOrderId error (55)
+    assert_eq!(result, Err(Ok(PaymentError::DuplicateOrderId)));
 }
 
 #[test]
