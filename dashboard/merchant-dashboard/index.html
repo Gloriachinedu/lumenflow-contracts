@@ -40,6 +40,19 @@
         <tbody></tbody>
       </table>
     </section>
+
+    <!-- Payment Volume Trend Chart (Issue #1248) -->
+    <section id="trend-section" aria-labelledby="trend-heading">
+      <h2 id="trend-heading">Payment Volume – Last 30 Days</h2>
+      <div class="trend-controls" role="group" aria-label="Aggregation period">
+        <button id="agg-daily"  class="agg-btn agg-active" aria-pressed="true">Daily</button>
+        <button id="agg-weekly" class="agg-btn"             aria-pressed="false">Weekly</button>
+      </div>
+      <div class="chart-wrapper">
+        <canvas id="volumeChart" role="img" aria-label="Payment volume trend line chart"></canvas>
+      </div>
+      <p id="trend-empty" class="trend-empty" style="display:none;">No payment data available for the selected period.</p>
+    </section>
   </main>
 
   <!-- Wallet + Confirm modals -->

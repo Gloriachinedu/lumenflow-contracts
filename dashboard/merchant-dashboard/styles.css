@@ -17,3 +17,61 @@ th,td{padding:8px;border-bottom:1px solid #eee;text-align:left}
 .skip-link{position:absolute;left:-999px;top:auto;width:1px;height:1px;overflow:hidden}
 .skip-link:focus{left:8px;top:8px;width:auto;height:auto;padding:8px;background:#fff;border:1px solid #ccc}
 .visually-hidden{position:absolute!important;height:1px;width:1px;overflow:hidden;clip:rect(1px,1px,1px,1px);white-space:nowrap}
+
+/* ── Payment Volume Trend Chart ──────────────────────────────────────────── */
+#trend-section{
+  margin-top:2rem;
+  background:#fff;
+  border-radius:8px;
+  padding:1.25rem 1.5rem;
+  box-shadow:0 1px 4px rgba(0,0,0,.08);
+}
+#trend-section h2{
+  font-size:1rem;
+  font-weight:600;
+  margin:0 0 .75rem;
+  color:#0b1726;
+}
+
+/* Toggle buttons */
+.trend-controls{margin-bottom:1rem;}
+.agg-btn{
+  margin-right:.5rem;
+  background:#f4f6fb;
+  border:1.5px solid #d0d8e8;
+  border-radius:20px;
+  padding:.3rem .9rem;
+  font-size:.85rem;
+  cursor:pointer;
+  color:#475569;
+  transition:background .15s,border-color .15s,color .15s;
+}
+.agg-btn:focus-visible{outline:3px solid rgba(11,102,255,.4);outline-offset:2px;}
+.agg-active,.agg-btn:hover{
+  background:var(--accent);
+  border-color:var(--accent);
+  color:#fff;
+}
+
+/* Responsive canvas wrapper */
+.chart-wrapper{
+  position:relative;
+  width:100%;
+  /* cap height on wide screens; shrinks on mobile */
+  max-height:320px;
+}
+.chart-wrapper canvas{
+  display:block;
+  width:100% !important;
+  height:auto !important;
+  max-height:320px;
+}
+
+.trend-empty{color:#888;font-size:.9rem;text-align:center;padding:1rem 0;}
+
+/* Dark-mode overrides */
+@media (prefers-color-scheme:dark){
+  #trend-section{background:#1a1f2e;color:#e2e8f0;}
+  #trend-section h2{color:#e2e8f0;}
+  .agg-btn{background:#252d3d;border-color:#374151;color:#cbd5e1;}
+}
