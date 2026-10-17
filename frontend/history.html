@@ -228,6 +228,60 @@
       color: #888;
     }
 
+    /* ── Skeleton / Shimmer loading ───────────────────────────────────────────── */
+    @keyframes shimmer {
+      0%   { background-position: -800px 0; }
+      100% { background-position:  800px 0; }
+    }
+
+    .skeleton-row td {
+      padding: 1rem;
+      border-bottom: 1px solid #f9f9f9;
+    }
+
+    .skeleton-cell {
+      display: inline-block;
+      height: 0.85rem;
+      border-radius: 4px;
+      background: linear-gradient(90deg, #ebebeb 25%, #f5f5f5 50%, #ebebeb 75%);
+      background-size: 800px 100%;
+      animation: shimmer 1.4s ease-in-out infinite;
+    }
+
+    /* Dark-mode friendly: inherit shimmer colours from the system palette */
+    @media (prefers-color-scheme: dark) {
+      .skeleton-cell {
+        background: linear-gradient(90deg, #2e2e3e 25%, #3a3a4e 50%, #2e2e3e 75%);
+        background-size: 800px 100%;
+      }
+    }
+
+    /* Column-specific widths to mirror real data widths */
+    .sk-date       { width: 9rem; }
+    .sk-order      { width: 7rem; }
+    .sk-merchant   { width: 5rem; }
+    .sk-amount     { width: 6rem; }
+    .sk-status     { width: 5.5rem; height: 1.3rem; border-radius: 4px; }
+
+    /* Mobile: skeleton cards */
+    @media (max-width: 767px) {
+      .skeleton-row {
+        display: block;
+        border: 1px solid #eee;
+        border-radius: 8px;
+        margin-bottom: 0.75rem;
+        padding: 0.75rem;
+        background: #fff;
+      }
+      .skeleton-row td {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.35rem 0;
+        border-bottom: none;
+      }
+    }
+
     /* ── Accessibility ────────────────────────────────────────────────────────── */
     .sr-only {
       position: absolute;
@@ -311,9 +365,22 @@
   </section>
 
   <div class="results-card">
-    <!-- Loading state -->
-    <div id="loading-state" style="display:none;padding:3rem;text-align:center;color:#888;" role="status" aria-live="polite">
-      ⏳ Loading payments…
+    <!-- Skeleton loading state (aria-busy marks in-progress region) -->
+    <div id="loading-state" style="display:none;" role="status" aria-live="polite" aria-label="Loading payments">
+      <table id="skeleton-table" aria-busy="true" aria-label="Loading payment rows" style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr>
+            <th style="background:#fafbfc;padding:1rem;font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#888;border-bottom:1px solid #eee;">Date</th>
+            <th style="background:#fafbfc;padding:1rem;font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#888;border-bottom:1px solid #eee;">Order ID</th>
+            <th style="background:#fafbfc;padding:1rem;font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#888;border-bottom:1px solid #eee;">Recipient</th>
+            <th style="background:#fafbfc;padding:1rem;font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#888;border-bottom:1px solid #eee;">Amount</th>
+            <th style="background:#fafbfc;padding:1rem;font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#888;border-bottom:1px solid #eee;">Status</th>
+          </tr>
+        </thead>
+        <tbody id="skeleton-body">
+          <!-- Rows injected by showLoading() -->
+        </tbody>
+      </table>
     </div>
 
     <!-- Error state -->
@@ -484,15 +551,23 @@
 
   // ── UI state helpers ────────────────────────────────────────────────────────
   function showLoading() {
+    // Build 5 skeleton rows that mirror the real table layout
+    const skeletonBody = document.getElementById('skeleton-body');
+    skeletonBody.innerHTML = '';
+    for (let i = 0; i < 5; i++) {
+      const tr = document.createElement('tr');
+      tr.className = 'skeleton-row';
+      tr.setAttribute('aria-hidden', 'true');
+      tr.innerHTML = `
+        <td data-label="Date"><span class="skeleton-cell sk-date"></span></td>
+        <td data-label="Order ID"><span class="skeleton-cell sk-order"></span></td>
+        <td data-label="Recipient"><span class="skeleton-cell sk-merchant"></span></td>
+        <td data-label="Amount"><span class="skeleton-cell sk-amount"></span></td>
+        <td data-label="Status"><span class="skeleton-cell sk-status"></span></td>`;
+      skeletonBody.appendChild(tr);
+    }
     document.getElementById('loading-state').style.display = 'block';
     document.getElementById('error-state').style.display   = 'none';
-    document.getElementById('history-table').style.display = 'none';
-    document.getElementById('empty-state').style.display   = 'none';
-  }
-  function showError(msg) {
-    document.getElementById('loading-state').style.display = 'none';
-    document.getElementById('error-state').style.display   = 'block';
-    document.getElementById('error-msg').textContent       = msg;
     document.getElementById('history-table').style.display = 'none';
     document.getElementById('empty-state').style.display   = 'none';
   }
@@ -500,6 +575,13 @@
     document.getElementById('loading-state').style.display = 'none';
     document.getElementById('error-state').style.display   = 'none';
     document.getElementById('history-table').style.display = '';
+  }
+  function showError(msg) {
+    document.getElementById('loading-state').style.display = 'none';
+    document.getElementById('error-state').style.display   = 'block';
+    document.getElementById('error-msg').textContent       = msg;
+    document.getElementById('history-table').style.display = 'none';
+    document.getElementById('empty-state').style.display   = 'none';
   }
 
   // ── Render rows ─────────────────────────────────────────────────────────────
