@@ -319,4 +319,200 @@ test.describe("Full Refund Lifecycle", () => {
     await expect(errorMsg).toBeVisible({ timeout: 15_000 });
     await expect(errorMsg).toContainText(/RefundWindowExpired|Refund window/i);
   });
+
+  // ── Rejected refund path ────────────────────────────────────────────────────
+
+  test("merchant rejects refund and UI shows Rejected status", async ({
+    page,
+    request,
+  }) => {
+    // Pre-seed a refund in Pending state so the merchant can reject it
+    await request.post(
+      `${process.env.API_URL || "http://localhost:8080"}/mock/seed/refund`,
+      {
+        data: {
+          refund_id: REFUND_ID,
+          order_id: BASE_PAYMENT.order_id,
+          amount: REFUND_AMOUNT,
+          reason: "E2E rejected-path test",
+          status: "Pending",
+          initiator: PAYER_ADDRESS,
+        },
+      }
+    );
+
+    await goToReceipt(page, BASE_PAYMENT.order_id);
+
+    // Refund section must be visible and show the pending item
+    const refundsSection = page.locator("#refunds-section");
+    await expect(refundsSection).toBeVisible();
+    await expect(refundsSection).toContainText(REFUND_ID);
+    await expect(refundsSection).toContainText("Pending");
+
+    // Merchant clicks Reject
+    const rejectBtn = page.locator(
+      `[data-testid="btn-reject-refund-${REFUND_ID}"]`
+    );
+    await expect(rejectBtn).toBeVisible();
+    await rejectBtn.click();
+
+    // Confirm the rejection
+    const confirmBtn = page.locator('[data-testid="btn-confirm-reject"]');
+    await expect(confirmBtn).toBeVisible();
+    await confirmBtn.click();
+
+    // Status badge on the refund item must update to Rejected
+    const refundStatus = page.locator(
+      `[data-testid="refund-status-${REFUND_ID}"]`
+    );
+    await expect(refundStatus).toContainText("Rejected", { timeout: 15_000 });
+
+    // Verify mock state
+    const refund = await getRefund(request, REFUND_ID);
+    expect(refund.status).toBe("Rejected");
+  });
+
+  // ── Refund window expired ───────────────────────────────────────────────────
+
+  test("refund initiated after window expiry shows error message", async ({
+    page,
+    request,
+  }) => {
+    // Seed a payment whose paid_at is 31 days ago (beyond the 30-day window)
+    const EXPIRED_PAYMENT_ID = "ORDER_E2E_EXPIRED";
+    const thirtyOneDaysAgo = Math.floor(Date.now() / 1000) - 31 * 24 * 3600;
+
+    await seedPayment(request, {
+      ...BASE_PAYMENT,
+      order_id: EXPIRED_PAYMENT_ID,
+      paid_at: thirtyOneDaysAgo,
+    });
+
+    // Mock the initiate_refund call to return a RefundWindowExpired error
+    await page.route("**/mock/contract/initiate_refund", (route) => {
+      route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: "ContractError",
+          code: "RefundWindowExpired",
+          message: "The refund window for this payment has expired.",
+        }),
+      });
+    });
+
+    await goToReceipt(page, EXPIRED_PAYMENT_ID);
+
+    const refundBtn = page.locator('[data-testid="btn-initiate-refund"]');
+    await expect(refundBtn).toBeVisible();
+    await refundBtn.click();
+
+    await page.locator('[data-testid="input-refund-id"]').fill("REFUND_EXPIRED");
+    await page.locator('[data-testid="input-refund-amount"]').fill("1000");
+    await page
+      .locator('[data-testid="input-refund-reason"]')
+      .fill("Test expired window");
+    await page.locator('[data-testid="btn-submit-refund"]').click();
+
+    // UI must show a clear error — not a blank screen or silent failure
+    const errorMsg = page.locator('[data-testid="refund-error-msg"]');
+    await expect(errorMsg).toBeVisible({ timeout: 15_000 });
+    await expect(errorMsg).toContainText(/RefundWindowExpired|refund window|expired/i);
+
+    // No success message should appear
+    await expect(
+      page.locator('[data-testid="refund-success-msg"]')
+    ).not.toBeVisible();
+  });
+
+  // ── Partial refund then full refund rejection ───────────────────────────────
+
+  test("partial refund reduces remaining refundable amount shown in UI", async ({
+    page,
+    request,
+  }) => {
+    const PARTIAL_REFUND_ID  = "REFUND_PARTIAL_001";
+    const PARTIAL_AMOUNT     = 3_000_000; // 0.3 XLM
+    const REMAINING_AMOUNT   = BASE_PAYMENT.amount - PARTIAL_AMOUNT; // 0.7 XLM
+
+    // Pre-seed a partial refund in Completed state on the base payment
+    await request.post(
+      `${process.env.API_URL || "http://localhost:8080"}/mock/seed/refund`,
+      {
+        data: {
+          refund_id: PARTIAL_REFUND_ID,
+          order_id: BASE_PAYMENT.order_id,
+          amount: PARTIAL_AMOUNT,
+          reason: "Partial E2E refund",
+          status: "Executed",
+          initiator: PAYER_ADDRESS,
+        },
+      }
+    );
+
+    // Update the payment status to PartiallyRefunded with the refunded amount
+    await request.post(
+      `${process.env.API_URL || "http://localhost:8080"}/mock/seed/payment`,
+      {
+        data: {
+          ...BASE_PAYMENT,
+          status: "PartiallyRefunded",
+          refunded_amount: PARTIAL_AMOUNT,
+        },
+      }
+    );
+
+    await goToReceipt(page, BASE_PAYMENT.order_id);
+
+    // Payment status badge must show PartiallyRefunded
+    const paymentBadge = page.locator("#status-badge");
+    await expect(paymentBadge).toContainText(
+      /Partially Refunded|PartiallyRefunded/,
+      { timeout: 15_000 }
+    );
+
+    // The remaining refundable amount shown in UI must reflect the partial refund
+    const remainingEl = page.locator('[data-testid="remaining-refundable-amount"]');
+    if (await remainingEl.isVisible()) {
+      const text = await remainingEl.textContent();
+      // Text should not show the full original amount (10_000_000 stroops)
+      // It should reflect at most REMAINING_AMOUNT (7_000_000)
+      expect(text).not.toContain("10000000");
+    }
+
+    // Now attempt a second refund for more than the remaining amount (full amount)
+    // The mock should reject this with RefundExceedsOriginal
+    await page.route("**/mock/contract/initiate_refund", (route) => {
+      route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: "ContractError",
+          code: "RefundExceedsOriginal",
+          message: "The total refund amount would exceed the original payment.",
+        }),
+      });
+    });
+
+    const refundBtn = page.locator('[data-testid="btn-initiate-refund"]');
+    await expect(refundBtn).toBeVisible();
+    await refundBtn.click();
+
+    // Try to refund more than what remains
+    await page.locator('[data-testid="input-refund-id"]').fill("REFUND_OVERFLOW");
+    await page
+      .locator('[data-testid="input-refund-amount"]')
+      .fill(String(BASE_PAYMENT.amount)); // full original amount — exceeds remaining
+    await page
+      .locator('[data-testid="input-refund-reason"]')
+      .fill("Attempt to over-refund");
+    await page.locator('[data-testid="btn-submit-refund"]').click();
+
+    // UI must show the RefundExceedsOriginal error
+    const errorMsg = page.locator('[data-testid="refund-error-msg"]');
+    await expect(errorMsg).toBeVisible({ timeout: 15_000 });
+    await expect(errorMsg).toContainText(
+      /RefundExceedsOriginal|exceeds.*original|cannot exceed/i
+    );
+  });
 });

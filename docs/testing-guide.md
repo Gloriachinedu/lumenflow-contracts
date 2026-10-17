@@ -226,3 +226,48 @@ node scripts/restore-drill.mjs                       # drill critical repo confi
 node scripts/restore-drill.mjs codecov.yml Makefile  # drill specific files
 npm run test:roadmap                                 # runs scripts/*.test.mjs, incl. the drill tests
 ```
+
+## Playwright E2E — Refund Lifecycle Tests
+
+**File:** `tests/playwright/refund-lifecycle.spec.ts`
+
+**Issue:** [#1249](https://github.com/Gloriachinedu/lumenflow-contracts/issues/1249)
+
+The spec covers the complete on-chain refund lifecycle through the browser UI,
+from payer-initiated refund through merchant approval/rejection to execution.
+
+### Test cases
+
+| Test | Description |
+|---|---|
+| `1 – payer can initiate a refund` | Happy path — payer fills refund form, submits, verifies Pending status |
+| `2 – merchant can approve a pending refund` | Merchant approves a pre-seeded Pending refund; status updates to Approved |
+| `3 – merchant can execute an approved refund` | Merchant executes an Approved refund; payment badge shows PartiallyRefunded |
+| `full flow – initiate → approve → execute` | End-to-end flow in a single test |
+| `fails meaningfully when contract returns an error` | Mock returns RefundWindowExpired; UI shows the error (existing happy-path error test) |
+| `merchant rejects refund and UI shows Rejected status` | **New** — Merchant rejects a Pending refund; status badge updates to Rejected |
+| `refund initiated after window expiry shows error message` | **New** — Payment older than 30 days; mock returns RefundWindowExpired; UI shows error |
+| `partial refund reduces remaining refundable amount shown in UI` | **New** — After a partial refund the PartiallyRefunded badge is shown and over-refunding shows RefundExceedsOriginal |
+
+### Running the refund lifecycle suite
+
+```bash
+cd tests
+npm run test:e2e
+# or for just this spec:
+npx playwright test playwright/refund-lifecycle.spec.ts
+```
+
+Set `MOCK_WALLET=1` (default in CI) to bypass wallet-signing dialogs.
+Set `API_URL=http://localhost:8080` to point at a local mock server.
+
+### Mock API endpoints used
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /mock/reset` | Clear all mock state before each test |
+| `POST /mock/seed/merchant` | Create a test merchant |
+| `POST /mock/seed/payment` | Create a test payment |
+| `POST /mock/seed/refund` | Pre-seed a refund in a given status |
+| `GET  /mock/contract/get_refund` | Fetch refund state for assertions |
+| `POST /mock/contract/initiate_refund` | Routable for error injection via `page.route()` |
