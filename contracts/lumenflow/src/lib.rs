@@ -227,6 +227,34 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Set the maximum number of active (non-expired) payment requests a single
+    /// merchant may hold at once. Admin only.
+    ///
+    /// Expired requests do not count toward the limit.  When a merchant reaches
+    /// this cap, [`create_payment_request`] returns
+    /// [`PaymentError::RateLimitExceeded`] until existing requests are paid or
+    /// expire.
+    ///
+    /// # Arguments
+    /// * `admin`  – Must be the configured administrator address.
+    /// * `limit`  – New cap (must be > 0). Default is 100.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`]   — caller is not the admin.
+    /// * [`PaymentError::InvalidAmount`]  — `limit` is zero.
+    pub fn set_max_active_payment_requests(
+        env: Env,
+        admin: Address,
+        limit: u32,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        if limit == 0 {
+            return Err(PaymentError::InvalidInput);
+        }
+        storage::set_max_active_payment_requests(&env, limit);
+        Ok(())
+    }
+
     /// Add a token to the payment whitelist. Admin only.
     pub fn add_allowed_token(env: Env, admin: Address, token: Address) -> Result<(), PaymentError> {
         require_admin(&env, &admin)?;
@@ -1955,6 +1983,7 @@ impl PaymentProcessingContract {
     /// * [`PaymentError::InvalidInput`] — `request_id` is empty.
     /// * [`PaymentError::TokenNotAllowed`] — `token` is not on the allow-list.
     /// * [`PaymentError::PaymentAlreadyExists`] — a request with `request_id` already exists.
+    /// * [`PaymentError::RateLimitExceeded`] — merchant has reached the active request cap.
     pub fn create_payment_request(
         env: Env,
         merchant: Address,
@@ -1977,11 +2006,19 @@ impl PaymentProcessingContract {
             return Err(PaymentError::PaymentAlreadyExists);
         }
 
+        // Rate-limit: reject if the merchant already holds the maximum number
+        // of active (non-expired) payment requests.
+        let active = storage::get_merchant_active_request_count(&env, &merchant);
+        let limit  = storage::get_max_active_payment_requests(&env);
+        if active >= limit {
+            return Err(PaymentError::RateLimitExceeded);
+        }
+
         let expires_at = env.ledger().timestamp().saturating_add(ttl);
 
         let pr = PaymentRequest {
             request_id,
-            merchant,
+            merchant: merchant.clone(),
             token,
             amount,
             memo,
@@ -1989,6 +2026,8 @@ impl PaymentProcessingContract {
         };
 
         storage::set_payment_request(&env, &pr);
+        // Track the new active request so subsequent calls can check the limit.
+        storage::increment_merchant_active_requests(&env, &merchant);
         Ok(())
     }
 
@@ -2021,6 +2060,8 @@ impl PaymentProcessingContract {
 
         if env.ledger().timestamp() > pr.expires_at {
             storage::remove_payment_request(&env, &request_id);
+            // Expired requests no longer count toward the rate limit.
+            storage::decrement_merchant_active_requests(&env, &pr.merchant);
             return Err(PaymentError::PaymentExpired);
         }
 
@@ -2061,6 +2102,8 @@ impl PaymentProcessingContract {
 
         // Remove the request as it's paid
         storage::remove_payment_request(&env, &request_id);
+        // Paid request is no longer active — release it from the rate-limit counter.
+        storage::decrement_merchant_active_requests(&env, &pr.merchant);
 
         env.events()
             .publish(("lumenflow", "payment_request_paid"), request_id);

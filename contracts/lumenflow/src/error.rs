@@ -70,6 +70,8 @@ pub enum PaymentError {
     ContractPaused = 70,
     /// The payment history limit for this account has been exceeded. Remediation: Archive old payments.
     PaymentHistoryLimitExceeded = 71,
+    /// The merchant has exceeded the maximum number of active payment requests. Remediation: Wait for existing requests to expire or be paid before creating new ones.
+    RateLimitExceeded = 72,
 
     // General
     /// The provided input parameters are invalid. Remediation: Check the input values and format.

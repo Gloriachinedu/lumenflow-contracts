@@ -49,6 +49,12 @@ pub enum DataKey {
     FeeRecipient,
     RefundWindow,
     Nonce(Address),
+    /// Global cap on how many active (non-expired) payment requests a single
+    /// merchant may hold at once. Admin-configurable via
+    /// `set_max_active_payment_requests`.
+    MaxActivePaymentRequests,
+    /// Per-merchant count of active (non-expired) payment requests.
+    MerchantActiveRequests(Address),
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -371,6 +377,53 @@ pub fn remove_payment_request(env: &Env, request_id: &String) {
     env.storage()
         .temporary()
         .remove(&DataKey::PaymentRequest(request_id.clone()));
+}
+
+// ── Payment Request Rate Limiting ─────────────────────────────────────────────
+
+/// Default maximum number of active (non-expired) payment requests per merchant.
+pub const DEFAULT_MAX_ACTIVE_PAYMENT_REQUESTS: u32 = 100;
+
+/// Returns the admin-configured cap on active payment requests per merchant.
+pub fn get_max_active_payment_requests(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MaxActivePaymentRequests)
+        .unwrap_or(DEFAULT_MAX_ACTIVE_PAYMENT_REQUESTS)
+}
+
+/// Sets the admin-configured cap on active payment requests per merchant.
+pub fn set_max_active_payment_requests(env: &Env, limit: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::MaxActivePaymentRequests, &limit);
+}
+
+/// Returns how many active (non-expired) payment requests the merchant currently holds.
+pub fn get_merchant_active_request_count(env: &Env, merchant: &Address) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MerchantActiveRequests(merchant.clone()))
+        .unwrap_or(0u32)
+}
+
+/// Increments the active request counter for the given merchant.
+pub fn increment_merchant_active_requests(env: &Env, merchant: &Address) {
+    let count = get_merchant_active_request_count(env, merchant);
+    env.storage()
+        .instance()
+        .set(&DataKey::MerchantActiveRequests(merchant.clone()), &(count + 1));
+}
+
+/// Decrements the active request counter for the given merchant (clamped at 0).
+pub fn decrement_merchant_active_requests(env: &Env, merchant: &Address) {
+    let count = get_merchant_active_request_count(env, merchant);
+    env.storage()
+        .instance()
+        .set(
+            &DataKey::MerchantActiveRequests(merchant.clone()),
+            &count.saturating_sub(1),
+        );
 }
 
 // ── Allowed Tokens ────────────────────────────────────────────────────────────
