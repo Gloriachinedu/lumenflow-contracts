@@ -1,0 +1,204 @@
+name: Stale Issues and Discussions
+
+on:
+  schedule:
+    - cron: "0 2 * * *"   # Daily at 02:00 UTC
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+  discussions: write
+
+jobs:
+  stale-issues:
+    name: Mark and Close Stale Issues
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+          # ── Stale settings ──────────────────────────────────────────────
+          days-before-stale: 60
+          days-before-close: 14
+          stale-issue-label: "stale"
+          close-issue-label: "auto-closed"
+
+          # ── Messages ────────────────────────────────────────────────────
+          stale-issue-message: |
+            👋 This issue has been automatically marked as **stale** because it has not had
+            any activity in the past 60 days.
+
+            If this issue is still relevant, please leave a comment or add new information.
+            It will be closed in **14 days** if no further activity occurs.
+
+            To keep this project tidy, stale issues are periodically closed.
+            Thank you for your contribution!
+
+          close-issue-message: |
+            🔒 This issue has been **automatically closed** due to 14 days of inactivity
+            after being marked stale.
+
+            If you believe this is still a valid issue, please open a new issue with
+            updated information and link back to this one. Thank you!
+
+          # ── Exemptions ──────────────────────────────────────────────────
+          exempt-issue-labels: "pinned,security,in-progress,help wanted,good first issue"
+          exempt-all-issue-assignees: true
+
+  stale-discussions:
+    name: Close Stale Q&A Discussions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const WARNING_DAYS  = 45;   // Post warning comment after this many days of inactivity
+            const CLOSE_DAYS    = 60;   // Close discussion after this many days of inactivity
+            const TARGET_CATEGORY = "Q&A";
+
+            const now = Date.now();
+            const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+            const owner = context.repo.owner;
+            const repo  = context.repo.repo;
+
+            // ── Fetch open discussions via GraphQL ──────────────────────
+            const query = `
+              query($owner: String!, $repo: String!, $cursor: String) {
+                repository(owner: $owner, name: $repo) {
+                  discussions(first: 100, after: $cursor, states: [OPEN]) {
+                    pageInfo { hasNextPage endCursor }
+                    nodes {
+                      id
+                      number
+                      title
+                      updatedAt
+                      category { name }
+                      comments(last: 1) {
+                        nodes { body createdAt }
+                        totalCount
+                      }
+                      labels(first: 10) {
+                        nodes { name }
+                      }
+                    }
+                  }
+                }
+              }
+            `;
+
+            let cursor = null;
+            let discussions = [];
+
+            do {
+              const result = await github.graphql(query, { owner, repo, cursor });
+              const page = result.repository.discussions;
+              discussions = discussions.concat(page.nodes);
+              cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+            } while (cursor);
+
+            core.info(`Found ${discussions.length} open discussions`);
+
+            for (const discussion of discussions) {
+              // Only target Q&A category
+              if (discussion.category.name !== TARGET_CATEGORY) {
+                core.info(`Skipping discussion #${discussion.number} — category: ${discussion.category.name}`);
+                continue;
+              }
+
+              // Skip if already labelled stale or pinned
+              const labels = discussion.labels.nodes.map(l => l.name);
+              if (labels.includes("pinned")) {
+                core.info(`Skipping pinned discussion #${discussion.number}`);
+                continue;
+              }
+
+              const lastActivity = new Date(discussion.updatedAt).getTime();
+              const inactiveDays = (now - lastActivity) / MS_PER_DAY;
+
+              core.info(`Discussion #${discussion.number} — inactive ${Math.floor(inactiveDays)} days`);
+
+              if (inactiveDays >= CLOSE_DAYS) {
+                // ── Already past close threshold — check if warning was posted ──
+                const alreadyWarned = discussion.comments.nodes.some(
+                  c => c.body && c.body.includes("automatically marked as stale")
+                );
+
+                // Close the discussion
+                const closeMutation = `
+                  mutation($id: ID!, $reason: DiscussionCloseReason) {
+                    closeDiscussion(input: { discussionId: $id, reason: $reason }) {
+                      discussion { number }
+                    }
+                  }
+                `;
+                await github.graphql(closeMutation, {
+                  id: discussion.id,
+                  reason: "OUTDATED",
+                });
+                core.info(`Closed stale Q&A discussion #${discussion.number}`);
+
+                // Post closing comment
+                const addCommentMutation = `
+                  mutation($id: ID!, $body: String!) {
+                    addDiscussionComment(input: { discussionId: $id, body: $body }) {
+                      comment { id }
+                    }
+                  }
+                `;
+                const closeBody = `
+🔒 This Q&A discussion has been **automatically closed** after ${CLOSE_DAYS} days of inactivity.
+
+If your question is still unanswered, we'd love to help! Please:
+
+- 💬 **[Open a new discussion](https://github.com/${owner}/${repo}/discussions/new?category=Q%26A)** in the Q&A category with updated details
+- 🐛 **[Open an issue](https://github.com/${owner}/${repo}/issues/new/choose)** if you've found a bug
+- 📖 Check the [README](https://github.com/${owner}/${repo}#readme) and [SUPPORT](https://github.com/${owner}/${repo}/blob/main/SUPPORT.md) docs for common answers
+
+Thank you for being part of the LumenFlow community! 🙏
+                `.trim();
+
+                await github.graphql(addCommentMutation, {
+                  id: discussion.id,
+                  body: closeBody,
+                });
+
+              } else if (inactiveDays >= WARNING_DAYS) {
+                // ── Warning threshold reached — check if we already warned ──
+                const alreadyWarned = discussion.comments.nodes.some(
+                  c => c.body && c.body.includes("automatically marked as stale")
+                );
+
+                if (!alreadyWarned) {
+                  const addCommentMutation = `
+                    mutation($id: ID!, $body: String!) {
+                      addDiscussionComment(input: { discussionId: $id, body: $body }) {
+                        comment { id }
+                      }
+                    }
+                  `;
+                  const warnBody = `
+👋 This Q&A discussion has been **automatically marked as stale** because it has not had any activity in the past ${WARNING_DAYS} days.
+
+If your question is still unanswered or relevant, please add a comment with any additional context. This discussion will be **automatically closed in ${CLOSE_DAYS - WARNING_DAYS} days** if no further activity occurs.
+
+Alternatively, you can:
+- 💬 **[Open a new discussion](https://github.com/${owner}/${repo}/discussions/new?category=Q%26A)** with your question
+- 📖 Check the [SUPPORT guide](https://github.com/${owner}/${repo}/blob/main/SUPPORT.md) for help resources
+
+Thank you for your patience! 🙏
+                  `.trim();
+
+                  await github.graphql(addCommentMutation, {
+                    id: discussion.id,
+                    body: warnBody,
+                  });
+                  core.info(`Posted stale warning on discussion #${discussion.number}`);
+                } else {
+                  core.info(`Discussion #${discussion.number} already warned, skipping`);
+                }
+              }
+            }
