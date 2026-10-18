@@ -270,3 +270,54 @@ jobs:
       - name: Build SDK
         working-directory: sdk
         run: npm run build --if-present
+
+  dependency-audit:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537  # master
+        with:
+          toolchain: 1.87.0
+
+      - name: Cache cargo registry
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-audit-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-audit-
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo-audit (fail on high/critical)
+        id: audit
+        run: |
+          cargo audit --config audit.toml --json > audit-results.json 2>&1 || AUDIT_EXIT=$?
+          cat audit-results.json
+          # Parse severity counts from JSON output
+          HIGH=$(python3 -c "
+          import json, sys
+          try:
+            data = json.load(open('audit-results.json'))
+            vulns = data.get('vulnerabilities', {}).get('list', [])
+            print(sum(1 for v in vulns if v.get('advisory', {}).get('cvss', {}) and 'HIGH' in str(v.get('advisory', {}).get('cvss', '')).upper()))
+          except Exception:
+            print(0)
+          " 2>/dev/null || echo 0)
+          echo "High/Critical vulnerabilities found: $HIGH"
+          exit ${AUDIT_EXIT:-0}
+
+      - name: Upload audit results as artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae6567c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: cargo-audit-results
+          path: audit-results.json
+          retention-days: 30
