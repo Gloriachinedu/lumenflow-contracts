@@ -528,7 +528,7 @@ console.log(payment.status, payment.amount, payment.refundedAmount);
 
 #### `getPaymentSummary(orderId: string): Promise<PaymentSummary>`
 
-Retrieve a public summary of a payment (no auth required).
+Retrieve a public summary of a payment (no auth required). This read-only query works without configuring a signer.
 
 ```typescript
 const summary = await client.getPaymentSummary('ORDER-001');
