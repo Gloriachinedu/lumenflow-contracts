@@ -9647,3 +9647,146 @@ fn test_set_min_refund_amount_zero_fails() {
     let result = client.try_set_min_refund_amount(&admin, &0i128);
     assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
 }
+
+// ── Max signers limit tests (issue #1269) ─────────────────────────────────────
+
+/// Helper: build a Vec<Address> of `n` freshly generated addresses.
+fn make_signers(env: &Env, n: usize) -> Vec<Address> {
+    let mut v = Vec::new(env);
+    for _ in 0..n {
+        v.push_back(Address::generate(env));
+    }
+    v
+}
+
+/// Exactly 10 signers (the default limit) must be accepted.
+#[test]
+fn test_multisig_exactly_max_signers_accepted() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let _ = admin; // silence unused warning; admin already set by setup_payment_env
+    let signers = make_signers(&env, 10);
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_MAX_OK"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &1,
+        &None,
+    );
+    assert!(result.is_ok(), "10 signers should be accepted by default");
+}
+
+/// 11 signers must be rejected with TooManySigners.
+#[test]
+fn test_multisig_exceeds_max_signers_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signers = make_signers(&env, 11);
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_TOO_MANY"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &1,
+        &None,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TooManySigners)));
+}
+
+/// 0 signers must still be rejected with InvalidInput (existing guard).
+#[test]
+fn test_multisig_zero_signers_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signers = make_signers(&env, 0);
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_ZERO"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &1,
+        &None,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+/// 1 signer must be accepted.
+#[test]
+fn test_multisig_single_signer_accepted() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signers = make_signers(&env, 1);
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_ONE"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &1,
+        &None,
+    );
+    assert!(result.is_ok(), "1 signer should be accepted");
+}
+
+/// Admin can raise the limit via set_max_signers; after raising to 15 a list
+/// of 15 signers must be accepted.
+#[test]
+fn test_set_max_signers_admin_configurable() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    // Raise the limit to 15.
+    client.set_max_signers(&admin, &15u32);
+
+    let signers = make_signers(&env, 15);
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_RAISED"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &1,
+        &None,
+    );
+    assert!(result.is_ok(), "15 signers should be accepted after raising the limit to 15");
+}
+
+/// After raising the limit to 15, a list of 16 must still be rejected.
+#[test]
+fn test_set_max_signers_still_enforced_after_admin_change() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    client.set_max_signers(&admin, &15u32);
+
+    let signers = make_signers(&env, 16);
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_RAISED_TOO_MANY"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &1,
+        &None,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TooManySigners)));
+}
+
+/// set_max_signers with 0 must be rejected with InvalidInput.
+#[test]
+fn test_set_max_signers_zero_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_set_max_signers(&admin, &0u32);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}

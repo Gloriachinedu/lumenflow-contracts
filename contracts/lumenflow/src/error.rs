@@ -60,6 +60,9 @@ pub enum PaymentError {
     RefundLimitExceeded = 37,
 
     // Multisig
+    /// The signers list exceeds the configured maximum (default 10). Remediation: Reduce the
+    /// number of signers or ask an admin to raise the limit via set_max_signers.
+    TooManySigners = 47,
     /// The multi-signature payment request was not found. Remediation: Verify the payment ID.
     MultisigNotFound = 40,
     /// The caller has already signed this multi-signature payment. Remediation: Wait for other required signers.
