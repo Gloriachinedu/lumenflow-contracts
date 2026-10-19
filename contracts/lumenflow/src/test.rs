@@ -14,8 +14,8 @@ use crate::{
     error::PaymentError,
     storage,
     types::{
-        BatchPaymentItem, MerchantCategory, PaymentFilter, SortField, SortOrder, StatusFilter,
-        SubscriptionStatus,
+        BatchPaymentItem, MerchantCategory, PaymentFilter, PaymentOrder, PaymentStatus, SortField,
+        SortOrder, StatusFilter, SubscriptionStatus,
     },
     PaymentProcessingContract, PaymentProcessingContractClient,
 };
@@ -3320,6 +3320,157 @@ fn test_unpause_emits_event() {
 }
 
 // ── build_page sort tests ─────────────────────────────────────────────────────
+
+fn next_property_random(state: &mut u64) -> u64 {
+    *state = state
+        .wrapping_mul(6_364_136_223_846_793_005)
+        .wrapping_add(1_442_695_040_888_963_407);
+    *state >> 16
+}
+
+fn seed_random_history(
+    env: &Env,
+    client: &PaymentProcessingContractClient,
+    merchant: &Address,
+    payer: &Address,
+    token: &Address,
+    count: u32,
+    seed: u64,
+) -> alloc::vec::Vec<(String, u64, i128)> {
+    let mut expected = alloc::vec::Vec::new();
+    let mut random_state = seed;
+
+    env.as_contract(&client.address, || {
+        for index in 0..count {
+            let order_id = str(env, &format!("PROP_{seed}_{index}"));
+            let paid_at = next_property_random(&mut random_state);
+            let amount = (next_property_random(&mut random_state) % 1_000_000) as i128 + 1;
+            let payment = PaymentOrder {
+                order_id: order_id.clone(),
+                merchant_address: merchant.clone(),
+                payer: payer.clone(),
+                token: token.clone(),
+                amount,
+                version: 1,
+                status: PaymentStatus::Completed,
+                paid_at,
+                refunded_amount: 0,
+                memo: str(env, "generated history test payment"),
+                tags: None,
+                platform_fee: 0,
+            };
+
+            storage::set_payment(env, &payment);
+            storage::add_merchant_payment_id(env, merchant, &order_id).unwrap();
+            storage::add_payer_payment_id(env, payer, &order_id).unwrap();
+            expected.push((order_id, paid_at, amount));
+        }
+    });
+
+    expected
+}
+
+fn collect_merchant_history(
+    client: &PaymentProcessingContractClient,
+    merchant: &Address,
+    sort_field: SortField,
+    sort_order: SortOrder,
+) -> alloc::vec::Vec<PaymentOrder> {
+    let mut cursor = None;
+    let mut payments = alloc::vec::Vec::new();
+
+    loop {
+        let page = client.get_merchant_payment_history(
+            merchant,
+            &cursor,
+            &13,
+            &None,
+            &sort_field,
+            &sort_order,
+        );
+        payments.extend(page.payments.iter());
+        match page.next_cursor {
+            Some(next_cursor) => cursor = Some(next_cursor),
+            None => break,
+        }
+    }
+
+    payments
+}
+
+fn assert_history_matches_dataset(actual: &[PaymentOrder], expected: &[(String, u64, i128)]) {
+    assert_eq!(actual.len(), expected.len());
+    for (order_id, _, _) in expected {
+        assert_eq!(
+            actual
+                .iter()
+                .filter(|payment| payment.order_id == *order_id)
+                .count(),
+            1,
+            "payment must appear exactly once across all pages"
+        );
+    }
+}
+
+#[test]
+fn test_date_ascending_pagination_is_complete_for_random_datasets() {
+    for count in [1, 10, 50, 100] {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        let expected = seed_random_history(
+            &env,
+            &client,
+            &merchant,
+            &payer,
+            &token,
+            count,
+            0xA11CE + count as u64,
+        );
+        let actual = collect_merchant_history(
+            &client,
+            &merchant,
+            SortField::Date,
+            SortOrder::Ascending,
+        );
+
+        assert_history_matches_dataset(&actual, &expected);
+        assert!(
+            actual
+                .windows(2)
+                .all(|pair| pair[0].paid_at <= pair[1].paid_at),
+            "Date ascending order must hold across page boundaries"
+        );
+    }
+}
+
+#[test]
+fn test_amount_descending_pagination_is_complete_for_random_datasets() {
+    for count in [1, 10, 50, 100] {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        let expected = seed_random_history(
+            &env,
+            &client,
+            &merchant,
+            &payer,
+            &token,
+            count,
+            0xB0B + count as u64,
+        );
+        let actual = collect_merchant_history(
+            &client,
+            &merchant,
+            SortField::Amount,
+            SortOrder::Descending,
+        );
+
+        assert_history_matches_dataset(&actual, &expected);
+        assert!(
+            actual
+                .windows(2)
+                .all(|pair| pair[0].amount >= pair[1].amount),
+            "Amount descending order must hold across page boundaries"
+        );
+    }
+}
 
 #[test]
 fn test_sort_by_amount_ascending() {
