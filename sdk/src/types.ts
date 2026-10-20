@@ -1,9 +1,37 @@
-export enum MerchantCategory {
-  Retail = "Retail",
-  Food = "Food",
-  Services = "Services",
-  Digital = "Digital",
-  Other = "Other",
+/**
+ * Merchant business category.
+ *
+ * Simple variants are plain string literals.  The Custom variant carries an
+ * arbitrary label (1–32 characters) that mirrors the Rust `Custom(String)`
+ * tuple variant defined in the smart contract.
+ *
+ * @example
+ * // Simple variant
+ * const category: MerchantCategory = "Retail";
+ *
+ * // Custom variant
+ * const category: MerchantCategory = { Custom: "Handmade" };
+ */
+export type MerchantCategory =
+  | "Retail"
+  | "Food"
+  | "Services"
+  | "Digital"
+  | "Other"
+  | { Custom: string };
+
+/** Namespace providing named helpers for each MerchantCategory variant. */
+// eslint-disable-next-line @typescript-eslint/no-namespace
+export namespace MerchantCategory {
+  export const Retail: MerchantCategory = "Retail";
+  export const Food: MerchantCategory = "Food";
+  export const Services: MerchantCategory = "Services";
+  export const Digital: MerchantCategory = "Digital";
+  export const Other: MerchantCategory = "Other";
+  /** Create a Custom category value. `label` must be 1–32 characters. */
+  export function custom(label: string): MerchantCategory {
+    return { Custom: label };
+  }
 }
 
 export interface Merchant {

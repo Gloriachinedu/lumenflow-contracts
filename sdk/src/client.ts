@@ -1,3 +1,84 @@
+feat/sdk-rpc-retry-integration
+/**
+ * LumenFlow SDK Client
+ * Provides a high-level interface for interacting with the LumenFlow smart contract.
+ */
+
+import { LumenFlowError } from './errors';
+import { withRetry, RetryConfig, DEFAULT_RETRY_CONFIG } from './retry';
+
+export interface ClientConfig {
+  /** Soroban RPC server URL */
+  rpcUrl: string;
+  /** LumenFlow contract ID */
+  contractId: string;
+  /** Optional retry configuration */
+  retryConfig?: Partial<RetryConfig>;
+}
+
+export class Client {
+  private rpcUrl: string;
+  private contractId: string;
+  private retryConfig: RetryConfig;
+
+  constructor(config: ClientConfig) {
+    this.rpcUrl = config.rpcUrl;
+    this.contractId = config.contractId;
+    this.retryConfig = { ...DEFAULT_RETRY_CONFIG, ...config.retryConfig };
+  }
+
+  /**
+   * Invoke a contract method with automatic retry for transient errors.
+   * 
+   * @param method - The contract method to invoke
+   * @param args - Arguments to pass to the method
+   * @returns The result of the contract call
+   */
+  async invoke(method: string, ...args: any[]): Promise<any> {
+    return withRetry(async () => {
+      return this.executeInvoke(method, ...args);
+    }, this.retryConfig);
+  }
+
+  /**
+   * Execute the actual contract invocation without retry logic.
+   * This is separated to allow withRetry to handle the retry logic.
+   */
+  private async executeInvoke(method: string, ...args: any[]): Promise<any> {
+    // In a real implementation, this would:
+    // 1. Load the Soroban SDK
+    // 2. Call server.prepareTransaction
+    // 3. Call server.sendTransaction
+    // 4. Handle the response
+    
+    // For now, this is a placeholder that simulates the behavior
+    // The actual implementation would use @stellar/stellar-sdk
+    
+    throw new Error('Client.executeInvoke not yet implemented - requires @stellar/stellar-sdk integration');
+  }
+
+  /**
+   * Get the RPC URL
+   */
+  getRpcUrl(): string {
+    return this.rpcUrl;
+  }
+
+  /**
+   * Get the contract ID
+   */
+  getContractId(): string {
+    return this.contractId;
+  }
+
+  /**
+   * Get the retry configuration
+   */
+  getRetryConfig(): RetryConfig {
+    return { ...this.retryConfig };
+  }
+}
+
 import {
   Address,
   Contract,
@@ -10,6 +91,38 @@ import {
   nativeToScVal,
   TimeoutInfinite,
 } from "@stellar/stellar-sdk";
+import packageJson from "../package.json";
+
+export const VERSION: string = packageJson.version;
+
+/**
+ * Serialize a {@link MerchantCategory} value to the XDR ScVal form expected
+ * by the Soroban contract.
+ *
+ * - Unit variants  →  `ScVec([ScSymbol("<Variant>")])`
+ * - Custom variant →  `ScVec([ScSymbol("Custom"), ScString("<label>")])`
+ *
+ * @throws {Error} When a `Custom` label is empty or exceeds 32 characters.
+ */
+export function serializeMerchantCategory(category: MerchantCategory): xdr.ScVal {
+  if (typeof category === "string") {
+    return xdr.ScVal.scvVec([xdr.ScVal.scvSymbol(category)]);
+  }
+  // { Custom: string }
+  const label = category.Custom;
+  if (!label || label.length === 0) {
+    throw new Error("MerchantCategory.Custom label must not be empty.");
+  }
+  if (label.length > 32) {
+    throw new Error(
+      `MerchantCategory.Custom label must be at most 32 characters (got ${label.length}).`
+    );
+  }
+  return xdr.ScVal.scvVec([
+    xdr.ScVal.scvSymbol("Custom"),
+    xdr.ScVal.scvString(label),
+  ]);
+}
 import {
   Merchant,
   MerchantCategory,
@@ -33,6 +146,7 @@ import {
   Subscription,
 } from "./types";
 import { LumenFlowError, PaymentErrorCode } from "./errors";
+import { withIdempotency, IdempotentResult } from "./idempotency";
 
 /**
  * A function that signs a Stellar transaction.
@@ -51,8 +165,11 @@ import { LumenFlowError, PaymentErrorCode } from "./errors";
 export type Signer = (tx: Transaction) => Promise<Transaction> | Transaction;
 
 /**
- * Configuration options for {@link LumenFlowClient}.
+ * The major version of the contract API this SDK is built against.
+ * Version compatibility is defined as matching major versions (semver).
  */
+export const SDK_CONTRACT_MAJOR_VERSION = 0;
+
 export interface ClientConfig {
   /** The Soroban contract ID (e.g. `"CAAAA..."`). */
   contractId: string;
@@ -66,6 +183,17 @@ export interface ClientConfig {
    * Can be set later via {@link LumenFlowClient.setSigner}.
    */
   signer?: Signer;
+  /**
+   * Skip the automatic contract version compatibility check on initialisation.
+   * Defaults to `false`.
+   */
+  skipVersionCheck?: boolean;
+  /**
+   * Throw an error instead of logging a warning when the contract major version
+   * does not match the SDK's expected major version.
+   * Defaults to `false`.
+   */
+  strictVersionCheck?: boolean;
 }
 
 /**
@@ -92,11 +220,11 @@ export interface ClientConfig {
 export class LumenFlowClient {
   /** The Soroban {@link Contract} instance used to build contract calls. */
   public readonly contract: Contract;
-  /** The Soroban RPC {@link SorobanRpc.Server} used to simulate and submit transactions. */
-  public readonly server: SorobanRpc.Server;
-  /** The Stellar network passphrase this client is configured for. */
+  public readonly server: rpc.Server;
   public readonly networkPassphrase: string;
   private signer?: Signer;
+  private skipVersionCheck: boolean;
+  private strictVersionCheck: boolean;
 
   /**
    * Creates a new {@link LumenFlowClient}.
@@ -112,9 +240,85 @@ export class LumenFlowClient {
    */
   constructor(config: ClientConfig) {
     this.contract = new Contract(config.contractId);
-    this.server = new SorobanRpc.Server(config.rpcUrl);
+    this.server = new rpc.Server(config.rpcUrl, {
+      headers: { "X-SDK-Version": VERSION },
+    });
     this.networkPassphrase = config.networkPassphrase;
     this.signer = config.signer;
+    this.skipVersionCheck = config.skipVersionCheck ?? false;
+    this.strictVersionCheck = config.strictVersionCheck ?? false;
+  }
+
+  /**
+   * Check that the deployed contract version is compatible with this SDK.
+   *
+   * Compatibility is defined as having the same major version (semver).
+   * Call this once after construction — it is invoked automatically by
+   * {@link init}.
+   *
+   * @throws {Error} when `strictVersionCheck` is `true` and the major versions differ.
+   */
+  async checkContractVersion(): Promise<void> {
+    if (this.skipVersionCheck) {
+      return;
+    }
+
+    let rawVersion: string;
+    try {
+      rawVersion = await this.getContractVersion();
+    } catch (err) {
+      // If we cannot fetch the version, log a warning and proceed so that
+      // callers are not hard-blocked by transient RPC issues.
+      console.warn(
+        "[LumenFlowSDK] Unable to fetch contract version for compatibility check:",
+        err
+      );
+      return;
+    }
+
+    const contractMajor = parseInt(rawVersion.split(".")[0] ?? "0", 10);
+    if (isNaN(contractMajor)) {
+      console.warn(
+        `[LumenFlowSDK] Contract returned an unparseable version string: "${rawVersion}". ` +
+          "Skipping version check."
+      );
+      return;
+    }
+
+    if (contractMajor !== SDK_CONTRACT_MAJOR_VERSION) {
+      const message =
+        `[LumenFlowSDK] Contract version mismatch: SDK expects major version ` +
+        `${SDK_CONTRACT_MAJOR_VERSION} but contract reports "${rawVersion}" ` +
+        `(major ${contractMajor}). Silent serialisation failures may occur.`;
+
+      if (this.strictVersionCheck) {
+        throw new Error(message);
+      } else {
+        console.warn(message);
+      }
+    }
+  }
+
+  /**
+   * Initialise the client by verifying contract version compatibility.
+   *
+   * This is a convenience factory that constructs the client and immediately
+   * runs the version check. Use this instead of the constructor when you want
+   * to ensure compatibility before issuing any contract calls.
+   *
+   * @example
+   * ```typescript
+   * const client = await LumenFlowClient.init({
+   *   contractId: "C...",
+   *   rpcUrl: "https://soroban-testnet.stellar.org",
+   *   networkPassphrase: Networks.TESTNET,
+   * });
+   * ```
+   */
+  static async init(config: ClientConfig): Promise<LumenFlowClient> {
+    const client = new LumenFlowClient(config);
+    await client.checkContractVersion();
+    return client;
   }
 
   /**
@@ -136,16 +340,12 @@ export class LumenFlowClient {
   // ── Admin ─────────────────────────────────────────────────────────────────
 
   /**
-   * Sets the contract administrator.
-   * Can only be called by the current admin.
-   *
-   * @param admin - Stellar address of the new administrator.
-   * @returns A Promise that resolves when the transaction is confirmed.
-   * @throws {@link LumenFlowError} if the caller is not the current admin.
-   *
-   * @example
-   * await client.setAdmin("GABC...");
+   * Fetch the version string deployed in the contract (e.g. `"0.2.0"`).
    */
+  async getContractVersion(): Promise<string> {
+    return await this.call("get_contract_version", []);
+  }
+
   async setAdmin(admin: string): Promise<void> {
     await this.invoke("set_admin", [new Address(admin)]);
   }
@@ -251,7 +451,23 @@ export class LumenFlowClient {
       name,
       description,
       contactInfo,
-      category,
+      serializeMerchantCategory(category),
+    ]);
+  }
+
+  async updateMerchant(
+    merchantAddress: string,
+    name: string,
+    description: string,
+    contactInfo: string,
+    category: MerchantCategory
+  ): Promise<void> {
+    await this.invoke("update_merchant", [
+      new Address(merchantAddress),
+      name,
+      description,
+      contactInfo,
+      serializeMerchantCategory(category),
     ]);
   }
 
@@ -390,22 +606,40 @@ export class LumenFlowClient {
   }
 
   /**
-   * Processes a payment that is replay-protected by a per-merchant nonce.
-   * Use this flow when the merchant provides a monotonically increasing nonce
-   * instead of a per-payment signature.
+   * Idempotent variant of processPaymentWithSignature.
    *
-   * @param payer - Stellar address of the account funding the payment (must sign).
-   * @param orderId - Unique order identifier (max 64 bytes). Must not already exist.
-   * @param merchantAddress - Stellar address of the recipient merchant.
-   * @param tokenAddress - Contract address of the Stellar asset (SAC) to transfer.
-   * @param amount - Transfer amount in the token's smallest unit.
-   * @param memo - Human-readable payment memo (max 256 bytes).
-   * @param tags - Optional tags for filtering; pass `null` to omit.
-   * @param nonce - The merchant's current nonce value. The contract increments it atomically.
-   * @returns A Promise that resolves when the payment is confirmed.
-   * @throws {@link LumenFlowError} with `PaymentErrorCode.DuplicateOrderId` if `orderId` already exists.
-   * @throws {@link LumenFlowError} with `PaymentErrorCode.InvalidNonce` if the nonce is stale or incorrect.
+   * If the contract returns PaymentAlreadyExists (code 21) the existing
+   * payment record is fetched and returned with `duplicate: true` so callers
+   * can safely retry without special-casing the error.
    */
+  async processPaymentIdempotent(
+    payer: string,
+    orderId: string,
+    merchantAddress: string,
+    tokenAddress: string,
+    amount: bigint,
+    memo: string,
+    tags: string[] | null,
+    signature: Buffer,
+    merchantPublicKey: Buffer
+  ): Promise<IdempotentResult<PaymentOrder | null>> {
+    return withIdempotency(
+      () =>
+        this.invoke("process_payment_with_signature", [
+          new Address(payer),
+          orderId,
+          new Address(merchantAddress),
+          new Address(tokenAddress),
+          amount,
+          memo,
+          tags,
+          signature,
+          merchantPublicKey,
+        ]),
+      () => this.call("get_payment_by_id", [new Address(payer), orderId])
+    );
+  }
+
   async processPaymentWithNonce(
     payer: string,
     orderId: string,
@@ -429,24 +663,57 @@ export class LumenFlowClient {
   }
 
   /**
-   * Submits multiple payments atomically in a single transaction.
-   * All payments succeed or all fail — there is no partial execution.
+   * Submit a payment with optional client-side idempotency protection.
    *
-   * @param payer - Stellar address of the account funding all payments (must sign).
-   * @param payments - Array of {@link BatchPaymentItem} objects. Each item describes
-   *   one payment including its merchant, token, amount, and merchant signature.
-   * @returns A Promise that resolves when the entire batch is confirmed.
-   * @throws {@link LumenFlowError} with `PaymentErrorCode.BatchSizeExceeded` if the
-   *   array length exceeds the contract's maximum batch size.
-   * @throws {@link LumenFlowError} if any individual payment in the batch is invalid
-   *   (the whole batch is reverted).
+   * This convenience method wraps {@link processPaymentWithNonce}.  When
+   * `idempotencyKey` is supplied the SDK caches the result and returns the
+   * same result for any subsequent call with the same key, without issuing
+   * a new RPC request.  Cache entries expire after 5 minutes.
+   *
+   * @param payer           - Address of the account funding the payment.
+   * @param orderId         - Unique order identifier for contract-level deduplication.
+   * @param merchantAddress - Registered, active merchant receiving the funds.
+   * @param tokenAddress    - Allowed token contract address.
+   * @param amount          - Positive token amount in the token's smallest unit.
+   * @param memo            - Optional free-text note (max 256 characters).
+   * @param tags            - Optional string tags (max 10 tags, 32 chars each).
+   * @param nonce           - Replay-prevention nonce (fetch current and increment by 1).
+   * @param idempotencyKey  - Optional caller-supplied key.  Identical keys within
+   *                          the 5-minute TTL return the cached result without a new call.
    *
    * @example
-   * await client.batchPayment("GPAYER...", [
-   *   { orderId: "ord-1", merchantAddress: "GM1...", tokenAddress: "CT...", amount: 10n, memo: "Item 1", signature: sig1, merchantPublicKey: pk1 },
-   *   { orderId: "ord-2", merchantAddress: "GM2...", tokenAddress: "CT...", amount: 20n, memo: "Item 2", signature: sig2, merchantPublicKey: pk2 },
-   * ]);
+   * ```typescript
+   * // First call — hits the network
+   * await client.processPayment(payer, 'ORDER-1', merchant, token, 1000n, 'memo', null, 0n, 'key-abc');
+   * // Second call with same key within 5 min — returns cached result, no RPC call
+   * await client.processPayment(payer, 'ORDER-1', merchant, token, 1000n, 'memo', null, 0n, 'key-abc');
+   * ```
    */
+  async processPayment(
+    payer: string,
+    orderId: string,
+    merchantAddress: string,
+    tokenAddress: string,
+    amount: bigint,
+    memo: string,
+    tags: string[] | null,
+    nonce: bigint,
+    idempotencyKey?: string
+  ): Promise<void> {
+    return withIdempotency(idempotencyKey, () =>
+      this.processPaymentWithNonce(
+        payer,
+        orderId,
+        merchantAddress,
+        tokenAddress,
+        amount,
+        memo,
+        tags,
+        nonce
+      )
+    );
+  }
+
   async batchPayment(
     payer: string,
     payments: BatchPaymentItem[]
@@ -795,15 +1062,16 @@ export class LumenFlowClient {
   }
 
   /**
-   * Files a dispute on a rejected refund, escalating the case to admin resolution.
-   *
-   * @param payer - Stellar address of the disputing payer (must sign).
-   * @param refundId - ID of the rejected refund to dispute.
-   * @param evidence - Supporting evidence text (max 1024 bytes, e.g. tracking info or screenshots URL).
-   * @returns A Promise that resolves when the dispute is recorded.
-   * @throws {@link LumenFlowError} if the refund is not in `Rejected` status.
-   * @throws {@link LumenFlowError} if the caller is not the payer of the original order.
+   * List all refunds for a given order.
+   * Caller must be the payer, merchant, or admin.
    */
+  async getRefundsForOrder(caller: string, orderId: string): Promise<RefundRecord[]> {
+    return await this.call("get_refunds_for_order", [
+      new Address(caller),
+      orderId,
+    ]);
+  }
+
   async disputeRefund(
     payer: string,
     refundId: string,
