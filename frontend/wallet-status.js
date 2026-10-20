@@ -1,285 +1,389 @@
 /**
  * wallet-status.js
- * Wallet connection status utilities for LumenFlow frontend.
  *
- * Provides user-friendly, i18n-ready error messages for common Freighter
- * wallet connection errors, replacing raw JavaScript error strings with
- * actionable guidance.
+ * Real-time wallet connection status chip for LumenFlow navigation bar.
  *
- * Import via: <script type="module" src="wallet-status.js"></script>
+ * Usage:
+ *   import { initWalletStatus } from './wallet-status.js';
+ *   initWalletStatus(document.getElementById('wallet-status-container'));
+ *
+ * The chip polls Freighter every 1 500 ms and emits a 'lf:walletchange'
+ * CustomEvent on window whenever the connection state changes.
+ *
+ * In demo mode (no window.freighter present) the chip simulates a connect /
+ * disconnect flow so the UI is usable during static preview.
  */
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// ── CSS (injected once) ───────────────────────────────────────────────────────
 
-/** Freighter browser extension install URL */
-export const FREIGHTER_INSTALL_URL = 'https://www.freighter.app/';
+const STYLE_ID = 'lf-wallet-status-styles';
 
-/** Freighter troubleshooting guide URL */
-export const FREIGHTER_TROUBLESHOOT_URL =
-  'https://docs.freighter.app/docs/guide/introduction';
+function ensureStyles() {
+  if (document.getElementById(STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = STYLE_ID;
+  style.textContent = `
+    /* ── Wallet chip ─────────────────────────────────────────────────────── */
+    .wallet-chip {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.3rem 0.75rem;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1.5px solid;
+      transition: all 0.2s;
+      user-select: none;
+      white-space: nowrap;
+    }
 
-/**
- * Expected Stellar network passphrase for this deployment.
- * Pages can override via window.LUMENFLOW_NETWORK_PASSPHRASE.
- */
-export const EXPECTED_NETWORK =
-  window.LUMENFLOW_NETWORK || 'testnet';
+    .wallet-chip:focus-visible {
+      outline: 3px solid #6c47ff;
+      outline-offset: 2px;
+    }
 
-// ── Error code constants ──────────────────────────────────────────────────────
+    .wallet-chip.connected {
+      border-color: #1a9e5c;
+      background: #e6f9f0;
+      color: #0e7a45;
+    }
 
-/**
- * Canonical wallet error codes used internally.
- * @enum {string}
- */
-export const WalletErrorCode = {
-  NOT_FOUND:        'WALLET_NOT_FOUND',
-  REJECTED:         'WALLET_REJECTED',
-  WRONG_NETWORK:    'WALLET_WRONG_NETWORK',
-  UNAUTHORIZED:     'WALLET_UNAUTHORIZED',
-  TIMEOUT:          'WALLET_TIMEOUT',
-  UNKNOWN:          'WALLET_UNKNOWN',
-};
+    .wallet-chip.disconnected {
+      border-color: #dde1e7;
+      background: #f5f5f5;
+      color: #666;
+    }
 
-// ── i18n message catalogue ────────────────────────────────────────────────────
+    .wallet-chip__dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      flex-shrink: 0;
+    }
 
-/**
- * Default English message catalogue.
- * Replace or extend via {@link setMessages} for i18n.
- *
- * Each entry has:
- *   - `title`  — short headline shown in UI
- *   - `detail` — longer explanation with actionable guidance (may contain HTML)
- *
- * @type {Record<string, {title: string, detail: string}>}
- */
-export const DEFAULT_MESSAGES = {
-  [WalletErrorCode.NOT_FOUND]: {
-    title: 'Freighter wallet not found',
-    detail:
-      `The Freighter browser extension is not installed or not active. ` +
-      `<a href="${FREIGHTER_INSTALL_URL}" target="_blank" rel="noopener noreferrer">` +
-      `Install Freighter</a> and reload this page.`,
-  },
-  [WalletErrorCode.REJECTED]: {
-    title: 'Connection request rejected',
-    detail:
-      `You declined the connection in Freighter. ` +
-      `Please click <strong>Connect</strong> again and approve the request in the ` +
-      `Freighter extension popup. ` +
-      `<a href="${FREIGHTER_TROUBLESHOOT_URL}" target="_blank" rel="noopener noreferrer">` +
-      `Troubleshooting guide</a>.`,
-  },
-  [WalletErrorCode.WRONG_NETWORK]: {
-    title: 'Wrong network selected',
-    detail: (currentNetwork) =>
-      `Your Freighter wallet is connected to <strong>${currentNetwork || 'an unknown network'}</strong>, ` +
-      `but this app requires <strong>${EXPECTED_NETWORK}</strong>. ` +
-      `Please switch the network in Freighter settings and reconnect.`,
-  },
-  [WalletErrorCode.UNAUTHORIZED]: {
-    title: 'Wallet not authorized',
-    detail:
-      `LumenFlow does not have permission to access your wallet. ` +
-      `Open Freighter, go to <em>Connected Sites</em>, and grant access to this site.`,
-  },
-  [WalletErrorCode.TIMEOUT]: {
-    title: 'Connection timed out',
-    detail:
-      `The wallet connection request timed out. ` +
-      `Please ensure Freighter is open and responsive, then try again.`,
-  },
-  [WalletErrorCode.UNKNOWN]: {
-    title: 'Wallet connection error',
-    detail:
-      `An unexpected error occurred while connecting your wallet. ` +
-      `Please refresh the page or check the ` +
-      `<a href="${FREIGHTER_TROUBLESHOOT_URL}" target="_blank" rel="noopener noreferrer">` +
-      `Freighter troubleshooting guide</a>.`,
-  },
-};
+    .wallet-chip.connected .wallet-chip__dot {
+      animation: lf-pulse 1.4s infinite;
+    }
 
-/** Currently active message catalogue (starts with DEFAULT_MESSAGES). */
-let _messages = { ...DEFAULT_MESSAGES };
+    @keyframes lf-pulse {
+      0%   { opacity: 1;   transform: scale(1);    }
+      50%  { opacity: 0.5; transform: scale(1.25); }
+      100% { opacity: 1;   transform: scale(1);    }
+    }
 
-/**
- * Override or extend the message catalogue for i18n.
- *
- * @param {Record<string, {title: string, detail: string|Function}>} overrides
- *   Partial or full replacement of the default catalogue.
- *
- * @example
- * // French locale
- * setMessages({
- *   [WalletErrorCode.NOT_FOUND]: {
- *     title: 'Extension Freighter introuvable',
- *     detail: `L'extension Freighter n'est pas installée. <a href="${FREIGHTER_INSTALL_URL}">Installer Freighter</a>.`,
- *   },
- * });
- */
-export function setMessages(overrides) {
-  _messages = { ..._messages, ...overrides };
+    /* ── Dropdown ────────────────────────────────────────────────────────── */
+    .wallet-dropdown {
+      position: absolute;
+      top: calc(100% + 6px);
+      right: 0;
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+      min-width: 160px;
+      z-index: 999;
+      overflow: hidden;
+    }
+
+    .wallet-dropdown button {
+      display: block;
+      width: 100%;
+      padding: 0.6rem 1rem;
+      text-align: left;
+      border: none;
+      background: none;
+      cursor: pointer;
+      font-size: 0.875rem;
+      color: #1a1a2e;
+    }
+
+    .wallet-dropdown button:hover {
+      background: #f5f7fa;
+    }
+
+    .wallet-dropdown button:focus-visible {
+      outline: 3px solid #6c47ff;
+      outline-offset: -2px;
+    }
+
+    /* ── Nav bar ─────────────────────────────────────────────────────────── */
+    .lf-nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.75rem 1.5rem;
+      background: #fff;
+      border-bottom: 1px solid #eee;
+      margin-bottom: 1.5rem;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .lf-nav__brand {
+      font-size: 1rem;
+      font-weight: 700;
+      color: #6c47ff;
+      letter-spacing: -0.01em;
+    }
+  `;
+  document.head.appendChild(style);
 }
 
-/**
- * Returns the current message catalogue (after any i18n overrides).
- * @returns {Record<string, {title: string, detail: string|Function}>}
- */
-export function getMessages() {
-  return _messages;
-}
-
-// ── Error classification ──────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
- * Maps a raw wallet error (thrown by Freighter or internal code) to a
- * canonical {@link WalletErrorCode}.
- *
- * @param {Error|string|unknown} rawError - The raw error caught during wallet connection.
- * @param {object}  [context]               - Optional context hints.
- * @param {string}  [context.currentNetwork] - Network currently selected in the wallet.
- * @returns {{ code: string, currentNetwork?: string }}
- */
-export function classifyWalletError(rawError, context = {}) {
-  const message = rawError instanceof Error
-    ? rawError.message.toLowerCase()
-    : String(rawError).toLowerCase();
-
-  // "Not found / not installed" patterns
-  if (
-    message.includes('not available') ||
-    message.includes('not found') ||
-    message.includes('not installed') ||
-    message.includes('freighter is not') ||
-    message.includes('no wallet') ||
-    message.includes('extension not')
-  ) {
-    return { code: WalletErrorCode.NOT_FOUND };
-  }
-
-  // "Unauthorized / permission" patterns — check before "rejected/denied" to
-  // avoid "permission denied" being caught by the REJECTED branch below.
-  if (
-    message.includes('unauthorized') ||
-    message.includes('permission') ||
-    message.includes('not allowed') ||
-    message.includes('access denied')
-  ) {
-    return { code: WalletErrorCode.UNAUTHORIZED };
-  }
-
-  // "User rejected" patterns
-  if (
-    message.includes('rejected') ||
-    message.includes('denied') ||
-    message.includes('user declined') ||
-    message.includes('user refused') ||
-    message.includes('cancelled') ||
-    message.includes('canceled')
-  ) {
-    return { code: WalletErrorCode.REJECTED };
-  }
-
-  // "Wrong network" patterns
-  if (
-    message.includes('network') ||
-    message.includes('passphrase') ||
-    message.includes('wrong chain') ||
-    message.includes('mainnet') && EXPECTED_NETWORK !== 'mainnet' ||
-    message.includes('testnet') && EXPECTED_NETWORK !== 'testnet'
-  ) {
-    return {
-      code: WalletErrorCode.WRONG_NETWORK,
-      currentNetwork: context.currentNetwork,
-    };
-  }
-
-  // Timeout
-  if (message.includes('timeout') || message.includes('timed out')) {
-    return { code: WalletErrorCode.TIMEOUT };
-  }
-
-  return { code: WalletErrorCode.UNKNOWN };
-}
-
-// ── User-friendly message resolution ─────────────────────────────────────────
-
-/**
- * Resolves a raw wallet error into a user-friendly message object.
- *
- * @param {Error|string|unknown} rawError
- * @param {object}  [context]
- * @param {string}  [context.currentNetwork] - Network currently selected in the wallet.
- * @returns {{ code: string, title: string, detail: string }}
- *
- * @example
- * try {
- *   await connectFreighter();
- * } catch (err) {
- *   const msg = resolveWalletError(err);
- *   showError(msg.title, msg.detail);
- * }
- */
-export function resolveWalletError(rawError, context = {}) {
-  const { code, currentNetwork } = classifyWalletError(rawError, context);
-  const entry = _messages[code] || _messages[WalletErrorCode.UNKNOWN];
-
-  const detail = typeof entry.detail === 'function'
-    ? entry.detail(currentNetwork)
-    : entry.detail;
-
-  return { code, title: entry.title, detail };
-}
-
-// ── DOM helper ────────────────────────────────────────────────────────────────
-
-/**
- * Renders a wallet error into a DOM element.
- *
- * @param {HTMLElement} container - Element to render the error into.
- * @param {Error|string|unknown} rawError - Raw error to display.
- * @param {object}  [context]
- * @param {string}  [context.currentNetwork]
- *
- * @example
- * const errorBox = document.getElementById('wallet-error');
- * renderWalletError(errorBox, err, { currentNetwork: 'mainnet' });
- */
-export function renderWalletError(container, rawError, context = {}) {
-  const { title, detail } = resolveWalletError(rawError, context);
-
-  container.setAttribute('role', 'alert');
-  container.setAttribute('aria-live', 'assertive');
-  container.innerHTML = `
-    <div class="wallet-error">
-      <strong class="wallet-error__title">⚠ ${escapeHtml(title)}</strong>
-      <p class="wallet-error__detail">${detail}</p>
-    </div>
-  `.trim();
-}
-
-/**
- * Clears a previously rendered wallet error from a container.
- * @param {HTMLElement} container
- */
-export function clearWalletError(container) {
-  container.removeAttribute('role');
-  container.removeAttribute('aria-live');
-  container.innerHTML = '';
-}
-
-// ── Internal helpers ──────────────────────────────────────────────────────────
-
-/**
- * Escapes HTML special characters to prevent XSS in title strings.
- * Note: `detail` strings are pre-authored HTML and are trusted.
- * @param {string} str
+ * Truncate a Stellar public key to "XXXX…XXXX" format (first 4 + last 4 chars).
+ * @param {string} key
  * @returns {string}
  */
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+function truncateKey(key) {
+  if (!key || key.length < 8) return key;
+  return `${key.slice(0, 4)}…${key.slice(-4)}`;
+}
+
+/**
+ * Dispatch the 'lf:walletchange' custom event on window.
+ * @param {boolean} connected
+ * @param {string|null} publicKey
+ */
+function emitWalletChange(connected, publicKey) {
+  window.dispatchEvent(
+    new CustomEvent('lf:walletchange', {
+      bubbles: true,
+      detail: { connected, publicKey: connected ? publicKey : null },
+    })
+  );
+}
+
+// ── Demo mode (no Freighter) ──────────────────────────────────────────────────
+
+/**
+ * Creates a simulated Freighter adapter for demo mode.
+ * Toggling the chip cycles between connected and disconnected states.
+ */
+function createDemoAdapter() {
+  const DEMO_KEY = 'GDEMO1UMENFLOW4EXAMPLE5ADDRESS6STELLAR7PUBKEY8DEMOKEY9ABCD';
+  let _connected = false;
+  let _key = null;
+
+  return {
+    isDemo: true,
+    async isConnected() { return _connected; },
+    async getPublicKey() { return _key; },
+    async requestAccess() {
+      await new Promise(r => setTimeout(r, 600)); // simulate async
+      _connected = true;
+      _key = DEMO_KEY;
+      return _key;
+    },
+    disconnect() {
+      _connected = false;
+      _key = null;
+    },
+  };
+}
+
+// ── Freighter adapter ─────────────────────────────────────────────────────────
+
+/**
+ * Wraps the real window.freighter API.
+ */
+function createFreighterAdapter() {
+  return {
+    isDemo: false,
+    async isConnected() {
+      try {
+        return Boolean(await window.freighter.isConnected());
+      } catch {
+        return false;
+      }
+    },
+    async getPublicKey() {
+      try {
+        return await window.freighter.getPublicKey();
+      } catch {
+        return null;
+      }
+    },
+    async requestAccess() {
+      try {
+        // Newer versions of Freighter expose requestAccess; fall back to getPublicKey.
+        if (typeof window.freighter.requestAccess === 'function') {
+          await window.freighter.requestAccess();
+        }
+        return await window.freighter.getPublicKey();
+      } catch {
+        return null;
+      }
+    },
+    disconnect() {
+      // Freighter does not expose a programmatic disconnect; we just clear local state.
+    },
+  };
+}
+
+// ── Core chip logic ───────────────────────────────────────────────────────────
+
+/**
+ * Insert a wallet status chip into `container` and start polling Freighter.
+ *
+ * @param {HTMLElement} container - The element that will receive the chip.
+ */
+export function initWalletStatus(container) {
+  if (!container) return;
+
+  ensureStyles();
+
+  const adapter = window.freighter ? createFreighterAdapter() : createDemoAdapter();
+
+  // ── Build chip DOM ──────────────────────────────────────────────────────────
+  const chip = document.createElement('div');
+  chip.className = 'wallet-chip disconnected';
+  chip.setAttribute('role', 'button');
+  chip.setAttribute('tabindex', '0');
+  chip.setAttribute('aria-label', 'Wallet status: Disconnected');
+  chip.innerHTML = `
+    <span class="wallet-chip__dot" aria-hidden="true"></span>
+    <span class="wallet-chip__label">Disconnected</span>
+  `;
+
+  container.appendChild(chip);
+
+  // ── Internal state ──────────────────────────────────────────────────────────
+  let _isConnected = false;
+  let _publicKey = null;
+  let _dropdownOpen = false;
+
+  // ── Dropdown ────────────────────────────────────────────────────────────────
+  function openDropdown() {
+    if (_dropdownOpen) return;
+    _dropdownOpen = true;
+
+    const dropdown = document.createElement('div');
+    dropdown.className = 'wallet-dropdown';
+    dropdown.setAttribute('role', 'menu');
+
+    const disconnectBtn = document.createElement('button');
+    disconnectBtn.textContent = 'Disconnect';
+    disconnectBtn.setAttribute('role', 'menuitem');
+    disconnectBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      closeDropdown();
+      adapter.disconnect();
+      // Force state refresh immediately
+      _isConnected = false;
+      _publicKey = null;
+      updateChipUI(false, null);
+      emitWalletChange(false, null);
+    });
+
+    dropdown.appendChild(disconnectBtn);
+    chip.appendChild(dropdown);
+
+    // Close on outside click
+    const onOutsideClick = (e) => {
+      if (!chip.contains(e.target)) {
+        closeDropdown();
+        document.removeEventListener('click', onOutsideClick);
+      }
+    };
+    // Use setTimeout to avoid the current click event triggering an immediate close
+    setTimeout(() => document.addEventListener('click', onOutsideClick), 0);
+  }
+
+  function closeDropdown() {
+    if (!_dropdownOpen) return;
+    _dropdownOpen = false;
+    const existing = chip.querySelector('.wallet-dropdown');
+    if (existing) existing.remove();
+  }
+
+  // ── UI update ───────────────────────────────────────────────────────────────
+  function updateChipUI(connected, publicKey) {
+    const label = chip.querySelector('.wallet-chip__label');
+    if (connected && publicKey) {
+      chip.className = 'wallet-chip connected';
+      chip.setAttribute('aria-label', `Wallet status: Connected`);
+      label.textContent = `Connected: ${truncateKey(publicKey)}`;
+    } else {
+      chip.className = 'wallet-chip disconnected';
+      chip.setAttribute('aria-label', 'Wallet status: Disconnected');
+      label.textContent = 'Disconnected';
+    }
+  }
+
+  // ── Polling ─────────────────────────────────────────────────────────────────
+  async function poll() {
+    try {
+      const connected = await adapter.isConnected();
+      const key = connected ? await adapter.getPublicKey() : null;
+
+      // Only update and emit if state actually changed
+      if (connected !== _isConnected || key !== _publicKey) {
+        _isConnected = connected;
+        _publicKey = key;
+        updateChipUI(connected, key);
+        emitWalletChange(connected, key);
+
+        // If disconnected externally, close any open dropdown
+        if (!connected) closeDropdown();
+      }
+    } catch {
+      // Silently ignore polling errors (e.g. extension not responding)
+    }
+  }
+
+  // Start polling immediately, then every 1 500 ms
+  poll();
+  setInterval(poll, 1500);
+
+  // ── Click / keyboard handler ────────────────────────────────────────────────
+  async function handleActivation() {
+    if (_isConnected) {
+      // Toggle dropdown
+      if (_dropdownOpen) {
+        closeDropdown();
+      } else {
+        openDropdown();
+      }
+    } else {
+      // Trigger connect flow
+      chip.setAttribute('aria-label', 'Wallet status: Connecting…');
+      chip.querySelector('.wallet-chip__label').textContent = 'Connecting…';
+      chip.style.pointerEvents = 'none';
+
+      try {
+        const key = await adapter.requestAccess();
+        if (key) {
+          _isConnected = true;
+          _publicKey = key;
+          updateChipUI(true, key);
+          emitWalletChange(true, key);
+        } else {
+          updateChipUI(false, null);
+        }
+      } catch {
+        updateChipUI(false, null);
+      } finally {
+        chip.style.pointerEvents = '';
+      }
+    }
+  }
+
+  chip.addEventListener('click', handleActivation);
+  chip.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      handleActivation();
+    }
+    if (e.key === 'Escape') {
+      closeDropdown();
+    }
+  });
 }
