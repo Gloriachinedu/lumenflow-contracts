@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "crypto";
 
-const SIGNATURE_PATTERN = /^sha256=([a-f0-9]{64})$/i;
+const SIGNATURE_PATTERN = /^sha256=([a-f0-9]*)$/i;
 
 export function verifyWebhookSignature(
   payload: Buffer,
@@ -18,5 +18,9 @@ export function verifyWebhookSignature(
 
   const expected = createHmac("sha256", secret).update(payload).digest();
   const received = Buffer.from(match[1], "hex");
+  if (received.length !== expected.length) {
+    return false;
+  }
+
   return timingSafeEqual(expected, received);
 }
