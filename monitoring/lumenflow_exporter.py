@@ -185,6 +185,8 @@ def _fetch_events(cursor: Optional[str] = None) -> list[Dict[str, Any]]:
 
 def _process_event(raw: Dict[str, Any]) -> None:
     """Record Prometheus metrics (and an OTel span) for a single event."""
+    from redact import redact_event  # local import keeps top-level imports clean
+
     topic: list = raw.get("topic", [])
     event_name: str = topic[1] if len(topic) >= 2 else "unknown"
 
@@ -197,7 +199,10 @@ def _process_event(raw: Dict[str, Any]) -> None:
 
     with _start_span(f"lumenflow.ingest.{event_name}", attributes=attributes):
         EVENTS_TOTAL.labels(event_name=event_name).inc()
-        log.info("Ingested event: %s  ledger=%s", event_name, raw.get("ledger"))
+        # Redact before logging to avoid leaking contact_info, payer addresses,
+        # or exact amounts (see docs/security/log-redaction.md).
+        safe = redact_event(raw)
+        log.info("Ingested event: %s  ledger=%s", event_name, safe.get("ledger"))
 
 
 def run_ingestion_cycle(cursor: Optional[str]) -> Optional[str]:
@@ -415,7 +420,13 @@ def save_cursor(token: str) -> None:
 # ─── Event processing ─────────────────────────────────────────────────────────
 
 def process_event(event: dict) -> None:
-    """Update Prometheus counters/gauges from a single Horizon event."""
+    """Update Prometheus counters/gauges from a single Horizon event.
+
+    Sensitive fields (contact_info, payer addresses, exact amounts) are
+    redacted before any logging statement — see docs/security/log-redaction.md.
+    """
+    from redact import redact_event  # local import keeps top-level imports clean
+
     topic = event.get("topic", [])
     if len(topic) < 2:
         return
@@ -457,6 +468,10 @@ def process_event(event: dict) -> None:
         contract_paused.labels(*lbl).set(1)
     elif event_name == "contract_unpaused":
         contract_paused.labels(*lbl).set(0)
+
+    # Redact before any debug/info logging of the raw event payload
+    safe = redact_event(event)
+    log.debug("Processed event: %s payload=%s", event_name, safe.get("value", {}))
 
 
 # ─── Scrape loop ───────────────────────────────────────────────────────────────
