@@ -1355,3 +1355,122 @@ This ensures integrators catch configuration problems early in development rathe
 ### CI Browser Matrix
 
 Browser compatibility is continuously validated by the `.github/workflows/compat-matrix.yml` workflow, which runs on every pull request and weekly on Mondays. The matrix tests the SDK against all documented Node.js versions and documented minimum browser targets via Playwright.
+
+---
+
+## Refund Recovery
+
+When a client-driven refund is interrupted mid-flow (network loss, process crash, etc.) the on-chain refund can be left in an intermediate state. The `RefundRecovery` utilities let merchants identify and re-attempt those stuck refunds.
+
+### Quick start
+
+```typescript
+import {
+  recoverRefund,
+  RefundRecoveryError,
+  RetryExhaustedError,
+  type RefundOps,
+} from '@lumenflow/sdk';
+
+// Wire up contract operations via your LumenFlowClient.
+const ops: RefundOps = {
+  getRefund:      (id)    => client.getRefund(id),
+  initiateRefund: (p)     => client.initiateRefund(p),
+  approveRefund:  (c, id) => client.approveRefund(c, id),
+  executeRefund:  (id)    => client.executeRefund(id),
+};
+
+const result = await recoverRefund(ops, {
+  refundId: 'REFUND_001',
+  orderId:  'ORDER_001',
+  amount:   BigInt(5_000_000),
+  reason:   'duplicate charge',
+  caller:   merchantKeypair.publicKey(),
+});
+
+console.log(result.finalStatus);   // 'Completed'
+console.log(result.stepsApplied);  // e.g. ['approve', 'execute']
+```
+
+### Finding stuck pending refunds
+
+Use `findStuckRefunds` to discover refunds stuck in `Pending` state beyond a configurable age threshold. The helper returns only refunds that are older than `thresholdMs` milliseconds and still in `Pending` status.
+
+```typescript
+import { findStuckRefunds } from '@lumenflow/sdk';
+
+const stuck = await findStuckRefunds({
+  // Fetch a page of refunds from your data source.
+  listRefunds: (cursor) => client.getRefunds({ cursor, limit: 50 }),
+  // Treat refunds older than 1 hour as stuck.
+  thresholdMs: 60 * 60 * 1000,
+});
+
+for (const refund of stuck) {
+  console.log(`Stuck refund: ${refund.id} (created ${refund.createdAt})`);
+}
+```
+
+### Retrying a stuck refund
+
+Once you have identified stuck refunds, pass each one to `recoverRefund`:
+
+```typescript
+import { recoverRefund, RefundRecoveryError, RetryExhaustedError } from '@lumenflow/sdk';
+
+for (const refund of stuck) {
+  try {
+    const result = await recoverRefund(ops, {
+      refundId: refund.id,
+      orderId:  refund.orderId,
+      amount:   refund.amount,
+      reason:   refund.reason,
+      caller:   merchantKeypair.publicKey(),
+      // Drive all the way through to Completed.
+      targetPhase: 'executed',
+      // Retry each step up to 3 times on transient errors.
+      maxRetriesPerStep: 3,
+      backoff: { baseDelayMs: 1000, maxDelayMs: 30_000, jitter: true },
+    });
+    console.log(`Recovered ${refund.id}: ${result.finalStatus}`);
+  } catch (err) {
+    if (err instanceof RefundRecoveryError) {
+      // Rejected or Disputed — requires human review.
+      console.error(`Manual action needed for ${refund.id}: ${err.message}`);
+    } else if (err instanceof RetryExhaustedError) {
+      // All retries exhausted — log and alert.
+      console.error(`Retry limit hit for step '${err.step}' on ${refund.id}`);
+    } else {
+      throw err;
+    }
+  }
+}
+```
+
+### Partial recovery
+
+To drive the refund only to a specific phase (e.g. `approved` but not yet `executed`), set `targetPhase`:
+
+```typescript
+await recoverRefund(ops, {
+  refundId: 'REFUND_001',
+  orderId:  'ORDER_001',
+  amount:   BigInt(5_000_000),
+  reason:   'duplicate charge',
+  caller:   merchantKeypair.publicKey(),
+  targetPhase: 'approved', // stop after approval, before execution
+});
+```
+
+### API reference
+
+| Export | Description |
+|--------|-------------|
+| `recoverRefund(ops, params)` | Reconciles and resumes an interrupted refund. Safe to call repeatedly and on already-completed refunds. |
+| `findStuckRefunds(options)` | Returns refunds in `Pending` state older than the configured threshold. |
+| `RefundRecoveryError` | Thrown when the refund is `Rejected`/`Disputed` or cannot converge. |
+| `RetryExhaustedError` | Thrown when all per-step retry attempts are exhausted. |
+| `computeBackoffDelay` | Utility for computing exponential backoff delay with optional jitter. |
+| `defaultIsTransient` | Default heuristic: `LumenFlowError` is permanent; network/timeout errors are transient. |
+
+See `sdk/src/refundRecovery.ts` for full type definitions and `sdk/src/tests/refundRecovery.test.ts` for usage examples.
