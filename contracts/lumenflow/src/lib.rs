@@ -237,6 +237,32 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Set the maximum number of signers allowed per multisig payment (issue #1269).
+    ///
+    /// Calls to `initiate_multisig_payment` with a `signers` list longer than this
+    /// limit will be rejected with [`PaymentError::TooManySigners`].
+    ///
+    /// # Arguments
+    /// * `admin`     - Must be the current contract administrator.
+    /// * `max_signers` - New upper bound (must be ≥ 1).
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — caller is not the admin.
+    /// * [`PaymentError::InvalidInput`] — `max_signers` is 0.
+    pub fn set_max_signers(
+        env: Env,
+        admin: Address,
+        max_signers: u32,
+    ) -> Result<(), PaymentError> {
+        require_admin_rate_limited(&env, &admin)?;
+        if max_signers == 0 {
+            return Err(PaymentError::InvalidInput);
+        }
+        storage::set_max_multisig_signers(&env, max_signers);
+        env.events().publish(("lumenflow", "max_signers_updated"), max_signers);
+        Ok(())
+    }
+
     /// Set the refund window in seconds (default 30 days). Admin only.
     pub fn set_refund_window(
         env: Env,
@@ -2788,6 +2814,12 @@ impl PaymentProcessingContract {
         }
         if required_signatures > signers.len() {
             return Err(PaymentError::InvalidInput);
+        }
+
+        // Enforce configurable maximum signers limit (issue #1269).
+        let max_signers = storage::get_max_multisig_signers(&env);
+        if signers.len() > max_signers {
+            return Err(PaymentError::TooManySigners);
         }
 
         if !storage::is_token_allowed(&env, &token_address) {
