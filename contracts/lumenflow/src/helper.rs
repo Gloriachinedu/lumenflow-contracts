@@ -265,13 +265,18 @@ pub fn require_non_empty_string(s: &String) -> Result<(), PaymentError> {
     }
 }
 
-/// Validate an ID field: non-empty and at most 64 characters.
+/// Validate an `order_id` field: non-empty and at most 64 characters.
+///
+/// Returns [`PaymentError::InvalidOrderId`] when the string is empty and
+/// [`PaymentError::OrderIdTooLong`] when it exceeds 64 characters.
 pub fn require_valid_id(id: &String) -> Result<(), PaymentError> {
-    if id.len() == 0 || id.len() > 64 {
-        Err(PaymentError::InvalidInput)
-    } else {
-        Ok(())
+    if id.len() == 0 {
+        return Err(PaymentError::InvalidOrderId);
     }
+    if id.len() > 64 {
+        return Err(PaymentError::OrderIdTooLong);
+    }
+    Ok(())
 }
 
 pub fn validate_tags(tags: &Option<Vec<String>>) -> Result<(), PaymentError> {
@@ -362,5 +367,50 @@ mod timing_safe_tests {
                 "Expected false when byte at position {diff_pos} differs"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod order_id_validation_tests {
+    use super::require_valid_id;
+    use soroban_sdk::String as SorobanString;
+    use soroban_sdk::Env;
+
+    fn make_string(env: &Env, s: &str) -> SorobanString {
+        SorobanString::from_str(env, s)
+    }
+
+    /// order_id of exactly 63 characters is accepted — boundary below max.
+    #[test]
+    fn test_order_id_63_chars_accepted() {
+        let env = Env::default();
+        let id = make_string(&env, &"a".repeat(63));
+        assert!(require_valid_id(&id).is_ok());
+    }
+
+    /// order_id of exactly 64 characters is accepted — at the max boundary.
+    #[test]
+    fn test_order_id_64_chars_accepted() {
+        let env = Env::default();
+        let id = make_string(&env, &"a".repeat(64));
+        assert!(require_valid_id(&id).is_ok());
+    }
+
+    /// order_id of 65 characters returns OrderIdTooLong.
+    #[test]
+    fn test_order_id_65_chars_too_long() {
+        use crate::error::PaymentError;
+        let env = Env::default();
+        let id = make_string(&env, &"a".repeat(65));
+        assert_eq!(require_valid_id(&id), Err(PaymentError::OrderIdTooLong));
+    }
+
+    /// Empty order_id returns InvalidOrderId.
+    #[test]
+    fn test_order_id_empty_invalid() {
+        use crate::error::PaymentError;
+        let env = Env::default();
+        let id = make_string(&env, "");
+        assert_eq!(require_valid_id(&id), Err(PaymentError::InvalidOrderId));
     }
 }

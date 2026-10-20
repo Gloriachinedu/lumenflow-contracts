@@ -81,5 +81,14 @@ infra/terraform/*.tfvars
 *.bak
 *.cache
 
+# ── Snapshot update temporaries ───────────────────────────────────────────────
+**/*.snap.new
+
+# ── Turborepo ─────────────────────────────────────────────────────────────────
+.turbo/
+
+# ── TypeScript build info ─────────────────────────────────────────────────────
+*.tsbuildinfo
+
 # ── Package manager lock files (keep these, exclude only redundant artifacts) ─
 # (Cargo.lock and package-lock.json are intentionally committed)
