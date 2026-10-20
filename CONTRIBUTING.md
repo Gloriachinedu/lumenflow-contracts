@@ -152,6 +152,118 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo build --target wasm32-unknown-unknown --release
 ```
 
+## Git Hooks
+
+The `.githooks/` directory contains two Git hooks that are installed locally
+when you run the setup command below.  They run automatically before each
+commit and catch common mistakes early, before code reaches CI.
+
+### Installation
+
+Run this once after cloning the repository:
+
+```bash
+./scripts/install_hooks.sh
+```
+
+The script symlinks `.githooks/pre-commit` and `.githooks/commit-msg` into
+`.git/hooks/` and ensures both are executable.
+
+### `commit-msg` — Conventional Commits format
+
+The `commit-msg` hook validates every commit message against the
+[Conventional Commits](https://www.conventionalcommits.org/) specification.
+It rejects messages that do not match the pattern:
+
+```
+<type>[(scope)][!]: <subject>
+```
+
+Valid types are: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `ci`,
+`chore`, `perf`, `revert`, `security`, `build`.
+
+The hook also rejects header lines longer than 100 characters.
+
+Example of a valid commit message:
+
+```
+feat(payments): add batch processing endpoint
+```
+
+### `pre-commit` — Lint and secret scanning
+
+The `pre-commit` hook runs two checks before every commit:
+
+1. **Secret scanning** — runs [gitleaks](https://github.com/gitleaks/gitleaks)
+   against the repository using `.gitleaks.toml` to detect accidentally staged
+   secrets (API keys, private keys, tokens, etc.).
+2. **Rust lint** — runs `cargo fmt --check` and
+   `cargo clippy -- -D warnings` to catch formatting and lint regressions
+   before they reach CI.
+
+Both checks must pass for the commit to be recorded.
+
+> **Emergency escape hatch:** if you need to commit without the secret scan
+> (e.g., to fix a broken hook configuration), set `SKIP_SECRET_SCAN=1`:
+> ```bash
+> SKIP_SECRET_SCAN=1 git commit -m "ci: fix hook configuration"
+> ```
+> Use this sparingly — the scan exists to prevent credential leaks.
+
+### Troubleshooting
+
+**Hook not running at all**
+
+Check that the hook files are executable:
+
+```bash
+ls -la .githooks/
+```
+
+Both `pre-commit` and `commit-msg` must have execute permission (`-rwxr-xr-x`).
+If they do not, re-run the install script:
+
+```bash
+./scripts/install_hooks.sh
+```
+
+**Commit rejected for bad message format**
+
+The `commit-msg` hook prints the reason for rejection and an example.  A valid
+conventional commit looks like:
+
+```
+fix(refunds): prevent duplicate refund_id on initiation
+```
+
+If your commit covers multiple concerns, split it into separate commits — one
+per logical change — or use the multi-line body format:
+
+```
+feat: resolve issues #1337 #1338
+
+- #1337: add confirmation dialog modal to multisig.html
+- #1338: add Git Hooks section to CONTRIBUTING.md
+```
+
+**Secret scan false positive**
+
+If gitleaks flags a string that is not a real secret (e.g., a test fixture or
+a documentation example), add an exception to `.gitleaksignore` in the
+repository root:
+
+```
+# .gitleaksignore
+# False positive: test fixture public key — not a real credential
+abc123def456...  # git object hash of the flagged commit
+```
+
+Alternatively, add an `[allowlist]` entry to `.gitleaks.toml` for a path or
+regex pattern that should always be ignored.  Open a PR with a comment
+explaining why the exception is safe.
+
+---
+
 ## Contribution Guidelines
 
 ### Translations

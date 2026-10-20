@@ -65,6 +65,9 @@ lcov.info
 # Local backup bundles (produced by scripts/backup-manager.mjs)
 backup-bundle/
 
+# Generated benchmark regression report (produced by scripts/check-benchmark-regression.sh)
+benchmark-results.md
+
 # Smoke test ephemeral npm cache
 scripts/.smoke_node_modules/
 

@@ -1,3 +1,5 @@
+> Decision criteria and governance process for this backlog are documented in [ADR-008](adr/ADR-008-supported-asset-expansion.md).
+
 # Prioritized Backlog for Supported Asset Expansion
 
 **Issue:** [#907](https://github.com/Gloriachinedu/lumenflow-contracts/issues/907)

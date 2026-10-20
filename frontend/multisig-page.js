@@ -387,22 +387,148 @@
     }
   }
 
+  // ── Confirmation modal (#1337) ─────────────────────────────────────────────
+  //
+  // Shows a summary dialog before the user commits the multisig payment
+  // on-chain.  Supports keyboard accessibility:
+  //   • Focus is trapped inside the modal while it is open.
+  //   • Escape closes the modal without submitting.
+  //   • Focus moves to the Cancel button when the modal opens and returns to
+  //     the submit button when it closes.
+
+  /** @type {HTMLElement | null} — element that had focus before modal opened */
+  let _modalReturnFocus = null;
+
+  /**
+   * Open the confirmation modal and populate the review fields.
+   * @param {{ merchantAddress: string, amount: string|number, tokenAddress: string, signers: string[], required: number }} details
+   */
+  function showConfirmModal({ merchantAddress, amount, tokenAddress, signers, required }) {
+    const modal = document.getElementById('confirmModal');
+    document.getElementById('confirmMerchant').textContent = merchantAddress;
+    document.getElementById('confirmAmount').textContent   = amount.toString();
+    document.getElementById('confirmToken').textContent    = tokenAddress;
+    document.getElementById('confirmSigners').textContent  = `${required} of ${signers.length}`;
+
+    // Record the element to restore focus to on close.
+    _modalReturnFocus = document.getElementById('submit-btn');
+
+    modal.style.display = 'flex';
+
+    // Move focus to Cancel button as initial focus target.
+    document.getElementById('confirmModalCancel').focus();
+  }
+
+  /** Hide the confirmation modal and restore focus. */
+  function hideConfirmModal() {
+    const modal = document.getElementById('confirmModal');
+    modal.style.display = 'none';
+    if (_modalReturnFocus) {
+      _modalReturnFocus.focus();
+      _modalReturnFocus = null;
+    }
+  }
+
+  /**
+   * Trap Tab / Shift-Tab focus within the modal.
+   * @param {KeyboardEvent} e
+   */
+  function _handleModalKeydown(e) {
+    const modal = document.getElementById('confirmModal');
+    if (modal.style.display === 'none') return;
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      hideConfirmModal();
+      return;
+    }
+
+    if (e.key !== 'Tab') return;
+
+    // Collect all focusable elements inside the modal content.
+    const focusable = Array.from(
+      modal.querySelectorAll(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      )
+    ).filter(el => !el.disabled && el.offsetParent !== null);
+
+    if (focusable.length === 0) { e.preventDefault(); return; }
+
+    const first = focusable[0];
+    const last  = focusable[focusable.length - 1];
+
+    if (e.shiftKey) {
+      if (document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      }
+    } else {
+      if (document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  }
+
+  // Attach modal event listeners once on init.
+  document.addEventListener('keydown', _handleModalKeydown);
+
+  document.getElementById('confirmModalBackdrop').addEventListener('click', () => {
+    hideConfirmModal();
+  });
+
+  document.getElementById('confirmModalCancel').addEventListener('click', () => {
+    hideConfirmModal();
+  });
+
+  // The Confirm button delegates to the actual submission logic captured in a
+  // closure below (set by showConfirmModal callers via _pendingSubmit).
+  /** @type {(() => void) | null} */
+  let _pendingSubmit = null;
+
+  document.getElementById('confirmModalConfirm').addEventListener('click', () => {
+    hideConfirmModal();
+    if (_pendingSubmit) {
+      const fn = _pendingSubmit;
+      _pendingSubmit = null;
+      fn();
+    }
+  });
+
   // ── Submit ─────────────────────────────────────────────────────────────────
 
   async function submitForm() {
     if (!validateForm()) return;
 
+    const paymentId       = document.getElementById('payment-id').value.trim();
+    const merchantAddress = document.getElementById('merchant-address').value.trim();
+    const tokenAddress    = document.getElementById('token-address').value.trim();
+    const amount          = Number(document.getElementById('amount').value.trim());
+    const signers         = getSignerValues();
+    const required        = parseInt(document.getElementById('required-sigs').value, 10);
+
+    // Show the confirmation modal.  The actual RPC call is deferred until the
+    // user clicks "Confirm & Submit".
+    _pendingSubmit = () => _doSubmit({ paymentId, merchantAddress, tokenAddress, amount, signers, required });
+    showConfirmModal({ merchantAddress, amount, tokenAddress, signers, required });
+  }
+
+  /**
+   * Perform the actual multisig initiation after modal confirmation.
+   */
+  async function _doSubmit({ paymentId, merchantAddress, tokenAddress, amount, signers, required }) {
+    // Idempotency guard: reject any concurrent submission attempt.
+    if (_submitting) return;
+    _submitting = true;
+
     const btn = document.getElementById('submit-btn');
     btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
     btn.textContent = 'Initiating…';
 
-    const paymentId      = document.getElementById('payment-id').value.trim();
-    const merchantAddress = document.getElementById('merchant-address').value.trim();
-    const tokenAddress   = document.getElementById('token-address').value.trim();
-    // Number() matches validateAmount; parseInt would read '1e3' as 1.
-    const amount         = Number(document.getElementById('amount').value.trim());
-    const signers        = getSignerValues();
-    const required       = parseInt(document.getElementById('required-sigs').value, 10);
+    // Clear any previous alert
+    const alertEl = document.getElementById('form-alert');
+    alertEl.style.display = 'none';
 
     const result = await callInitiateMultisig({ paymentId, merchantAddress, tokenAddress, amount, signers, required });
 
@@ -412,15 +538,18 @@
       alert.className   = 'alert alert-error';
       alert.style.display = 'block';
       btn.disabled = false;
+      btn.removeAttribute('aria-busy');
       btn.textContent = 'Initiate Payment';
+      _submitting = false;
       return;
     }
 
-    // Store state and show progress panel
+    // Store state and show progress panel.
     state = { paymentId, merchantAddress, tokenAddress, amount, signers, required, signatures: new Set() };
     document.getElementById('form-panel').style.display = 'none';
     renderProgress();
     document.getElementById('progress-panel').style.display = 'block';
+    _submitting = false;
   }
 
   // ── Progress ───────────────────────────────────────────────────────────────
