@@ -285,7 +285,93 @@
             },
             "description": "Opens a refund request for an existing payment. Caller must be the payer or merchant.\n\n**Refund rules:**\n- Window: 30 days from `paid_at`\n- Partial refunds allowed; cumulative total cannot exceed original payment amount\n- Max refunds per order: `MaxRefundsPerOrder` (default 5)\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $CALLER_SECRET \\\n  -- initiate_refund \\\n  --caller $CALLER_ADDRESS \\\n  --refund_id \"REFUND_001\" \\\n  --order_id \"ORDER_001\" \\\n  --amount 500 \\\n  --reason \"Customer request\"\n```\n\n**Expected response:** `null`\n\n**Errors:** `Unauthorized`, `PaymentNotFound`, `RefundWindowExpired`, `RefundLimitExceeded`, `AmountExceedsPayment`"
           },
-          "response": []
+          "response": [
+            {
+              "name": "Success — Refund initiated (Pending)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": "{{RPC_URL}}",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 30,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $CALLER_SECRET -- initiate_refund --caller $CALLER_ADDRESS --refund_id REFUND_001 --order_id ORDER_001 --amount 500 --reason 'Customer request'>\"\n  }\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\"jsonrpc\":\"2.0\",\"id\":30,\"result\":{\"results\":[{\"xdr\":\"AAAAAA==\"}],\"cost\":{\"cpuInsns\":\"750000\",\"memBytes\":\"2048\"},\"latestLedger\":12345}}"
+            },
+            {
+              "name": "Error — Payment not found",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": "{{RPC_URL}}",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 30,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: ... --order_id NONEXISTENT_ORDER ...>\"\n  }\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\"jsonrpc\":\"2.0\",\"id\":30,\"result\":{\"error\":\"HostError: Error(Contract, #4)\",\"retval\":null}}"
+            },
+            {
+              "name": "Error — Refund window expired (> 30 days after payment)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": "{{RPC_URL}}",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 30,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: ... --order_id ORDER_OLDER_THAN_30_DAYS ...>\"\n  }\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\"jsonrpc\":\"2.0\",\"id\":30,\"result\":{\"error\":\"HostError: Error(Contract, #14)\",\"retval\":null}}"
+            },
+            {
+              "name": "Error — Refund amount exceeds original payment",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": "{{RPC_URL}}",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 30,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: ... --amount 999999 ...>\"\n  }\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\"jsonrpc\":\"2.0\",\"id\":30,\"result\":{\"error\":\"HostError: Error(Contract, #13)\",\"retval\":null}}"
+            },
+            {
+              "name": "Error — Unauthorized (caller is neither payer nor merchant)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": "{{RPC_URL}}",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 30,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: ... --caller UNAUTHORIZED_ADDRESS ...>\"\n  }\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\"jsonrpc\":\"2.0\",\"id\":30,\"result\":{\"error\":\"HostError: Error(Contract, #1)\",\"retval\":null}}"
+            }
+          ]
         },
         {
           "name": "Approve Refund",
@@ -299,7 +385,76 @@
             },
             "description": "Approves a pending refund. Caller must be the merchant or admin.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $MERCHANT_SECRET \\\n  -- approve_refund \\\n  --caller $MERCHANT_ADDRESS \\\n  --refund_id \"REFUND_001\"\n```\n\n**Expected response:** `null`\n\n**Errors:** `Unauthorized`, `RefundNotFound`, `InvalidRefundStatus` (must be Pending)"
           },
-          "response": []
+          "response": [
+            {
+              "name": "Success — Refund approved (status → Approved)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": "{{RPC_URL}}",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 31,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $MERCHANT_SECRET -- approve_refund --caller {{MERCHANT_ADDRESS}} --refund_id REFUND_001>\"\n  }\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\"jsonrpc\":\"2.0\",\"id\":31,\"result\":{\"results\":[{\"xdr\":\"AAAAAA==\"}],\"cost\":{\"cpuInsns\":\"600000\",\"memBytes\":\"1536\"},\"latestLedger\":12346}}"
+            },
+            {
+              "name": "Error — Refund not found",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": "{{RPC_URL}}",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 31,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: ... --refund_id NONEXISTENT_REFUND ...>\"\n  }\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\"jsonrpc\":\"2.0\",\"id\":31,\"result\":{\"error\":\"HostError: Error(Contract, #10)\",\"retval\":null}}"
+            },
+            {
+              "name": "Error — Invalid refund status (not Pending — already Approved or Rejected)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": "{{RPC_URL}}",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 31,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: ... --refund_id REFUND_ALREADY_APPROVED ...>\"\n  }\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\"jsonrpc\":\"2.0\",\"id\":31,\"result\":{\"error\":\"HostError: Error(Contract, #11)\",\"retval\":null}}"
+            },
+            {
+              "name": "Error — Unauthorized (caller is not the merchant or admin)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": "{{RPC_URL}}",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 31,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: ... --caller PAYER_ADDRESS (not merchant) ...>\"\n  }\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\"jsonrpc\":\"2.0\",\"id\":31,\"result\":{\"error\":\"HostError: Error(Contract, #1)\",\"retval\":null}}"
+            }
+          ]
         },
         {
           "name": "Reject Refund",
@@ -313,7 +468,76 @@
             },
             "description": "Rejects a pending refund. Caller must be the merchant or admin.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $MERCHANT_SECRET \\\n  -- reject_refund \\\n  --caller $MERCHANT_ADDRESS \\\n  --refund_id \"REFUND_001\"\n```\n\n**Expected response:** `null`\n\n**Errors:** `Unauthorized`, `RefundNotFound`, `InvalidRefundStatus` (must be Pending)"
           },
-          "response": []
+          "response": [
+            {
+              "name": "Success — Refund rejected (status → Rejected)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": "{{RPC_URL}}",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 32,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $MERCHANT_SECRET -- reject_refund --caller {{MERCHANT_ADDRESS}} --refund_id REFUND_001>\"\n  }\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\"jsonrpc\":\"2.0\",\"id\":32,\"result\":{\"results\":[{\"xdr\":\"AAAAAA==\"}],\"cost\":{\"cpuInsns\":\"600000\",\"memBytes\":\"1536\"},\"latestLedger\":12347}}"
+            },
+            {
+              "name": "Error — Refund not found",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": "{{RPC_URL}}",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 32,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: ... --refund_id NONEXISTENT_REFUND ...>\"\n  }\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\"jsonrpc\":\"2.0\",\"id\":32,\"result\":{\"error\":\"HostError: Error(Contract, #10)\",\"retval\":null}}"
+            },
+            {
+              "name": "Error — Invalid refund status (already Rejected or Completed)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": "{{RPC_URL}}",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 32,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: ... --refund_id REFUND_ALREADY_REJECTED ...>\"\n  }\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\"jsonrpc\":\"2.0\",\"id\":32,\"result\":{\"error\":\"HostError: Error(Contract, #11)\",\"retval\":null}}"
+            },
+            {
+              "name": "Error — Unauthorized (caller is not the merchant or admin)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": "{{RPC_URL}}",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 32,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: ... --caller PAYER_ADDRESS (not merchant) ...>\"\n  }\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\"jsonrpc\":\"2.0\",\"id\":32,\"result\":{\"error\":\"HostError: Error(Contract, #1)\",\"retval\":null}}"
+            }
+          ]
         },
         {
           "name": "Execute Refund",
@@ -327,7 +551,93 @@
             },
             "description": "Executes an approved refund, transferring tokens from merchant back to payer. Caller must be the merchant (who signs the token transfer).\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $MERCHANT_SECRET \\\n  -- execute_refund \\\n  --refund_id \"REFUND_001\"\n```\n\n**Expected response:** `null`\n\n**Errors:** `Unauthorized`, `RefundNotFound`, `InvalidRefundStatus` (must be Approved), `InsufficientBalance`"
           },
-          "response": []
+          "response": [
+            {
+              "name": "Success — Refund executed (status → Completed, funds returned to payer)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": "{{RPC_URL}}",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 33,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $MERCHANT_SECRET -- execute_refund --refund_id REFUND_001>\"\n  }\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\"jsonrpc\":\"2.0\",\"id\":33,\"result\":{\"results\":[{\"xdr\":\"AAAAAA==\"}],\"cost\":{\"cpuInsns\":\"1200000\",\"memBytes\":\"3072\"},\"latestLedger\":12348}}"
+            },
+            {
+              "name": "Error — Refund not found",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": "{{RPC_URL}}",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 33,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: ... --refund_id NONEXISTENT_REFUND ...>\"\n  }\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\"jsonrpc\":\"2.0\",\"id\":33,\"result\":{\"error\":\"HostError: Error(Contract, #10)\",\"retval\":null}}"
+            },
+            {
+              "name": "Error — Invalid refund status (must be Approved, not Pending or Rejected)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": "{{RPC_URL}}",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 33,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: ... --refund_id REFUND_STILL_PENDING ...>\"\n  }\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\"jsonrpc\":\"2.0\",\"id\":33,\"result\":{\"error\":\"HostError: Error(Contract, #11)\",\"retval\":null}}"
+            },
+            {
+              "name": "Error — Insufficient balance (merchant does not have enough tokens)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": "{{RPC_URL}}",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 33,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: ... (merchant balance < refund amount) ...>\"\n  }\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\"jsonrpc\":\"2.0\",\"id\":33,\"result\":{\"error\":\"HostError: Error(WasmVm, InvalidAction)\",\"retval\":null}}"
+            },
+            {
+              "name": "Error — Contract paused",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": "{{RPC_URL}}",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 33,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: ... (contract is paused) ...>\"\n  }\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\"jsonrpc\":\"2.0\",\"id\":33,\"result\":{\"error\":\"HostError: Error(Contract, #20)\",\"retval\":null}}"
+            }
+          ]
         },
         {
           "name": "Get Refund",
