@@ -1,55 +1,339 @@
-/* Minimal merchant refunds UI logic
-   - Tabs for statuses
-   - Approve / Reject with confirm modal
-   - Execute (calls wallet if connected)
-   - Wallet modal with Freighter / Albedo handlers
-   - Polling for updates (mocked fetch)
+/* Merchant refunds dashboard
+   - Connects to LumenFlowClient SDK in live mode
+   - Falls back to mock data in demo mode (no CONTRACT_ID configured)
+   - Tabs for Pending / Approved / Rejected / Completed
+   - Approve / Reject / Execute wired to real contract calls via Freighter
+   - Errors mapped to human-readable messages via ERROR_MESSAGES
+   - Dark mode toggle synced with localStorage key 'lumenflow_theme'
+   - CSV export of the current filtered view
 */
 
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/** Base URL for the receipt page, relative to this dashboard's origin.
+ *  Adjust if receipt.html lives at a different path. */
+const RECEIPT_BASE_URL = (() => {
+  const { origin, pathname } = window.location;
+  // Derive the frontend root: strip dashboard/merchant-dashboard/ suffix
+  const root = pathname.replace(/\/dashboard\/merchant-dashboard\/?.*$/, '');
+  return `${origin}${root}/frontend/receipt.html`;
+})();
+
+// ── Shared state ──────────────────────────────────────────────────────────────
+
 const state = {
-  status: 'pending',
-  refunds: [],
-  wallet: null,
+  status: 'pending',  // lowercase to match tab data-status; comparisons are case-insensitive
+  refunds: [],        // RefundRecord[]
+  wallet: null,  // { type: 'freighter', account: string }
+  client: null,  // LumenFlowClient | null
 };
 
-const accountEl = document.getElementById('account');
-const tableBody = document.querySelector('#refundsTable tbody');
-const emptyEl = document.getElementById('empty');
+// ── DOM refs ──────────────────────────────────────────────────────────────────
 
+const accountEl  = document.getElementById('account');
+const tableBody  = document.querySelector('#refundsTable tbody');
+const emptyEl    = document.getElementById('empty');
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  PAYMENT LINK GENERATOR
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Returns true when the `expires` timestamp encoded in a payment link URL has
+ * already passed.
+ *
+ * @param {string|URL} url - The full payment link URL.
+ * @returns {boolean}
+ */
+function isLinkExpired(url) {
+  try {
+    const params = new URLSearchParams(typeof url === 'string' ? new URL(url).search : url.search);
+    const expires = parseInt(params.get('expires'), 10);
+    if (!expires || isNaN(expires)) return false; // no expiry = never expires
+    return Date.now() > expires;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Builds a shareable payment URL that pre-fills receipt.html.
+ *
+ * Encoded parameters:
+ *   merchant    – merchant Stellar address
+ *   token       – token / asset address
+ *   amount      – amount in stroops
+ *   order_id    – unique order identifier
+ *   memo        – optional payment memo
+ *   expires     – Unix timestamp (ms) after which the link is considered expired
+ *
+ * @param {{merchant:string, token:string, amount:string|number, orderId:string, memo:string, ttlHours:number}} opts
+ * @returns {string} The generated URL.
+ */
+function generatePaymentLink({ merchant, token, amount, orderId, memo, ttlHours }) {
+  const ttl = Math.max(1, parseInt(ttlHours, 10) || 24);
+  const expires = Date.now() + ttl * 60 * 60 * 1000;
+
+  const params = new URLSearchParams();
+  params.set('merchant',  merchant.trim());
+  params.set('token',     token.trim());
+  params.set('amount',    String(amount).trim());
+  params.set('order_id',  orderId.trim());
+  if (memo && memo.trim()) params.set('memo', memo.trim());
+  params.set('expires',   String(expires));
+
+  return `${RECEIPT_BASE_URL}?${params.toString()}`;
+}
+
+// QR code instance — keep a reference so we can clear and re-render
+let qrInstance = null;
+
+/**
+ * Renders a QR code into #plg-qr using the qrcode.js library loaded from CDN.
+ * Falls back to a plain text notice if the library is unavailable.
+ *
+ * @param {string} url
+ */
+function renderQRCode(url) {
+  const container = document.getElementById('plg-qr');
+  container.innerHTML = ''; // clear previous
+
+  if (typeof QRCode === 'undefined') {
+    container.textContent = 'QR library not loaded. Please check your internet connection.';
+    return;
+  }
+
+  qrInstance = new QRCode(container, {
+    text:         url,
+    width:        192,
+    height:       192,
+    colorDark:    '#0b1726',
+    colorLight:   '#ffffff',
+    correctLevel: QRCode.CorrectLevel.M,
+  });
+}
+
+/**
+ * Validates the payment link form and, on success, generates the URL, renders
+ * the QR code, and shows the result area.
+ */
+function handleGenerateLink(e) {
+  e.preventDefault();
+
+  const merchant = document.getElementById('plg-merchant').value.trim();
+  const token    = document.getElementById('plg-token').value.trim();
+  const amount   = document.getElementById('plg-amount').value.trim();
+  const orderId  = document.getElementById('plg-order-id').value.trim();
+  const memo     = document.getElementById('plg-memo').value.trim();
+  const ttlHours = document.getElementById('plg-ttl').value.trim();
+
+  // Basic validation
+  const errors = [];
+  if (!merchant) errors.push('Merchant address is required.');
+  if (!token)    errors.push('Token address is required.');
+  if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) errors.push('A positive amount is required.');
+  if (!orderId)  errors.push('Order ID is required.');
+
+  if (errors.length) {
+    alert(errors.join('\n'));
+    return;
+  }
+
+  const url = generatePaymentLink({ merchant, token, amount, orderId, memo, ttlHours });
+
+  // Show the result panel
+  const resultEl = document.getElementById('plg-result');
+  resultEl.hidden = false;
+
+  // Populate the URL textarea
+  const outputEl = document.getElementById('plg-url-output');
+  outputEl.value = url;
+
+  // Expiry note
+  const ttl = Math.max(1, parseInt(ttlHours, 10) || 24);
+  const expiresAt = new Date(Date.now() + ttl * 60 * 60 * 1000);
+  document.getElementById('plg-expiry-note').textContent =
+    `⏱ Expires: ${expiresAt.toLocaleString()} (${ttl} hour${ttl !== 1 ? 's' : ''} from now)`;
+
+  // Render QR code
+  renderQRCode(url);
+
+  // Scroll result into view smoothly
+  resultEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+/**
+ * Copies the generated payment link to the user's clipboard.
+ */
+function handleCopyLink() {
+  const url = document.getElementById('plg-url-output').value;
+  if (!url) return;
+
+  const btn = document.getElementById('copyLinkBtn');
+
+  const onSuccess = () => {
+    btn.textContent = '✅ Copied!';
+    setTimeout(() => { btn.textContent = '📋 Copy Link'; }, 2000);
+  };
+
+  const onFailure = () => {
+    // Graceful degradation: select the textarea for manual copy
+    const ta = document.getElementById('plg-url-output');
+    ta.select();
+    ta.setSelectionRange(0, 99999);
+    try {
+      document.execCommand('copy');
+      onSuccess();
+    } catch {
+      prompt('Copy this link manually:', url);
+    }
+  };
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(onSuccess).catch(onFailure);
+  } else {
+    onFailure();
+  }
+}
+
+/**
+ * Downloads the rendered QR code as a PNG file.
+ * The qrcode.js library renders a <canvas> element inside #plg-qr — we grab
+ * that canvas, convert it to a data URL, and trigger a browser download.
+ */
+function handleDownloadQr() {
+  const container = document.getElementById('plg-qr');
+  const canvas = container.querySelector('canvas');
+
+  if (!canvas) {
+    // qrcode.js may render an <img> instead of a <canvas> in some environments
+    const img = container.querySelector('img');
+    if (img) {
+      // Create a temporary canvas to export the image
+      const tmpCanvas = document.createElement('canvas');
+      tmpCanvas.width  = img.naturalWidth  || img.width  || 192;
+      tmpCanvas.height = img.naturalHeight || img.height || 192;
+      const ctx = tmpCanvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      triggerQrDownload(tmpCanvas);
+    } else {
+      alert('QR code not yet generated. Please generate a payment link first.');
+    }
+    return;
+  }
+
+  triggerQrDownload(canvas);
+}
+
+/**
+ * Triggers a PNG download from a canvas element.
+ * @param {HTMLCanvasElement} canvas
+ */
+function triggerQrDownload(canvas) {
+  const dataUrl = canvas.toDataURL('image/png');
+  const link = document.createElement('a');
+  link.href = dataUrl;
+  link.download = 'lumenflow-payment-qr.png';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+// Wire up payment link form events
+document.getElementById('paymentLinkForm').addEventListener('submit', handleGenerateLink);
+document.getElementById('copyLinkBtn').addEventListener('click', handleCopyLink);
+document.getElementById('downloadQrBtn').addEventListener('click', handleDownloadQr);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  REFUND MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Show an inline error banner below the tab bar. Clears after 8 s. */
+function showError(msg) {
+  let banner = document.getElementById('errorBanner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'errorBanner';
+    banner.setAttribute('role', 'alert');
+    banner.style.cssText = [
+      'padding:0.6rem 1rem', 'margin:0.5rem 0',
+      'background:#f8d7da', 'color:#58151c',
+      'border:1px solid #f1aeb5', 'border-radius:4px',
+      'font-size:0.9rem',
+    ].join(';');
+    const content = document.getElementById('content');
+    content.parentNode.insertBefore(banner, content);
+  }
+  banner.textContent = `⚠ ${msg}`;
+  banner.style.display = 'block';
+  clearTimeout(banner._timer);
+  banner._timer = setTimeout(() => { banner.style.display = 'none'; }, 8000);
+}
+
+// ── Formatting ────────────────────────────────────────────────────────────────
+function formatAmount(amount, token) {
+  // Use 7 decimals for XLM / native; 6 for USDC; 7 as default
+  const isUsdc = typeof token === 'string' && token.length > 10;
+  const decimals = isUsdc ? 6 : 7;
+  const symbol   = isUsdc ? 'USDC' : 'XLM';
+  const value    = Number(amount) / Math.pow(10, decimals);
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: decimals,
+  }) + ` ${symbol}`;
+}
+
+function formatDate(ts) {
+  return new Date(Number(ts) * 1000).toLocaleString();
+}
+
+function shorten(addr) {
+  return addr ? addr.slice(0, 6) + '…' + addr.slice(-4) : '—';
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
 function setStatus(status) {
   state.status = status;
   document.querySelectorAll('.tabs .tab').forEach(btn => {
-    const s = btn.dataset.status;
-    btn.setAttribute('aria-selected', s === status);
+    btn.setAttribute('aria-selected', btn.dataset.status === status);
   });
   render();
 }
 
 function render() {
-  const rows = state.refunds.filter(r => r.status === state.status);
+  // Normalise to lowercase for comparison because demo data uses RefundStatus
+  // enum strings (capitalised) and the contract returns the same strings.
+  const rows = state.refunds.filter(
+    r => (r.status || '').toLowerCase() === (state.status || '').toLowerCase()
+  );
   tableBody.innerHTML = '';
+
   if (!rows.length) {
     emptyEl.style.display = 'block';
-    document.getElementById('refundsTable').style.display = 'none';
+    tableEl.style.display = 'none';
     return;
   }
   emptyEl.style.display = 'none';
-  document.getElementById('refundsTable').style.display = 'table';
+  tableEl.style.display = 'table';
+
   rows.forEach(r => {
     const tr = document.createElement('tr');
+    const dateStr = r.createdAt ? formatDate(r.createdAt) : '—';
+    const amtStr  = formatAmount(r.amount, r.token || 'native');
     tr.innerHTML = `
-      <td>${r.id}</td>
-      <td>${r.customer}</td>
-      <td>${r.amount}</td>
+      <td>${r.refundId}</td>
+      <td title="${r.initiator || ''}">${shorten(r.initiator)}</td>
+      <td>${amtStr}</td>
       <td>${r.status}</td>
+      <td>${dateStr}</td>
       <td></td>
     `;
     const actions = tr.querySelector('td:last-child');
     if (r.status === 'pending') {
       const approve = document.createElement('button'); approve.textContent = 'Approve';
-      const reject = document.createElement('button'); reject.textContent = 'Reject';
+      const reject  = document.createElement('button'); reject.textContent  = 'Reject';
       approve.addEventListener('click', () => confirmAction('approve', r.id));
-      reject.addEventListener('click', () => confirmAction('reject', r.id));
+      reject.addEventListener('click',  () => confirmAction('reject',  r.id));
       actions.appendChild(approve); actions.appendChild(reject);
     } else if (r.status === 'approved') {
       const execute = document.createElement('button'); execute.textContent = 'Execute';
@@ -62,13 +346,13 @@ function render() {
 
 function confirmAction(action, id) {
   const modal = document.getElementById('confirmModal');
-  const text = document.getElementById('confirmText');
+  const text  = document.getElementById('confirmText');
   text.textContent = `Confirm ${action} for refund ${id}?`;
   openModal(modal);
   document.getElementById('confirmYes').onclick = async () => {
     closeModal(modal);
     if (action === 'approve') updateStatus(id, 'approved');
-    if (action === 'reject') updateStatus(id, 'rejected');
+    if (action === 'reject')  updateStatus(id, 'rejected');
     if (action === 'execute') await executeRefund(id);
   };
 }
@@ -84,12 +368,11 @@ async function executeRefund(id) {
     alert('Please connect a wallet first');
     return;
   }
-  // Attempt to sign using wallet adapters (Freighter/Albedo)
   try {
     if (state.wallet.type === 'freighter' && window.freighter) {
-      await window.freighter.signTransaction({memo: `refund:${id}`});
+      await window.freighter.signTransaction({ memo: `refund:${id}` });
     } else if (state.wallet.type === 'albedo') {
-      await window.albedo.sign({memo: `refund:${id}`});
+      await window.albedo.sign({ memo: `refund:${id}` });
     } else {
       console.warn('No wallet adapter present, simulate execute');
     }
@@ -100,25 +383,27 @@ async function executeRefund(id) {
   }
 }
 
+// ── Modal helpers ─────────────────────────────────────────────────────────────
+
 function openModal(modal) {
   modal.style.display = 'block';
   modal.setAttribute('aria-hidden', 'false');
   trapFocus(modal);
 }
+
 function closeModal(modal) {
   modal.style.display = 'none';
   modal.setAttribute('aria-hidden', 'true');
   releaseFocusTrap();
 }
 
-// Simple focus trap implementation
-let lastFocused = null;
+let lastFocused  = null;
 let trapListener = null;
 function trapFocus(modal) {
   lastFocused = document.activeElement;
-  const focusable = modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+  const focusable = modal.querySelectorAll('button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])');
   const first = focusable[0];
-  const last = focusable[focusable.length - 1];
+  const last  = focusable[focusable.length - 1];
   first && first.focus();
   trapListener = (e) => {
     if (e.key === 'Tab') {
@@ -133,384 +418,381 @@ function trapFocus(modal) {
   };
   document.addEventListener('keydown', trapListener);
 }
+
 function releaseFocusTrap() {
   document.removeEventListener('keydown', trapListener);
   trapListener = null;
-  lastFocused && lastFocused.focus();
+  if (lastFocused) lastFocused.focus();
 }
 
-// Wallet connect handlers
+// ── Wallet connect handlers ───────────────────────────────────────────────────
+
 document.getElementById('connectWallet').addEventListener('click', () => openModal(document.getElementById('walletModal')));
 document.getElementById('walletClose').addEventListener('click', () => closeModal(document.getElementById('walletModal')));
+
 document.getElementById('freighter').addEventListener('click', async () => {
   closeModal(document.getElementById('walletModal'));
-  // Attempt Freighter connection
   if (window.freighter) {
     try {
       const resp = await window.freighter.getConnectedAccount();
-      state.wallet = {type: 'freighter', account: resp.publicKey};
+      state.wallet = { type: 'freighter', account: resp.publicKey };
       localStorage.setItem('wallet', JSON.stringify(state.wallet));
       accountEl.textContent = shorten(resp.publicKey);
+      // Pre-fill merchant address field if it's empty
+      const merchantInput = document.getElementById('plg-merchant');
+      if (!merchantInput.value) merchantInput.value = resp.publicKey;
     } catch (e) { alert('Freighter not available'); }
   } else { alert('Freighter not installed'); }
 });
+
 document.getElementById('albedo').addEventListener('click', async () => {
   closeModal(document.getElementById('walletModal'));
   if (window.albedo) {
     try {
       const resp = await window.albedo.publicKey();
-      state.wallet = {type: 'albedo', account: resp};
+      state.wallet = { type: 'albedo', account: resp };
       localStorage.setItem('wallet', JSON.stringify(state.wallet));
       accountEl.textContent = shorten(resp);
+      const merchantInput = document.getElementById('plg-merchant');
+      if (!merchantInput.value) merchantInput.value = resp;
     } catch (e) { alert('Albedo connect failed'); }
   } else { alert('Albedo not available'); }
 });
 
-function shorten(a) { return a ? a.slice(0,6)+'…'+a.slice(-4) : '—'; }
+function shorten(a) { return a ? a.slice(0, 6) + '…' + a.slice(-4) : '—'; }
 
-// Tabs
-document.querySelectorAll('.tabs .tab').forEach(btn => btn.addEventListener('click', () => setStatus(btn.dataset.status)));
+// ── Refund tabs ───────────────────────────────────────────────────────────────
+
+document.querySelectorAll('.tabs .tab').forEach(btn =>
+  btn.addEventListener('click', () => setStatus(btn.dataset.status))
+);
+
+// ── Mock fetch — replace with real API/EventSource in production ──────────────
+
+  const caller = state.wallet.account;
 
 // Mock fetch — in real app call backend API or use streaming (EventSource)
 async function fetchRefunds() {
-  // placeholder: generate some items
-  const now = Date.now();
   state.refunds = [
-    {id: 'r1', customer: 'Alice', amount: '10 XLM', status: 'pending'},
-    {id: 'r2', customer: 'Bob', amount: '5 XLM', status: 'approved'},
+    {
+      id: 'r1',
+      order_id: 'ORDER_001',
+      customer: 'Alice',
+      amount: 10000000,
+      token: 'XLM',
+      status: 'pending',
+      refunded_amount: 0,
+      platform_fee: 25000,
+      memo: 'Invoice #001',
+      date: new Date(now - 86400000 * 2).toISOString(),
+    },
+    {
+      id: 'r2',
+      order_id: 'ORDER_002',
+      customer: 'Bob',
+      amount: 5000000,
+      token: 'XLM',
+      status: 'approved',
+      refunded_amount: 0,
+      platform_fee: 12500,
+      memo: 'Invoice #002',
+      date: new Date(now - 86400000).toISOString(),
+    },
+    {
+      id: 'r3',
+      order_id: 'ORDER_003',
+      customer: 'Carol',
+      amount: 20000000,
+      token: 'USDC',
+      status: 'completed',
+      refunded_amount: 5000000,
+      platform_fee: 50000,
+      memo: 'Invoice "special" order',
+      date: new Date(now - 86400000 * 5).toISOString(),
+    },
+    {
+      id: 'r4',
+      order_id: 'ORDER_004',
+      customer: 'Dave',
+      amount: 3000000,
+      token: 'XLM',
+      status: 'rejected',
+      refunded_amount: 0,
+      platform_fee: 7500,
+      memo: '',
+      date: new Date(now - 86400000 * 3).toISOString(),
+    },
   ];
   render();
+}
+
+// ── Freighter signer factory ──────────────────────────────────────────────────
+/**
+ * Wraps window.freighter.signTransaction into the SDK Signer shape:
+ *   (tx: Transaction) => Promise<Transaction>
+ *
+ * Freighter's signTransaction accepts an XDR string and returns a signed XDR
+ * string, so we serialise / deserialise around the call.
+ */
+function buildFreighterSigner() {
+  return async (tx) => {
+    const freighter = window.freighter;
+    if (!freighter) throw new Error('Freighter extension is not installed.');
+    // freighter.signTransaction expects the XDR envelope string
+    const signedXdr = await freighter.signTransaction(tx.toEnvelope().toXDR('base64'), {
+      network: NETWORK,
+      networkPassphrase: NETWORK_PASSPHRASE,
+    });
+    // Re-hydrate the signed transaction from XDR
+    // Using stellar-sdk TransactionBuilder.fromXDR via dynamic import
+    const { TransactionBuilder } = await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/dist/stellar-sdk.min.js');
+    return TransactionBuilder.fromXDR(signedXdr, NETWORK_PASSPHRASE);
+  };
+}
+
+// ── Data fetching ─────────────────────────────────────────────────────────────
+/**
+ * Fetch pending refunds for the connected merchant.
+ *
+ * Strategy:
+ *  1. Demo mode → use local mock data.
+ *  2. Live mode, wallet connected → call getMerchantPaymentHistory to get
+ *     orders, then getRefundsForOrder on each to collect all refund records.
+ *  3. Live mode, no wallet → show empty list.
+ */
+async function fetchRefunds() {
+  if (DEMO_MODE || !state.client) {
+    if (!state.refunds.length) {
+      // Populate mock data once
+      state.refunds = buildMockRefunds();
+    }
+    render();
+    return;
+  }
+
+  if (!state.wallet) {
+    render();
+    return;
+  }
+
+  const merchant = state.wallet.account;
+
+  try {
+    // 1. Fetch recent orders for this merchant
+    const page = await state.client.getMerchantPaymentHistory(
+      merchant,
+      null,   // cursor — start from beginning
+      50,     // limit
+      null,   // filter — all statuses
+      'Date',
+      'Descending'
+    );
+
+    const orders = page.payments || [];
+
+    // 2. For each order, fetch its associated refunds
+    const refundLists = await Promise.all(
+      orders.map(order =>
+        state.client.getRefundsForOrder(merchant, order.orderId).catch(() => [])
+      )
+    );
+
+    // Flatten and deduplicate by refundId
+    const seen = new Set();
+    const all = [];
+    for (const list of refundLists) {
+      for (const r of list) {
+        if (!seen.has(r.refundId)) {
+          seen.add(r.refundId);
+          all.push(r);
+        }
+      }
+    }
+
+    state.refunds = all;
+    render();
+  } catch (err) {
+    showError(friendlyError(err));
+  }
+}
+
+// ── Wallet connect handlers ───────────────────────────────────────────────────
+function applyWallet(info) {
+  state.wallet = info;
+  localStorage.setItem('wallet', JSON.stringify(info));
+  accountEl.textContent = shorten(info.account);
+
+  // Build SDK client with the Freighter signer
+  if (!DEMO_MODE) {
+    const signer = info.type === 'freighter' ? buildFreighterSigner() : null;
+    state.client = new LumenFlowClient({
+      contractId: CONTRACT_ID,
+      rpcUrl: RPC_URL,
+      networkPassphrase: NETWORK_PASSPHRASE,
+      signer,
+    });
+  }
+
+  // Refresh data for the newly connected wallet
+  fetchRefunds();
+}
+
+document.getElementById('connectWallet').addEventListener('click', () =>
+  openModal(document.getElementById('walletModal'))
+);
+document.getElementById('walletClose').addEventListener('click', () =>
+  closeModal(document.getElementById('walletModal'))
+);
+
+document.getElementById('freighter').addEventListener('click', async () => {
+  closeModal(document.getElementById('walletModal'));
+  if (!window.freighter) {
+    showError('Freighter extension is not installed. Visit https://www.freighter.app/');
+    return;
+  }
+  try {
+    const resp = await window.freighter.getConnectedAccount();
+    applyWallet({ type: 'freighter', account: resp.publicKey });
+  } catch (e) {
+    showError(`Freighter connection failed: ${friendlyError(e)}`);
+  }
+});
+
+document.getElementById('albedo').addEventListener('click', async () => {
+  closeModal(document.getElementById('walletModal'));
+  if (!window.albedo) {
+    showError('Albedo is not available. Please install or enable it.');
+    return;
+  }
+  try {
+    const resp = await window.albedo.publicKey();
+    applyWallet({ type: 'albedo', account: resp.publicKey || resp });
+  } catch (e) {
+    showError(`Albedo connection failed: ${friendlyError(e)}`);
+  }
+});
+
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+document.querySelectorAll('.tabs .tab').forEach(btn =>
+  btn.addEventListener('click', () => setStatus(btn.dataset.status))
+);
+
+// ── CSV export ────────────────────────────────────────────────────────────────
+function csvEscape(value) {
+  const str = value == null ? '' : String(value);
+  return '"' + str.replace(/"/g, '""') + '"';
+}
+
+function exportToCsv() {
+  const rows = state.refunds.filter(
+    r => (r.status || '').toLowerCase() === (state.status || '').toLowerCase()
+  );
+  const dates  = rows.map(r => r.createdAt ? formatDate(r.createdAt) : '').filter(Boolean).sort();
+  const from   = dates.length ? dates[0].slice(0, 10)             : 'unknown';
+  const to     = dates.length ? dates[dates.length - 1].slice(0, 10) : 'unknown';
+  const prefix = state.wallet ? state.wallet.account.slice(0, 6) : 'noaddr';
+  const filename = `lumenflow-${prefix}-${from}-${to}.csv`;
+
+  const header = ['refund_id', 'order_id', 'initiator', 'amount', 'status', 'reason', 'created_at'];
+  const lines  = [header.join(',')];
+  rows.forEach(r => {
+    lines.push([
+      csvEscape(r.refundId),
+      csvEscape(r.orderId),
+      csvEscape(r.initiator),
+      csvEscape(r.amount),
+      csvEscape(r.status),
+      csvEscape(r.reason),
+      csvEscape(r.createdAt ? formatDate(r.createdAt) : ''),
+    ].join(','));
+  });
+
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href  = url;
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 }
 
 // Poll every 10s
 fetchRefunds();
 setInterval(fetchRefunds, 10000);
 
-// Restore wallet state
+// ── Restore wallet from localStorage ─────────────────────────────────────────
+
 const saved = localStorage.getItem('wallet');
 if (saved) {
-  try { state.wallet = JSON.parse(saved); accountEl.textContent = shorten(state.wallet.account); } catch(e){}
+  try {
+    state.wallet = JSON.parse(saved);
+    accountEl.textContent = shorten(state.wallet.account);
+    // Pre-fill merchant field from saved wallet
+    const merchantInput = document.getElementById('plg-merchant');
+    if (!merchantInput.value && state.wallet.account) {
+      merchantInput.value = state.wallet.account;
+    }
+  } catch (e) { /* ignore */ }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Payment Volume Trend Chart  (Issue #1248)
-// Uses the Canvas 2D API — no external charting library.
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Dark mode ─────────────────────────────────────────────────────────────────
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('lumenflow_theme', theme);
+  const btn = document.getElementById('themeToggle');
+  if (btn) btn.textContent = theme === 'dark' ? '☀️ Light' : '🌙 Dark';
+}
 
-(function initVolumeChart() {
-  // ── 1. Mock / live data source ──────────────────────────────────────────────
-  //
-  // In live mode replace getMerchantStats() with a real Soroban RPC call to
-  // `get_merchant_stats`.  The returned object is expected to have a
-  // `daily_volumes` array of { timestamp_secs: number, volume_stroops: number }
-  // entries for the last 30 days.
-  //
-  // The chart normalises volumes to XLM (divide by 1e7) for display.
+const themeToggleBtn = document.getElementById('themeToggle');
+if (themeToggleBtn) {
+  themeToggleBtn.addEventListener('click', () => {
+    const current = document.documentElement.getAttribute('data-theme') || 'light';
+    applyTheme(current === 'dark' ? 'light' : 'dark');
+  });
+  const initialTheme = document.documentElement.getAttribute('data-theme') || 'light';
+  themeToggleBtn.textContent = initialTheme === 'dark' ? '☀️ Light' : '🌙 Dark';
+}
 
-  function generateMockDailyVolumes() {
-    const now = Math.floor(Date.now() / 1000);
-    const DAY = 86400;
-    const volumes = [];
-    for (let i = 29; i >= 0; i--) {
-      volumes.push({
-        timestamp_secs: now - i * DAY,
-        // random volume 0.5 XLM – 50 XLM in stroops
-        volume_stroops: Math.floor((0.5 + Math.random() * 49.5) * 1e7),
+// ── Demo / live mode banner ───────────────────────────────────────────────────
+(function renderModeBanner() {
+  const banner = document.createElement('div');
+  banner.id = 'lf-mode-banner';
+  banner.setAttribute('role', 'status');
+  banner.style.cssText = [
+    'position:sticky', 'top:0', 'z-index:1000',
+    'padding:0.4rem 1rem', 'font-size:0.8rem', 'font-weight:600', 'text-align:center',
+    DEMO_MODE
+      ? 'background:#fff3cd;color:#856404;'
+      : 'background:#d1f3e0;color:#1a5e37;',
+  ].join(';');
+  banner.textContent = DEMO_MODE
+    ? '⚠ Demo mode – displaying mock data. Set LUMENFLOW_CONTRACT_ID to connect to a live contract.'
+    : `✔ Live mode – connected to contract ${CONTRACT_ID.slice(0, 8)}… on ${NETWORK}.`;
+  document.body.prepend(banner);
+})();
+
+// ── Initialise ────────────────────────────────────────────────────────────────
+
+// Restore wallet from localStorage (e.g. page refresh)
+const savedWallet = localStorage.getItem('wallet');
+if (savedWallet) {
+  try {
+    const info = JSON.parse(savedWallet);
+    state.wallet = info;
+    accountEl.textContent = shorten(info.account);
+    if (!DEMO_MODE && info.type === 'freighter') {
+      state.client = new LumenFlowClient({
+        contractId: CONTRACT_ID,
+        rpcUrl: RPC_URL,
+        networkPassphrase: NETWORK_PASSPHRASE,
+        signer: buildFreighterSigner(),
       });
     }
-    return volumes;
-  }
+  } catch (e) { /* ignore corrupt storage */ }
+}
 
-  function getMerchantStats() {
-    // Swap this with a live contract call when CONTRACT_ID is available.
-    return Promise.resolve({ daily_volumes: generateMockDailyVolumes() });
-  }
-
-  // ── 2. Aggregation helpers ──────────────────────────────────────────────────
-
-  const DAY_MS = 86400 * 1000;
-  const WEEK_MS = 7 * DAY_MS;
-
-  /**
-   * Aggregate raw daily entries into weekly buckets.
-   * @param {Array<{timestamp_secs:number, volume_stroops:number}>} daily
-   * @returns {Array<{label:string, volumeXlm:number}>}
-   */
-  function aggregateWeekly(daily) {
-    const buckets = new Map();
-    for (const entry of daily) {
-      const d = new Date(entry.timestamp_secs * 1000);
-      // ISO week start (Monday)
-      const day = d.getDay(); // 0=Sun
-      const diff = (day === 0 ? -6 : 1 - day);
-      const weekStart = new Date(d);
-      weekStart.setDate(d.getDate() + diff);
-      weekStart.setHours(0, 0, 0, 0);
-      const key = weekStart.toISOString().slice(0, 10);
-      buckets.set(key, (buckets.get(key) || 0) + entry.volume_stroops);
-    }
-    return Array.from(buckets.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, stroops]) => ({
-        label: 'w/' + key.slice(5), // "w/MM-DD"
-        volumeXlm: stroops / 1e7,
-      }));
-  }
-
-  /**
-   * @param {Array<{timestamp_secs:number, volume_stroops:number}>} daily
-   * @returns {Array<{label:string, volumeXlm:number}>}
-   */
-  function aggregateDaily(daily) {
-    return daily.map(entry => {
-      const d = new Date(entry.timestamp_secs * 1000);
-      const label = (d.getMonth() + 1) + '/' + d.getDate();
-      return { label, volumeXlm: entry.volume_stroops / 1e7 };
-    });
-  }
-
-  // ── 3. Canvas chart renderer ────────────────────────────────────────────────
-
-  /**
-   * Draw a line chart onto a <canvas> element.
-   *
-   * Colour palette is WCAG AA compliant and works in both light and dark modes:
-   *   Line:  #0b66ff  (blue, contrast ≥ 4.5:1 on white and ≥ 3.1:1 on dark bg)
-   *   Fill:  rgba(11,102,255,0.10) semi-transparent
-   *   Grid:  #e2e8f0 / #2d3748  (light/dark)
-   *   Text:  #475569 / #94a3b8  (light/dark)
-   *
-   * @param {HTMLCanvasElement} canvas
-   * @param {Array<{label:string, volumeXlm:number}>} points
-   */
-  function drawChart(canvas, points) {
-    const dpr = window.devicePixelRatio || 1;
-    const W   = canvas.clientWidth  || canvas.parentElement.clientWidth  || 600;
-    const H   = Math.min(Math.round(W * 0.38), 280); // ~38% aspect, max 280px
-
-    canvas.width  = W * dpr;
-    canvas.height = H * dpr;
-    canvas.style.width  = W + 'px';
-    canvas.style.height = H + 'px';
-
-    const ctx = canvas.getContext('2d');
-    ctx.scale(dpr, dpr);
-
-    // Detect dark mode
-    const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    const COL  = {
-      line:       '#0b66ff',
-      fill:       'rgba(11,102,255,0.10)',
-      grid:       dark ? '#2d3748' : '#e2e8f0',
-      label:      dark ? '#94a3b8' : '#475569',
-      tooltip_bg: dark ? '#1e293b' : '#fff',
-      tooltip_fg: dark ? '#e2e8f0' : '#0b1726',
-    };
-
-    const PAD = { top: 24, right: 24, bottom: 40, left: 56 };
-    const cW  = W - PAD.left - PAD.right;
-    const cH  = H - PAD.top  - PAD.bottom;
-
-    const maxVol  = Math.max(...points.map(p => p.volumeXlm), 0.001);
-    const gridMax = Math.ceil(maxVol * 1.1 * 10) / 10;  // 10% headroom
-    const GRID_LINES = 4;
-
-    // Clear
-    ctx.clearRect(0, 0, W, H);
-
-    // ── Grid lines and Y labels ─────────────────────────────────────────────
-    ctx.font      = `11px system-ui,Arial,sans-serif`;
-    ctx.textAlign = 'right';
-    for (let i = 0; i <= GRID_LINES; i++) {
-      const val = (gridMax / GRID_LINES) * i;
-      const y   = PAD.top + cH - (val / gridMax) * cH;
-
-      ctx.strokeStyle = COL.grid;
-      ctx.lineWidth   = 1;
-      ctx.beginPath();
-      ctx.moveTo(PAD.left, y);
-      ctx.lineTo(PAD.left + cW, y);
-      ctx.stroke();
-
-      ctx.fillStyle = COL.label;
-      ctx.fillText(val.toFixed(1), PAD.left - 6, y + 4);
-    }
-
-    // Y-axis title
-    ctx.save();
-    ctx.translate(12, PAD.top + cH / 2);
-    ctx.rotate(-Math.PI / 2);
-    ctx.textAlign = 'center';
-    ctx.fillStyle = COL.label;
-    ctx.fillText('XLM', 0, 0);
-    ctx.restore();
-
-    if (!points.length) return;
-
-    // ── Compute point coordinates ───────────────────────────────────────────
-    const xs = points.map((_, i) => PAD.left + (i / (points.length - 1 || 1)) * cW);
-    const ys = points.map(p  => PAD.top + cH - (p.volumeXlm / gridMax) * cH);
-
-    // ── Area fill ───────────────────────────────────────────────────────────
-    ctx.beginPath();
-    ctx.moveTo(xs[0], PAD.top + cH);
-    xs.forEach((x, i) => ctx.lineTo(x, ys[i]));
-    ctx.lineTo(xs[xs.length - 1], PAD.top + cH);
-    ctx.closePath();
-    ctx.fillStyle = COL.fill;
-    ctx.fill();
-
-    // ── Line ────────────────────────────────────────────────────────────────
-    ctx.beginPath();
-    ctx.moveTo(xs[0], ys[0]);
-    xs.forEach((x, i) => { if (i > 0) ctx.lineTo(x, ys[i]); });
-    ctx.strokeStyle = COL.line;
-    ctx.lineWidth   = 2;
-    ctx.lineJoin    = 'round';
-    ctx.stroke();
-
-    // ── Data point dots ─────────────────────────────────────────────────────
-    xs.forEach((x, i) => {
-      ctx.beginPath();
-      ctx.arc(x, ys[i], 3.5, 0, Math.PI * 2);
-      ctx.fillStyle   = COL.line;
-      ctx.fill();
-      ctx.strokeStyle = dark ? '#1a1f2e' : '#fff';
-      ctx.lineWidth   = 1.5;
-      ctx.stroke();
-    });
-
-    // ── X-axis labels (thin out when many points) ───────────────────────────
-    const step  = points.length > 14 ? Math.ceil(points.length / 7) : 1;
-    ctx.fillStyle = COL.label;
-    ctx.textAlign = 'center';
-    ctx.font      = '10px system-ui,Arial,sans-serif';
-    points.forEach((p, i) => {
-      if (i % step !== 0 && i !== points.length - 1) return;
-      ctx.fillText(p.label, xs[i], H - PAD.bottom + 16);
-    });
-  }
-
-  // ── 4. Hover tooltip ────────────────────────────────────────────────────────
-
-  let currentPoints = [];
-  let currentCanvas = null;
-
-  function attachTooltip(canvas) {
-    currentCanvas = canvas;
-    canvas.addEventListener('mousemove', onMouseMove);
-    canvas.addEventListener('mouseleave', onMouseLeave);
-    canvas.addEventListener('touchmove', onTouchMove, { passive: true });
-  }
-
-  function onMouseMove(e) {
-    const rect = currentCanvas.getBoundingClientRect();
-    showTooltip(e.clientX - rect.left, e.clientY - rect.top);
-  }
-  function onTouchMove(e) {
-    const rect = currentCanvas.getBoundingClientRect();
-    const t = e.touches[0];
-    showTooltip(t.clientX - rect.left, t.clientY - rect.top);
-  }
-  function onMouseLeave() { hideTooltip(); }
-
-  let tooltipEl = null;
-  function ensureTooltip() {
-    if (!tooltipEl) {
-      tooltipEl = document.createElement('div');
-      tooltipEl.style.cssText = [
-        'position:absolute', 'pointer-events:none', 'display:none',
-        'background:#fff', 'border:1px solid #e2e8f0', 'border-radius:6px',
-        'padding:6px 10px', 'font-size:12px', 'box-shadow:0 2px 8px rgba(0,0,0,.12)',
-        'color:#0b1726', 'white-space:nowrap', 'z-index:10',
-      ].join(';');
-      document.getElementById('trend-section').style.position = 'relative';
-      document.getElementById('trend-section').appendChild(tooltipEl);
-    }
-  }
-
-  function showTooltip(mx, my) {
-    if (!currentPoints.length) return;
-    ensureTooltip();
-
-    const W   = currentCanvas.clientWidth;
-    const PAD = { left: 56, right: 24, top: 24, bottom: 40 };
-    const cW  = W - PAD.left - PAD.right;
-    const step = cW / (currentPoints.length - 1 || 1);
-    const idx  = Math.round(Math.max(0, Math.min(currentPoints.length - 1, (mx - PAD.left) / step)));
-    const pt   = currentPoints[idx];
-    if (!pt) return;
-
-    tooltipEl.textContent = `${pt.label}: ${pt.volumeXlm.toFixed(2)} XLM`;
-    tooltipEl.style.display = 'block';
-
-    const canvasRect = currentCanvas.getBoundingClientRect();
-    const sectionRect = document.getElementById('trend-section').getBoundingClientRect();
-    const offsetX = canvasRect.left - sectionRect.left;
-    const offsetY = canvasRect.top  - sectionRect.top;
-    tooltipEl.style.left = (offsetX + mx + 12) + 'px';
-    tooltipEl.style.top  = (offsetY + my - 28) + 'px';
-  }
-  function hideTooltip() {
-    if (tooltipEl) tooltipEl.style.display = 'none';
-  }
-
-  // ── 5. Controller ───────────────────────────────────────────────────────────
-
-  let rawDaily    = [];
-  let aggregation = 'daily'; // 'daily' | 'weekly'
-
-  function renderChart() {
-    const canvas   = document.getElementById('volumeChart');
-    const emptyEl  = document.getElementById('trend-empty');
-    const points   = aggregation === 'weekly'
-      ? aggregateWeekly(rawDaily)
-      : aggregateDaily(rawDaily);
-
-    if (!points.length || points.every(p => p.volumeXlm === 0)) {
-      canvas.style.display  = 'none';
-      emptyEl.style.display = 'block';
-      return;
-    }
-    canvas.style.display  = 'block';
-    emptyEl.style.display = 'none';
-    currentPoints         = points;
-    drawChart(canvas, points);
-    attachTooltip(canvas);
-  }
-
-  function setAggregation(mode) {
-    aggregation = mode;
-    const daily  = document.getElementById('agg-daily');
-    const weekly = document.getElementById('agg-weekly');
-    daily.classList.toggle('agg-active', mode === 'daily');
-    daily.setAttribute('aria-pressed', String(mode === 'daily'));
-    weekly.classList.toggle('agg-active', mode === 'weekly');
-    weekly.setAttribute('aria-pressed', String(mode === 'weekly'));
-    renderChart();
-  }
-
-  // Toggle buttons
-  document.getElementById('agg-daily') .addEventListener('click', () => setAggregation('daily'));
-  document.getElementById('agg-weekly').addEventListener('click', () => setAggregation('weekly'));
-
-  // Redraw on resize for responsiveness
-  let resizeTimer;
-  window.addEventListener('resize', () => {
-    clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(renderChart, 120);
-  });
-
-  // Redraw when colour scheme changes
-  window.matchMedia('(prefers-color-scheme: dark)')
-    .addEventListener('change', renderChart);
-
-  // Load data and draw initial chart
-  getMerchantStats().then(stats => {
-    rawDaily = stats.daily_volumes || [];
-    renderChart();
-  }).catch(err => {
-    console.error('[VolumeChart] failed to load stats:', err);
-    document.getElementById('trend-empty').style.display = 'block';
-  });
-})();
+// Initial fetch + poll every 30 s
+fetchRefunds();
+setInterval(fetchRefunds, 30_000);
