@@ -417,6 +417,23 @@
       <label>Link Expires</label>
       <div class="value" id="prefill-expiry"></div>
     </div>
+    <!-- Countdown timer — only shown for active (non-expired) requests with a TTL -->
+    <div id="prefill-countdown-row" style="display:none;margin-bottom:1rem;">
+      <div id="prefill-countdown-timer"
+           role="timer"
+           aria-live="polite"
+           aria-label="Time remaining before payment link expires"
+           style="display:inline-flex;align-items:center;gap:0.4rem;font-size:0.9rem;font-weight:600;color:#2563eb;padding:0.35rem 0.75rem;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;">
+        <span aria-hidden="true">⏳</span>
+        <span id="prefill-countdown-text">--:--</span>
+      </div>
+      <!-- Warning state — shown when < 60 seconds remain -->
+      <div id="prefill-countdown-warning"
+           role="alert"
+           style="display:none;margin-top:0.4rem;font-size:0.8rem;color:#b45309;font-weight:500;">
+        ⚠ Less than 1 minute remaining — complete your payment now.
+      </div>
+    </div>
     <div class="actions">
       <button class="btn btn-primary" id="prefill-pay-btn">Pay with Freighter</button>
       <button class="btn btn-outline" onclick="copyLink()">🔗 Copy Link</button>
@@ -835,9 +852,109 @@
       document.getElementById('prefill-expired-badge').style.display = 'inline-flex';
       document.getElementById('prefill-pay-btn').disabled = true;
       document.getElementById('prefill-pay-note').style.display = 'block';
+    } else if (params.expires) {
+      // Start the live countdown for active (non-expired) requests.
+      startExpiryCountdown(params.expires);
     }
 
     document.getElementById('payment-prefill').style.display = 'block';
+  }
+
+  /**
+   * Starts a live countdown timer for a payment request with the given expiry
+   * timestamp (milliseconds since Unix epoch).
+   *
+   * - Updates every second.
+   * - Shows a warning state when < 60 seconds remain.
+   * - Disables the pay button and shows the expired message when TTL elapses.
+   * - Uses Intl.RelativeTimeFormat for i18n-friendly labels where available,
+   *   falling back to a plain mm:ss display.
+   *
+   * @param {number} expiresAt  Unix-millisecond timestamp when the link expires.
+   */
+  function startExpiryCountdown(expiresAt) {
+    const timerRow     = document.getElementById('prefill-countdown-row');
+    const timerText    = document.getElementById('prefill-countdown-text');
+    const warningEl    = document.getElementById('prefill-countdown-warning');
+    const expiredBadge = document.getElementById('prefill-expired-badge');
+    const payBtn       = document.getElementById('prefill-pay-btn');
+    const payNote      = document.getElementById('prefill-pay-note');
+
+    if (!timerRow || !timerText) return;
+    timerRow.style.display = 'block';
+
+    /**
+     * Format remaining seconds as a human-readable string.
+     * Uses Intl.RelativeTimeFormat when a locale is available for full i18n
+     * ("2 minutes remaining"), otherwise renders as mm:ss.
+     *
+     * @param {number} totalSeconds
+     * @returns {string}
+     */
+    function formatRemaining(totalSeconds) {
+      if (totalSeconds <= 0) return '0:00';
+
+      const mins = Math.floor(totalSeconds / 60);
+      const secs = totalSeconds % 60;
+
+      // Use Intl.RelativeTimeFormat for friendly labels (e.g. "2 minutes remaining").
+      // Gracefully degrade if the API is unavailable.
+      try {
+        const lang = document.documentElement.lang || navigator.language || 'en';
+        const rtf  = new Intl.RelativeTimeFormat(lang, { numeric: 'always', style: 'long' });
+
+        if (totalSeconds >= 120) {
+          // Round to nearest minute for readability when > 2 minutes remain.
+          return rtf.format(Math.ceil(totalSeconds / 60), 'minute').replace('-', '') + ' remaining';
+        }
+        if (totalSeconds >= 60) {
+          return '1 minute remaining';
+        }
+      } catch {
+        // Intl not available — fall through to mm:ss
+      }
+
+      // < 60 s or Intl unavailable: plain mm:ss
+      const mm = String(mins).padStart(1, '0');
+      const ss = String(secs).padStart(2, '0');
+      return `${mm}:${ss}`;
+    }
+
+    let intervalId = null;
+
+    function tick() {
+      const remaining = Math.ceil((expiresAt - Date.now()) / 1000);
+
+      if (remaining <= 0) {
+        // TTL elapsed — stop the timer and show expired state.
+        clearInterval(intervalId);
+        timerRow.style.display = 'none';
+        expiredBadge.style.display = 'inline-flex';
+        payBtn.disabled = true;
+        payNote.style.display = 'block';
+        warningEl.style.display = 'none';
+        return;
+      }
+
+      // Update timer text.
+      timerText.textContent = formatRemaining(remaining);
+
+      // Warning state when < 60 seconds remain.
+      if (remaining < 60) {
+        // Change timer colour to amber/warning.
+        const timerDiv = document.getElementById('prefill-countdown-timer');
+        if (timerDiv) {
+          timerDiv.style.color      = '#b45309';
+          timerDiv.style.background = '#fffbeb';
+          timerDiv.style.borderColor = '#fcd34d';
+        }
+        warningEl.style.display = 'block';
+      }
+    }
+
+    // Run immediately, then every second.
+    tick();
+    intervalId = setInterval(tick, 1000);
   }
 
   // ── Bootstrap ──────────────────────────────────────────────────────────────

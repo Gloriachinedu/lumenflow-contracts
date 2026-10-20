@@ -56,7 +56,12 @@
     "platformFee": "Comisión de Plataforma",
     "loading": "Cargando recibo…",
     "notFound": "Recibo no encontrado.",
-    "error": "No se pudo cargar el recibo."
+    "error": "No se pudo cargar el recibo.",
+    "countdownRemaining": "{n} minutos restantes",
+    "countdownOneMinute": "1 minuto restante",
+    "countdownSeconds": "{n} segundos restantes",
+    "countdownWarning": "Menos de 1 minuto restante — completa tu pago ahora.",
+    "countdownExpired": "Este enlace de pago ha expirado. Por favor, solicita un nuevo enlace al comerciante."
   },
 
   "multisig": {
