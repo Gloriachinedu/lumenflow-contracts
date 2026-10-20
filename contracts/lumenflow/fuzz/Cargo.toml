@@ -20,3 +20,9 @@ name = "fuzz_auth"
 path = "fuzz_targets/fuzz_auth.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "fuzz_batch_payment_deserialize"
+path = "fuzz_targets/fuzz_batch_payment_deserialize.rs"
+test = false
+doc = false

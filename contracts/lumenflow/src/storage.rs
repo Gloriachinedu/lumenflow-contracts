@@ -157,6 +157,9 @@ pub enum DataKey {
     AdminAuditCount,
     /// Configurable maximum audit log entries before oldest-first eviction.
     AdminAuditMaxEntries,
+    /// Configurable signature expiry window in seconds (Issue #1350).
+    /// Signatures with a timestamp older than `now - window` are rejected.
+    SEW,
 }
 
 /// The schema version this binary was compiled against.
@@ -1277,6 +1280,26 @@ pub fn append_admin_audit_entry(env: &Env, entry: &AdminAuditEntry) {
         .extend_ttl(&key, ADMIN_AUDIT_TTL_LEDGERS, ADMIN_AUDIT_TTL_LEDGERS);
 
     set_admin_audit_count(env, count + 1);
+}
+
+// ── Signature expiry window (Issue #1350) ─────────────────────────────────────
+
+/// Default signature expiry window: 5 minutes in seconds.
+pub const DEFAULT_SIGNATURE_EXPIRY_WINDOW_SECS: u64 = 5 * 60;
+
+/// Return the configured signature expiry window in seconds.
+/// Defaults to [`DEFAULT_SIGNATURE_EXPIRY_WINDOW_SECS`] (300 s = 5 minutes).
+pub fn get_signature_expiry_window(env: &Env) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::SEW)
+        .unwrap_or(DEFAULT_SIGNATURE_EXPIRY_WINDOW_SECS)
+}
+
+/// Persist the signature expiry window in seconds.
+/// Admin only — caller is responsible for authorization before invoking.
+pub fn set_signature_expiry_window(env: &Env, window_secs: u64) {
+    env.storage().instance().set(&DataKey::SEW, &window_secs);
 }
 
 /// Return audit log entries whose index falls within `[from_index, to_index]`,

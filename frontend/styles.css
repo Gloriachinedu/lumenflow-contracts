@@ -424,10 +424,168 @@ button, input, textarea, select { min-height: 44px; min-width: 44px; }
   outline-offset: 2px;
 }
 
-/* ── Print ──────────────────────────────────────────────────────────────────── */
+/* ── Print (Issue #1351) ─────────────────────────────────────────────────────
+ *
+ * Rules ensure that when a user prints a receipt page via the browser:
+ *   - Navigation, wallet status, and action buttons are hidden.
+ *   - Receipt content is formatted cleanly for A4/Letter paper.
+ *   - The LumenFlow logo renders at an appropriate print size.
+ *   - Page breaks are managed so receipts don't split mid-record.
+ *
+ * Tested in Chrome and Firefox print preview.
+ * ─────────────────────────────────────────────────────────────────────────── */
 @media print {
-  body { background: #fff; padding: 0; }
-  .card { box-shadow: none; border-radius: 0; max-width: 100%; }
-  .actions { display: none; }
-  #lf-dark-toggle { display: none; }
+  /* Reset background and remove screen chrome */
+  *,
+  *::before,
+  *::after {
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
+  body {
+    background: #fff;
+    color: #000;
+    padding: 0;
+    margin: 0;
+    font-size: 11pt;
+    line-height: 1.4;
+  }
+
+  /* ── Hide non-essential UI elements ── */
+
+  /* Navigation bar / site header */
+  nav,
+  header,
+  .navbar,
+  .site-header,
+  [role="navigation"],
+  .lf-nav,
+  .lf-header {
+    display: none !important;
+  }
+
+  /* Wallet status widget */
+  .wallet-status,
+  .lf-wallet-status,
+  #wallet-status,
+  #lf-wallet-status,
+  [data-wallet-status],
+  .wallet-connect-btn {
+    display: none !important;
+  }
+
+  /* Action buttons: Share, Download, Refund, and any generic button row */
+  .actions,
+  .action-buttons,
+  .btn-group,
+  .lf-actions,
+  button:not(.print-visible),
+  .btn:not(.print-visible),
+  [data-action],
+  #share-btn,
+  #download-btn,
+  #refund-btn {
+    display: none !important;
+  }
+
+  /* Dark-mode toggle, notifications, and other floating widgets */
+  #lf-dark-toggle,
+  .lf-toast,
+  .lf-notification,
+  .lf-tooltip,
+  footer {
+    display: none !important;
+  }
+
+  /* ── Page and layout ── */
+
+  /* A4 width with safe margins; 'auto' height lets the browser paginate */
+  @page {
+    size: A4 portrait;
+    margin: 18mm 15mm;
+  }
+
+  /* Receipt card: full width, no rounding/shadow, no max-width constraint */
+  .card,
+  .receipt-card,
+  .lf-card,
+  .receipt-container,
+  main {
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border: none !important;
+  }
+
+  /* Avoid breaking receipt rows across pages */
+  .receipt-row,
+  .payment-row,
+  tr {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Keep headings with their following content */
+  h1, h2, h3, h4, h5, h6 {
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+
+  /* ── Logo ── */
+
+  /* Render the LumenFlow logo at a sensible print size (48pt wide) */
+  .lf-logo,
+  .logo,
+  #lf-logo {
+    width: 48pt !important;
+    height: auto !important;
+    max-width: 48pt !important;
+  }
+
+  /* ── Links: show URL inline for paper readers ── */
+  a[href]::after {
+    content: " (" attr(href) ")";
+    font-size: 0.8em;
+    color: #555;
+  }
+  /* Suppress URL display for icon-only links and anchors */
+  a[href^="#"]::after,
+  a[href^="javascript:"]::after,
+  .no-print-url::after {
+    content: "" !important;
+  }
+
+  /* ── Typography: use system serif for crisp print rendering ── */
+  body,
+  .card,
+  .receipt-card {
+    font-family: Georgia, "Times New Roman", serif;
+  }
+
+  code,
+  pre,
+  .mono {
+    font-family: "Courier New", Courier, monospace;
+    font-size: 9pt;
+  }
+
+  /* ── Tables ── */
+  table {
+    border-collapse: collapse;
+    width: 100%;
+  }
+
+  th, td {
+    border: 1px solid #ccc;
+    padding: 4pt 6pt;
+    text-align: left;
+  }
+
+  thead {
+    display: table-header-group; /* repeat header on each printed page */
+  }
 }
