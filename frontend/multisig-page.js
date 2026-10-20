@@ -387,6 +387,99 @@
     }
   }
 
+  // ── Polling ────────────────────────────────────────────────────────────────
+  // Polls get_multisig_payment every 10 seconds while the payment is pending.
+  // Stops automatically when the signature threshold is met, the payment is
+  // executed/cancelled, or expires.
+
+  /** @type {ReturnType<typeof setInterval>|null} */
+  let _pollInterval = null;
+
+  /**
+   * Query the contract for the current multisig payment state.
+   * In demo mode returns the local in-memory state so the UI stays functional
+   * without a live contract.
+   *
+   * @param {string} paymentId
+   * @returns {Promise<{success: boolean, data?: object, error?: string}>}
+   */
+  async function callGetMultisigPayment(paymentId) {
+    if (!CONTRACT_ID) {
+      // Demo mode: mirror local state so tests / previews work without a contract.
+      return { success: true, data: state };
+    }
+    if (!connectedPublicKey) {
+      return { success: false, error: 'Wallet not connected.' };
+    }
+    try {
+      const { SorobanRpc, Contract, nativeToScVal, Networks, TransactionBuilder, BASE_FEE, scValToNative } =
+        await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
+      const server   = new SorobanRpc.Server(RPC_URL);
+      const contract = new Contract(CONTRACT_ID);
+      const account  = await server.getAccount(connectedPublicKey);
+      const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase: Networks.TESTNET })
+        .addOperation(contract.call(
+          'get_multisig_payment',
+          nativeToScVal(connectedPublicKey, { type: 'address' }),
+          nativeToScVal(paymentId,          { type: 'string'  }),
+        ))
+        .setTimeout(30)
+        .build();
+      const sim = await server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(sim)) throw new Error(sim.error);
+      const result = scValToNative(sim.result?.retval);
+      return { success: true, data: result };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  }
+
+  /**
+   * Start polling get_multisig_payment every 10 seconds.
+   * Polling stops when:
+   *   – collected signatures >= required_signatures (threshold met)
+   *   – payment is marked executed or cancelled
+   *   – payment expires (expires_at in the past)
+   */
+  function startPolling() {
+    stopPolling(); // clear any previous interval
+    _pollInterval = setInterval(async () => {
+      if (!state) { stopPolling(); return; }
+
+      const result = await callGetMultisigPayment(state.paymentId);
+      if (!result.success) return; // transient error — keep polling
+
+      const ms = result.data;
+
+      // Sync signatures into local state from the contract response
+      if (ms && ms.collected && Array.isArray(ms.collected)) {
+        ms.collected.forEach(entry => {
+          const addr = entry.signer ?? entry;
+          if (addr) state.signatures.add(addr);
+        });
+      }
+
+      renderProgress();
+
+      // Determine stopping conditions
+      const thresholdMet  = state.signatures.size >= state.required;
+      const isExecuted    = ms && ms.executed;
+      const isCancelled   = ms && ms.cancelled;
+      const isExpired     = ms && ms.expires_at && (Date.now() / 1000) > ms.expires_at;
+
+      if (thresholdMet || isExecuted || isCancelled || isExpired) {
+        stopPolling();
+      }
+    }, 10_000); // poll every 10 seconds
+  }
+
+  function stopPolling() {
+    if (_pollInterval !== null) {
+      clearInterval(_pollInterval);
+      _pollInterval = null;
+    }
+  }
+
   // ── Submit ─────────────────────────────────────────────────────────────────
 
   async function submitForm() {
@@ -421,6 +514,9 @@
     document.getElementById('form-panel').style.display = 'none';
     renderProgress();
     document.getElementById('progress-panel').style.display = 'block';
+
+    // Begin live polling for signature updates (issue #1355)
+    startPolling();
   }
 
   // ── Progress ───────────────────────────────────────────────────────────────
@@ -441,6 +537,7 @@
     idDisplay.innerHTML = `Payment ID: <code>${paymentId}</code>${copyButtonHtml(paymentId, 'Copy payment ID')}`;
 
     document.getElementById('progress-bar').style.width = pct + '%';
+    document.getElementById('progress-bar').setAttribute('aria-valuenow', String(pct));
     document.getElementById('progress-fraction').textContent = `${signed} / ${signers.length} signed`;
     document.getElementById('progress-label').textContent =
       signed >= required
@@ -463,7 +560,9 @@
     });
 
     const execBtn = document.getElementById('execute-btn');
-    execBtn.disabled = signed < required;
+    const thresholdMet = signed >= required;
+    execBtn.disabled = !thresholdMet;
+    execBtn.setAttribute('aria-disabled', String(!thresholdMet));
   }
 
   async function signPayment(signerAddress) {
@@ -490,6 +589,7 @@
     const result = await callExecuteMultisig(state.paymentId);
 
     if (result.success) {
+      stopPolling(); // threshold met and executed — no more polling needed
       showExecuteAlert('✔ Payment executed successfully!', true);
       btn.textContent = 'Executed';
     } else {
@@ -518,6 +618,7 @@
   window.signPayment     = signPayment;
   window.executePayment  = executePayment;
   window.connectWallet   = connectWallet;
+  window.stopPolling     = stopPolling;
 
   document.getElementById('required-sigs').addEventListener('input', () => {
     validateThreshold();
