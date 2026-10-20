@@ -56,7 +56,12 @@
     "platformFee": "Platform Fee",
     "loading": "Loading receipt…",
     "notFound": "Receipt not found.",
-    "error": "Could not load receipt."
+    "error": "Could not load receipt.",
+    "countdownRemaining": "{n} minutes remaining",
+    "countdownOneMinute": "1 minute remaining",
+    "countdownSeconds": "{n} seconds remaining",
+    "countdownWarning": "Less than 1 minute remaining — complete your payment now.",
+    "countdownExpired": "This payment link has expired. Please ask the merchant for a new link."
   },
 
   "multisig": {
