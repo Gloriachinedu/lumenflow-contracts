@@ -412,7 +412,8 @@ fn test_batch_intra_batch_duplicate_rejected() {
     payments.push_back(item); // exact duplicate in same batch
 
     let result = client.try_batch_payment(&payer, &payments);
-    assert_eq!(result, Err(Ok(PaymentError::PaymentAlreadyExists)));
+    // Intra-batch duplicates return DuplicateOrderId (55), not PaymentAlreadyExists (21)
+    assert_eq!(result, Err(Ok(PaymentError::DuplicateOrderId)));
 }
 
 /// A batch order_id that was already processed in a prior call must be rejected.

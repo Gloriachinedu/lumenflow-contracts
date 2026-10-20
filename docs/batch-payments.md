@@ -417,7 +417,8 @@ the **entire batch to fail** with no partial state written.
 | 22 | `InvalidAmount` | Any item has `amount ≤ 0` | Ensure all amounts are positive integers. |
 | 50 | `InvalidInput` | Any `order_id` is empty or > 64 chars | Use non-empty IDs within the length limit. |
 | 53 | `InvalidTags` | Any item has > 5 tags, an empty tag, or a tag > 32 chars | Fix tags on the offending item. |
-| 21 | `PaymentAlreadyExists` | Intra-batch duplicate `order_id`, or `order_id` already on-chain | Use unique `order_id` values across items and across prior calls. |
+| 21 | `PaymentAlreadyExists` | `order_id` already exists on-chain (cross-call duplicate) | Use unique `order_id` values across all calls. |
+| 55 | `DuplicateOrderId` | Two or more items within the **same batch call** share an `order_id` (intra-batch duplicate) | Ensure every `order_id` in the batch is unique before submitting. |
 | 26 | `TokenNotAllowed` | Any item's `token_address` not on the allow-list | Use only admin-whitelisted tokens. |
 | 10 | `MerchantNotFound` | Any item's `merchant_address` not registered | Verify merchant addresses. |
 | 12 | `MerchantInactive` | Any merchant has been deactivated | Contact admin to reactivate the merchant. |
@@ -467,8 +468,10 @@ and no events emitted.
 ### 13.4 Intra-batch duplicate `order_id`
 
 Two items within the same batch sharing an `order_id` are caught in Phase 1
-via a linear scan over `seen_ids`. The batch fails with `PaymentAlreadyExists`
-(21). Neither item is recorded.
+via a linear scan over `seen_ids`. The batch fails with `DuplicateOrderId`
+(55). Neither item is recorded. Use `PaymentAlreadyExists` (21) to distinguish
+this case: code 55 means the collision is within the current batch, while
+code 21 means the `order_id` already exists from a previous call.
 
 ### 13.5 Cross-call duplicate `order_id`
 
@@ -689,7 +692,8 @@ what they tell you about which item failed:
 | Error code | Name | Likely offending item |
 |---|---|---|
 | 23 | `InvalidSignature` | Item whose signature does not match its payload — check each item's signature |
-| 21 | `PaymentAlreadyExists` | An `order_id` that was already committed on-chain or appears twice within the batch |
+| 21 | `PaymentAlreadyExists` | Item referencing an `order_id` already committed on-chain from a prior call |
+| 55 | `DuplicateOrderId` | An `order_id` that appears twice within the current batch |
 | 10 | `MerchantNotFound` | Item referencing an unregistered merchant address |
 | 12 | `MerchantInactive` | Item referencing a deactivated merchant |
 | 26 | `TokenNotAllowed` | Item using a token address not on the admin allow-list |

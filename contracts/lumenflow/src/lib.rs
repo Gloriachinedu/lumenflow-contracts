@@ -1524,9 +1524,11 @@ impl PaymentProcessingContract {
             validate_tags(&item.tags)?;
 
             // Intra-batch duplicate check (linear scan — max 10 iterations)
+            // Returns DuplicateOrderId (55) rather than PaymentAlreadyExists so
+            // callers can distinguish intra-batch duplicates from cross-call ones.
             for seen in seen_ids.iter() {
                 if seen == item.order_id {
-                    return Err(PaymentError::PaymentAlreadyExists);
+                    return Err(PaymentError::DuplicateOrderId);
                 }
             }
             seen_ids.push_back(item.order_id.clone());
