@@ -11,6 +11,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 - `Custom(String)` variant to `MerchantCategory` enum (max 32 chars, non-empty). Validated on merchant registration. Resolves #114.
+- Explicit named re-export of `MerchantCategory` from `@lumenflow/sdk` package root (`sdk/src/index.ts`). Consumers can now import `MerchantCategory` directly from `@lumenflow/sdk` without internal path imports. Resolves #1259.
+
+### Changed (Breaking)
+- `registerMerchant` category parameter is now strictly typed as `MerchantCategory` enum. Raw string literals (e.g. `"Retail"`) are no longer accepted by the TypeScript compiler; use `MerchantCategory.Retail` instead.
 
 ---
 

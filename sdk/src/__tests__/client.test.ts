@@ -6,7 +6,7 @@
  *   LUMENFLOW_CONTRACT_ID, LUMENFLOW_RPC_URL, LUMENFLOW_SOURCE_SECRET
  */
 
-import { LumenFlowClient, NETWORKS, LumenFlowError, PaymentErrorCode } from "../index";
+import { LumenFlowClient, NETWORKS, LumenFlowError, PaymentErrorCode, MerchantCategory } from "../index";
 import { SorobanRpc, scValToNative, nativeToScVal, xdr } from "@stellar/stellar-sdk";
 
 // ── Mock the Soroban RPC server ───────────────────────────────────────────────
@@ -153,7 +153,7 @@ describe("LumenFlowClient — invoke calls", () => {
       "My Store",
       "A store",
       "contact@store.com",
-      "Retail"
+      MerchantCategory.Retail
     );
     expect(result.result).toBeUndefined();
     expect(mockSendTransaction).toHaveBeenCalledTimes(1);
@@ -167,7 +167,7 @@ describe("LumenFlowClient — invoke calls", () => {
 
     const client = makeClient();
     const err = await client
-      .registerMerchant(source, source.publicKey(), "Store", "", "", "Other")
+      .registerMerchant(source, source.publicKey(), "Store", "", "", MerchantCategory.Other)
       .catch((e) => e);
     expect(err).toBeInstanceOf(LumenFlowError);
     expect((err as LumenFlowError).code).toBe(PaymentErrorCode.MerchantAlreadyRegistered);
@@ -184,7 +184,7 @@ describe("LumenFlowClient — invoke calls", () => {
 
     const client = makeClient();
     await expect(
-      client.registerMerchant(source, source.publicKey(), "Store", "", "", "Other")
+      client.registerMerchant(source, source.publicKey(), "Store", "", "", MerchantCategory.Other)
     ).rejects.toThrow("Transaction submission failed");
   });
 });
