@@ -6,8 +6,11 @@ limiting, and boundary cases.
 
 > **See also:** [`docs/signature-format.md`](signature-format.md) for the
 > single-payment signature specification, [`docs/errors.md`](errors.md) for the
-> full error code reference, and [`docs/api-rate-limits.md`](api-rate-limits.md)
-> for the per-merchant rate limit reference.
+> full error code reference, [`docs/api-rate-limits.md`](api-rate-limits.md)
+> for the per-merchant rate limit reference, and
+> [`docs/audit/threat-model-batch-payments.md`](audit/threat-model-batch-payments.md)
+> for the STRIDE threat model covering replay attacks, partial failure
+> exploitation, resource exhaustion, and signature substitution.
 
 ---
 
