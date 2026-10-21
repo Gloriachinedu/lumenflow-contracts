@@ -1,100 +1,106 @@
-# Payment Confirmation SLOs
+# Service-Level Objectives for Payment Confirmation and Webhooks
 
-Service Level Objectives for the LumenFlow payment confirmation pipeline.
-
-These SLOs define the reliability targets that canary deployments and production
-monitoring must maintain. The canary health check (`scripts/canary-health-check.sh`)
-enforces these thresholds automatically during progressive rollout.
-
----
-
-## SLO Definitions
-
-| SLO | Metric | Target | Window |
-|-----|--------|--------|--------|
-| **Error Rate** | `lumenflow_payment_error_rate` | ≤ 1% | 5 minutes |
-| **Confirmation Latency p95** | `lumenflow_payment_confirm_duration_seconds` (p95) | ≤ 30 s | 5 minutes |
-| **Confirmation Latency p99** | `lumenflow_payment_confirm_duration_seconds` (p99) | ≤ 60 s | 5 minutes |
-| **Availability** | HTTP 2xx rate on RPC endpoint | ≥ 99.5% | 5 minutes |
-
-### Error Rate SLO (primary canary gate)
-
-```
-Error Rate = (failed_payments / total_payments) × 100
-```
-
-A "failed payment" is any call to `process_payment_with_signature` or
-`batch_payment` that returns a non-zero contract error code during the
-observation window.
-
-**Threshold:** `CANARY_ERROR_RATE_THRESHOLD` (default `1.0` — i.e. 1%)
-
-If the error rate exceeds this threshold during the 5-minute canary observation
-window, the health check exits non-zero and triggers automatic rollback via
-`scripts/rollback-canary.sh`.
+**Issue:** [#906](https://github.com/Gloriachinedu/lumenflow-contracts/issues/906)
+**Status:** Backlog / Planning
+**Priority:** Medium
+**Effort:** Medium
+**Labels:** product, Stellar Wave
 
 ---
 
-## Prometheus Metrics
+## Overview
 
-LumenFlow exports the following Prometheus-compatible metrics via the
-sidecar metrics exporter (configured at `METRICS_URL`):
+This document defines the service-level objectives (SLOs) that LumenFlow commits
+to for two merchant-visible surfaces:
 
-| Metric name | Type | Description |
-|---|---|---|
-| `lumenflow_payment_error_rate` | Gauge | Rolling error rate (%) over the last 5 min |
-| `lumenflow_payment_confirm_duration_seconds` | Histogram | End-to-end payment confirmation latency |
-| `lumenflow_rpc_request_total` | Counter | Total RPC calls, labelled by `status` |
-| `lumenflow_rpc_error_total` | Counter | Total RPC errors |
+1. **Payment confirmation** — the time from a payer submitting a payment to the
+   merchant being able to observe it as confirmed.
+2. **Webhook delivery** — the time from a confirmed event to a successful webhook
+   POST at the merchant endpoint, including retry behaviour.
 
-### Sample PromQL queries
-
-```promql
-# 5-minute rolling error rate (%)
-100 * (
-  rate(lumenflow_rpc_error_total[5m])
-  /
-  rate(lumenflow_rpc_request_total[5m])
-)
-
-# p95 confirmation latency
-histogram_quantile(0.95, rate(lumenflow_payment_confirm_duration_seconds_bucket[5m]))
-
-# Availability (HTTP 2xx fraction)
-rate(lumenflow_rpc_request_total{status=~"2.."}[5m])
-/
-rate(lumenflow_rpc_request_total[5m])
-```
+It complements the operational guidance in
+[observability.md](observability.md), [monitoring.md](monitoring.md), and
+[webhook-integration.md](webhook-integration.md).
 
 ---
 
-## Environment Variables (canary health check)
+## Definitions
 
-| Variable | Default | Description |
-|---|---|---|
-| `METRICS_URL` | *(required)* | Prometheus/Grafana metrics endpoint URL |
-| `CANARY_ERROR_RATE_THRESHOLD` | `1.0` | Maximum acceptable error rate (%) |
-| `CANARY_OBSERVE_SECONDS` | `300` | Observation window in seconds (5 min) |
-| `CANARY_POLL_INTERVAL` | `30` | Poll interval in seconds |
-| `ROLLBACK_SCRIPT` | `scripts/rollback-canary.sh` | Path to rollback script |
-
----
-
-## Rollback Policy
-
-If any canary health check poll returns an error rate above `CANARY_ERROR_RATE_THRESHOLD`:
-
-1. The health check script logs the current metric value and the threshold.
-2. It exits with code `1`.
-3. The CI/CD pipeline invokes `scripts/rollback-canary.sh` automatically.
-4. An alert is sent to the on-call channel (configured in the CI pipeline).
-
-Human review is required before re-attempting a canary promotion after a rollback.
+| Term | Meaning |
+|---|---|
+| **Confirmation latency** | `confirmed_at - submitted_at` for a payment, where `confirmed_at` is when the ledger entry is final and indexed |
+| **Webhook delivery latency** | `first_2xx_at - event_created_at` for an event |
+| **Delivery success** | Endpoint returned `2xx` within the retry budget |
+| **Error budget** | `1 - SLO target`, measured over a rolling 30-day window |
 
 ---
 
-## References
+## Service-Level Objectives
 
-- [Monitoring Guide](monitoring.md)
-- [Deployment Guide](deployment-guide.md)
-- [Deployment Environments](deployment-environments.md)
+### Payment confirmation
+
+| Objective | Target (rolling 30 days) |
+|---|---|
+| Confirmation latency p50 | ≤ 6 s |
+| Confirmation latency p95 | ≤ 20 s |
+| Confirmation latency p99 | ≤ 60 s |
+| Confirmed payments never lost from history | 99.99% |
+
+### Webhook delivery
+
+| Objective | Target (rolling 30 days) |
+|---|---|
+| Delivery latency p50 (first attempt) | ≤ 5 s |
+| Delivery latency p95 | ≤ 30 s |
+| Events delivered within retry budget | 99.9% |
+| Duplicate deliveries | ≤ 0.1% of events (at-least-once, dedup by `event_id`) |
+
+### Retry budget
+
+Exponential backoff with jitter: attempts at ~0s, 30s, 2m, 10m, 1h, 6h, then
+hourly up to 24h total. After the budget is exhausted the event is marked
+`undeliverable` and surfaced in the dashboard for manual replay.
+
+---
+
+## Measurement
+
+- Latency is measured from server-side timestamps only; client clocks are not
+  trusted.
+- SLIs are emitted as histograms and counters via the existing metrics pipeline
+  (`payment_confirmation_latency_seconds`, `webhook_delivery_latency_seconds`,
+  `webhook_delivery_attempts_total{result}`).
+- A dashboard panel and a burn-rate alert (2% budget in 1h, or 5% in 6h) are
+  added per [monitoring.md](monitoring.md).
+
+---
+
+## Failure, Permission, and Boundary Cases
+
+| Case | Expected behaviour |
+|---|---|
+| Ledger congestion pushes confirmation past p99 | Error budget consumed; burn-rate alert fires; no data loss |
+| Merchant endpoint down for < 24h | Event delivered on a later retry; counts against latency, not success, if within budget |
+| Merchant endpoint down for > 24h | Event `undeliverable`; excluded from latency SLO, counted against the delivery-success SLO |
+| Merchant returns `2xx` but ignores payload | Treated as delivered; out of scope for the SLO |
+| Clock skew / negative computed latency | Sample dropped and logged, not clamped to zero |
+| Endpoint returns `410 Gone` | Deliveries stop immediately; event marked `endpoint_retired`, not counted as a failure |
+
+---
+
+## Testing
+
+- Normal path: a confirmed payment emits a confirmation-latency sample and a
+  webhook that succeeds on the first attempt records one delivery sample.
+- Edge case: an endpoint failing twice then succeeding produces three
+  `webhook_delivery_attempts_total` increments and one success within budget.
+- Failure case: an endpoint failing for the full retry budget marks the event
+  `undeliverable` and counts against the delivery-success SLO exactly once.
+
+---
+
+## Review Cadence
+
+SLO targets are reviewed quarterly against actual performance. Changes require
+product and operations sign-off and an update to this document and
+[ROADMAP.md](../ROADMAP.md) if commitments change.
