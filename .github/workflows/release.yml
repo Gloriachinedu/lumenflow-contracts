@@ -41,6 +41,13 @@ jobs:
           cp target/wasm32-unknown-unknown/release/lumenflow.wasm \
              lumenflow_${{ github.ref_name }}.wasm
 
+      - name: Upload release build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lumenflow-release-${{ github.ref_name }}
+          path: lumenflow_${{ github.ref_name }}.wasm
+          retention-days: 90
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
