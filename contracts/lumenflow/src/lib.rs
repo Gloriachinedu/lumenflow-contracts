@@ -50,6 +50,25 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Transfer administration to a new account.
+    pub fn transfer_admin(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &current_admin)?;
+        if new_admin.contract_id().is_some() {
+            return Err(PaymentError::InvalidAdminAddress);
+        }
+
+        storage::set_admin(&env, &new_admin);
+        env.events().publish(
+            ("lumenflow", "admin_transferred"),
+            (current_admin, new_admin, env.ledger().timestamp()),
+        );
+        Ok(())
+    }
+
     /// Set how long (seconds) before a payment record is eligible for cleanup.
     pub fn set_payment_cleanup_period(
         env: Env,

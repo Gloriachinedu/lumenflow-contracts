@@ -173,6 +173,7 @@ For `payment_processed` events, the `order_id` in the event data is unique per p
 | `multisig_initiated` | Multisig payment created | `payment_id` |
 | `multisig_executed` | Multisig payment executed | `payment_id` |
 | `merchant_registered` | New merchant registered | `merchant_address` |
+| `admin_transferred` | Admin privileges transferred | `old_admin`, `new_admin`, `timestamp` |
 | `payment_archived` | Payment record removed | `order_id` |
 
 For the full events reference see [events-reference.md](./events-reference.md).

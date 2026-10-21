@@ -27,6 +27,22 @@ Emitted when the contract administrator is successfully initialized.
 
 ---
 
+### `admin_transferred`
+Emitted when the current administrator transfers administration to another account.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful call to `transfer_admin`. |
+| **Topics** | `["lumenflow", "admin_transferred"]` |
+| **Payload** | `(old_admin: Address, new_admin: Address, timestamp: u64)` |
+
+**Payload Details:**
+- `old_admin`: The address of the administrator who initiated the transfer.
+- `new_admin`: The address receiving administrator privileges.
+- `timestamp`: The ledger timestamp when the transfer was recorded.
+
+---
+
 ### `merchant_registered`
 Emitted when a new merchant profile is created.
 

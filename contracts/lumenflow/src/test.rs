@@ -3,7 +3,7 @@
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
     token::StellarAssetClient,
-    Address, Bytes, Env, String, Vec,
+    Address, Bytes, Env, IntoVal, String, Vec,
 };
 
 use crate::{
@@ -103,6 +103,30 @@ fn test_set_admin_zero_address_fails() {
     let contract_address = env.register(PaymentProcessingContract, ());
     let result = client.try_set_admin(&contract_address);
     assert_eq!(result, Err(Ok(PaymentError::InvalidAdminAddress)));
+}
+
+#[test]
+fn test_transfer_admin_emits_event() {
+    let (env, client) = setup();
+    let old_admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let timestamp = 1_700_000_000;
+    env.ledger().set_timestamp(timestamp);
+
+    client.set_admin(&old_admin);
+    client.transfer_admin(&old_admin, &new_admin);
+
+    let event = env
+        .events()
+        .all()
+        .iter()
+        .find(|event| {
+            event.topics.get(1).unwrap()
+                == soroban_sdk::Symbol::new(&env, "admin_transferred")
+        })
+        .expect("admin transfer event should be emitted");
+    let expected_data = (old_admin, new_admin, timestamp).into_val(&env);
+    assert_eq!(event.data, expected_data);
 }
 
 // ── Merchant tests ────────────────────────────────────────────────────────────
