@@ -1124,3 +1124,8 @@ All Critical findings will have remediation PRs before mainnet deployment. A re-
 ## License
 
 [MIT](LICENSE) © 2026 LumenFlow Contributors
+
+## Handsoff notes
+
+<!-- handsoff-issue-1332 -->
+- #1332: [Frontend] Ensure all icon SVGs have accessible title and desc elements
