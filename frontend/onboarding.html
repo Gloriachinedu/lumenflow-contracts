@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Merchant Onboarding – LumenFlow</title>
+  <meta name="description" content="Register your business as a LumenFlow merchant to start accepting payments on the Stellar network." />
+  <meta property="og:title" content="Merchant Onboarding – LumenFlow" />
+  <meta property="og:description" content="Register your business as a LumenFlow merchant." />
+  <meta name="twitter:card" content="summary" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #f5f7fa;
+      --surface: #ffffff;
+      --text: #1a1a2e;
+      --muted: #666;
+      --border: #e0e0e0;
+      --accent: #6c47ff;
+      --accent-light: #f0ecff;
+      --accent-hover: #5032d1;
+      --success-bg: #e6f9f0;
+      --success-text: #1a9e5c;
+      --error-bg: #fff0f0;
+      --error-text: #cc2200;
+      --shadow: 0 2px 16px rgba(0, 0, 0, 0.07);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0d0d1a;
+        --surface: #1a1a2e;
+        --text: #e8e8f0;
+        --muted: #9090a8;
+        --border: #2e2e48;
+        --accent: #7c5cff;
+        --accent-light: #1e1a38;
+        --accent-hover: #9070ff;
+        --success-bg: #0d2a1a;
+        --success-text: #4ed98a;
+        --error-bg: #2a0d0d;
+        --error-text: #ff6b6b;
+        --shadow: 0 2px 16px rgba(0, 0, 0, 0.4);
+      }
+    }
+
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 2rem 1rem;
+    }
+
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+
+    header h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 0.5rem;
+    }
+
+    header p {
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    /* ── Steps Indicator ──────────────────────────────────────────────── */
+    .steps {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 0;
+      margin-bottom: 2rem;
+    }
+
+    .step {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.35rem;
+      flex: 1;
+      max-width: 120px;
+      position: relative;
+    }
+
+    .step::after {
+      content: '';
+      position: absolute;
+      top: 16px;
+      left: 60%;
+      width: 80%;
+      height: 2px;
+      background: var(--border);
+    }
+
+    .step:last-child::after { display: none; }
+
+    .step.active::after { background: var(--accent); }
+
+    .step-num {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--border);
+      color: var(--muted);
+      font-size: 0.85rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      z-index: 1;
+      transition: background 0.2s, color 0.2s;
+    }
+
+    .step.active .step-num, .step.done .step-num {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .step-label {
+      font-size: 0.7rem;
+      color: var(--muted);
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    .step.active .step-label { color: var(--accent); font-weight: 600; }
+
+    /* ── Card ────────────────────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      padding: 2rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .card h2 {
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-bottom: 1.25rem;
+      color: var(--text);
+    }
+
+    /* ── Form ────────────────────────────────────────────────────────── */
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .form-group:last-child { margin-bottom: 0; }
+
+    label {
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+    }
+
+    input, select, textarea {
+      padding: 0.65rem 0.85rem;
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      font-size: 0.95rem;
+      background: var(--bg);
+      color: var(--text);
+      outline: none;
+      transition: border-color 0.15s;
+      font-family: inherit;
+    }
+
+    input:focus, select:focus, textarea:focus {
+      border-color: var(--accent);
+    }
+
+    textarea { resize: vertical; min-height: 80px; }
+
+    .hint {
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-top: 0.2rem;
+    }
+
+    /* ── Buttons ─────────────────────────────────────────────────────── */
+    .btn {
+      padding: 0.7rem 1.5rem;
+      border-radius: 10px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: opacity 0.15s, background 0.15s;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .btn-primary:hover { opacity: 0.88; }
+
+    .btn-secondary {
+      background: var(--accent-light);
+      color: var(--accent);
+      border: 1.5px solid var(--accent);
+    }
+
+    .btn-secondary:hover { background: var(--accent); color: #fff; }
+
+    .btn-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 1.5rem;
+      gap: 1rem;
+    }
+
+    /* ── Status banner ───────────────────────────────────────────────── */
+    .status-banner {
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      font-size: 0.9rem;
+      font-weight: 600;
+      margin-bottom: 1.25rem;
+      display: none;
+    }
+
+    .status-banner.success {
+      background: var(--success-bg);
+      color: var(--success-text);
+      display: block;
+    }
+
+    .status-banner.error {
+      background: var(--error-bg);
+      color: var(--error-text);
+      display: block;
+    }
+
+    /* ── Wallet section ──────────────────────────────────────────────── */
+    .wallet-address {
+      font-family: monospace;
+      font-size: 0.82rem;
+      color: var(--muted);
+      background: var(--accent-light);
+      padding: 0.5rem 0.75rem;
+      border-radius: 6px;
+      word-break: break-all;
+    }
+
+    .wallet-connected {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--success-text);
+    }
+
+    /* ── Category badges ─────────────────────────────────────────────── */
+    .category-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap: 0.75rem;
+      margin-top: 0.5rem;
+    }
+
+    .category-option {
+      display: none;
+    }
+
+    .category-label {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      padding: 0.75rem 0.5rem;
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--muted);
+      transition: border-color 0.15s, background 0.15s, color 0.15s;
+      text-align: center;
+    }
+
+    .category-option:checked + .category-label {
+      border-color: var(--accent);
+      background: var(--accent-light);
+      color: var(--accent);
+    }
+
+    .category-icon { font-size: 1.4rem; }
+
+    /* ── Accessibility ───────────────────────────────────────────────── */
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0,0,0,0);
+      border: 0;
+    }
+
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    /* ── Page steps visibility ───────────────────────────────────────── */
+    .step-panel { display: none; }
+    .step-panel.active { display: block; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>Merchant Onboarding</h1>
+    <p>Register your business to start accepting payments on LumenFlow</p>
+  </header>
+
+  <!-- Step indicator -->
+  <nav class="steps" aria-label="Onboarding steps">
+    <div class="step active" id="step-indicator-1" aria-current="step">
+      <div class="step-num">1</div>
+      <span class="step-label">Connect</span>
+    </div>
+    <div class="step" id="step-indicator-2">
+      <div class="step-num">2</div>
+      <span class="step-label">Profile</span>
+    </div>
+    <div class="step" id="step-indicator-3">
+      <div class="step-num">3</div>
+      <span class="step-label">Category</span>
+    </div>
+    <div class="step" id="step-indicator-4">
+      <div class="step-num">4</div>
+      <span class="step-label">Review</span>
+    </div>
+  </nav>
+
+  <!-- Step 1: Connect Wallet -->
+  <section class="step-panel active" id="panel-1" aria-labelledby="step1-heading">
+    <div class="card">
+      <h2 id="step1-heading">Connect Your Wallet</h2>
+
+      <div id="status-banner-1" class="status-banner" role="alert"></div>
+
+      <p style="margin-bottom:1.25rem; color: var(--muted); font-size:0.9rem;">
+        Connect your Stellar wallet to verify your identity before registering.
+        LumenFlow supports Freighter and compatible Stellar wallets.
+      </p>
+
+      <div id="wallet-disconnected">
+        <button class="btn btn-primary" id="connect-wallet-btn" onclick="connectWallet()">
+          Connect Freighter Wallet
+        </button>
+      </div>
+
+      <div id="wallet-connected-section" style="display:none">
+        <div class="wallet-connected">
+          <span>✅</span>
+          <span>Wallet connected</span>
+        </div>
+        <div class="wallet-address" id="wallet-address-display" style="margin-top:0.75rem;"></div>
+      </div>
+
+      <div class="btn-row" style="justify-content:flex-end;">
+        <button class="btn btn-primary" id="next-1" onclick="goToStep(2)" disabled>
+          Next: Business Profile →
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Step 2: Business Profile -->
+  <section class="step-panel" id="panel-2" aria-labelledby="step2-heading">
+    <div class="card">
+      <h2 id="step2-heading">Business Profile</h2>
+
+      <div id="status-banner-2" class="status-banner" role="alert"></div>
+
+      <div class="form-group">
+        <label for="business-name">Business Name <span aria-hidden="true">*</span></label>
+        <input type="text" id="business-name" placeholder="e.g. My Awesome Store" required
+               autocomplete="organization" />
+      </div>
+
+      <div class="form-group">
+        <label for="business-description">Description</label>
+        <textarea id="business-description" placeholder="Tell buyers what your business offers…" maxlength="256"></textarea>
+        <span class="hint">Max 256 characters</span>
+      </div>
+
+      <div class="form-group">
+        <label for="contact-info">Contact Info <span aria-hidden="true">*</span></label>
+        <input type="text" id="contact-info" placeholder="email@example.com or https://yoursite.com" required />
+        <span class="hint">Displayed publicly to payers</span>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-secondary" onclick="goToStep(1)">← Back</button>
+        <button class="btn btn-primary" onclick="nextFromProfile()">Next: Category →</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Step 3: Category -->
+  <section class="step-panel" id="panel-3" aria-labelledby="step3-heading">
+    <div class="card">
+      <h2 id="step3-heading">Select Merchant Category</h2>
+
+      <p style="margin-bottom:1rem; color: var(--muted); font-size:0.9rem;">
+        Choose the category that best describes your business.
+      </p>
+
+      <div class="category-grid" role="group" aria-labelledby="step3-heading">
+        <input class="category-option" type="radio" name="category" id="cat-retail" value="Retail" />
+        <label class="category-label" for="cat-retail">
+          <span class="category-icon" aria-hidden="true">🏪</span>
+          Retail
+        </label>
+
+        <input class="category-option" type="radio" name="category" id="cat-food" value="Food" />
+        <label class="category-label" for="cat-food">
+          <span class="category-icon" aria-hidden="true">🍔</span>
+          Food
+        </label>
+
+        <input class="category-option" type="radio" name="category" id="cat-services" value="Services" />
+        <label class="category-label" for="cat-services">
+          <span class="category-icon" aria-hidden="true">🛠️</span>
+          Services
+        </label>
+
+        <input class="category-option" type="radio" name="category" id="cat-digital" value="Digital" />
+        <label class="category-label" for="cat-digital">
+          <span class="category-icon" aria-hidden="true">💻</span>
+          Digital
+        </label>
+
+        <input class="category-option" type="radio" name="category" id="cat-other" value="Other" />
+        <label class="category-label" for="cat-other">
+          <span class="category-icon" aria-hidden="true">📦</span>
+          Other
+        </label>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-secondary" onclick="goToStep(2)">← Back</button>
+        <button class="btn btn-primary" onclick="nextFromCategory()">Next: Review →</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Step 4: Review & Submit -->
+  <section class="step-panel" id="panel-4" aria-labelledby="step4-heading">
+    <div class="card">
+      <h2 id="step4-heading">Review & Register</h2>
+
+      <div id="status-banner-4" class="status-banner" role="alert"></div>
+
+      <table style="width:100%; border-collapse:collapse; font-size:0.9rem; margin-bottom:1.25rem;">
+        <tbody>
+          <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:0.6rem 0; color:var(--muted); font-weight:600; width:40%">Wallet</td>
+            <td style="padding:0.6rem 0; font-family:monospace; font-size:0.82rem; word-break:break-all" id="review-wallet">—</td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:0.6rem 0; color:var(--muted); font-weight:600">Business Name</td>
+            <td style="padding:0.6rem 0" id="review-name">—</td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:0.6rem 0; color:var(--muted); font-weight:600">Description</td>
+            <td style="padding:0.6rem 0" id="review-description">—</td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:0.6rem 0; color:var(--muted); font-weight:600">Contact</td>
+            <td style="padding:0.6rem 0" id="review-contact">—</td>
+          </tr>
+          <tr>
+            <td style="padding:0.6rem 0; color:var(--muted); font-weight:600">Category</td>
+            <td style="padding:0.6rem 0; font-weight:600; color:var(--accent)" id="review-category">—</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p style="font-size:0.82rem; color:var(--muted); margin-bottom:1rem;">
+        By registering, you agree to the LumenFlow
+        <a href="#" style="color:var(--accent)">Terms of Service</a>.
+        This transaction requires a small network fee paid in XLM.
+      </p>
+
+      <div class="btn-row">
+        <button class="btn btn-secondary" onclick="goToStep(3)">← Back</button>
+        <button class="btn btn-primary" id="register-btn" onclick="registerMerchant()">
+          Register Merchant
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Success state (hidden until registration completes) -->
+  <section id="success-panel" style="display:none" aria-live="polite">
+    <div class="card" style="text-align:center">
+      <div style="font-size:3rem; margin-bottom:1rem;">🎉</div>
+      <h2 style="color: var(--success-text); margin-bottom:0.75rem;">Registration Successful!</h2>
+      <p style="color:var(--muted); margin-bottom:1.5rem;">
+        Your merchant profile is now active. You can start accepting payments immediately.
+      </p>
+      <div style="display:flex; gap:1rem; justify-content:center; flex-wrap:wrap;">
+        <a href="history.html" class="btn btn-secondary">View Payment History</a>
+        <a href="multisig.html" class="btn btn-primary">Go to Dashboard</a>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+  // ── State ─────────────────────────────────────────────────────────────────
+  let walletAddress = null;
+  let currentStep = 1;
+
+  // ── Step navigation ───────────────────────────────────────────────────────
+  function goToStep(n) {
+    document.getElementById(`panel-${currentStep}`).classList.remove('active');
+    document.getElementById(`step-indicator-${currentStep}`).classList.remove('active');
+    currentStep = n;
+    document.getElementById(`panel-${currentStep}`).classList.add('active');
+    const ind = document.getElementById(`step-indicator-${currentStep}`);
+    ind.classList.add('active');
+    ind.setAttribute('aria-current', 'step');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  // ── Wallet connection ─────────────────────────────────────────────────────
+  async function connectWallet() {
+    const banner = document.getElementById('status-banner-1');
+    banner.className = 'status-banner';
+
+    try {
+      // Try Freighter wallet API
+      if (typeof window.freighter !== 'undefined' && window.freighter.isConnected) {
+        const connected = await window.freighter.isConnected();
+        if (!connected) await window.freighter.connect();
+        walletAddress = await window.freighter.getPublicKey();
+      } else {
+        // Demo mode: use a mock address
+        walletAddress = 'GDEMOADDRESS' + Math.random().toString(36).substring(2, 10).toUpperCase() + 'AAAAAAAAAA';
+      }
+
+      document.getElementById('wallet-disconnected').style.display = 'none';
+      document.getElementById('wallet-connected-section').style.display = 'block';
+      document.getElementById('wallet-address-display').textContent = walletAddress;
+      document.getElementById('next-1').disabled = false;
+
+      banner.textContent = '✅ Wallet connected successfully.';
+      banner.className = 'status-banner success';
+    } catch (err) {
+      banner.textContent = `⚠️ Could not connect wallet: ${err.message}`;
+      banner.className = 'status-banner error';
+    }
+  }
+
+  // ── Step 2 → 3 validation ─────────────────────────────────────────────────
+  function nextFromProfile() {
+    const name = document.getElementById('business-name').value.trim();
+    const contact = document.getElementById('contact-info').value.trim();
+    const banner = document.getElementById('status-banner-2');
+
+    if (!name || !contact) {
+      banner.textContent = 'Please fill in all required fields.';
+      banner.className = 'status-banner error';
+      return;
+    }
+    banner.className = 'status-banner';
+    goToStep(3);
+  }
+
+  // ── Step 3 → 4 validation ─────────────────────────────────────────────────
+  function nextFromCategory() {
+    const selected = document.querySelector('input[name="category"]:checked');
+    if (!selected) {
+      alert('Please select a category before continuing.');
+      return;
+    }
+    populateReview();
+    goToStep(4);
+  }
+
+  // ── Populate review panel ─────────────────────────────────────────────────
+  function populateReview() {
+    document.getElementById('review-wallet').textContent = walletAddress || '—';
+    document.getElementById('review-name').textContent = document.getElementById('business-name').value;
+    document.getElementById('review-description').textContent = document.getElementById('business-description').value || '(none)';
+    document.getElementById('review-contact').textContent = document.getElementById('contact-info').value;
+    const cat = document.querySelector('input[name="category"]:checked');
+    document.getElementById('review-category').textContent = cat ? cat.value : '—';
+  }
+
+  // ── Register merchant ─────────────────────────────────────────────────────
+  async function registerMerchant() {
+    const banner = document.getElementById('status-banner-4');
+    const btn = document.getElementById('register-btn');
+    btn.disabled = true;
+    btn.textContent = 'Registering…';
+    banner.className = 'status-banner';
+
+    try {
+      const payload = {
+        merchantAddress: walletAddress,
+        name: document.getElementById('business-name').value.trim(),
+        description: document.getElementById('business-description').value.trim(),
+        contactInfo: document.getElementById('contact-info').value.trim(),
+        category: document.querySelector('input[name="category"]:checked').value,
+      };
+
+      // In live mode, call the LumenFlow SDK here:
+      // await lumenflowClient.registerMerchant(keypair, payload.merchantAddress, ...)
+      // For demo mode, we simulate a 1-second network call:
+      await new Promise(r => setTimeout(r, 1000));
+
+      // Show success panel
+      document.getElementById('panel-4').style.display = 'none';
+      document.getElementById('success-panel').style.display = 'block';
+    } catch (err) {
+      banner.textContent = `⚠️ Registration failed: ${err.message}`;
+      banner.className = 'status-banner error';
+      btn.disabled = false;
+      btn.textContent = 'Register Merchant';
+    }
+  }
+</script>
+
+</body>
+</html>
