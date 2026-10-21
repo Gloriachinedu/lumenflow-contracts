@@ -73,8 +73,57 @@
       align-items: center;
       gap: 0.25rem;
       font-size: 0.7rem;
-      color: #6c47ff;
+      color: #1a9e5c;
       font-weight: 600;
+      cursor: help;
+      position: relative;
+    }
+
+    .verified-badge .verified-tooltip {
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%) translateY(-4px);
+      background: #1a1a2e;
+      color: #fff;
+      font-size: 0.72rem;
+      font-weight: 400;
+      padding: 0.4rem 0.6rem;
+      border-radius: 6px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.15s ease;
+      z-index: 10;
+      width: max-content;
+      max-width: 240px;
+    }
+
+    .verified-badge:hover .verified-tooltip,
+    .verified-badge:focus .verified-tooltip {
+      opacity: 1;
+    }
+
+    .verified-badge .verified-tooltip::after {
+      content: '';
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      border: 5px solid transparent;
+      border-top-color: #1a1a2e;
+    }
+
+    [data-theme="dark"] .verified-badge {
+      color: #34d48a;
+    }
+
+    [data-theme="dark"] .verified-badge .verified-tooltip {
+      background: #e8e8f0;
+      color: #1a1a2e;
+    }
+
+    [data-theme="dark"] .verified-badge .verified-tooltip::after {
+      border-top-color: #e8e8f0;
     }
 
     .refunds-section h2 {
@@ -374,7 +423,7 @@
       <label>Merchant</label>
       <div class="value">
         <span id="field-merchant-name"></span>
-        <span id="verified-badge" class="verified-badge" style="display:none">✔ Verified</span>
+        <span id="verified-badge" class="verified-badge" style="display:none" role="img" aria-label="Verified merchant — this merchant has been verified by LumenFlow" tabindex="0">✔ Verified<span class="verified-tooltip">This merchant has been verified by LumenFlow, confirming their identity and business legitimacy.</span></span>
       </div>
       <div class="help-text">The business that received this payment.</div>
     </div>
