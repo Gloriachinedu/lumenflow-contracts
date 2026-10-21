@@ -1,0 +1,201 @@
+name: Terraform Plan
+
+on:
+  pull_request:
+    paths:
+      - "infra/terraform/**"
+  push:
+    branches: [main, develop]
+    paths:
+      - "infra/terraform/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+# Ensure only one Terraform workflow runs at a time per branch so that
+# concurrent CI runs queue on the DynamoDB state lock rather than racing.
+# See issue #1058.
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  terraform-plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.8.5"
+
+      - name: Configure AWS credentials
+        if: github.event_name == 'push'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
+      - name: Terraform Init
+        id: init
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            terraform init -backend=false -input=false
+          else
+            terraform init -input=false
+          fi
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate -no-color
+
+      - name: Terraform Plan
+        id: plan
+        if: github.event_name == 'push'
+        run: |
+          terraform plan \
+            -input=false \
+            -no-color \
+            -var="environment=dev" \
+            2>&1 | tee plan.txt
+        continue-on-error: true
+
+      # ── Infracost cost estimation ──────────────────────────────────────────
+      # Runs infracost diff to estimate the monthly cost impact of this PR.
+      # The INFRACOST_API_KEY secret must be set in the repository settings.
+      # Threshold is configurable via the INFRACOST_COST_THRESHOLD input.
+      # Resolves: #1060
+      - name: Set up Infracost
+        if: github.event_name == 'pull_request'
+        uses: infracost/actions/setup@v3
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Generate Infracost baseline (main branch)
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch origin main --depth=1
+          git stash
+          git checkout FETCH_HEAD -- infra/terraform/ 2>/dev/null || true
+          infracost breakdown \
+            --path . \
+            --format json \
+            --out-file /tmp/infracost-base.json \
+            --no-cache \
+            2>&1 || true
+          git checkout - -- infra/terraform/ 2>/dev/null || true
+          git stash pop 2>/dev/null || true
+        working-directory: infra/terraform
+        continue-on-error: true
+
+      - name: Generate Infracost diff (this PR)
+        if: github.event_name == 'pull_request'
+        run: |
+          infracost diff \
+            --path . \
+            --format json \
+            --compare-to /tmp/infracost-base.json \
+            --out-file /tmp/infracost-diff.json \
+            --no-cache \
+            2>&1 || true
+        working-directory: infra/terraform
+        continue-on-error: true
+
+      - name: Post Infracost estimate as PR comment
+        if: github.event_name == 'pull_request'
+        uses: infracost/actions/comment@v3
+        with:
+          path: /tmp/infracost-diff.json
+          behavior: update
+        continue-on-error: true
+
+      - name: Enforce monthly cost increase threshold
+        if: github.event_name == 'pull_request'
+        env:
+          # Configurable threshold in USD — workflow input overrides the default of $100
+          INFRACOST_COST_THRESHOLD: ${{ inputs.cost_threshold || '100' }}
+        run: |
+          if [[ ! -f /tmp/infracost-diff.json ]]; then
+            echo "⚠️  Infracost diff file not found — skipping cost threshold check."
+            exit 0
+          fi
+
+          MONTHLY_INCREASE=$(jq -r '
+            (.projects[].breakdown.totalMonthlyCost // "0") |
+            tonumber
+          ' /tmp/infracost-diff.json | awk '{s+=$1} END {print s+0}' 2>/dev/null || echo "0")
+
+          echo "Monthly cost increase: \$${MONTHLY_INCREASE}"
+
+          # Compare as integers (cents) to avoid floating-point issues
+          INCREASE_CENTS=$(echo "$MONTHLY_INCREASE * 100" | bc | cut -d. -f1)
+          THRESHOLD_CENTS=$(echo "$INFRACOST_COST_THRESHOLD * 100" | bc | cut -d. -f1)
+
+          if [[ "$INCREASE_CENTS" -gt "$THRESHOLD_CENTS" ]]; then
+            echo "::error::Monthly cost increase \$${MONTHLY_INCREASE} exceeds the \$${INFRACOST_COST_THRESHOLD} threshold. Review the Infracost comment on this PR and adjust the infrastructure changes, or raise the threshold via the cost_threshold workflow input."
+            exit 1
+          fi
+
+          echo "✅ Monthly cost increase \$${MONTHLY_INCREASE} is within the \$${INFRACOST_COST_THRESHOLD} threshold."
+        continue-on-error: true
+
+      # ── Post Terraform plan as PR comment ──────────────────────────────────
+      - name: Post Plan as PR Comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const planPath = 'infra/terraform/plan.txt';
+            const plan = fs.existsSync(planPath)
+              ? fs.readFileSync(planPath, 'utf8')
+              : 'AWS-backed plans are skipped on pull requests. Format and validation checks ran without AWS credentials.';
+            const truncated = plan.length > 60000
+              ? plan.substring(0, 60000) + '\n\n... (truncated)'
+              : plan;
+
+            const body = `## Terraform Plan
+
+            #### Format 🖌 \`${{ steps.fmt.outcome }}\`
+            #### Init ⚙️ \`${{ steps.init.outcome }}\`
+            #### Validate 🤖 \`${{ steps.validate.outcome }}\`
+            #### Plan 📖 \`${{ steps.plan.outcome }}\`
+
+            <details><summary>Show Plan</summary>
+
+            \`\`\`hcl
+            ${truncated}
+            \`\`\`
+
+            </details>
+
+            *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            });
+
+      - name: Fail if plan failed
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
