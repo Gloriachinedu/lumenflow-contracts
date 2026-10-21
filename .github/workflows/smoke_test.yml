@@ -12,12 +12,27 @@ jobs:
     name: Smoke Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Install Stellar CLI
         run: |
-          curl -sSL https://github.com/stellar/stellar-cli/releases/latest/download/stellar-cli-x86_64-unknown-linux-gnu.tar.gz \
-            | tar -xz -C /usr/local/bin
+          curl -sSfL \
+            https://github.com/stellar/stellar-cli/releases/download/v22.8.1/stellar-cli-v22.8.1-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /usr/local/bin stellar
+
+      # Node.js is required by scripts/generate_smoke_keypair.sh to build
+      # and sign the canonical payment payload (see docs/signature-format.md).
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Cache smoke-signer npm modules
+        uses: actions/cache@v4
+        with:
+          path: scripts/.smoke_node_modules
+          key: ${{ runner.os }}-smoke-npm-stellar-sdk-13.8.0
+          restore-keys: ${{ runner.os }}-smoke-npm-stellar-sdk-
 
       - name: Run smoke test
         env:

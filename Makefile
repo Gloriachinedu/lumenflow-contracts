@@ -1,11 +1,11 @@
 NETWORK ?= local
-WASM    := target/wasm32-unknown-unknown/release/lumenflow.wasm
+WASM    := target/wasm32v1-none/release/lumenflow.wasm
 
 .PHONY: build test lint deploy clean help
 
 ## build: compile the contract to WASM (release)
 build:
-	cargo build --target wasm32-unknown-unknown --release --package lumenflow
+	cargo build --target wasm32v1-none --release --package lumenflow
 
 ## test: run the full test suite
 test:

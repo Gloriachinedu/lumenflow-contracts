@@ -1,0 +1,12 @@
+# Core dependencies
+requests==2.32.3
+prometheus-client==0.21.1
+
+# OpenTelemetry — only needed when OTEL_EXPORTER_OTLP_ENDPOINT is configured.
+# Install the extras block to enable tracing:
+#   pip install -r monitoring/requirements.txt
+# All packages below are optional at runtime; the exporter gracefully disables
+# tracing if they are not installed.
+opentelemetry-sdk==1.28.4
+opentelemetry-exporter-otlp-proto-grpc==1.28.4
+opentelemetry-api==1.28.4

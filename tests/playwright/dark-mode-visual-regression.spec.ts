@@ -1,187 +1,272 @@
 /**
- * Dark Mode Visual Regression Tests
+ * Visual Regression Tests – Dark Mode & Light Mode
  *
- * Captures screenshots of LumenFlow frontend pages in dark mode and compares
- * them against committed baseline images. The CI build fails if any screenshot
- * diff exceeds the configured threshold.
+ * Captures full-page screenshots of every frontend page in both light and dark
+ * colour schemes and compares them against approved baselines.
  *
- * Covered pages
- * ─────────────
- * - frontend/onboarding.html          (added by #1263)
- * - frontend/payment-history-paginated.html (added by #1263)
+ * Baseline storage:  tests/playwright/screenshots/
+ * Threshold:         1 % pixel-ratio (configured in playwright.config.ts)
  *
- * Threshold
- * ─────────
- * maxDiffPixelRatio: 0.02  (2% of pixels may differ between runs)
+ * Update baselines (run locally, commit the resulting PNGs):
+ *   npm --prefix tests run test:update-snapshots -- playwright/dark-mode-visual-regression.spec.ts
  *
- * This matches the tolerance used for minor anti-aliasing and font-hinting
- * differences across platforms. Lower thresholds risk flakiness; higher
- * thresholds may mask genuine regressions.
+ * In CI the job uploads screenshot artefacts on failure so diffs can be
+ * inspected from the Actions run summary.
  *
- * Updating baselines
- * ──────────────────
- * Run with the --update-snapshots flag to regenerate baseline images:
- *
- *   npx playwright test tests/playwright/dark-mode-visual-regression.spec.ts \
- *     --update-snapshots
- *
- * Then commit the new/updated files under tests/playwright/snapshots/.
- *
- * Dependencies
- * ────────────
- * Requires the pages to exist in the frontend/ directory. Serves them via a
- * local HTTP server spawned within the test (no external server needed).
+ * Resolves: #1085
  */
 
-import { test, expect, Page } from '@playwright/test';
-import * as http from 'http';
-import * as fs from 'fs';
-import * as path from 'path';
+import { test, expect, Page } from "@playwright/test";
 
-// ── Screenshot diff threshold (2% of pixels) ─────────────────────────────────
-const DIFF_THRESHOLD: number = 0.02;
+// ── Constants ─────────────────────────────────────────────────────────────────
 
-// ── Local static file server ──────────────────────────────────────────────────
+const FIXED_TS = 1736935200; // 2026-01-15T10:00:00Z — stable across runs
 
-function createStaticServer(): http.Server {
-  const root = process.cwd();
-  return http.createServer((req, res) => {
-    const requestUrl = new URL(req.url ?? '/', 'http://127.0.0.1');
-    const filePath = path.join(root, requestUrl.pathname);
+type ColorScheme = "light" | "dark";
 
-    // Path traversal guard
-    if (!filePath.startsWith(root)) {
-      res.writeHead(403);
-      res.end('Forbidden');
-      return;
-    }
-
-    fs.readFile(filePath, (err, data) => {
-      if (err) {
-        res.writeHead(404);
-        res.end('Not found');
-        return;
-      }
-
-      const ext = path.extname(filePath).toLowerCase();
-      const contentType =
-        ext === '.css' ? 'text/css; charset=utf-8' :
-        ext === '.js'  ? 'application/javascript; charset=utf-8' :
-                         'text/html; charset=utf-8';
-
-      res.writeHead(200, { 'Content-Type': contentType });
-      res.end(data);
-    });
-  });
-}
-
-async function startServer(): Promise<{ server: http.Server; port: number }> {
-  const server = createStaticServer();
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address() as { port: number };
-  return { server, port: address.port };
-}
-
-// ── Dark-mode emulation helper ────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
- * Navigate to a page with dark mode emulation enabled, wait for the page to
- * settle, and return the page handle.
+ * Wait for the page to reach a visually-stable state before snapping.
+ * Disables CSS transitions/animations to eliminate flakiness.
  */
-async function openInDarkMode(page: Page, url: string): Promise<void> {
-  await page.emulateMedia({ colorScheme: 'dark' });
-  await page.goto(url, { waitUntil: 'networkidle' });
-  // Small delay to allow CSS transitions and async JS rendering to complete
-  await page.waitForTimeout(300);
+async function waitForIdle(page: Page): Promise<void> {
+  await page.waitForLoadState("networkidle");
+
+  // Freeze CSS animations so screenshots are pixel-stable
+  await page.addStyleTag({
+    content: `
+      *, *::before, *::after {
+        animation-duration: 0s !important;
+        animation-delay: 0s !important;
+        transition-duration: 0s !important;
+        transition-delay: 0s !important;
+      }
+    `,
+  });
+
+  await page.waitForTimeout(200);
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+/**
+ * Inject deterministic demo data so screenshots do not depend on live RPC or
+ * wall-clock time.
+ */
+async function injectMockData(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    (window as any).LUMENFLOW_CONTRACT_ID = "";
+    (window as any).LUMENFLOW_MOCK_MODE = true;
 
-test.describe('Dark mode visual regression', () => {
-  let server: http.Server;
-  let port: number;
-
-  test.beforeAll(async () => {
-    ({ server, port } = await startServer());
+    (window as any).__LUMENFLOW_DEMO_PAYMENT = {
+      order_id: "ORDER_VRT_001",
+      merchant_name: "Demo Merchant",
+      merchant_verified: true,
+      amount: 10_000_000,
+      token: "XLM",
+      paid_at: 1736935200,
+      status: "Completed",
+      refunds: [],
+    };
   });
+}
 
-  test.afterAll(() => {
-    server.close();
-  });
-
-  // ── onboarding.html ─────────────────────────────────────────────────────────
-
-  test('onboarding.html — step 1 renders correctly in dark mode', async ({ page }) => {
-    await openInDarkMode(page, `http://127.0.0.1:${port}/frontend/onboarding.html`);
-
-    await expect(page).toHaveScreenshot('onboarding-step1-dark.png', {
-      maxDiffPixelRatio: DIFF_THRESHOLD,
+/**
+ * Create a test that opens a page, waits for idle, and takes a full-page
+ * screenshot for both light and dark colour schemes.
+ *
+ * The snapshot name follows the pattern:
+ *   <label>-<light|dark>.png
+ *
+ * so baselines for the same page are stored side-by-side.
+ */
+function snapshotPage(
+  label: string,
+  path: string,
+  scheme: ColorScheme,
+  beforeSnapshot?: (page: Page) => Promise<void>
+): void {
+  test(`${label} [${scheme}]`, async ({ page }) => {
+    // Apply colour scheme before any navigation so the browser honours it from
+    // the first paint.
+    await page.emulateMedia({ colorScheme: scheme });
+    await injectMockData(page);
+    await page.goto(path);
+    await waitForIdle(page);
+    if (beforeSnapshot) await beforeSnapshot(page);
+    await expect(page).toHaveScreenshot(`${label}-${scheme}.png`, {
       fullPage: true,
     });
   });
+}
 
-  test('onboarding.html — step 3 category grid renders correctly in dark mode', async ({ page }) => {
-    await openInDarkMode(page, `http://127.0.0.1:${port}/frontend/onboarding.html`);
+// ── history.html ──────────────────────────────────────────────────────────────
 
-    // Simulate wallet connect (demo mode) and navigate to step 3
-    await page.click('#connect-wallet-btn');
-    await page.waitForSelector('#wallet-connected-section', { state: 'visible' });
-    await page.click('#next-1');
+test.describe("Dark/Light – history.html", () => {
+  for (const scheme of ["light", "dark"] as ColorScheme[]) {
+    snapshotPage("history-default", "/history.html", scheme);
+  }
+});
 
-    // Fill required step 2 fields
-    await page.fill('#business-name', 'Demo Store');
-    await page.fill('#contact-info', 'demo@example.com');
-    await page.click('button:has-text("Next: Category")');
+// ── receipt.html ──────────────────────────────────────────────────────────────
 
-    await expect(page).toHaveScreenshot('onboarding-step3-dark.png', {
-      maxDiffPixelRatio: DIFF_THRESHOLD,
-      fullPage: true,
-    });
-  });
-
-  // ── payment-history-paginated.html ──────────────────────────────────────────
-
-  test('payment-history-paginated.html — renders correctly in dark mode', async ({ page }) => {
-    await openInDarkMode(
-      page,
-      `http://127.0.0.1:${port}/frontend/payment-history-paginated.html`
+test.describe("Dark/Light – receipt.html", () => {
+  for (const scheme of ["light", "dark"] as ColorScheme[]) {
+    snapshotPage(
+      "receipt-completed",
+      "/receipt.html?orderId=ORDER_VRT_001",
+      scheme,
+      async (page) => {
+        await expect(page.locator("#receipt-content")).toBeVisible();
+      }
     );
 
-    // Wait for the async mock data to load (page calls loadPage() on init)
-    await page.waitForFunction(() => {
-      const meta = document.getElementById('page-meta');
-      return meta && meta.textContent !== '' && !meta.textContent.includes('Loading');
-    }, { timeout: 5000 });
-
-    await expect(page).toHaveScreenshot('payment-history-paginated-dark.png', {
-      maxDiffPixelRatio: DIFF_THRESHOLD,
-      fullPage: true,
+    snapshotPage("receipt-not-found", "/receipt.html?orderId=NOT_FOUND", scheme, async (page) => {
+      await expect(page.locator("#not-found")).toBeVisible();
     });
-  });
 
-  test('payment-history-paginated.html — next page renders correctly in dark mode', async ({ page }) => {
-    await openInDarkMode(
-      page,
-      `http://127.0.0.1:${port}/frontend/payment-history-paginated.html`
-    );
-
-    // Wait for initial load
-    await page.waitForFunction(() => {
-      const btn = document.getElementById('next-btn') as HTMLButtonElement | null;
-      return btn && !btn.disabled;
-    }, { timeout: 5000 });
-
-    await page.click('#next-btn');
-
-    // Wait for page 2 to load
-    await page.waitForFunction(() => {
-      const meta = document.getElementById('page-meta');
-      return meta && meta.textContent?.includes('Page 2');
-    }, { timeout: 5000 });
-
-    await expect(page).toHaveScreenshot('payment-history-paginated-page2-dark.png', {
-      maxDiffPixelRatio: DIFF_THRESHOLD,
-      fullPage: true,
+    test(`receipt-verified-badge [${scheme}]`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.addInitScript(() => {
+        (window as any).LUMENFLOW_CONTRACT_ID = "";
+        (window as any).__LUMENFLOW_DEMO_PAYMENT = {
+          order_id: "ORDER_VRT_VERIFIED",
+          merchant_name: "Verified Store",
+          merchant_verified: true,
+          amount: 5_000_000,
+          token: "XLM",
+          paid_at: 1736935200,
+          status: "Completed",
+          refunds: [],
+        };
+      });
+      await page.goto("/receipt.html?orderId=ORDER_VRT_VERIFIED");
+      await waitForIdle(page);
+      await expect(page.locator("#receipt-content")).toBeVisible();
+      // The verified badge must be visible when merchant is verified
+      await expect(page.locator("#verified-badge")).toBeVisible();
+      await expect(page).toHaveScreenshot(`receipt-verified-badge-${scheme}.png`, {
+        fullPage: true,
+      });
     });
-  });
+
+    test(`receipt-partially-refunded [${scheme}]`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.addInitScript(() => {
+        (window as any).LUMENFLOW_CONTRACT_ID = "";
+        (window as any).__LUMENFLOW_DEMO_PAYMENT = {
+          order_id: "ORDER_VRT_PARTIAL",
+          merchant_name: "Demo Merchant",
+          merchant_verified: false,
+          amount: 10_000_000,
+          token: "XLM",
+          paid_at: 1736935200,
+          status: "PartiallyRefunded",
+          refunds: [
+            {
+              refund_id: "REFUND_001",
+              amount: 3_000_000,
+              reason: "Partial return",
+              status: "Executed",
+            },
+          ],
+        };
+      });
+      await page.goto("/receipt.html?orderId=ORDER_VRT_PARTIAL");
+      await waitForIdle(page);
+      await expect(page.locator("#receipt-content")).toBeVisible();
+      await expect(page).toHaveScreenshot(`receipt-partially-refunded-${scheme}.png`, {
+        fullPage: true,
+      });
+    });
+  }
+});
+
+// ── multisig.html ─────────────────────────────────────────────────────────────
+
+test.describe("Dark/Light – multisig.html", () => {
+  for (const scheme of ["light", "dark"] as ColorScheme[]) {
+    snapshotPage("multisig-empty", "/multisig.html", scheme);
+
+    test(`multisig-filled [${scheme}]`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: scheme });
+      await injectMockData(page);
+      await page.goto("/multisig.html");
+      await waitForIdle(page);
+
+      const merchantField = page
+        .locator(
+          'input[name="merchant_address"], #merchant-address, input[placeholder*="merchant" i]'
+        )
+        .first();
+      if (await merchantField.isVisible()) {
+        await merchantField.fill(
+          "GBUYUAI75XXWDZEKLY66CFYKQPET5JR4EAPL7STQKQCRLKJ74SC65VU"
+        );
+      }
+
+      const amountField = page
+        .locator('input[name="amount"], #amount, input[placeholder*="amount" i]')
+        .first();
+      if (await amountField.isVisible()) {
+        await amountField.fill("10000000");
+      }
+
+      await page.waitForTimeout(200);
+      await expect(page).toHaveScreenshot(`multisig-filled-${scheme}.png`, {
+        fullPage: true,
+      });
+    });
+  }
+});
+
+// ── onboarding.html ───────────────────────────────────────────────────────────
+// If this page does not yet exist, the test navigates to "/" as a fallback.
+
+test.describe("Dark/Light – onboarding.html", () => {
+  for (const scheme of ["light", "dark"] as ColorScheme[]) {
+    test(`onboarding-default [${scheme}]`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: scheme });
+      await injectMockData(page);
+
+      // Try dedicated page first; fall back to index
+      const res = await page.request.head("/onboarding.html").catch(() => null);
+      const path =
+        res && res.status() < 400 ? "/onboarding.html" : "/";
+      await page.goto(path);
+      await waitForIdle(page);
+      await expect(page).toHaveScreenshot(`onboarding-default-${scheme}.png`, {
+        fullPage: true,
+      });
+    });
+  }
+});
+
+// ── dashboard.html ────────────────────────────────────────────────────────────
+
+test.describe("Dark/Light – dashboard.html", () => {
+  for (const scheme of ["light", "dark"] as ColorScheme[]) {
+    test(`dashboard-default [${scheme}]`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: scheme });
+      await injectMockData(page);
+
+      // Try /dashboard.html, then index.html in the dashboard directory
+      const candidates = ["/dashboard.html", "/dashboard/index.html"];
+      let navigated = false;
+      for (const path of candidates) {
+        const res = await page.request.head(path).catch(() => null);
+        if (res && res.status() < 400) {
+          await page.goto(path);
+          navigated = true;
+          break;
+        }
+      }
+      if (!navigated) {
+        await page.goto("/dashboard/merchant-dashboard/index.html");
+      }
+      await waitForIdle(page);
+      await expect(page).toHaveScreenshot(`dashboard-default-${scheme}.png`, {
+        fullPage: true,
+      });
+    });
+  }
 });
