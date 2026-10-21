@@ -597,13 +597,21 @@ impl PaymentProcessingContract {
         let mut payment = storage::get_payment(&env, &refund.order_id)
             .ok_or(PaymentError::PaymentNotFound)?;
 
+        let refunded_amount = payment
+            .refunded_amount
+            .checked_add(refund.amount)
+            .ok_or(PaymentError::RefundExceedsOriginal)?;
+        if refunded_amount > payment.amount {
+            return Err(PaymentError::RefundExceedsOriginal);
+        }
+
         // Merchant must authorise the transfer
         payment.merchant_address.require_auth();
 
         let token_client = token::Client::new(&env, &payment.token);
         token_client.transfer(&payment.merchant_address, &payment.payer, &refund.amount);
 
-        payment.refunded_amount += refund.amount;
+        payment.refunded_amount = refunded_amount;
         payment.status = if payment.refunded_amount >= payment.amount {
             PaymentStatus::FullyRefunded
         } else {
