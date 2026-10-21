@@ -277,112 +277,10 @@
       "type": "row"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "events / hour",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 15,
-            "gradientMode": "none",
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "insertNulls": false,
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": { "type": "linear" },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" },
-            "thresholdsStyle": { "mode": "off" }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [{ "color": "green", "value": null }]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
-      "id": 10,
-      "options": {
-        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "none" }
-      },
-      "title": "Payments per hour",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "increase(lumenflow_payments_total[$__rate_interval])",
-          "legendFormat": "Payments / interval",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "events / hour",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 15,
-            "gradientMode": "none",
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "insertNulls": false,
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": { "type": "linear" },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" },
-            "thresholdsStyle": { "mode": "off" }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [{ "color": "green", "value": null }]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
-      "id": 11,
-      "options": {
-        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "none" }
-      },
-      "title": "Refunds per hour",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "increase(lumenflow_refunds_total[$__rate_interval])",
-          "legendFormat": "Refunds / interval",
-          "refId": "A"
-        }
-      ]
-    },
-    {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 },
       "id": 102,
-      "title": "Payment Amounts",
+      "title": "Canary vs Stable",
       "type": "row"
     },
     {
@@ -391,36 +289,45 @@
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": {
-            "axisLabel": "stroops",
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "success rate %",
+            "axisPlacement": "auto",
             "drawStyle": "line",
             "fillOpacity": 10,
-            "lineInterpolation": "smooth",
             "lineWidth": 2,
+            "pointSize": 5,
             "showPoints": "never",
             "spanNulls": false
           },
           "mappings": [],
+          "min": 0,
+          "max": 100,
           "thresholds": {
             "mode": "absolute",
-            "steps": [{ "color": "green", "value": null }]
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 95 },
+              { "color": "red", "value": 90 }
+            ]
           },
-          "unit": "short"
+          "unit": "percent"
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
-      "id": 20,
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 7 },
+      "id": 200,
       "options": {
-        "legend": { "calcs": ["mean", "last"], "displayMode": "table", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "none" }
+        "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
       },
-      "title": "Average Payment Amount (stroops)",
+      "title": "Payment Success Rate by Deployment",
       "type": "timeseries",
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "lumenflow_payment_amount_sum / lumenflow_payment_amount_count",
-          "legendFormat": "Avg amount",
+          "expr": "sum by (deployment) (rate(lumenflow_payments_total{status=\"success\"}[5m])) / clamp_min(sum by (deployment) (rate(lumenflow_payments_total[5m])), 0.001) * 100",
+          "legendFormat": "{{deployment}}",
           "refId": "A"
         }
       ]
@@ -431,11 +338,14 @@
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": {
-            "axisLabel": "events / interval",
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "seconds",
+            "axisPlacement": "auto",
             "drawStyle": "line",
-            "fillOpacity": 15,
-            "lineInterpolation": "smooth",
+            "fillOpacity": 10,
             "lineWidth": 2,
+            "pointSize": 5,
             "showPoints": "never",
             "spanNulls": false
           },
@@ -444,216 +354,88 @@
             "mode": "absolute",
             "steps": [
               { "color": "green", "value": null },
-              { "color": "red", "value": 1 }
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 3 }
             ]
           },
-          "unit": "short"
+          "unit": "s"
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
-      "id": 21,
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 7 },
+      "id": 201,
       "options": {
-        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "none" }
+        "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
       },
-      "title": "Error Rate over time",
+      "title": "p99 Latency by Deployment",
       "type": "timeseries",
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "increase(lumenflow_errors_total[$__rate_interval])",
-          "legendFormat": "Errors",
+          "expr": "histogram_quantile(0.99, sum by (le, deployment) (rate(lumenflow_payment_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{deployment}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "error rate %",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 3 },
+              { "color": "red", "value": 5 }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 7 },
+      "id": 202,
+      "options": {
+        "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "Error Rate by Deployment",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (deployment) (rate(lumenflow_errors_total[5m])) / clamp_min(sum by (deployment) (rate(lumenflow_payments_total[5m])), 0.001) * 100",
+          "legendFormat": "{{deployment}}",
           "refId": "A"
         }
       ]
     }
   ],
   "refresh": "30s",
-  "schemaVersion": 38,
-  "tags": ["lumenflow", "stellar", "soroban"],
-  "templating": {
-    "list": [
-      {
-        "current": {},
-        "hide": 0,
-        "includeAll": false,
-        "multi": false,
-        "name": "contract_id",
-        "options": [],
-        "query": "label_values(lumenflow_payments_total, contract_id)",
-        "refresh": 1,
-        "type": "query",
-        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-        "label": "Contract ID"
-      }
-    ]
-  },
-  "time": { "from": "now-3h", "to": "now" },
+  "schemaVersion": 39,
+  "tags": ["lumenflow", "payments", "canary"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
   "timepicker": {},
   "timezone": "browser",
-  "title": "LumenFlow Contract Metrics",
-  "uid": "lumenflow-contract-metrics",
+  "title": "LumenFlow Payments",
+  "uid": "lumenflow-payments",
   "version": 1,
-  "weekStart": "",
-  "alerting": {
-    "alerts": [
-      {
-        "uid": "lumenflow-high-error-rate",
-        "title": "LumenFlow: High Error Rate",
-        "condition": "C",
-        "data": [
-          {
-            "refId": "A",
-            "queryType": "",
-            "relativeTimeRange": { "from": 300, "to": 0 },
-            "datasourceUid": "${DS_PROMETHEUS}",
-            "model": {
-              "expr": "rate(lumenflow_errors_total[5m]) / (rate(lumenflow_payments_total[5m]) + 0.001) * 100",
-              "intervalMs": 1000,
-              "maxDataPoints": 43200,
-              "refId": "A"
-            }
-          },
-          {
-            "refId": "C",
-            "queryType": "",
-            "relativeTimeRange": { "from": 0, "to": 0 },
-            "datasourceUid": "__expr__",
-            "model": {
-              "conditions": [
-                {
-                  "evaluator": { "params": [5], "type": "gt" },
-                  "operator": { "type": "and" },
-                  "query": { "params": ["A"] },
-                  "reducer": { "params": [], "type": "last" },
-                  "type": "query"
-                }
-              ],
-              "datasource": { "type": "__expr__", "uid": "__expr__" },
-              "expression": "A",
-              "refId": "C",
-              "type": "classic_conditions"
-            }
-          }
-        ],
-        "noDataState": "NoData",
-        "execErrState": "Error",
-        "for": "5m",
-        "annotations": {
-          "description": "LumenFlow error rate exceeded 5% over the past 5 minutes.",
-          "summary": "High error rate on LumenFlow contract"
-        },
-        "labels": { "severity": "critical" }
-      },
-      {
-        "uid": "lumenflow-payment-volume-drop",
-        "title": "LumenFlow: Payment Volume Drop 50%",
-        "condition": "C",
-        "data": [
-          {
-            "refId": "A",
-            "queryType": "",
-            "relativeTimeRange": { "from": 3600, "to": 0 },
-            "datasourceUid": "${DS_PROMETHEUS}",
-            "model": {
-              "expr": "increase(lumenflow_payments_total[1h])",
-              "intervalMs": 1000,
-              "maxDataPoints": 43200,
-              "refId": "A"
-            }
-          },
-          {
-            "refId": "B",
-            "queryType": "",
-            "relativeTimeRange": { "from": 7200, "to": 3600 },
-            "datasourceUid": "${DS_PROMETHEUS}",
-            "model": {
-              "expr": "increase(lumenflow_payments_total[1h])",
-              "intervalMs": 1000,
-              "maxDataPoints": 43200,
-              "refId": "B"
-            }
-          },
-          {
-            "refId": "C",
-            "queryType": "",
-            "relativeTimeRange": { "from": 0, "to": 0 },
-            "datasourceUid": "__expr__",
-            "model": {
-              "conditions": [
-                {
-                  "evaluator": { "params": [0.5], "type": "lt" },
-                  "operator": { "type": "and" },
-                  "query": { "params": ["A", "B"] },
-                  "reducer": { "params": [], "type": "last" },
-                  "type": "query"
-                }
-              ],
-              "datasource": { "type": "__expr__", "uid": "__expr__" },
-              "expression": "A / (B + 0.001)",
-              "refId": "C",
-              "type": "classic_conditions"
-            }
-          }
-        ],
-        "noDataState": "NoData",
-        "execErrState": "Error",
-        "for": "15m",
-        "annotations": {
-          "description": "Payment volume in the last hour dropped more than 50% compared to the previous hour.",
-          "summary": "Significant payment volume drop on LumenFlow"
-        },
-        "labels": { "severity": "warning" }
-      },
-      {
-        "uid": "lumenflow-contract-paused",
-        "title": "LumenFlow: Contract Paused",
-        "condition": "C",
-        "data": [
-          {
-            "refId": "A",
-            "queryType": "",
-            "relativeTimeRange": { "from": 60, "to": 0 },
-            "datasourceUid": "${DS_PROMETHEUS}",
-            "model": {
-              "expr": "lumenflow_contract_paused",
-              "intervalMs": 1000,
-              "maxDataPoints": 43200,
-              "refId": "A"
-            }
-          },
-          {
-            "refId": "C",
-            "queryType": "",
-            "relativeTimeRange": { "from": 0, "to": 0 },
-            "datasourceUid": "__expr__",
-            "model": {
-              "conditions": [
-                {
-                  "evaluator": { "params": [1], "type": "gte" },
-                  "operator": { "type": "and" },
-                  "query": { "params": ["A"] },
-                  "reducer": { "params": [], "type": "last" },
-                  "type": "query"
-                }
-              ],
-              "datasource": { "type": "__expr__", "uid": "__expr__" },
-              "expression": "A",
-              "refId": "C",
-              "type": "classic_conditions"
-            }
-          }
-        ],
-        "noDataState": "NoData",
-        "execErrState": "Error",
-        "for": "1m",
-        "annotations": {
-          "description": "The LumenFlow contract has been paused. No payments can be processed.",
-          "summary": "LumenFlow contract is paused"
-        },
-        "labels": { "severity": "critical" }
-      }
-    ]
-  }
+  "weekStart": ""
 }
