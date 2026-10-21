@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # scripts/test.sh — Run the full LumenFlow test suite with optional filters.
+#
+# Usage:
+#   ./scripts/test.sh               # lint + test
+#   ./scripts/test.sh <filter>      # lint + filtered test
+#   COVERAGE=1 ./scripts/test.sh    # lint + test + coverage report (requires cargo-llvm-cov)
 set -euo pipefail
 
 FILTER="${1:-}"
@@ -20,7 +25,12 @@ if [[ "$COVERAGE" == "1" ]]; then
 elif [[ -n "$FILTER" ]]; then
   cargo test --all-features "$FILTER"
 else
-  cargo test --all-features
+  echo "==> Running tests${FILTER:+ (filter: $FILTER)}..."
+  if [[ -n "$FILTER" ]]; then
+    cargo test --all-features "$FILTER"
+  else
+    cargo test --all-features
+  fi
 fi
 
 echo ""

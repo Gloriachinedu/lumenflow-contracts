@@ -27,6 +27,7 @@ LumenFlow é um contrato inteligente de processamento de pagamentos de nível de
 - Diagrama de estado do ciclo de vida de reembolsos disponível em `docs/refund-lifecycle.md`
 - Guia de testes disponível em `docs/testing-guide.md`
 - Guia de pagamentos multi-assinatura disponível em `docs/multisig-guide.md`
+- Lista completa de códigos de erro, descrições e passos de resolução em [`docs/errors.pt.md`](docs/errors.pt.md)
 
 ## Estrutura do Projeto
 

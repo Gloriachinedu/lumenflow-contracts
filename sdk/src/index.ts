@@ -1,9 +1,26 @@
+feat/stellar-address-validation
+// Error handling
+export { LumenFlowError, PaymentErrorCode } from './errors';
+
+// Payment payload signing
+export { buildPaymentPayload, signPaymentPayload, Keypair } from './signPaymentPayload';
+
+// Wallet adapters
+export { WalletAdapter, FreighterAdapter, KeypairAdapter, Keypair as AdapterKeypair } from './adapter';
+
+// Address validation
+export { isValidStellarAddress, isValidStellarContractId } from './adapter';
+
+// Legacy wallet helpers (for backward compatibility)
+export { connectFreighter, connectAlbedo, disconnectWallet, saveWallet, loadWallet, createFreighterAdapter } from './wallet';
 export * from "./client";
 export * from "./types";
 export * from "./errors";
+export * from "./idempotency";
 export * from "./signPaymentPayload";
 export * from "./wallet";
-
-// Explicit named re-export for MerchantCategory so SDK consumers get
-// autocomplete and type-safety without importing from internal paths.
-export { MerchantCategory } from "./types";
+export * from "./idempotency";
+export * from "./eventCatalog";
+export * from "./security";
+export * from "./lazyRoute";
+export * from "./refundRecovery";
