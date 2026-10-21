@@ -227,47 +227,58 @@ node scripts/restore-drill.mjs codecov.yml Makefile  # drill specific files
 npm run test:roadmap                                 # runs scripts/*.test.mjs, incl. the drill tests
 ```
 
-## Playwright E2E — Refund Lifecycle Tests
+## Cargo fuzz targets for signature verification edge cases
 
-**File:** `tests/playwright/refund-lifecycle.spec.ts`
+The `contracts/lumenflow/fuzz/` directory contains libfuzzer-based fuzz targets
+built with [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz).
 
-**Issue:** [#1249](https://github.com/Gloriachinedu/lumenflow-contracts/issues/1249)
+### fuzz_verify_signature
 
-The spec covers the complete on-chain refund lifecycle through the browser UI,
-from payer-initiated refund through merchant approval/rejection to execution.
+`contracts/lumenflow/fuzz/fuzz_targets/fuzz_verify_signature.rs`
 
-### Test cases
+Fuzzes `verify_signature` — the ed25519 signature boundary called from
+`process_payment_with_signature` — with arbitrary byte inputs. It exercises:
 
-| Test | Description |
+| Input class | Expected outcome |
 |---|---|
-| `1 – payer can initiate a refund` | Happy path — payer fills refund form, submits, verifies Pending status |
-| `2 – merchant can approve a pending refund` | Merchant approves a pre-seeded Pending refund; status updates to Approved |
-| `3 – merchant can execute an approved refund` | Merchant executes an Approved refund; payment badge shows PartiallyRefunded |
-| `full flow – initiate → approve → execute` | End-to-end flow in a single test |
-| `fails meaningfully when contract returns an error` | Mock returns RefundWindowExpired; UI shows the error (existing happy-path error test) |
-| `merchant rejects refund and UI shows Rejected status` | **New** — Merchant rejects a Pending refund; status badge updates to Rejected |
-| `refund initiated after window expiry shows error message` | **New** — Payment older than 30 days; mock returns RefundWindowExpired; UI shows error |
-| `partial refund reduces remaining refundable amount shown in UI` | **New** — After a partial refund the PartiallyRefunded badge is shown and over-refunding shows RefundExceedsOriginal |
+| All-zero 32-byte key + 64-byte signature | `Ok(())` (test-harness mock convention) |
+| Any truncated key (< 32 bytes) | `Err(InvalidSignature)` — no panic |
+| Any oversized key (> 32 bytes) | `Err(InvalidSignature)` — no panic |
+| Truncated signature (< 64 bytes) | `Err(InvalidSignature)` — no panic |
+| Oversized signature (> 64 bytes) | `Err(InvalidSignature)` — no panic |
+| Correct lengths, non-zero arbitrary bytes | `Err(InvalidSignature)` — no panic |
+| Empty payload | handled gracefully — no panic |
+| Large payload (up to 1 KB) | handled gracefully — no panic |
 
-### Running the refund lifecycle suite
+**Run locally (60-second time limit):**
 
 ```bash
-cd tests
-npm run test:e2e
-# or for just this spec:
-npx playwright test playwright/refund-lifecycle.spec.ts
+cargo install cargo-fuzz
+cargo fuzz run fuzz_verify_signature \
+    --manifest-path contracts/lumenflow/fuzz/Cargo.toml \
+    -- -max_total_time=60
 ```
 
-Set `MOCK_WALLET=1` (default in CI) to bypass wallet-signing dialogs.
-Set `API_URL=http://localhost:8080` to point at a local mock server.
+**Run for 100 k iterations (CI gate):**
 
-### Mock API endpoints used
+```bash
+cargo fuzz run fuzz_verify_signature \
+    --manifest-path contracts/lumenflow/fuzz/Cargo.toml \
+    -- -runs=100000
+```
 
-| Endpoint | Purpose |
-|---|---|
-| `POST /mock/reset` | Clear all mock state before each test |
-| `POST /mock/seed/merchant` | Create a test merchant |
-| `POST /mock/seed/payment` | Create a test payment |
-| `POST /mock/seed/refund` | Pre-seed a refund in a given status |
-| `GET  /mock/contract/get_refund` | Fetch refund state for assertions |
-| `POST /mock/contract/initiate_refund` | Routable for error injection via `page.route()` |
+**Reproduce a crash artifact:**
+
+```bash
+cargo fuzz run fuzz_verify_signature \
+    --manifest-path contracts/lumenflow/fuzz/Cargo.toml \
+    contracts/lumenflow/fuzz/artifacts/fuzz_verify_signature/<crash-file>
+```
+
+### fuzz_auth (existing)
+
+`contracts/lumenflow/fuzz/fuzz_targets/fuzz_auth.rs`
+
+Fuzzes `batch_payment` boundary conditions — empty batches, over-limit batches
+(> 10 items), and batches containing zero/negative amounts, oversized
+`order_id`, and oversized memo fields. See the file header for full details.

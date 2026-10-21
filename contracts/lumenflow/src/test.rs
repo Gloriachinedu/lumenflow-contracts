@@ -14,8 +14,8 @@ use crate::{
     error::PaymentError,
     storage,
     types::{
-        BatchPaymentItem, MerchantCategory, PaymentFilter, SortField, SortOrder, StatusFilter,
-        SubscriptionStatus,
+        BatchPaymentItem, MerchantCategory, PaymentFilter, PaymentOrder, PaymentStatus, SortField,
+        SortOrder, StatusFilter, SubscriptionStatus,
     },
     PaymentProcessingContract, PaymentProcessingContractClient,
 };
@@ -964,7 +964,8 @@ fn test_batch_payment_intra_batch_duplicate_fails() {
         });
     }
     let result = client.try_batch_payment(&payer, &payments);
-    assert_eq!(result, Err(Ok(PaymentError::PaymentAlreadyExists)));
+    // Intra-batch duplicates return the dedicated DuplicateOrderId error (55)
+    assert_eq!(result, Err(Ok(PaymentError::DuplicateOrderId)));
 }
 
 #[test]
@@ -3320,6 +3321,157 @@ fn test_unpause_emits_event() {
 }
 
 // ── build_page sort tests ─────────────────────────────────────────────────────
+
+fn next_property_random(state: &mut u64) -> u64 {
+    *state = state
+        .wrapping_mul(6_364_136_223_846_793_005)
+        .wrapping_add(1_442_695_040_888_963_407);
+    *state >> 16
+}
+
+fn seed_random_history(
+    env: &Env,
+    client: &PaymentProcessingContractClient,
+    merchant: &Address,
+    payer: &Address,
+    token: &Address,
+    count: u32,
+    seed: u64,
+) -> alloc::vec::Vec<(String, u64, i128)> {
+    let mut expected = alloc::vec::Vec::new();
+    let mut random_state = seed;
+
+    env.as_contract(&client.address, || {
+        for index in 0..count {
+            let order_id = str(env, &format!("PROP_{seed}_{index}"));
+            let paid_at = next_property_random(&mut random_state);
+            let amount = (next_property_random(&mut random_state) % 1_000_000) as i128 + 1;
+            let payment = PaymentOrder {
+                order_id: order_id.clone(),
+                merchant_address: merchant.clone(),
+                payer: payer.clone(),
+                token: token.clone(),
+                amount,
+                version: 1,
+                status: PaymentStatus::Completed,
+                paid_at,
+                refunded_amount: 0,
+                memo: str(env, "generated history test payment"),
+                tags: None,
+                platform_fee: 0,
+            };
+
+            storage::set_payment(env, &payment);
+            storage::add_merchant_payment_id(env, merchant, &order_id).unwrap();
+            storage::add_payer_payment_id(env, payer, &order_id).unwrap();
+            expected.push((order_id, paid_at, amount));
+        }
+    });
+
+    expected
+}
+
+fn collect_merchant_history(
+    client: &PaymentProcessingContractClient,
+    merchant: &Address,
+    sort_field: SortField,
+    sort_order: SortOrder,
+) -> alloc::vec::Vec<PaymentOrder> {
+    let mut cursor = None;
+    let mut payments = alloc::vec::Vec::new();
+
+    loop {
+        let page = client.get_merchant_payment_history(
+            merchant,
+            &cursor,
+            &13,
+            &None,
+            &sort_field,
+            &sort_order,
+        );
+        payments.extend(page.payments.iter());
+        match page.next_cursor {
+            Some(next_cursor) => cursor = Some(next_cursor),
+            None => break,
+        }
+    }
+
+    payments
+}
+
+fn assert_history_matches_dataset(actual: &[PaymentOrder], expected: &[(String, u64, i128)]) {
+    assert_eq!(actual.len(), expected.len());
+    for (order_id, _, _) in expected {
+        assert_eq!(
+            actual
+                .iter()
+                .filter(|payment| payment.order_id == *order_id)
+                .count(),
+            1,
+            "payment must appear exactly once across all pages"
+        );
+    }
+}
+
+#[test]
+fn test_date_ascending_pagination_is_complete_for_random_datasets() {
+    for count in [1, 10, 50, 100] {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        let expected = seed_random_history(
+            &env,
+            &client,
+            &merchant,
+            &payer,
+            &token,
+            count,
+            0xA11CE + count as u64,
+        );
+        let actual = collect_merchant_history(
+            &client,
+            &merchant,
+            SortField::Date,
+            SortOrder::Ascending,
+        );
+
+        assert_history_matches_dataset(&actual, &expected);
+        assert!(
+            actual
+                .windows(2)
+                .all(|pair| pair[0].paid_at <= pair[1].paid_at),
+            "Date ascending order must hold across page boundaries"
+        );
+    }
+}
+
+#[test]
+fn test_amount_descending_pagination_is_complete_for_random_datasets() {
+    for count in [1, 10, 50, 100] {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        let expected = seed_random_history(
+            &env,
+            &client,
+            &merchant,
+            &payer,
+            &token,
+            count,
+            0xB0B + count as u64,
+        );
+        let actual = collect_merchant_history(
+            &client,
+            &merchant,
+            SortField::Amount,
+            SortOrder::Descending,
+        );
+
+        assert_history_matches_dataset(&actual, &expected);
+        assert!(
+            actual
+                .windows(2)
+                .all(|pair| pair[0].amount >= pair[1].amount),
+            "Amount descending order must hold across page boundaries"
+        );
+    }
+}
 
 #[test]
 fn test_sort_by_amount_ascending() {
@@ -9646,4 +9798,147 @@ fn test_set_min_refund_amount_zero_fails() {
     // Zero is not a valid positive amount
     let result = client.try_set_min_refund_amount(&admin, &0i128);
     assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+}
+
+// ── Max signers limit tests (issue #1269) ─────────────────────────────────────
+
+/// Helper: build a Vec<Address> of `n` freshly generated addresses.
+fn make_signers(env: &Env, n: usize) -> Vec<Address> {
+    let mut v = Vec::new(env);
+    for _ in 0..n {
+        v.push_back(Address::generate(env));
+    }
+    v
+}
+
+/// Exactly 10 signers (the default limit) must be accepted.
+#[test]
+fn test_multisig_exactly_max_signers_accepted() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let _ = admin; // silence unused warning; admin already set by setup_payment_env
+    let signers = make_signers(&env, 10);
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_MAX_OK"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &1,
+        &None,
+    );
+    assert!(result.is_ok(), "10 signers should be accepted by default");
+}
+
+/// 11 signers must be rejected with TooManySigners.
+#[test]
+fn test_multisig_exceeds_max_signers_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signers = make_signers(&env, 11);
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_TOO_MANY"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &1,
+        &None,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TooManySigners)));
+}
+
+/// 0 signers must still be rejected with InvalidInput (existing guard).
+#[test]
+fn test_multisig_zero_signers_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signers = make_signers(&env, 0);
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_ZERO"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &1,
+        &None,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+/// 1 signer must be accepted.
+#[test]
+fn test_multisig_single_signer_accepted() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signers = make_signers(&env, 1);
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_ONE"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &1,
+        &None,
+    );
+    assert!(result.is_ok(), "1 signer should be accepted");
+}
+
+/// Admin can raise the limit via set_max_signers; after raising to 15 a list
+/// of 15 signers must be accepted.
+#[test]
+fn test_set_max_signers_admin_configurable() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    // Raise the limit to 15.
+    client.set_max_signers(&admin, &15u32);
+
+    let signers = make_signers(&env, 15);
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_RAISED"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &1,
+        &None,
+    );
+    assert!(result.is_ok(), "15 signers should be accepted after raising the limit to 15");
+}
+
+/// After raising the limit to 15, a list of 16 must still be rejected.
+#[test]
+fn test_set_max_signers_still_enforced_after_admin_change() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    client.set_max_signers(&admin, &15u32);
+
+    let signers = make_signers(&env, 16);
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_RAISED_TOO_MANY"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &1,
+        &None,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TooManySigners)));
+}
+
+/// set_max_signers with 0 must be rejected with InvalidInput.
+#[test]
+fn test_set_max_signers_zero_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_set_max_signers(&admin, &0u32);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
 }

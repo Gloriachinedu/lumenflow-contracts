@@ -24,6 +24,9 @@
 #   BATCH_ITEMS    — items per batch payment call (default: 10)
 #   BASELINE_P95_MS — recorded baseline P95 latency (ms) for the concurrent
 #                     batch scenario, from docs/benchmarking.md (default: 1200)
+#   MULTISIG_SIGNER_TX_XDRS — JSON array of five pre-signed sign_multisig_payment
+#                     transaction envelopes for the same payment and unique signers
+#   MULTISIG_THRESHOLD — signatures required for the multisig payment (default: 3)
 #
 # Pass/fail thresholds:
 #   p99 latency < 5 000 ms
@@ -34,6 +37,10 @@
 # call containing BATCH_ITEMS entries. It reports throughput (payments/sec),
 # P95 latency, and error rate, and fails if P95 regresses more than 20% over
 # BASELINE_P95_MS (see docs/benchmarking.md — "Load Test Baseline").
+#
+# Issue #1276: when MULTISIG_SIGNER_TX_XDRS is provided, five concurrent k6 VUs
+# submit pre-signed sign_multisig_payment transactions and wait for finality.
+# This requires funded signer accounts and an already initiated payment.
 #
 # Results are printed to stdout and written to RESULTS_FILE in JSON format.
 set -euo pipefail
@@ -62,6 +69,8 @@ LATENCY_THRESHOLD_MS="${LATENCY_THRESHOLD_MS:-5000}"
 BATCH_CLIENTS="${BATCH_CLIENTS:-10}"
 BATCH_ITEMS="${BATCH_ITEMS:-10}"
 BASELINE_P95_MS="${BASELINE_P95_MS:-1200}"
+MULTISIG_SIGNER_TX_XDRS="${MULTISIG_SIGNER_TX_XDRS:-}"
+MULTISIG_THRESHOLD="${MULTISIG_THRESHOLD:-3}"
 
 echo "════════════════════════════════════════════════════════════════"
 echo "  LumenFlow Load Test — High-Frequency Payment Submission"
@@ -112,11 +121,28 @@ const paymentErrors   = new Rate('lumenflow_payment_error_rate');
 // Issue #1084 — concurrent batch payment scenario metrics
 const batchPaymentDuration = new Trend('lumenflow_batch_payment_duration', true);
 const batchPaymentErrors   = new Rate('lumenflow_batch_payment_error_rate');
+const multisigSignerDuration = new Trend('lumenflow_multisig_signer_duration', true);
+const multisigSignerErrors = new Rate('lumenflow_multisig_signer_error_rate');
 
 const RPC_URL     = __ENV.RPC_URL     || 'https://soroban-testnet.stellar.org';
 const CONTRACT_ID = __ENV.CONTRACT_ID || '';
 const BATCH_CLIENTS   = parseInt(__ENV.BATCH_CLIENTS)   || 10;
 const BATCH_ITEMS     = parseInt(__ENV.BATCH_ITEMS)     || 10;
+const MULTISIG_SIGNER_TX_XDRS = __ENV.MULTISIG_SIGNER_TX_XDRS
+  ? JSON.parse(__ENV.MULTISIG_SIGNER_TX_XDRS)
+  : [];
+const MULTISIG_SIGNERS = 5;
+const MULTISIG_THRESHOLD = parseInt(__ENV.MULTISIG_THRESHOLD) || 3;
+const MULTISIG_ENABLED = MULTISIG_SIGNER_TX_XDRS.length > 0;
+if (MULTISIG_ENABLED && MULTISIG_SIGNER_TX_XDRS.length !== MULTISIG_SIGNERS) {
+  throw new Error('MULTISIG_SIGNER_TX_XDRS must contain exactly five transaction XDRs');
+}
+if (MULTISIG_THRESHOLD < 1 || MULTISIG_THRESHOLD > MULTISIG_SIGNERS) {
+  throw new Error('MULTISIG_THRESHOLD must be between 1 and 5');
+}
+if (MULTISIG_ENABLED && new Set(MULTISIG_SIGNER_TX_XDRS).size !== MULTISIG_SIGNERS) {
+  throw new Error('MULTISIG_SIGNER_TX_XDRS must contain five distinct transaction XDRs');
+}
 // Regression gate: fail if the batch scenario's P95 latency exceeds the
 // recorded baseline (docs/benchmarking.md — "Load Test Baseline") by >20%.
 const BASELINE_P95_MS = parseFloat(__ENV.BASELINE_P95_MS) || 1200;
@@ -143,7 +169,18 @@ export const options = {
       startTime: '0s',
       maxDuration: '5m',
     },
+    ...(MULTISIG_ENABLED ? {
+      concurrent_multisig_signing: {
+        executor: 'per-vu-iterations',
+        exec: 'concurrentMultisigSigner',
+        vus: MULTISIG_SIGNERS,
+        iterations: 1,
+        startTime: '0s',
+        maxDuration: '5m',
+      },
+    } : {}),
   },
+  summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(20)', 'p(40)', 'p(50)', 'p(60)', 'p(80)', 'p(90)', 'p(95)', 'p(99)', 'p(100)'],
   thresholds: {
     // p99 latency under 5 seconds for all HTTP requests
     'http_req_duration': ['p(99)<5000'],
@@ -157,6 +194,10 @@ export const options = {
     // and error rate must stay under 1%.
     'lumenflow_batch_payment_duration': [`p(95)<${BATCH_P95_GATE_MS}`],
     'lumenflow_batch_payment_error_rate': ['rate<0.01'],
+    ...(MULTISIG_ENABLED ? {
+      'lumenflow_multisig_signer_error_rate': ['rate<0.01'],
+      'lumenflow_multisig_signer_duration': ['p(99)<30000'],
+    } : {}),
   },
 };
 
@@ -279,6 +320,64 @@ export function concurrentBatchPayment() {
   batchPaymentErrors.add(!ok);
 }
 
+// ── Scenario: concurrent_multisig_signing (Issue #1276) ──────────────────────
+// Each VU submits one pre-signed transaction from a distinct authorized signer.
+export function concurrentMultisigSigner() {
+  const signerIndex = __VU - 1;
+  const startedAt = Date.now();
+  const sendResponse = http.post(RPC_URL, JSON.stringify({
+    jsonrpc: '2.0',
+    id: `multisig-send-${signerIndex}`,
+    method: 'sendTransaction',
+    params: { transaction: MULTISIG_SIGNER_TX_XDRS[signerIndex] },
+  }), {
+    headers: { 'Content-Type': 'application/json' },
+    timeout: '30s',
+  });
+
+  let sendResult;
+  try {
+    sendResult = JSON.parse(sendResponse.body).result;
+  } catch (_) {
+    multisigSignerErrors.add(true);
+    return;
+  }
+
+  if (sendResponse.status !== 200 || !sendResult || sendResult.status === 'ERROR' || !sendResult.hash) {
+    multisigSignerErrors.add(true);
+    return;
+  }
+
+  let transactionStatus = 'NOT_FOUND';
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const statusResponse = http.post(RPC_URL, JSON.stringify({
+      jsonrpc: '2.0',
+      id: `multisig-status-${signerIndex}-${attempt}`,
+      method: 'getTransaction',
+      params: { hash: sendResult.hash },
+    }), {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: '10s',
+    });
+
+    try {
+      transactionStatus = JSON.parse(statusResponse.body).result?.status ?? 'NOT_FOUND';
+    } catch (_) {
+      transactionStatus = 'ERROR';
+    }
+    if (transactionStatus === 'SUCCESS' || transactionStatus === 'FAILED' || transactionStatus === 'ERROR') {
+      break;
+    }
+    sleep(0.5);
+  }
+
+  const succeeded = transactionStatus === 'SUCCESS';
+  multisigSignerErrors.add(!succeeded);
+  if (succeeded) {
+    multisigSignerDuration.add(Date.now() - startedAt);
+  }
+}
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 export function handleSummary(data) {
   const p50  = Math.round(data.metrics.http_req_duration?.values?.['p(50)'] ?? 0);
@@ -298,8 +397,17 @@ export function handleSummary(data) {
     ? (((batchP95 - BASELINE_P95_MS) / BASELINE_P95_MS) * 100).toFixed(1)
     : '0.0';
   const batchPassed = batchP95 <= batchP95Gate && parseFloat(batchErrRate) < 1.0;
+  const multisigSignerCount = data.metrics.lumenflow_multisig_signer_duration?.values?.count ?? 0;
+  const multisigErrorRate = ((data.metrics.lumenflow_multisig_signer_error_rate?.values?.rate ?? 0) * 100).toFixed(2);
+  const thresholdPercentile = MULTISIG_THRESHOLD * 20;
+  const multisigThresholdCompletionMs = Math.round(
+    data.metrics.lumenflow_multisig_signer_duration?.values?.[`p(${thresholdPercentile})`] ?? 0
+  );
+  const multisigPassed = !MULTISIG_ENABLED || (
+    multisigSignerCount === MULTISIG_SIGNERS && parseFloat(multisigErrorRate) === 0
+  );
 
-  const passed = p99 < 5000 && parseFloat(errRate) < 1.0 && batchPassed;
+  const passed = p99 < 5000 && parseFloat(errRate) < 1.0 && batchPassed && multisigPassed;
   const status = passed ? '✅ PASSED' : '❌ FAILED';
 
   const summary = [
@@ -321,6 +429,14 @@ export function handleSummary(data) {
     `  p95 latency:  ${batchP95} ms  (baseline: ${BASELINE_P95_MS} ms, gate: ${batchP95Gate} ms)`,
     `  Regression:   ${batchRegressionPct}% vs baseline (fails CI if > 20%)`,
     `  Error rate:   ${batchErrRate}%  (threshold: < 1%)`,
+    '',
+    '  -- Concurrent multisig signing (Issue #1276) --',
+    MULTISIG_ENABLED
+      ? `  Signers / threshold: ${MULTISIG_SIGNERS} / ${MULTISIG_THRESHOLD}`
+      : '  Skipped: MULTISIG_SIGNER_TX_XDRS was not provided',
+    `  Threshold completion: ${multisigThresholdCompletionMs} ms (threshold-th successful signer)`,
+    `  Successful signers: ${multisigSignerCount} / ${MULTISIG_ENABLED ? MULTISIG_SIGNERS : 0}`,
+    `  Signer error rate: ${multisigErrorRate}%`,
     '════════════════════════════════════════════════════════════════',
     '',
   ].join('\n');
@@ -346,6 +462,15 @@ export function handleSummary(data) {
       error_rate_pct: parseFloat(batchErrRate),
       passed: batchPassed,
     },
+    concurrent_multisig_signing: {
+      enabled: MULTISIG_ENABLED,
+      signers: MULTISIG_ENABLED ? MULTISIG_SIGNERS : 0,
+      threshold: MULTISIG_ENABLED ? MULTISIG_THRESHOLD : null,
+      threshold_completion_ms: multisigThresholdCompletionMs,
+      successful_signers: multisigSignerCount,
+      error_rate_pct: parseFloat(multisigErrorRate),
+      passed: multisigPassed,
+    },
     passed,
   }, null, 2);
 
@@ -370,6 +495,8 @@ k6 run \
   --env BATCH_CLIENTS="$BATCH_CLIENTS" \
   --env BATCH_ITEMS="$BATCH_ITEMS" \
   --env BASELINE_P95_MS="$BASELINE_P95_MS" \
+  --env MULTISIG_SIGNER_TX_XDRS="$MULTISIG_SIGNER_TX_XDRS" \
+  --env MULTISIG_THRESHOLD="$MULTISIG_THRESHOLD" \
   --env RESULTS_FILE="$RESULTS_FILE" \
   --summary-export="$RESULTS_FILE" \
   "$K6_SCRIPT"

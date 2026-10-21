@@ -14,7 +14,66 @@
 const HORIZON_URL    = window.LUMENFLOW_HORIZON_URL   || 'https://horizon-testnet.stellar.org';
 const CONTRACT_ID    = window.LUMENFLOW_CONTRACT_ID    || '';
 const REFRESH_MS     = 60_000;          // 60 seconds
-const LARGE_PAYMENT_THRESHOLD = window.LUMENFLOW_LARGE_PAYMENT_THRESHOLD || 100_000; // stroops
+
+/** Default alert thresholds — used when no saved settings are present. */
+const DEFAULTS = {
+  largePaymentThresholdXlm: (window.LUMENFLOW_LARGE_PAYMENT_THRESHOLD || 100_000) / 1e7,
+  velocityLimitPerHour: 50,
+};
+
+/** Stroops per XLM */
+const STROOPS_PER_XLM = 1e7;
+
+// ── Persisted settings ────────────────────────────────────────────────────
+
+const SETTINGS_KEY = 'lumenflow_fraud_settings';
+
+/**
+ * Load settings from localStorage.  Falls back to DEFAULTS for any missing
+ * or invalid values so the dashboard always starts in a sensible state.
+ *
+ * @returns {{ largePaymentThresholdXlm: number, velocityLimitPerHour: number }}
+ */
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return { ...DEFAULTS };
+    const parsed = JSON.parse(raw);
+    return {
+      largePaymentThresholdXlm:
+        typeof parsed.largePaymentThresholdXlm === 'number' && parsed.largePaymentThresholdXlm > 0
+          ? parsed.largePaymentThresholdXlm
+          : DEFAULTS.largePaymentThresholdXlm,
+      velocityLimitPerHour:
+        typeof parsed.velocityLimitPerHour === 'number' && parsed.velocityLimitPerHour >= 1
+          ? parsed.velocityLimitPerHour
+          : DEFAULTS.velocityLimitPerHour,
+    };
+  } catch {
+    return { ...DEFAULTS };
+  }
+}
+
+/**
+ * Persist settings to localStorage.
+ *
+ * @param {{ largePaymentThresholdXlm: number, velocityLimitPerHour: number }} settings
+ */
+function saveSettings(settings) {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+}
+
+/** Active settings — mutated when the user saves new values. */
+let settings = loadSettings();
+
+/** Returns the large-payment threshold in stroops (for comparison). */
+function largePaymentThresholdStroops() {
+  return Math.round(settings.largePaymentThresholdXlm * STROOPS_PER_XLM);
+}
+
+// Keep LARGE_PAYMENT_THRESHOLD as a dynamic getter for backward compatibility
+// with code that reads it as a value.
+let LARGE_PAYMENT_THRESHOLD = largePaymentThresholdStroops();
 
 // Track unseen alerts for the nav badge
 let seenEventIds = new Set(JSON.parse(sessionStorage.getItem('seen_event_ids') || '[]'));
@@ -203,7 +262,7 @@ function renderLargePayments(payments) {
   const labelEl = document.getElementById('threshold-label');
 
   loadEl.hidden = true;
-  labelEl.textContent = `Threshold: ${fmtAmount(LARGE_PAYMENT_THRESHOLD)} XLM`;
+  labelEl.textContent = `Threshold: ${fmtAmount(largePaymentThresholdStroops())} XLM`;
 
   if (payments.length === 0) { emptyEl.hidden = false; return; }
 
@@ -288,6 +347,124 @@ async function refresh() {
   refreshBtn.disabled = false;
   refreshBtn.textContent = '↻ Refresh';
 }
+
+// ── Settings panel ────────────────────────────────────────────────────────
+
+const settingsBtn   = document.getElementById('settings-btn');
+const settingsPanel = document.getElementById('settings-panel');
+const settingsClose = document.getElementById('settings-close');
+const settingsForm  = document.getElementById('settings-form');
+const settingsReset = document.getElementById('settings-reset');
+const savedMsg      = document.getElementById('settings-saved-msg');
+
+const inputLargeThreshold = document.getElementById('setting-large-payment-threshold');
+const inputVelocityLimit  = document.getElementById('setting-velocity-limit');
+const errLargeThreshold   = document.getElementById('setting-large-payment-threshold-error');
+const errVelocityLimit    = document.getElementById('setting-velocity-limit-error');
+
+/** Populate form fields with current settings values. */
+function populateSettingsForm() {
+  inputLargeThreshold.value = settings.largePaymentThresholdXlm;
+  inputVelocityLimit.value  = settings.velocityLimitPerHour;
+}
+
+/** Open the settings panel and populate fields. */
+function openSettings() {
+  populateSettingsForm();
+  settingsPanel.hidden = false;
+  settingsBtn.setAttribute('aria-expanded', 'true');
+  settingsClose.focus();
+  savedMsg.hidden = true;
+}
+
+/** Close the settings panel. */
+function closeSettings() {
+  settingsPanel.hidden = true;
+  settingsBtn.setAttribute('aria-expanded', 'false');
+  settingsBtn.focus();
+}
+
+/** Validate and save settings, then re-render the dashboard. */
+function handleSettingsSave(e) {
+  e.preventDefault();
+
+  let valid = true;
+
+  // Validate large payment threshold
+  const thresholdVal = parseFloat(inputLargeThreshold.value);
+  if (isNaN(thresholdVal) || thresholdVal <= 0) {
+    errLargeThreshold.textContent = 'Enter a positive number greater than 0.';
+    errLargeThreshold.hidden = false;
+    inputLargeThreshold.classList.add('invalid');
+    valid = false;
+  } else {
+    errLargeThreshold.hidden = true;
+    inputLargeThreshold.classList.remove('invalid');
+  }
+
+  // Validate velocity limit
+  const velocityVal = parseInt(inputVelocityLimit.value, 10);
+  if (isNaN(velocityVal) || velocityVal < 1) {
+    errVelocityLimit.textContent = 'Enter a whole number of at least 1.';
+    errVelocityLimit.hidden = false;
+    inputVelocityLimit.classList.add('invalid');
+    valid = false;
+  } else {
+    errVelocityLimit.hidden = true;
+    inputVelocityLimit.classList.remove('invalid');
+  }
+
+  if (!valid) return;
+
+  // Persist and apply immediately
+  settings = {
+    largePaymentThresholdXlm: thresholdVal,
+    velocityLimitPerHour: velocityVal,
+  };
+  saveSettings(settings);
+
+  // Update the legacy variable for any code reading it directly
+  LARGE_PAYMENT_THRESHOLD = largePaymentThresholdStroops();
+
+  // Show confirmation and re-render dashboard without closing the panel
+  savedMsg.hidden = false;
+  refresh();
+}
+
+/** Reset settings to defaults, repopulate form, and re-render. */
+function handleSettingsReset() {
+  settings = { ...DEFAULTS };
+  saveSettings(settings);
+  LARGE_PAYMENT_THRESHOLD = largePaymentThresholdStroops();
+  populateSettingsForm();
+  savedMsg.hidden = false;
+  refresh();
+}
+
+// Close settings panel when clicking outside (backdrop)
+document.addEventListener('click', (e) => {
+  if (
+    !settingsPanel.hidden &&
+    !settingsPanel.contains(e.target) &&
+    e.target !== settingsBtn
+  ) {
+    closeSettings();
+  }
+});
+
+// Keyboard: Escape closes the panel
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !settingsPanel.hidden) {
+    closeSettings();
+  }
+});
+
+settingsBtn.addEventListener('click', () => {
+  settingsPanel.hidden ? openSettings() : closeSettings();
+});
+settingsClose.addEventListener('click', closeSettings);
+settingsForm.addEventListener('submit', handleSettingsSave);
+settingsReset.addEventListener('click', handleSettingsReset);
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────
 

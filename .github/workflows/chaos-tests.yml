@@ -21,7 +21,12 @@ jobs:
             -H 'content-type: application/json' \
             -d '{"name":"lumenflow-rpc","listen":"0.0.0.0:18000","upstream":"host.docker.internal:8000"}'
       - name: Run opt-in chaos tests
-        run: CHAOS_TESTS=1 node --test tests/chaos/rpc-chaos.test.mjs 2>&1 | tee chaos-results.log
+        run: |
+          CHAOS_TESTS=1 node --test tests/chaos/rpc-chaos.test.mjs 2>&1 | tee chaos-results.log
+        env:
+          TOXIPROXY_ADMIN_URL: http://localhost:8474
+          TOXIPROXY_PROXY: lumenflow-rpc
+          RPC_URL: http://localhost:18000
       - name: Upload chaos results
         if: always()
         uses: actions/upload-artifact@v4

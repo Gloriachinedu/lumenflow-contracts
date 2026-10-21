@@ -12,6 +12,7 @@
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
+    "strictNullChecks": true,
     "types": ["jest", "node"]
   },
   "include": ["src/**/*", "tsup.config.ts"],

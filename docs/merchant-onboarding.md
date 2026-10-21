@@ -107,3 +107,5 @@ Confirms successful registration and provides next steps:
 - [CLI Usage](../README.md#cli-usage)
 - [Developer Onboarding Guide](ONBOARDING.md)
 - [Merchant Onboarding — Completion Metrics & Funnel Events](merchant-onboarding-metrics.md)
+- [Merchant Payout & Settlement Reporting](merchant-payout-reporting.md) — including [Accounting Integration (QuickBooks / Xero)](merchant-payout-reporting.md#accounting-integration-quickbooks--xero)
+- [Merchant-Facing Reconciliation Between Payouts and Payments](merchant-payment-reconciliation.md)

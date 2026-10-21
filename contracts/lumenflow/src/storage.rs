@@ -157,6 +157,8 @@ pub enum DataKey {
     AdminAuditCount,
     /// Configurable maximum audit log entries before oldest-first eviction.
     AdminAuditMaxEntries,
+    /// Configurable maximum signers per multisig payment (issue #1269). Short code `MSL`.
+    MSL,
 }
 
 /// The schema version this binary was compiled against.
@@ -666,6 +668,24 @@ pub fn get_multisig_expiry_duration(env: &Env) -> u64 {
 
 pub fn set_multisig_expiry_duration(env: &Env, duration: u64) {
     env.storage().instance().set(&DataKey::MED, &duration);
+}
+
+// ── Multisig Signers Limit (issue #1269) ──────────────────────────────────────
+
+/// Default maximum number of signers allowed per multisig payment.
+pub const DEFAULT_MAX_MULTISIG_SIGNERS: u32 = 10;
+
+/// Returns the currently configured maximum signers limit.
+pub fn get_max_multisig_signers(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MSL)
+        .unwrap_or(DEFAULT_MAX_MULTISIG_SIGNERS)
+}
+
+/// Persists a new maximum signers limit.
+pub fn set_max_multisig_signers(env: &Env, limit: u32) {
+    env.storage().instance().set(&DataKey::MSL, &limit);
 }
 
 // -- Subscriptions -------------------------------------------------------------
