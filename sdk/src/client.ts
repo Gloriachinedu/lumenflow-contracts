@@ -184,6 +184,16 @@ export interface ClientConfig {
    */
   signer?: Signer;
   /**
+   * The Stellar address of the currently connected wallet.
+   *
+   * When set, {@link LumenFlowClient.cancelPaymentRequest} (and other
+   * caller-validated methods) will compare the supplied `caller` argument
+   * against this value before broadcasting any transaction.
+   * Supply this to prevent accidental submission of transactions that
+   * would fail on-chain due to an auth mismatch.
+   */
+  walletAddress?: string;
+  /**
    * Skip the automatic contract version compatibility check on initialisation.
    * Defaults to `false`.
    */
@@ -223,6 +233,7 @@ export class LumenFlowClient {
   public readonly server: rpc.Server;
   public readonly networkPassphrase: string;
   private signer?: Signer;
+  private walletAddress?: string;
   private skipVersionCheck: boolean;
   private strictVersionCheck: boolean;
 
@@ -245,6 +256,7 @@ export class LumenFlowClient {
     });
     this.networkPassphrase = config.networkPassphrase;
     this.signer = config.signer;
+    this.walletAddress = config.walletAddress;
     this.skipVersionCheck = config.skipVersionCheck ?? false;
     this.strictVersionCheck = config.strictVersionCheck ?? false;
   }
@@ -335,6 +347,19 @@ export class LumenFlowClient {
    */
   setSigner(signer: Signer) {
     this.signer = signer;
+  }
+
+  /**
+   * Update the wallet address used for pre-flight caller validation.
+   *
+   * Call this whenever the user connects or switches wallets so that
+   * {@link cancelPaymentRequest} and other caller-validated methods
+   * stay in sync with the active account.
+   *
+   * @param address - The Stellar public key of the connected wallet (G…).
+   */
+  setWalletAddress(address: string) {
+    this.walletAddress = address;
   }
 
   // ── Admin ─────────────────────────────────────────────────────────────────
@@ -1353,6 +1378,53 @@ export class LumenFlowClient {
   async payPaymentRequest(payer: string, requestId: string): Promise<void> {
     await this.invoke("pay_payment_request", [
       new Address(payer),
+      requestId,
+    ]);
+  }
+
+  /**
+   * Cancel an unexpired payment request before it has been paid.
+   *
+   * Only the merchant who created the request may cancel it. This method
+   * performs a **pre-flight caller validation**: if `walletAddress` is
+   * configured on this client (via {@link ClientConfig.walletAddress} or
+   * {@link setWalletAddress}), the supplied `caller` must match exactly.
+   * A mismatch throws {@link LumenFlowError} with code
+   * {@link PaymentErrorCode.Unauthorized} before any RPC call is made,
+   * saving a round-trip.
+   *
+   * @param caller    - The Stellar address of the merchant cancelling the request.
+   *                    Must match the merchant who created the request on-chain.
+   * @param requestId - The unique ID of the payment request to cancel.
+   *
+   * @throws {LumenFlowError} `Unauthorized` (code 1) when `caller` does not
+   *   match the configured wallet address.
+   *
+   * @example
+   * ```typescript
+   * const client = new LumenFlowClient({
+   *   contractId: CONTRACT_ID,
+   *   rpcUrl:     RPC_URL,
+   *   networkPassphrase: Networks.TESTNET,
+   *   walletAddress: merchantKeypair.publicKey(),
+   * });
+   * client.setSigner(tx => { tx.sign(merchantKeypair); return tx; });
+   *
+   * // Cancel an unexpired request
+   * await client.cancelPaymentRequest(merchantKeypair.publicKey(), "REQ_001");
+   * ```
+   */
+  async cancelPaymentRequest(caller: string, requestId: string): Promise<void> {
+    // Pre-flight: verify the caller matches the connected wallet address.
+    if (this.walletAddress !== undefined && caller !== this.walletAddress) {
+      throw new LumenFlowError(
+        PaymentErrorCode.Unauthorized,
+        `cancelPaymentRequest: caller "${caller}" does not match the connected wallet address "${this.walletAddress}".`
+      );
+    }
+
+    await this.invoke("cancel_payment_request", [
+      new Address(caller),
       requestId,
     ]);
   }

@@ -795,6 +795,47 @@ Fulfil a payment request.
 await client.payPaymentRequest(payerAddress, 'REQ-001');
 ```
 
+#### `cancelPaymentRequest(caller: string, requestId: string): Promise<void>`
+
+Cancel an unexpired payment request before it has been paid. Only the merchant who created the request may call this.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `caller` | `string` | Address of the merchant cancelling the request |
+| `requestId` | `string` | Unique ID of the payment request to cancel |
+
+**Caller validation:** If `walletAddress` is configured on the client (via `ClientConfig.walletAddress` or `client.setWalletAddress()`), the supplied `caller` must match exactly. A mismatch throws `LumenFlowError` with code `Unauthorized` *before* any RPC call is made, saving a round-trip.
+
+```typescript
+// Option 1 — pass walletAddress at construction time
+const client = new LumenFlowClient({
+  contractId,
+  rpcUrl,
+  networkPassphrase: Networks.TESTNET,
+  walletAddress: merchantKeypair.publicKey(), // enables pre-flight check
+});
+client.setSigner(tx => { tx.sign(merchantKeypair); return tx; });
+
+await client.cancelPaymentRequest(merchantKeypair.publicKey(), 'REQ-001');
+
+// Option 2 — set wallet address after construction (e.g. after wallet connects)
+client.setWalletAddress(merchantAddress);
+await client.cancelPaymentRequest(merchantAddress, 'REQ-002');
+```
+
+**Error thrown on caller mismatch:**
+
+```typescript
+try {
+  // walletAddress = 'GCEZ…', caller = 'GBZX…'
+  await client.cancelPaymentRequest(differentAddress, 'REQ-003');
+} catch (err) {
+  if (err instanceof LumenFlowError && err.code === PaymentErrorCode.Unauthorized) {
+    console.error('Caller does not match the connected wallet');
+  }
+}
+```
+
 ---
 
 ### Subscriptions
