@@ -1312,6 +1312,28 @@ fn test_refund_respects_admin_min_amount() {
 }
 
 #[test]
+fn test_concurrent_partial_refunds_cannot_exceed_original() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_RACE", 1_000);
+
+    for refund_id in ["REFUND_RACE_1", "REFUND_RACE_2"] {
+        client.initiate_refund(
+            &payer,
+            &str(&env, refund_id),
+            &str(&env, "ORDER_RACE"),
+            &600,
+            &str(&env, "Partial refund"),
+        );
+        client.approve_refund(&merchant, &str(&env, refund_id));
+    }
+
+    client.execute_refund(&str(&env, "REFUND_RACE_1"));
+
+    let result = client.try_execute_refund(&str(&env, "REFUND_RACE_2"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundExceedsOriginal)));
+}
+
+#[test]
 fn test_refund_exceeds_original_fails() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
     make_payment(&env, &client, &merchant, &payer, &token, "ORDER_R2", 500);
