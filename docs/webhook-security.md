@@ -115,3 +115,49 @@ The event payload is not forwarded to `WEBHOOK_URL` and a warning is logged.
 - [TweetNaCl.js documentation](https://tweetnacl.js.org/)
 - [ed25519 on Wikipedia](https://en.wikipedia.org/wiki/EdDSA)
 - [Stellar Horizon API — Contract Events](https://developers.stellar.org/docs/data/horizon/api-reference/resources/contract-events)
+
+---
+
+## Security response headers
+
+The webhook server sets the following HTTP response headers on **all outgoing
+requests** forwarded to `WEBHOOK_URL`.  These headers protect against common
+web vulnerabilities when the server is exposed to a browser-based client (e.g.
+a status endpoint, a health-check UI, or a browser-side event receiver).
+
+| Header | Value | Purpose |
+|---|---|---|
+| `Content-Security-Policy` | `default-src 'none'; frame-ancestors 'none'` | Blocks inline scripts and restricts all resource origins; prevents the response from being embedded in a frame. |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | Instructs browsers to use HTTPS exclusively for the next year, preventing protocol-downgrade attacks. |
+| `X-Content-Type-Options` | `nosniff` | Prevents browsers from MIME-sniffing the response, blocking content-type confusion attacks. |
+| `X-Frame-Options` | `DENY` | Prevents the page from being embedded in an iframe, blocking clickjacking. |
+| `X-XSS-Protection` | `1; mode=block` | Enables legacy XSS filters in older browsers (modern browsers rely on CSP). |
+| `Referrer-Policy` | `same-origin` | Limits the `Referer` header to same-origin requests, reducing information leakage. |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=()` | Disables access to sensitive browser features that are not required by this server. |
+
+### Implementation
+
+Headers are applied by the `applySecurityHeaders(headers)` helper function
+defined in `webhook-server.js`.  Pass a mutable headers object to it and it
+will merge the security headers in-place:
+
+```js
+const SECURITY_HEADERS = {
+  'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",
+  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'X-XSS-Protection': '1; mode=block',
+  'Referrer-Policy': 'same-origin',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+};
+
+function applySecurityHeaders(headers) {
+  Object.assign(headers, SECURITY_HEADERS);
+  return headers;
+}
+```
+
+To customise headers, update `SECURITY_HEADERS` in `webhook-server.js`.
+Never weaken `X-Frame-Options` or `Content-Security-Policy` unless you
+have a specific operational reason reviewed by the security team.

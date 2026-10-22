@@ -12,6 +12,9 @@
  *    correct position after a restart.
  *  - Delivers events to a downstream WEBHOOK_URL with configurable retries
  *    and exponential back-off.
+ *  - Sets security HTTP response headers on all outgoing responses to
+ *    protect against common web vulnerabilities (XSS, clickjacking, MIME
+ *    sniffing, etc.).
  *  - Graceful shutdown on SIGINT / SIGTERM.
  *
  * Environment variables
@@ -48,6 +51,68 @@ const RETRY_BASE_MS = parseInt(process.env.RETRY_BASE_MS || '500', 10);
 
 if (!CONTRACT_ID) throw new Error('CONTRACT_ID environment variable is required.');
 if (!WEBHOOK_URL) throw new Error('WEBHOOK_URL environment variable is required.');
+
+// ---------------------------------------------------------------------------
+// Security headers
+//
+// Applied to every HTTP response sent by this server.  These headers protect
+// against common web vulnerabilities if the webhook server is ever exposed
+// directly to a browser (e.g. through a status/health endpoint).
+//
+// Reference: docs/webhook-security.md
+// ---------------------------------------------------------------------------
+
+/**
+ * Security headers to attach to every outgoing HTTP response.
+ *
+ * - Content-Security-Policy: restricts resource loading to the same origin,
+ *   blocking inline scripts and mixed-content.
+ * - Strict-Transport-Security: instructs browsers to use HTTPS only for
+ *   the next year, protecting against protocol downgrade attacks.
+ * - X-Content-Type-Options: prevents browsers from MIME-sniffing the
+ *   response away from the declared Content-Type.
+ * - X-Frame-Options: prevents the response from being embedded in an
+ *   iframe, blocking clickjacking attacks.
+ * - X-XSS-Protection: enables the browser's built-in XSS filter (legacy
+ *   browsers; modern browsers rely on CSP instead).
+ * - Referrer-Policy: limits the Referer header to the same origin,
+ *   reducing information leakage.
+ * - Permissions-Policy: disables access to sensitive browser features
+ *   (camera, microphone, geolocation) that are not needed by this server.
+ */
+const SECURITY_HEADERS = {
+  'Content-Security-Policy':
+    "default-src 'none'; frame-ancestors 'none'",
+  'Strict-Transport-Security':
+    'max-age=31536000; includeSubDomains',
+  'X-Content-Type-Options':
+    'nosniff',
+  'X-Frame-Options':
+    'DENY',
+  'X-XSS-Protection':
+    '1; mode=block',
+  'Referrer-Policy':
+    'same-origin',
+  'Permissions-Policy':
+    'camera=(), microphone=(), geolocation=()',
+};
+
+/**
+ * Applies the security headers defined in SECURITY_HEADERS to a fetch
+ * Response object (or any object with a `headers` Map/object).
+ *
+ * Usage:
+ *   const headers = { 'Content-Type': 'application/json' };
+ *   applySecurityHeaders(headers);
+ *   // → headers now includes all security headers
+ *
+ * @param {Record<string, string>} headers  Mutable headers object to augment.
+ * @returns {Record<string, string>}        The same object, for chaining.
+ */
+function applySecurityHeaders(headers) {
+  Object.assign(headers, SECURITY_HEADERS);
+  return headers;
+}
 
 // ---------------------------------------------------------------------------
 // Cursor persistence
@@ -104,12 +169,12 @@ async function deliverWithRetry(eventName, data, ledger, pagingToken) {
     try {
       const response = await fetch(WEBHOOK_URL, {
         method: 'POST',
-        headers: {
+        headers: applySecurityHeaders({
           'Content-Type': 'application/json',
           'X-LumenFlow-Event': eventName,
           'X-LumenFlow-Paging-Token': pagingToken,
           'X-LumenFlow-Attempt': String(attempt),
-        },
+        }),
         body: payload,
       });
 
