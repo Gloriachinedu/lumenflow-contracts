@@ -65,6 +65,9 @@ lcov.info
 # Local backup bundles (produced by scripts/backup-manager.mjs)
 backup-bundle/
 
+# Generated benchmark regression report (produced by scripts/check-benchmark-regression.sh)
+benchmark-results.md
+
 # Smoke test ephemeral npm cache
 scripts/.smoke_node_modules/
 
@@ -92,3 +95,21 @@ infra/terraform/*.tfvars
 
 # ── Package manager lock files (keep these, exclude only redundant artifacts) ─
 # (Cargo.lock and package-lock.json are intentionally committed)
+
+# ── Fuzz testing artifacts (Issue #1354) ─────────────────────────────────────
+# cargo-fuzz output: crash artifacts, corpus, and coverage data
+contracts/**/fuzz/artifacts/
+contracts/**/fuzz/corpus/
+contracts/**/fuzz/coverage/
+# libfuzzer crash/timeout/oom input files
+crash-*
+timeout-*
+oom-*
+slow-*
+
+# ── Cosign / Sigstore signing bundles (Issue #1352) ──────────────────────────
+# Locally generated release signing bundles — these are published to GitHub
+# Releases and should not be committed to the repository.
+*.wasm.sig
+*.wasm.cert
+

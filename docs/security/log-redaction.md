@@ -53,8 +53,69 @@ text left untouched).
 - Deployment scripts under `scripts/` read secrets from the environment and
   must not print them; pass `set +x` around any block that references one.
 
+## Monitoring exporter — `monitoring/lumenflow_exporter.py`
+
+**Issue:** [#1261](https://github.com/Gloriachinedu/lumenflow-contracts/issues/1261)
+
+The Prometheus exporter polls raw contract event payloads from Horizon. These
+payloads can contain `contact_info`, payer addresses, and exact payment amounts.
+All three are redacted before any log statement using the helpers in
+`monitoring/redact.py`.
+
+### Redaction rules for event payloads
+
+| Field type | Rule | Example output |
+|---|---|---|
+| `contact_info` (and aliases) | Value replaced with `[REDACTED]` | `"[REDACTED]"` |
+| Payer / address fields | Truncated to first 8 + last 4 chars | `"GAAZI4TC…CCWN"` |
+| Amount fields | Replaced with range-bucket label | `"1M–10M"` |
+| Stellar address embedded in a string | In-place truncation via regex | `"paid by GAAZI4TC…CCWN"` |
+
+### Redacted field names
+
+**Contact info keys** (value always hidden): `contact_info`, `contactinfo`,
+`contact`, `email`, `phone`, `mobile`
+
+**Address keys** (value truncated): `payer`, `payer_address`, `initiator`,
+`merchant`, `merchant_address`, `address`, `from`, `to`
+
+**Amount keys** (value bucketed): `amount`, `refund_amount`, `total`, `value`,
+`fee`, `platform_fee`
+
+### Amount range buckets
+
+| Range (stroops) | Label |
+|---|---|
+| 0 – 999 | `<1K` |
+| 1 000 – 9 999 | `1K–10K` |
+| 10 000 – 99 999 | `10K–100K` |
+| 100 000 – 999 999 | `100K–1M` |
+| 1 000 000 – 9 999 999 | `1M–10M` |
+| 10 000 000 – 99 999 999 | `10M–100M` |
+| ≥ 100 000 000 | `≥100M` |
+
+### Usage in the exporter
+
+```python
+from redact import redact_event
+
+safe = redact_event(raw_event_dict)
+log.info("Ingested event: %s  ledger=%s", event_name, safe.get("ledger"))
+```
+
+`redact_event` returns a **deep copy** — the original dict is never mutated.
+
+### Tests
+
+Unit tests are in `monitoring/test_redact.py` and cover all three redaction
+rules plus immutability and edge cases:
+
+```bash
+cd monitoring && python -m pytest test_redact.py -v
+```
+
 ## Reviewing a change
 
 When reviewing code that adds logging, check that no credential, header, cookie,
 or full request/response object is logged without passing through
-`redactSecrets`.
+`redactSecrets` (SDK) or `redact_event` (monitoring exporter).

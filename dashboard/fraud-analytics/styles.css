@@ -300,3 +300,124 @@ body {
   font-size: 0.85rem;
   padding: 2rem 1rem;
 }
+
+/* ── Settings panel ─────────────────────────────────────────────────────── */
+
+.btn-outline {
+  background: transparent;
+  border: 1px solid var(--color-header-fg);
+  color: var(--color-header-fg);
+  margin-right: 0.5rem;
+}
+.btn-outline:hover { background: rgba(255,255,255,0.1); }
+
+.btn-ghost {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-muted);
+}
+.btn-ghost:hover { background: var(--color-bg); }
+
+.btn-primary {
+  background: var(--color-accent);
+  border: none;
+  color: #fff;
+  font-weight: 600;
+}
+.btn-primary:hover { filter: brightness(1.1); }
+
+.settings-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: min(400px, 100vw);
+  height: 100vh;
+  background: var(--color-surface);
+  border-left: 1px solid var(--color-border);
+  box-shadow: -4px 0 24px rgba(0,0,0,0.12);
+  z-index: 1000;
+  overflow-y: auto;
+  transition: transform 0.2s ease;
+}
+
+.settings-panel[hidden] {
+  display: none;
+}
+
+.settings-panel-inner {
+  padding: 1.5rem;
+}
+
+.settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.settings-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.settings-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.settings-hint {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--color-muted);
+  margin-top: 0.15rem;
+}
+
+.settings-input {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 0.9rem;
+  width: 100%;
+}
+.settings-input:focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+.settings-input.invalid { border-color: var(--color-danger); }
+
+.settings-error {
+  font-size: 0.78rem;
+  color: var(--color-danger);
+}
+
+.settings-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.settings-saved-msg {
+  font-size: 0.85rem;
+  color: var(--color-success);
+  font-weight: 600;
+  padding: 0.5rem 0;
+}

@@ -157,6 +157,8 @@ pub enum DataKey {
     AdminAuditCount,
     /// Configurable maximum audit log entries before oldest-first eviction.
     AdminAuditMaxEntries,
+    /// Configurable maximum signers per multisig payment (issue #1269). Short code `MSL`.
+    MSL,
 }
 
 /// The schema version this binary was compiled against.
@@ -666,6 +668,24 @@ pub fn get_multisig_expiry_duration(env: &Env) -> u64 {
 
 pub fn set_multisig_expiry_duration(env: &Env, duration: u64) {
     env.storage().instance().set(&DataKey::MED, &duration);
+}
+
+// ── Multisig Signers Limit (issue #1269) ──────────────────────────────────────
+
+/// Default maximum number of signers allowed per multisig payment.
+pub const DEFAULT_MAX_MULTISIG_SIGNERS: u32 = 10;
+
+/// Returns the currently configured maximum signers limit.
+pub fn get_max_multisig_signers(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MSL)
+        .unwrap_or(DEFAULT_MAX_MULTISIG_SIGNERS)
+}
+
+/// Persists a new maximum signers limit.
+pub fn set_max_multisig_signers(env: &Env, limit: u32) {
+    env.storage().instance().set(&DataKey::MSL, &limit);
 }
 
 // -- Subscriptions -------------------------------------------------------------
@@ -1277,6 +1297,26 @@ pub fn append_admin_audit_entry(env: &Env, entry: &AdminAuditEntry) {
         .extend_ttl(&key, ADMIN_AUDIT_TTL_LEDGERS, ADMIN_AUDIT_TTL_LEDGERS);
 
     set_admin_audit_count(env, count + 1);
+}
+
+// ── Signature expiry window (Issue #1350) ─────────────────────────────────────
+
+/// Default signature expiry window: 5 minutes in seconds.
+pub const DEFAULT_SIGNATURE_EXPIRY_WINDOW_SECS: u64 = 5 * 60;
+
+/// Return the configured signature expiry window in seconds.
+/// Defaults to [`DEFAULT_SIGNATURE_EXPIRY_WINDOW_SECS`] (300 s = 5 minutes).
+pub fn get_signature_expiry_window(env: &Env) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::SEW)
+        .unwrap_or(DEFAULT_SIGNATURE_EXPIRY_WINDOW_SECS)
+}
+
+/// Persist the signature expiry window in seconds.
+/// Admin only — caller is responsible for authorization before invoking.
+pub fn set_signature_expiry_window(env: &Env, window_secs: u64) {
+    env.storage().instance().set(&DataKey::SEW, &window_secs);
 }
 
 /// Return audit log entries whose index falls within `[from_index, to_index]`,

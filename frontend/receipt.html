@@ -88,7 +88,7 @@
       align-items: center;
       gap: 0.25rem;
       font-size: 0.7rem;
-      color: #6c47ff;
+      color: #1a9e5c;
       font-weight: 600;
       cursor: default;
       /* Ensure the badge never shows in an unverified state */
@@ -417,6 +417,23 @@
       <label>Link Expires</label>
       <div class="value" id="prefill-expiry"></div>
     </div>
+    <!-- Countdown timer — only shown for active (non-expired) requests with a TTL -->
+    <div id="prefill-countdown-row" style="display:none;margin-bottom:1rem;">
+      <div id="prefill-countdown-timer"
+           role="timer"
+           aria-live="polite"
+           aria-label="Time remaining before payment link expires"
+           style="display:inline-flex;align-items:center;gap:0.4rem;font-size:0.9rem;font-weight:600;color:#2563eb;padding:0.35rem 0.75rem;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;">
+        <span aria-hidden="true">⏳</span>
+        <span id="prefill-countdown-text">--:--</span>
+      </div>
+      <!-- Warning state — shown when < 60 seconds remain -->
+      <div id="prefill-countdown-warning"
+           role="alert"
+           style="display:none;margin-top:0.4rem;font-size:0.8rem;color:#b45309;font-weight:500;">
+        ⚠ Less than 1 minute remaining — complete your payment now.
+      </div>
+    </div>
     <div class="actions">
       <button class="btn btn-primary" id="prefill-pay-btn">Pay with Freighter</button>
       <button class="btn btn-outline" onclick="copyLink()">🔗 Copy Link</button>
@@ -498,6 +515,97 @@
       <button class="btn btn-outline no-print" onclick="window.print()">🖨 Print</button>
       <button class="btn btn-primary no-print" onclick="copyLink()">🔗 Copy Link</button>
     </div>
+
+    <!-- ── Inline refund initiation (issue #1280) ──────────────────────── -->
+    <!--
+      Shown only when the payment is within the 30-day refund window and its
+      status allows a new refund (Completed or PartiallyRefunded).
+      Hidden entirely for FullyRefunded payments and payments older than 30 days.
+    -->
+    <div id="refund-initiation-section" style="display:none; margin-top:1.5rem;">
+      <hr class="divider" />
+
+      <!-- Trigger button (visible when within refund window) -->
+      <div id="refund-btn-container" style="margin-top:1rem;">
+        <button
+          class="btn btn-outline no-print"
+          id="btn-request-refund"
+          aria-expanded="false"
+          aria-controls="refund-form-panel"
+          onclick="toggleRefundForm()"
+        >↩ Request Refund</button>
+      </div>
+
+      <!-- Inline refund form panel -->
+      <div
+        id="refund-form-panel"
+        role="region"
+        aria-label="Refund request form"
+        style="display:none; margin-top:1rem; padding:1rem; background:#fafafa; border:1px solid #e0e0e0; border-radius:8px;"
+      >
+        <h2 style="font-size:0.95rem;font-weight:700;margin-bottom:0.75rem;">Request a Refund</h2>
+
+        <div class="field" style="margin-bottom:0.75rem;">
+          <label for="refund-order-id-display">Order ID</label>
+          <input
+            type="text"
+            id="refund-order-id-display"
+            class="value"
+            readonly
+            style="width:100%;padding:0.4rem 0.6rem;border:1px solid #e0e0e0;border-radius:6px;font-size:0.85rem;background:#f5f5f5;"
+            aria-readonly="true"
+          />
+        </div>
+
+        <div class="field" style="margin-bottom:0.75rem;">
+          <label for="refund-amount-input">Refund Amount</label>
+          <input
+            type="number"
+            id="refund-amount-input"
+            class="value"
+            min="0.0000001"
+            step="any"
+            style="width:100%;padding:0.4rem 0.6rem;border:1px solid #e0e0e0;border-radius:6px;font-size:0.85rem;"
+            aria-describedby="refund-amount-hint"
+            required
+          />
+          <div id="refund-amount-hint" style="font-size:0.75rem;color:#888;margin-top:0.2rem;">
+            Enter a partial amount or leave as-is for a full refund.
+          </div>
+          <div id="refund-amount-error" role="alert" style="display:none;color:#b91c1c;font-size:0.78rem;margin-top:0.2rem;"></div>
+        </div>
+
+        <div class="field" style="margin-bottom:1rem;">
+          <label for="refund-reason-input">Reason <span aria-hidden="true">(optional)</span></label>
+          <textarea
+            id="refund-reason-input"
+            rows="2"
+            maxlength="200"
+            style="width:100%;padding:0.4rem 0.6rem;border:1px solid #e0e0e0;border-radius:6px;font-size:0.85rem;resize:vertical;"
+            placeholder="Describe the reason for your refund request…"
+          ></textarea>
+        </div>
+
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+          <button
+            class="btn btn-primary"
+            id="btn-submit-refund"
+            onclick="submitRefundRequest()"
+            style="flex:1 1 120px;"
+          >Submit Request</button>
+          <button
+            class="btn btn-outline"
+            onclick="toggleRefundForm()"
+            style="flex:1 1 100px;"
+            aria-label="Cancel refund request"
+          >Cancel</button>
+        </div>
+
+        <div id="refund-submit-status" role="status" aria-live="polite" style="margin-top:0.75rem;font-size:0.85rem;"></div>
+      </div>
+    </div>
+    <!-- ── /inline refund initiation ─────────────────────────────────── -->
+
   </div>
 </div>
 </main>
@@ -760,6 +868,9 @@
     }
 
     document.getElementById('receipt-content').style.display = 'block';
+
+    // Initialise inline refund section (issue #1280).
+    initRefundSection(payment);
   }
 
   function copyLink() {
@@ -790,6 +901,148 @@
     setTimeout(() => { document.title = prevTitle; }, 500);
   }
   window.downloadPdf = downloadPdf;
+
+  // ── Inline refund initiation (issue #1280) ─────────────────────────────────
+
+  const REFUND_WINDOW_DAYS = 30;
+
+  /**
+   * Examine the loaded payment and decide whether to show the refund button.
+   * Called from renderReceipt() after the payment data is available.
+   *
+   * @param {object} payment - The payment record from fetchPayment().
+   */
+  function initRefundSection(payment) {
+    const section = document.getElementById('refund-initiation-section');
+    if (!section) return;
+
+    // Only show for statuses that still allow a new refund.
+    const refundableStatuses = ['Completed', 'PartiallyRefunded'];
+    if (!refundableStatuses.includes(payment.status)) return;
+
+    // Check 30-day refund window.
+    const paidAtMs = Number(payment.paid_at) * 1000;
+    const windowMs = REFUND_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+    if (Date.now() - paidAtMs > windowMs) {
+      // Outside window — keep section hidden.
+      return;
+    }
+
+    // Pre-fill form fields.
+    const orderIdInput = document.getElementById('refund-order-id-display');
+    if (orderIdInput) orderIdInput.value = payment.order_id;
+
+    const amountInput = document.getElementById('refund-amount-input');
+    if (amountInput) {
+      // Pre-fill with the remaining refundable amount (original minus already refunded).
+      const refundable = Number(payment.amount) - Number(payment.refunded_amount || 0n);
+      amountInput.value = (refundable / 1e7).toFixed(7).replace(/\.?0+$/, '');
+      amountInput.max   = (refundable / 1e7).toFixed(7);
+    }
+
+    section.style.display = 'block';
+
+    // Store payment context for the submit handler.
+    section.dataset.orderId  = payment.order_id;
+    section.dataset.maxUnits = String(Number(payment.amount) - Number(payment.refunded_amount || 0n));
+  }
+
+  /**
+   * Toggle the inline refund form open/closed.
+   */
+  function toggleRefundForm() {
+    const panel  = document.getElementById('refund-form-panel');
+    const button = document.getElementById('btn-request-refund');
+    if (!panel || !button) return;
+
+    const isOpen = panel.style.display !== 'none';
+    panel.style.display  = isOpen ? 'none' : 'block';
+    button.setAttribute('aria-expanded', String(!isOpen));
+
+    // Clear previous status messages when closing.
+    if (isOpen) {
+      document.getElementById('refund-submit-status').textContent = '';
+      document.getElementById('refund-amount-error').style.display = 'none';
+    } else {
+      // Move focus into the form.
+      const firstInput = panel.querySelector('input, textarea, button');
+      if (firstInput) firstInput.focus();
+    }
+  }
+  window.toggleRefundForm = toggleRefundForm;
+
+  /**
+   * Validate and submit the refund request.
+   * In the absence of a live contract this shows a success confirmation and
+   * redirects to the refund status view.
+   */
+  async function submitRefundRequest() {
+    const section      = document.getElementById('refund-initiation-section');
+    const amountInput  = document.getElementById('refund-amount-input');
+    const reasonInput  = document.getElementById('refund-reason-input');
+    const statusEl     = document.getElementById('refund-submit-status');
+    const errorEl      = document.getElementById('refund-amount-error');
+    const submitBtn    = document.getElementById('btn-submit-refund');
+
+    if (!section || !amountInput) return;
+
+    const orderId  = section.dataset.orderId || '';
+    const maxUnits = parseFloat(section.dataset.maxUnits || '0');
+    const enteredAmount = parseFloat(amountInput.value);
+    const enteredUnits  = Math.round(enteredAmount * 1e7);
+
+    // ── Validation ───────────────────────────────────────────────────────────
+    errorEl.style.display = 'none';
+
+    if (!enteredAmount || enteredAmount <= 0) {
+      errorEl.textContent   = 'Please enter a refund amount greater than zero.';
+      errorEl.style.display = 'block';
+      amountInput.focus();
+      return;
+    }
+
+    if (enteredUnits > maxUnits) {
+      errorEl.textContent   = `Amount exceeds the refundable balance for this order.`;
+      errorEl.style.display = 'block';
+      amountInput.focus();
+      return;
+    }
+
+    // ── Submit ───────────────────────────────────────────────────────────────
+    submitBtn.disabled = true;
+    statusEl.textContent = '⏳ Submitting refund request…';
+
+    try {
+      // Generate a unique refund ID from the order ID + timestamp.
+      const refundId = `REFUND_${orderId}_${Date.now()}`;
+      const reason   = (reasonInput ? reasonInput.value.trim() : '') || 'Requested via receipt page';
+
+      if (typeof window.lumenflowClient !== 'undefined' && window.lumenflowClient) {
+        // Live contract path — call initiate_refund.
+        await window.lumenflowClient.initiate_refund({
+          payer:    window.lumenflowWalletAddress,
+          refund_id: refundId,
+          order_id: orderId,
+          amount:   BigInt(enteredUnits),
+          reason:   reason,
+        });
+      }
+      // In demo / static mode we treat the call as immediately succeeded.
+
+      statusEl.innerHTML = '✅ Refund request submitted successfully.';
+
+      // Redirect to refund status view after a short delay.
+      setTimeout(() => {
+        const params = new URLSearchParams({ refund_id: refundId, order_id: orderId });
+        window.location.href = `refund-status.html?${params.toString()}`;
+      }, 1800);
+
+    } catch (err) {
+      statusEl.textContent = `❌ Submission failed: ${err?.message || 'Unknown error. Please try again.'}`;
+      submitBtn.disabled = false;
+    }
+  }
+  window.submitRefundRequest = submitRefundRequest;
 
   // ── Payment link pre-fill ──────────────────────────────────────────────────
 
@@ -835,9 +1088,109 @@
       document.getElementById('prefill-expired-badge').style.display = 'inline-flex';
       document.getElementById('prefill-pay-btn').disabled = true;
       document.getElementById('prefill-pay-note').style.display = 'block';
+    } else if (params.expires) {
+      // Start the live countdown for active (non-expired) requests.
+      startExpiryCountdown(params.expires);
     }
 
     document.getElementById('payment-prefill').style.display = 'block';
+  }
+
+  /**
+   * Starts a live countdown timer for a payment request with the given expiry
+   * timestamp (milliseconds since Unix epoch).
+   *
+   * - Updates every second.
+   * - Shows a warning state when < 60 seconds remain.
+   * - Disables the pay button and shows the expired message when TTL elapses.
+   * - Uses Intl.RelativeTimeFormat for i18n-friendly labels where available,
+   *   falling back to a plain mm:ss display.
+   *
+   * @param {number} expiresAt  Unix-millisecond timestamp when the link expires.
+   */
+  function startExpiryCountdown(expiresAt) {
+    const timerRow     = document.getElementById('prefill-countdown-row');
+    const timerText    = document.getElementById('prefill-countdown-text');
+    const warningEl    = document.getElementById('prefill-countdown-warning');
+    const expiredBadge = document.getElementById('prefill-expired-badge');
+    const payBtn       = document.getElementById('prefill-pay-btn');
+    const payNote      = document.getElementById('prefill-pay-note');
+
+    if (!timerRow || !timerText) return;
+    timerRow.style.display = 'block';
+
+    /**
+     * Format remaining seconds as a human-readable string.
+     * Uses Intl.RelativeTimeFormat when a locale is available for full i18n
+     * ("2 minutes remaining"), otherwise renders as mm:ss.
+     *
+     * @param {number} totalSeconds
+     * @returns {string}
+     */
+    function formatRemaining(totalSeconds) {
+      if (totalSeconds <= 0) return '0:00';
+
+      const mins = Math.floor(totalSeconds / 60);
+      const secs = totalSeconds % 60;
+
+      // Use Intl.RelativeTimeFormat for friendly labels (e.g. "2 minutes remaining").
+      // Gracefully degrade if the API is unavailable.
+      try {
+        const lang = document.documentElement.lang || navigator.language || 'en';
+        const rtf  = new Intl.RelativeTimeFormat(lang, { numeric: 'always', style: 'long' });
+
+        if (totalSeconds >= 120) {
+          // Round to nearest minute for readability when > 2 minutes remain.
+          return rtf.format(Math.ceil(totalSeconds / 60), 'minute').replace('-', '') + ' remaining';
+        }
+        if (totalSeconds >= 60) {
+          return '1 minute remaining';
+        }
+      } catch {
+        // Intl not available — fall through to mm:ss
+      }
+
+      // < 60 s or Intl unavailable: plain mm:ss
+      const mm = String(mins).padStart(1, '0');
+      const ss = String(secs).padStart(2, '0');
+      return `${mm}:${ss}`;
+    }
+
+    let intervalId = null;
+
+    function tick() {
+      const remaining = Math.ceil((expiresAt - Date.now()) / 1000);
+
+      if (remaining <= 0) {
+        // TTL elapsed — stop the timer and show expired state.
+        clearInterval(intervalId);
+        timerRow.style.display = 'none';
+        expiredBadge.style.display = 'inline-flex';
+        payBtn.disabled = true;
+        payNote.style.display = 'block';
+        warningEl.style.display = 'none';
+        return;
+      }
+
+      // Update timer text.
+      timerText.textContent = formatRemaining(remaining);
+
+      // Warning state when < 60 seconds remain.
+      if (remaining < 60) {
+        // Change timer colour to amber/warning.
+        const timerDiv = document.getElementById('prefill-countdown-timer');
+        if (timerDiv) {
+          timerDiv.style.color      = '#b45309';
+          timerDiv.style.background = '#fffbeb';
+          timerDiv.style.borderColor = '#fcd34d';
+        }
+        warningEl.style.display = 'block';
+      }
+    }
+
+    // Run immediately, then every second.
+    tick();
+    intervalId = setInterval(tick, 1000);
   }
 
   // ── Bootstrap ──────────────────────────────────────────────────────────────
