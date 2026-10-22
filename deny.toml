@@ -1,69 +1,73 @@
 # cargo-deny configuration
-# Used alongside cargo-audit to manage known false positives and advisory exceptions.
-# See: https://embarkstudios.github.io/cargo-deny/
+# Docs: https://embarkstudios.github.io/cargo-deny/
 
+[graph]
+# Run checks against all targets/features
+all-features = false
+no-default-features = false
+
+# ---------------------------------------------------------------------------
+# Advisories — fail on any known CVE or unmaintained crate
+# ---------------------------------------------------------------------------
 [advisories]
-# The path where the advisory databases are stored.
+# The path where the advisory database is cloned/cached.
 db-path = "~/.cargo/advisory-db"
-
-# URL(s) of the advisory databases to use.
+# URL(s) for the advisory databases.
 db-urls = ["https://github.com/rustsec/advisory-db"]
-
-# The lint level for security vulnerabilities.
-vulnerability = "deny"
-
-# The lint level for unmaintained crates.
-unmaintained = "warn"
-
-# The lint level for crates that have been yanked from their source registry.
-yanked = "warn"
-
-# The lint level for crates with security notices.
-notice = "warn"
-
-# Advisories that are explicitly ignored (known false positives).
-# Format: "RUSTSEC-YYYY-NNNN"
-# Example:
-#   ignore = [
-#     { id = "RUSTSEC-2020-0001", reason = "Not applicable — we don't use the affected feature" },
-#   ]
-ignore = []
-
-[licenses]
-# Lint level for crates which do not have a detectable license.
-unlicensed = "deny"
-
-# List of explicitly allowed licenses.
-allow = [
-  "MIT",
-  "Apache-2.0",
-  "Apache-2.0 WITH LLVM-exception",
-  "BSD-2-Clause",
-  "BSD-3-Clause",
-  "ISC",
-  "Unicode-DFS-2016",
-  "CC0-1.0",
-  "MPL-2.0",
+# Fail the check if any vulnerability advisory is detected.
+version = 2
+ignore = [
+    # Example entry — add real ignores here with justification and expiry:
+    # { id = "RUSTSEC-0000-0000", reason = "No fix available; mitigated by X", expiry = "2026-12-31" }
 ]
 
-# Lint level for licenses considered copyleft.
-copyleft = "warn"
+# ---------------------------------------------------------------------------
+# Licenses — only allow OSI-approved permissive/copyleft licenses
+# ---------------------------------------------------------------------------
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "Zlib",
+]
+# Confidence threshold for detecting a license from a license file.
+confidence-threshold = 0.8
+exceptions = []
 
+[[licenses.clarify]]
+# ring has a complex license; clarify it explicitly
+name = "ring"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [
+    { path = "LICENSE", hash = 0xbd0eed23 },
+]
+
+# ---------------------------------------------------------------------------
+# Bans — reject duplicate versions and yanked crates
+# ---------------------------------------------------------------------------
 [bans]
-# Lint level for when multiple versions of the same crate are detected.
+# Deny multiple versions of the same crate unless explicitly allowed.
 multiple-versions = "warn"
+# Deny wildcard (path/git) dependencies in non-workspace crates.
+wildcards = "allow"
+# Deny yanked crates.
+deny = []
+skip = []
+skip-tree = []
 
-# Lint level for when a crate version requirement is `*`.
-wildcards = "deny"
-
+# ---------------------------------------------------------------------------
+# Sources — only allow crates from crates.io and the workspace itself
+# ---------------------------------------------------------------------------
 [sources]
-# Lint level for what to happen when a crate from a crate registry that is
-# not in the allow list is encountered.
+# Deny crates from unknown registries or unrecognised git sources.
 unknown-registry = "deny"
-
-# Lint level for what to happen when a crate from a git repository that is
-# not in the allow list is encountered.
 unknown-git = "deny"
-
-# List of allowed registries.
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

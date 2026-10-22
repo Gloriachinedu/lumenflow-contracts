@@ -29,24 +29,49 @@ echo "Updated $CARGO_TOML -> version = \"${VERSION}\""
 cargo update --workspace --locked 2>/dev/null || cargo generate-lockfile
 echo "Cargo.lock updated"
 
-# 3. Prepend release entry to CHANGELOG.md
-TMPFILE=$(mktemp)
-{
-  echo "## [${VERSION}] - ${DATE}"
-  echo ""
-  echo "### Added"
-  echo "- (fill in release notes)"
-  echo ""
-  echo "### Changed"
-  echo "- (fill in changes)"
-  echo ""
-  echo "### Fixed"
-  echo "- (fill in fixes)"
-  echo ""
-  cat "$CHANGELOG"
-} > "$TMPFILE"
-mv "$TMPFILE" "$CHANGELOG"
-echo "Prepended entry to $CHANGELOG"
+# 3. Regenerate CHANGELOG.md from conventional commits using changelog.config.js.
+#    Falls back to a manual stub if conventional-changelog-cli is not installed.
+if command -v conventional-changelog &>/dev/null; then
+  # -p conventionalcommits  – use the conventional-commits preset
+  # -i / -s                 – read from and write to CHANGELOG.md in place
+  # -r 0                    – regenerate the full changelog (all tags)
+  # --config                – custom grouping/transform defined in changelog.config.js
+  conventional-changelog \
+    -p conventionalcommits \
+    -i "$CHANGELOG" \
+    -s \
+    -r 0 \
+    --config changelog.config.js
+  echo "Regenerated $CHANGELOG via conventional-changelog"
+elif npx --no-install conventional-changelog --version &>/dev/null 2>&1; then
+  npx conventional-changelog \
+    -p conventionalcommits \
+    -i "$CHANGELOG" \
+    -s \
+    -r 0 \
+    --config changelog.config.js
+  echo "Regenerated $CHANGELOG via npx conventional-changelog"
+else
+  echo "WARNING: conventional-changelog-cli not found; falling back to manual stub." >&2
+  echo "Install it with: npm install -g conventional-changelog-cli@5.0.0" >&2
+  TMPFILE=$(mktemp)
+  {
+    echo "## [${VERSION}] - ${DATE}"
+    echo ""
+    echo "### Added"
+    echo "- (fill in release notes)"
+    echo ""
+    echo "### Changed"
+    echo "- (fill in changes)"
+    echo ""
+    echo "### Fixed"
+    echo "- (fill in fixes)"
+    echo ""
+    cat "$CHANGELOG"
+  } > "$TMPFILE"
+  mv "$TMPFILE" "$CHANGELOG"
+  echo "Prepended manual stub entry to $CHANGELOG"
+fi
 
 # 4. Stage changes
 git add "$CARGO_TOML" "$CHANGELOG" Cargo.lock
