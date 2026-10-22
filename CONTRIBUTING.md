@@ -121,6 +121,22 @@ To update a pinned action:
 2. Replace the SHA in the workflow file and update the version comment.
 3. Dependabot is configured to open PRs for these updates automatically (weekly).
 
+### Container Image Scanning
+
+Every Docker image built in CI is scanned for OS and library vulnerabilities by
+Trivy (`.github/workflows/docker-scan.yml`) **before** it can be used in any
+deployment:
+
+| Severity | Behaviour |
+|----------|-----------|
+| **Critical** | Workflow fails — image must not be deployed |
+| **High** | Warning annotation posted on the PR; workflow continues |
+| All results | Uploaded as SARIF to the GitHub Security tab |
+
+To suppress a false-positive finding, add a `.trivyignore` file at the
+repository root with the CVE IDs to skip, one per line, and include a comment
+explaining why the finding is not applicable.
+
 ## Development Setup
 
 ### Secret Scanning Hook
