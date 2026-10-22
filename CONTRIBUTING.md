@@ -89,6 +89,7 @@ SOURCE_ACCOUNT=<secret-key> ./scripts/local_up.sh
 - **Branch names**: `feat/<slug>`, `fix/<slug>`, `docs/<slug>`, `ci/<slug>`, `test/<slug>`
 - **Commit messages**: follow [Conventional Commits](https://www.conventionalcommits.org/) — see the [Commits](#commits) section below for the full type list, breaking-change syntax, and examples. The `commit-msg` hook validates messages locally.
 - **Linking issues**: add `Closes #N` in the PR description body to auto-close the issue on merge
+- **Milestone assignment**: every new issue and PR **must** be assigned to a GitHub Milestone before it can be merged. Milestones correspond directly to the phases defined in [ROADMAP.md](ROADMAP.md) (`v0.4`, `v0.5`, `v0.6`, `Backlog`). If you are unsure which milestone applies, assign `Backlog` and a maintainer will re-triage. See [docs/roadmap-tracking.md](docs/roadmap-tracking.md#github-milestones) for the full milestone table and due dates.
 - **One concern per PR** — keep PRs focused; reviewers will ask you to split large ones
 - **Fill the PR template** — summary, what was tested, any blocked items
 - **CI must be green** before requesting review

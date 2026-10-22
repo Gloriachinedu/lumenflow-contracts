@@ -9,6 +9,24 @@ The tracking data itself lives in the **Unresolved item tracking** section of
 
 ---
 
+## GitHub Milestones
+
+Each phase defined in `ROADMAP.md` is mirrored as a **GitHub Milestone** so that
+issue and PR progress can be tracked directly in the GitHub UI.
+
+| Milestone | GitHub Milestone | Due date (estimate) |
+|-----------|-----------------|---------------------|
+| `v0.4`    | [v0.4](https://github.com/Gloriachinedu/lumenflow-contracts/milestones) | Q1 2027 |
+| `v0.5`    | [v0.5](https://github.com/Gloriachinedu/lumenflow-contracts/milestones) | Q2 2027 |
+| `v0.6`    | [v0.6](https://github.com/Gloriachinedu/lumenflow-contracts/milestones) | Q3 2027 |
+| `Backlog` | [Backlog](https://github.com/Gloriachinedu/lumenflow-contracts/milestones) | No due date |
+
+> **Milestone assignment is required.** Every new issue and PR must be assigned
+> to one of the above milestones before it can be merged. See
+> [CONTRIBUTING.md](../CONTRIBUTING.md#milestone-assignment) for details.
+
+---
+
 ## What is tracked
 
 Every unchecked (`- [ ]`) bullet in the `Near-term`, `Medium-term`, and
