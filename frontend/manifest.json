@@ -1,0 +1,50 @@
+{
+  "name": "LumenFlow",
+  "short_name": "LumenFlow",
+  "description": "Scalable, secure, and decentralized payment processing on Stellar Soroban. Manage payments, refunds, and multi-signature transactions from your mobile device.",
+  "start_url": "/history.html",
+  "display": "standalone",
+  "background_color": "#f5f7fa",
+  "theme_color": "#6c47ff",
+  "orientation": "portrait-primary",
+  "scope": "/",
+  "lang": "en",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Payment History",
+      "short_name": "History",
+      "description": "Browse your payment history",
+      "url": "/history.html",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Multisig Payment",
+      "short_name": "Multisig",
+      "description": "Initiate a multi-signature payment",
+      "url": "/multisig.html",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ],
+  "categories": ["finance", "utilities"],
+  "screenshots": []
+}

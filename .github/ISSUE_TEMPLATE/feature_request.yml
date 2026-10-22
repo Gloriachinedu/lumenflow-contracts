@@ -2,6 +2,13 @@ name: Feature Request
 description: Suggest a new feature or improvement
 labels: ["enhancement"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        > 💡 **Prefer to discuss first?** Post in [Feature Requests discussions](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/feature-requests) to gauge community interest before filing a formal issue.
+        >
+        > Use this template if you have a well-scoped, actionable feature proposal ready. For exploratory ideas or broad discussions visit [GitHub Discussions](https://github.com/PrincessnJoy/lumenflow-contracts/discussions).
+
   - type: textarea
     id: problem
     attributes:
