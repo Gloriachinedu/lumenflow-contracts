@@ -29,6 +29,11 @@ enum Commands {
         #[arg(short, long)]
         order_id: String,
     },
+    /// Merchant management operations
+    Merchant {
+        #[command(subcommand)]
+        action: MerchantCommands,
+    },
     /// Refund operations
     Refund {
         #[command(subcommand)]
@@ -42,6 +47,28 @@ enum Commands {
     },
     /// View global statistics (admin only)
     Stats,
+}
+
+#[derive(Subcommand)]
+enum MerchantCommands {
+    /// Update a merchant profile
+    Update {
+        /// Merchant address to update
+        #[arg(long)]
+        address: String,
+        /// New merchant name
+        #[arg(long)]
+        name: Option<String>,
+        /// New merchant description
+        #[arg(long)]
+        description: Option<String>,
+        /// New merchant contact information
+        #[arg(long)]
+        contact_info: Option<String>,
+        /// New merchant category
+        #[arg(long)]
+        category: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -115,6 +142,45 @@ mod tests {
         std::env::remove_var("LUMENFLOW_NETWORK");
         Ok(())
     }
+
+    #[test]
+    fn test_merchant_update_parses_optional_fields() {
+        let cli = Cli::try_parse_from([
+            "lumenflow",
+            "merchant",
+            "update",
+            "--address",
+            "GTEST123",
+            "--name",
+            "New Name",
+            "--description",
+            "Updated description",
+            "--contact-info",
+            "updated@example.com",
+            "--category",
+            "retail",
+        ])
+        .expect("merchant update should parse required options");
+
+        match cli.command {
+            Commands::Merchant { action } => match action {
+                MerchantCommands::Update {
+                    address,
+                    name,
+                    description,
+                    contact_info,
+                    category,
+                } => {
+                    assert_eq!(address, "GTEST123");
+                    assert_eq!(name.as_deref(), Some("New Name"));
+                    assert_eq!(description.as_deref(), Some("Updated description"));
+                    assert_eq!(contact_info.as_deref(), Some("updated@example.com"));
+                    assert_eq!(category.as_deref(), Some("retail"));
+                }
+            },
+            _ => panic!("expected merchant action"),
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -129,10 +195,37 @@ fn main() -> Result<()> {
             println!("  Merchant: {}", merchant);
             println!("  Amount:   {}", amount);
             println!("  Network:  {}", config.network.as_deref().unwrap_or("testnet"));
-            
+
             // In a real implementation, we would call the contract here
             println!("\nSuccess! Payment for order {} has been submitted.", order_id);
         }
+        Commands::Merchant { action } => match action {
+            MerchantCommands::Update {
+                address,
+                name,
+                description,
+                contact_info,
+                category,
+            } => {
+                println!("Updating merchant profile for {}...", address);
+                println!("  Contract: {}", config.contract_id.as_deref().unwrap_or("N/A"));
+
+                if let Some(value) = name {
+                    println!("  Name: {}", value);
+                }
+                if let Some(value) = description {
+                    println!("  Description: {}", value);
+                }
+                if let Some(value) = contact_info {
+                    println!("  Contact Info: {}", value);
+                }
+                if let Some(value) = category {
+                    println!("  Category: {}", value);
+                }
+
+                println!("\nSuccess! Merchant profile updated for {}.", address);
+            }
+        },
         Commands::Refund { action } => {
             match action {
                 RefundCommands::Init { order_id, amount } => {
