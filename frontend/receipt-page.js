@@ -292,8 +292,10 @@
     }
 
     if (params.expires) {
+      // Use Intl.DateTimeFormat via shared formatDate for locale-aware display (issue #1017)
+      // params.expires is a Unix timestamp in seconds
       document.getElementById('prefill-expiry').textContent  =
-        new Date(params.expires).toLocaleString();
+        formatDate(params.expires);
     } else {
       document.getElementById('prefill-expiry-row').style.display = 'none';
     }

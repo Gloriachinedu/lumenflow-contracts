@@ -315,7 +315,10 @@ frontend environment variables, webhook consumers) with the new `CONTRACT_ID`.
 
 ## 6. Post-Deployment Verification
 
-Run these steps after **every** deployment (local, testnet, or mainnet).
+Run these steps after **every** deployment (local, testnet, or mainnet). To
+whitelist a new token/asset on a deployed contract, see
+[add-supported-token.md](add-supported-token.md) instead — that procedure
+builds on the smoke test in section 6.1 below.
 
 ### 6.1 Smoke test
 
@@ -564,7 +567,7 @@ Add a row to the published hashes table:
 
 For major upgrades requiring storage migration, deploy a one-time migration
 contract before calling `upgrade`, or use a two-phase approach. See
-[docs/upgrade-guide.md](upgrade-guide.md) for details.
+[docs/upgrade-guide.md — Storage Schema Migration](upgrade-guide.md#storage-schema-migration) for the full process: identifying breaking changes, writing and testing migration functions, example before/after layouts, and rollback steps.
 
 ---
 
@@ -870,7 +873,7 @@ steps and then unpause.
 |----------|---------|
 | [docs/deployment-guide.md](deployment-guide.md) | Full narrative deployment walkthrough |
 | [docs/deployment-environments.md](deployment-environments.md) | Per-environment config files |
-| [docs/upgrade-guide.md](upgrade-guide.md) | Versioning policy and TTL recalibration |
+| [docs/upgrade-guide.md](upgrade-guide.md) | Versioning policy, storage schema migration, and TTL recalibration |
 | [docs/release-hashes.md](release-hashes.md) | Published SHA-256 hashes per release |
 | [docs/release-workflow.md](release-workflow.md) | How to cut a release and push a tag |
 | [docs/monitoring.md](monitoring.md) | Horizon SSE, Prometheus, Grafana |

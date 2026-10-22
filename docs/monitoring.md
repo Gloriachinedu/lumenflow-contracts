@@ -17,6 +17,7 @@ All events are emitted under the `lumenflow` topic prefix. See [events-reference
 | `lumenflow/suspicious_activity` | Large-payment threshold exceeded |
 | `lumenflow/merchant_registered` | New merchant registered |
 | `lumenflow/admin_set` | Admin initialised |
+| `lumenflow/admin_transferred` | Admin privileges transferred |
 
 ---
 

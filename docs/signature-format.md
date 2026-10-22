@@ -4,7 +4,7 @@ To process payments with a signature in LumenFlow, the merchant must sign a spec
 
 ## Payload Layout
 
-The payload is the concatenation of the network ID, the XDR-encoded `contract_address`, the big-endian 8-byte `nonce`, the XDR-encoded `order_id`, and the big-endian 16-byte representation of the `amount`.
+The payload is the concatenation of the network ID, the XDR-encoded `contract_address`, the big-endian 8-byte `nonce`, the XDR-encoded `order_id`, the big-endian 16-byte representation of the `amount`, and the big-endian 8-byte `timestamp`.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -13,6 +13,12 @@ The payload is the concatenation of the network ID, the XDR-encoded `contract_ad
 | `nonce` | u64 (8 bytes) | Replay-protection counter. Must equal `get_merchant_nonce(merchant) + 1`. |
 | `order_id` | XDR String | The unique order identifier, encoded as a Stellar/Soroban XDR `ScVal` String. |
 | `amount` | i128 (16 bytes) | The payment amount as a 128-bit signed integer in big-endian byte order. |
+| `timestamp` | u64 (8 bytes) | Unix timestamp (seconds) at which the signature was produced. Must be within the configured expiry window (default 5 minutes) of the current ledger time. Older signatures are rejected with `SignatureExpired`. |
+
+> **Breaking change (Issue #1350):** `timestamp` is a new required field appended to the
+> payload. Signatures generated against the old 5-field payload are incompatible with this
+> format and will fail verification. All callers must regenerate signatures with the
+> timestamp field included.
 
 ### 0. Nonce (Replay Protection)
 
@@ -46,6 +52,24 @@ The byte layout for `order_id.to_xdr()` is:
 
 The `amount` is a 128-bit signed integer. It must be encoded as exactly 16 bytes in big-endian order.
 
+### 5. Timestamp Encoding (Issue #1350)
+
+The `timestamp` is a 64-bit unsigned integer representing the Unix time (seconds) at which the
+signature was produced. It must be encoded as exactly 8 bytes in big-endian order.
+
+The contract validates that:
+
+```
+current_ledger_timestamp - timestamp <= signature_expiry_window
+```
+
+where `signature_expiry_window` defaults to **300 seconds (5 minutes)** and is admin-configurable
+via `set_signature_expiry_window`. Signatures older than this window are rejected with
+`ContractError::SignatureExpired` (error code 27).
+
+To obtain the current time use the `Date.now()` API in JavaScript or `time.time()` in Python,
+truncated to whole seconds. Ledger timestamps on Stellar are also in Unix seconds.
+
 ---
 
 ## JavaScript Implementation Example
@@ -64,9 +88,15 @@ import { Address } from '@stellar/stellar-sdk';
  * @param {bigint} nonce - Must equal get_merchant_nonce(merchant) + 1n.
  * @param {string} orderId - The unique order ID.
  * @param {bigint|string} amount - The payment amount.
+ * @param {bigint} timestamp - Unix seconds when the signature is produced (default: Date.now() / 1000).
  * @returns {Buffer} The concatenated payload.
  */
-function buildSignaturePayload(networkPassphrase, contractId, nonce, orderId, amount) {
+function buildSignaturePayload(networkPassphrase, contractId, nonce, orderId, amount, timestamp) {
+  // Default timestamp to current time if not provided
+  if (timestamp === undefined) {
+    timestamp = BigInt(Math.floor(Date.now() / 1000));
+  }
+
   // 1. Network ID (SHA-256 of passphrase)
   const networkId = hash(Buffer.from(networkPassphrase));
 
@@ -86,7 +116,11 @@ function buildSignaturePayload(networkPassphrase, contractId, nonce, orderId, am
   amountBuf.writeBigInt64BE(bigAmount >> 64n, 0);
   amountBuf.writeBigInt64BE(bigAmount & 0xFFFFFFFFFFFFFFFFn, 8);
 
-  return Buffer.concat([networkId, contractIdXdr, nonceBuf, orderIdXdr, amountBuf]);
+  // 6. Encode timestamp as 8-byte big-endian u64 (Issue #1350)
+  const timestampBuf = Buffer.alloc(8);
+  timestampBuf.writeBigUInt64BE(BigInt(timestamp), 0);
+
+  return Buffer.concat([networkId, contractIdXdr, nonceBuf, orderIdXdr, amountBuf, timestampBuf]);
 }
 ```
 
@@ -96,9 +130,15 @@ function buildSignaturePayload(networkPassphrase, contractId, nonce, orderId, am
 import xdrbuf # or any XDR library
 import struct
 import hashlib
+import time
 
 def build_signature_payload(network_passphrase: str, contract_address_xdr: bytes,
-                             nonce: int, order_id: str, amount: int):
+                             nonce: int, order_id: str, amount: int,
+                             timestamp: int = None):
+    # Default timestamp to current Unix time in seconds
+    if timestamp is None:
+        timestamp = int(time.time())
+
     # 1. Network ID
     network_id = hashlib.sha256(network_passphrase.encode('utf-8')).digest()
 
@@ -117,8 +157,11 @@ def build_signature_payload(network_passphrase: str, contract_address_xdr: bytes
     
     # 5. Amount as 16-byte big-endian
     amount_bytes = amount.to_bytes(16, byteorder='big', signed=True)
+
+    # 6. Timestamp as 8-byte big-endian u64 (Issue #1350)
+    timestamp_bytes = struct.pack(">Q", timestamp)
     
-    return network_id + contract_address_xdr + nonce_bytes + order_xdr + amount_bytes
+    return network_id + contract_address_xdr + nonce_bytes + order_xdr + amount_bytes + timestamp_bytes
 ```
 
 ## Reference
@@ -145,6 +188,7 @@ which implements exactly the payload layout described above.
    || nonce as u64 big-endian        ← 8 bytes
    || ScVal::String XDR(order_id)   ← variable (tag + len + data + padding)
    || amount as i128 big-endian      ← 16 bytes
+   || timestamp as u64 big-endian    ← 8 bytes  (Issue #1350)
    ```
 3. Generates a throwaway ed25519 keypair using Node.js 18+ built-in `crypto.generateKeyPairSync`.
 4. Signs the payload with `crypto.sign(null, payload, privateKey)`.

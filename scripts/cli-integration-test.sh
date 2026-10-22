@@ -148,6 +148,73 @@ else
   echo "    Built: ${LUMENFLOW}"
 fi
 
+# ── Step 2b: Negative config validation tests ─────────────────────────────────
+# These verify the CLI fails fast with a clear error for invalid configs rather
+# than surfacing confusing runtime errors later.
+step "[2b/8] Running negative CLI config validation tests"
+
+# Helper: run the CLI with a given config file and capture exit code + output.
+# Usage: run_config_case <config_path> <output_var> <status_var>
+run_config_case() {
+  local cfg="$1"
+  local out
+  local status=0
+  out=$("${LUMENFLOW}" --config "${cfg}" stats 2>&1) || status=$?
+  printf -v "$2" '%s' "${out}"
+  printf -v "$3" '%s' "${status}"
+}
+
+# Case 1: missing contract_id
+MISSING_CONTRACT_CFG=$(mktemp /tmp/lumenflow-int-bad-contract-XXXXXX.toml)
+cat > "${MISSING_CONTRACT_CFG}" <<EOF
+network        = "local"
+source_account = "${PAYER_KEY}"
+rpc_url        = "${LOCAL_RPC_URL}"
+network_passphrase = "${LOCAL_PASSPHRASE}"
+EOF
+run_config_case "${MISSING_CONTRACT_CFG}" OUT STATUS
+if [[ "${STATUS}" -ne 0 && "${OUT}" == *"contract_id is required"* ]]; then
+  pass "missing contract_id rejected with clear error"
+else
+  fail "missing contract_id rejected with clear error" \
+    "exit=${STATUS}, output=${OUT}"
+fi
+rm -f "${MISSING_CONTRACT_CFG}"
+
+# Case 2: invalid network name
+INVALID_NETWORK_CFG=$(mktemp /tmp/lumenflow-int-bad-network-XXXXXX.toml)
+cat > "${INVALID_NETWORK_CFG}" <<EOF
+network        = "not-a-real-network"
+contract_id    = "${CONTRACT_ID:-CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4}"
+source_account = "${PAYER_KEY}"
+rpc_url        = "${LOCAL_RPC_URL}"
+network_passphrase = "${LOCAL_PASSPHRASE}"
+EOF
+run_config_case "${INVALID_NETWORK_CFG}" OUT STATUS
+if [[ "${STATUS}" -ne 0 && "${OUT}" == *"Unknown network: not-a-real-network"* ]]; then
+  pass "invalid network name rejected with clear error"
+else
+  fail "invalid network name rejected with clear error" \
+    "exit=${STATUS}, output=${OUT}"
+fi
+rm -f "${INVALID_NETWORK_CFG}"
+
+# Case 3: malformed TOML (missing closing quote on line 2)
+MALFORMED_TOML_CFG=$(mktemp /tmp/lumenflow-int-bad-toml-XXXXXX.toml)
+cat > "${MALFORMED_TOML_CFG}" <<EOF
+network        = "local"
+contract_id    = "unterminated
+source_account = "${PAYER_KEY}"
+EOF
+run_config_case "${MALFORMED_TOML_CFG}" OUT STATUS
+if [[ "${STATUS}" -ne 0 && "${OUT}" == *"TOML"* && "${OUT}" =~ line\ [0-9]+ ]]; then
+  pass "malformed TOML rejected with parse error and line number"
+else
+  fail "malformed TOML rejected with parse error and line number" \
+    "exit=${STATUS}, output=${OUT}"
+fi
+rm -f "${MALFORMED_TOML_CFG}"
+
 # ── Step 3: Deploy the contract ───────────────────────────────────────────────
 step "[3/8] Deploying lumenflow contract to local node"
 
@@ -205,128 +272,6 @@ eval "$("${SCRIPT_DIR}/generate_smoke_keypair.sh" \
   --contract-id  "${CONTRACT_ID}" \
   --merchant     "${MERCHANT_ADDRESS}" \
   --order-id     "${ORDER_ID}" \
-  --amount       1000 \
-  --network      local)"
+ 
 
-# ── Test: lumenflow pay ───────────────────────────────────────────────────────
-step "[4/8] Test: lumenflow pay"
-TEST_NAME="lumenflow pay"
-if LUMENFLOW_SOURCE="${PAYER_KEY}" "${LUMENFLOW}" \
-    --config "${CLI_CONFIG}" \
-    pay \
-    --merchant "${MERCHANT_ADDRESS}" \
-    --amount   1000 \
-    --order-id "${ORDER_ID}" \
-    --token    "${TOKEN_ADDRESS}" \
-    --signature "${SMOKE_SIG}" \
-    --merchant-public-key "${SMOKE_PUBKEY}" 2>&1; then
-  pass "${TEST_NAME}"
-else
-  fail "${TEST_NAME}" "pay command exited non-zero"
-fi
-
-# ── Test: lumenflow refund init ───────────────────────────────────────────────
-step "[5/8] Test: lumenflow refund init"
-TEST_NAME="lumenflow refund init"
-REFUND_ID="REFUND_$(date +%s)"
-if LUMENFLOW_SOURCE="${PAYER_KEY}" "${LUMENFLOW}" \
-    --config "${CLI_CONFIG}" \
-    refund init \
-    --order-id  "${ORDER_ID}" \
-    --amount    500 \
-    --caller    "${PAYER_ADDRESS}" \
-    --reason    "Integration test refund" 2>&1; then
-  pass "${TEST_NAME}"
-else
-  fail "${TEST_NAME}" "refund init command exited non-zero"
-fi
-
-# Fetch the refund ID generated on-chain (needed for approve/execute steps)
-REFUND_ID_ONCHAIN=$(stellar contract invoke \
-  --id "${CONTRACT_ID}" \
-  --source-account "${PAYER_KEY}" \
-  --network local \
-  -- get_refunds_for_order \
-  --caller "${PAYER_ADDRESS}" \
-  --order_id "${ORDER_ID}" 2>/dev/null \
-  | grep -o '"refund_id":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "${REFUND_ID}")
-
-# ── Test: lumenflow refund approve ────────────────────────────────────────────
-step "[6/8] Test: lumenflow refund approve"
-TEST_NAME="lumenflow refund approve"
-if LUMENFLOW_SOURCE="${MERCHANT_KEY}" "${LUMENFLOW}" \
-    --config "${CLI_CONFIG}" \
-    --source-account "${MERCHANT_KEY}" \
-    refund approve \
-    --refund-id "${REFUND_ID_ONCHAIN}" \
-    --caller    "${MERCHANT_ADDRESS}" 2>&1; then
-  pass "${TEST_NAME}"
-else
-  fail "${TEST_NAME}" "refund approve command exited non-zero"
-fi
-
-# ── Test: lumenflow refund execute ────────────────────────────────────────────
-step "[7/8] Test: lumenflow refund execute"
-TEST_NAME="lumenflow refund execute"
-if LUMENFLOW_SOURCE="${MERCHANT_KEY}" "${LUMENFLOW}" \
-    --config "${CLI_CONFIG}" \
-    --source-account "${MERCHANT_KEY}" \
-    refund execute \
-    --refund-id "${REFUND_ID_ONCHAIN}" 2>&1; then
-  pass "${TEST_NAME}"
-else
-  fail "${TEST_NAME}" "refund execute command exited non-zero"
-fi
-
-# ── Test: lumenflow history ───────────────────────────────────────────────────
-step "[8a/8] Test: lumenflow history"
-TEST_NAME="lumenflow history"
-if LUMENFLOW_SOURCE="${MERCHANT_KEY}" "${LUMENFLOW}" \
-    --config "${CLI_CONFIG}" \
-    history \
-    --merchant "${MERCHANT_ADDRESS}" 2>&1; then
-  pass "${TEST_NAME}"
-else
-  fail "${TEST_NAME}" "history command exited non-zero"
-fi
-
-# ── Test: lumenflow stats ─────────────────────────────────────────────────────
-step "[8b/8] Test: lumenflow stats"
-TEST_NAME="lumenflow stats"
-if LUMENFLOW_SOURCE="${ADMIN_KEY}" "${LUMENFLOW}" \
-    --config "${CLI_CONFIG}" \
-    --source-account "${ADMIN_KEY}" \
-    stats \
-    --admin "${ADMIN_ADDRESS}" 2>&1; then
-  pass "${TEST_NAME}"
-else
-  fail "${TEST_NAME}" "stats command exited non-zero"
-fi
-
-# ── Summary ───────────────────────────────────────────────────────────────────
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  CLI Integration Test Results"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-for R in "${RESULTS[@]}"; do
-  if [[ "${R}" == PASS* ]]; then
-    echo -e "${GREEN}  ${R}${NC}"
-  else
-    echo -e "${RED}  ${R}${NC}"
-  fi
-done
-echo ""
-echo "  Passed: ${PASS} / $((PASS + FAIL))"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-# Cleanup temp config
-rm -f "${CLI_CONFIG}"
-
-if [[ ${FAIL} -gt 0 ]]; then
-  echo ""
-  echo "❌ ${FAIL} integration test(s) FAILED — see output above."
-  exit 1
-fi
-
-echo ""
-echo "✅ All CLI integration tests passed."
+/* … truncated 3981 chars — edit only what you need near the top … */

@@ -324,6 +324,102 @@ Unpause the contract. Admin only.
 |------|------|-----------|
 | 1 | [`Unauthorized`](errors.md#auth-errors) | `admin` is not the configured administrator. |
 
+---
+
+### `get_admin_audit_log`
+
+> **Issue #1115** — Structured audit log for all admin actions.
+
+```rust
+pub fn get_admin_audit_log(
+    env: Env,
+    admin: Address,
+    from_ledger: u32,
+    to_ledger: u32,
+    limit: u32,
+) -> Result<Vec<AdminAuditEntry>, PaymentError>
+```
+
+Query the append-only admin audit log. Returns up to `limit` entries (newest first) whose `ledger_sequence` falls within the inclusive range `[from_ledger, to_ledger]`.
+
+The audit log captures every privileged admin action with a tamper-evident on-chain record. Entries are **write-once** — they cannot be modified or deleted. When the log grows beyond the configured maximum (`AdminAuditMaxEntries`, default 10 000), the oldest entries are evicted automatically in FIFO order to bound storage growth.
+
+#### Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `admin` | `Address` | Yes | Must be the configured contract administrator. Must sign the call. |
+| `from_ledger` | `u32` | Yes | Start of the ledger sequence range (inclusive). |
+| `to_ledger` | `u32` | Yes | End of the ledger sequence range (inclusive). Pass `4294967295` (`u32::MAX`) for open-ended queries. |
+| `limit` | `u32` | Yes | Maximum entries to return. Capped at 100. |
+
+#### Returns
+
+`Vec<AdminAuditEntry>` — entries in newest-first order (highest `ledger_sequence` first).
+
+#### Errors
+
+| Code | Name | Condition |
+|------|------|-----------|
+| 1 | [`Unauthorized`](errors.md#auth-errors) | `admin` is not the configured administrator. |
+| 4 | [`InvalidInput`](errors.md#validation-errors) | `from_ledger > to_ledger` or `limit` is 0. |
+
+#### `AdminAuditEntry` fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `index` | `u32` | Sequential log index (0-based, monotonically increasing). |
+| `action` | `AdminActionType` | Enum identifying which admin function was called (see below). |
+| `caller` | `Address` | Admin address that performed the action. |
+| `params` | `String` | Human-readable summary of key parameters for the action. |
+| `timestamp` | `u64` | Unix ledger timestamp at the time of the action. |
+| `ledger_sequence` | `u32` | Ledger sequence number at the time of the action. |
+
+#### `AdminActionType` values
+
+| Variant | Triggered by |
+|---------|-------------|
+| `SetAdmin` | `set_admin` |
+| `TransferAdmin` | `transfer_admin` |
+| `PauseContract` | `pause_contract` |
+| `UnpauseContract` | `unpause_contract` |
+| `AddAllowedToken` | `add_allowed_token` |
+| `RemoveAllowedToken` | `remove_allowed_token` |
+| `SetPlatformFee` | `set_platform_fee` |
+| `SetLargePaymentThreshold` | `set_large_payment_threshold` |
+| `SetPaymentCleanupPeriod` | `set_payment_cleanup_period` |
+| `SetMultisigExpiryDuration` | `set_multisig_expiry_duration` |
+| `SetRefundWindow` | `set_refund_window` |
+| `SetMinRefundAmount` | `set_min_refund_amount` |
+| `DeactivateMerchant` | `deactivate_merchant` |
+| `ReactivateMerchant` | `reactivate_merchant` |
+| `VerifyMerchant` | `verify_merchant` |
+| `UnverifyMerchant` | `unverify_merchant` |
+| `ArchivePaymentRecord` | `archive_payment_record` |
+| `CleanupExpiredPayments` | `cleanup_expired_payments` |
+| `SetPauseGuardians` | `set_pause_guardians` |
+| `UpgradeContract` | `upgrade` |
+| `ConfirmMerchantDataDeletion` | `confirm_merchant_data_deletion` |
+| `Other` | Any admin action not listed above. |
+
+#### Access control
+
+Only the configured admin may call this function. Attempts by any other address will fail with `Unauthorized`.
+
+#### CLI example
+
+```bash
+# Fetch the 20 most recent audit log entries from any ledger
+stellar contract invoke \
+  --id $CONTRACT_ID \
+  --source-account $ADMIN_KEY \
+  --network $NETWORK \
+  -- get_admin_audit_log \
+  --admin $ADMIN_ADDR \
+  --from_ledger 0 \
+  --to_ledger 4294967295 \
+  --limit 20
+```
 
 ---
 
@@ -1352,6 +1448,80 @@ Cancel an active subscription. The subscriber must sign the call.
 ---
 
 ## Payment Requests
+
+> **See also:** [`docs/payment-link-guide.md`](payment-link-guide.md) for the merchant-facing guide on generating and sharing payment links.
+
+### Payment Request Flow — Sequence Diagram
+
+The diagram below covers the full payment request lifecycle: happy path, merchant cancellation, payer-side expiry, and admin bulk cleanup.
+
+```mermaid
+sequenceDiagram
+    actor M as Merchant
+    actor P as Payer
+    actor A as Admin
+    participant C as LumenFlow Contract
+
+    %% Happy path
+    rect rgb(220, 252, 231)
+        Note over M,C: Happy Path — request created and paid
+        M->>+C: create_payment_request(merchant, request_id, token, amount, memo, ttl)
+        C-->>-M: Ok(()) + lumenflow/payment_request_created event
+        P->>+C: pay_payment_request(payer, request_id)
+        C->>C: validate payer balance and token
+        C->>C: transfer tokens merchant ← payer
+        C->>C: write PaymentRecord (order_id = request_id)
+        C->>C: mark request Paid / remove Temporary entry
+        C-->>-P: Ok(()) + lumenflow/payment_request_paid event
+    end
+
+    %% Merchant cancellation
+    rect rgb(254, 249, 195)
+        Note over M,C: Merchant cancels an unexpired request
+        M->>+C: cancel_payment_request(caller=merchant, request_id)
+        C->>C: verify caller == merchant, request not yet paid
+        C-->>-M: Ok(()) + lumenflow/payment_request_cancelled event
+    end
+
+    %% Payer opens an expired link
+    rect rgb(254, 226, 226)
+        Note over P,C: Payer attempts to pay an expired request
+        P->>+C: pay_payment_request(payer, request_id)
+        C->>C: check TTL — entry expired (Temporary storage auto-evicted)
+        C-->>-P: Err(PaymentExpired / PaymentNotFound)
+    end
+
+    %% Admin bulk cleanup
+    rect rgb(219, 234, 254)
+        Note over A,C: Admin removes all expired requests in bulk
+        A->>+C: cancel_expired_payment_requests(admin)
+        C->>C: iterate Temporary entries, remove each expired request
+        C->>C: emit lumenflow/payment_request_cancelled per removed entry
+        C-->>-A: Ok(count_removed)
+    end
+```
+
+#### State transitions
+
+| State | Trigger | Next state |
+|---|---|---|
+| *(none)* | `create_payment_request` | **Active** (Temporary storage, TTL countdown) |
+| Active | `pay_payment_request` (before expiry) | **Paid** (Temporary entry removed; PaymentRecord written) |
+| Active | `cancel_payment_request` (merchant) | **Cancelled** (Temporary entry removed) |
+| Active | TTL elapsed / `cancel_expired_payment_requests` | **Expired / Cancelled** |
+
+#### Error codes
+
+| Code | Name | Condition |
+|---|---|---|
+| 20 | [`PaymentNotFound`](errors.md#payment-errors) | `request_id` not found (never created or already expired/paid) |
+| 21 | [`PaymentAlreadyExists`](errors.md#payment-errors) | `request_id` already used |
+| 24 | [`PaymentExpired`](errors.md#payment-errors) | TTL elapsed before `pay_payment_request` was called |
+| 25 | [`InsufficientBalance`](errors.md#payment-errors) | Payer has insufficient token balance |
+| 26 | [`TokenNotAllowed`](errors.md#payment-errors) | Requested token is not on the allowlist |
+| 1  | [`Unauthorized`](errors.md#auth-errors) | Caller is not the merchant (for `cancel_payment_request`) or not admin (for bulk cancel) |
+
+---
 
 ### `create_payment_request`
 

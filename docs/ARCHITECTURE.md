@@ -157,3 +157,43 @@ History queries are O(n) scans over in-contract index vectors:
 ## Event Emission
 
 Every state-changing operation emits a Soroban event with topic `["lumenflow", "<event_name>"]`. See [`docs/events-reference.md`](events-reference.md) for full payload schemas.
+
+---
+
+## Data Flow Diagram
+
+The diagram shows payment initiation and signature verification, followed by event monitoring and merchant webhook delivery.
+
+```mermaid
+flowchart TD
+    FE[Frontend]
+    SDK[LumenFlow SDK / Stellar SDK]
+    WALLET[Wallet]
+    RPC[Soroban RPC]
+    CONTRACT[LumenFlow contract]
+    STORAGE[(Soroban contract storage)]
+    EVENTS[Soroban events]
+    INDEXER[Horizon event stream]
+    MONITOR[Monitoring and alerting]
+    WEBHOOK[Merchant webhook service]
+    MERCHANT[Merchant systems]
+
+    FE -->|payment details and request| SDK
+    SDK -->|canonical payment payload| WALLET
+    WALLET -->|signature and signed transaction| SDK
+    SDK -->|submit transaction| RPC
+    RPC -->|invoke contract| CONTRACT
+    CONTRACT -->|verify payer signature| CONTRACT
+    CONTRACT -->|read and write payment record| STORAGE
+    CONTRACT -->|payment result| RPC
+    RPC -->|result or error| SDK
+    SDK -->|receipt status| FE
+
+    CONTRACT -->|emit payment and refund events| EVENTS
+    EVENTS -->|ledger event data| INDEXER
+    INDEXER -->|event stream| MONITOR
+    INDEXER -->|matching merchant events| WEBHOOK
+    WEBHOOK -->|HTTPS event notification| MERCHANT
+```
+
+Payment signatures cover the canonical payload described in [`signature-format.md`](signature-format.md). The contract verifies the signature before recording the payment. State-changing calls emit Soroban events; off-chain monitoring and merchant webhook consumers receive those events through the event stream. See [`events-reference.md`](events-reference.md), [`monitoring.md`](monitoring.md), and [`webhook-integration.md`](webhook-integration.md) for event schemas and integration details.

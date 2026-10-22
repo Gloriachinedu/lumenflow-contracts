@@ -37,11 +37,9 @@ pub enum PaymentError {
     InvalidSignature = 23,
     /// The payment request has expired. Remediation: Create a new payment request.
     PaymentExpired = 24,
-    /// The provided time-to-live (TTL) value is zero, would overflow the ledger
-    /// timestamp type, or would produce a computed expiry timestamp in the past.
-    /// Remediation: Provide a positive TTL that does not overflow u64 when added
-    /// to the current ledger timestamp.
-    InvalidTtl = 27,
+    /// The signature timestamp is older than the configured expiry window (default 5 minutes).
+    /// Remediation: Generate a fresh signature with a current timestamp and resubmit.
+    SignatureExpired = 27,
     /// The payer does not have enough tokens to complete the payment. Remediation: Ensure the payer has sufficient funds in the specified token.
     InsufficientBalance = 25,
     /// The specified token is not accepted. Remediation: Use a supported token.
@@ -65,6 +63,9 @@ pub enum PaymentError {
     RefundLimitExceeded = 37,
 
     // Multisig
+    /// The signers list exceeds the configured maximum (default 10). Remediation: Reduce the
+    /// number of signers or ask an admin to raise the limit via set_max_signers.
+    TooManySigners = 47,
     /// The multi-signature payment request was not found. Remediation: Verify the payment ID.
     MultisigNotFound = 40,
     /// The caller has already signed this multi-signature payment. Remediation: Wait for other required signers.
@@ -113,10 +114,16 @@ pub enum PaymentError {
     PaginationLimitExceeded = 51,
     /// The batch operation exceeds the maximum allowed items. Remediation: Reduce the number of items in the batch.
     BatchSizeExceeded = 52,
+    /// Two or more items within a single batch_payment call share the same order_id. Remediation: Ensure every order_id in the batch is unique.
+    DuplicateOrderId = 55,
     /// The provided tags exceed length or count limits. Remediation: Ensure tags are within the allowed limits (e.g., max 5 tags, max 20 chars per tag).
     InvalidTags = 53,
     /// The serialized payload for a batch item exceeds the maximum allowed size. Remediation: Reduce the size of memo, order_id, or other string fields.
     SerializedPayloadTooLarge = 54,
+    /// The order_id field is empty. Remediation: Provide a non-empty order ID string.
+    InvalidOrderId = 55,
+    /// The order_id field exceeds the maximum allowed length of 64 characters. Remediation: Shorten the order ID to 64 characters or fewer.
+    OrderIdTooLong = 56,
 
     // Referral
     /// The referral address is invalid: either it does not belong to a registered merchant or

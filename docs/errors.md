@@ -65,6 +65,7 @@ This document lists all the error codes returned by the LumenFlow contract, alon
 | `BatchSizeExceeded` | 52 | The batch operation exceeds the maximum allowed items. | Reduce the number of items in the batch. |
 | `InvalidTags` | 53 | The provided tags exceed length or count limits. | Ensure tags are within the allowed limits (e.g., max 5 tags, max 20 chars per tag). |
 | `SerializedPayloadTooLarge` | 54 | The serialized payload for a batch item exceeds the maximum allowed size (1 024 bytes). | Reduce the size of memo, order_id, or other string fields in the batch item. |
+| `DuplicateOrderId` | 55 | Two or more items within a single `batch_payment` call share the same `order_id`. | Ensure every `order_id` in the batch is unique. Unlike `PaymentAlreadyExists` (21), this error signals an intra-batch collision rather than a collision with an existing on-chain record. |
 
 ## Subscription Errors
 

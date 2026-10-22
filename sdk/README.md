@@ -27,22 +27,144 @@ The CI workflow `.github/workflows/differential-tests.yml` runs the full suite w
 
 ## Quick Start
 
+Get from zero to your first successful payment in under 10 minutes using the testnet.
+
+### Step 1: Install
+
+```bash
+npm install @lumenflow/sdk @stellar/stellar-sdk
+```
+
+> **Need testnet XLM?** Fund your account via the [Stellar Friendbot](https://friendbot.stellar.org/?addr=YOUR_ADDRESS).
+
+### Step 2: Initialize the Client
+
 ```typescript
-import { LumenFlowClient, MerchantCategory } from '@lumenflow/sdk';
+// quickstart.ts
+import { LumenFlowClient } from '@lumenflow/sdk';
 import { Keypair } from '@stellar/stellar-sdk';
 
+// Replace with your deployed testnet contract ID
+const CONTRACT_ID = 'CC...'; // e.g. from scripts/deploy.sh output
+
 const client = new LumenFlowClient({
-  contractId: 'CC...',
+  contractId: CONTRACT_ID,
   rpcUrl: 'https://soroban-testnet.stellar.org',
   networkPassphrase: 'Test SDF Network ; September 2015',
 });
 
-const keypair = Keypair.fromSecret('S...');
+// Set the signer — used to authorize all state-changing contract calls
+const adminKeypair = Keypair.fromSecret('S...'); // your admin account secret
 client.setSigner(async (tx) => {
-  tx.sign(keypair);
+  tx.sign(adminKeypair);
   return tx;
 });
 ```
+
+### Step 3: Register a Merchant
+
+```typescript
+import { LumenFlowClient, MerchantCategory } from '@lumenflow/sdk';
+import { Keypair } from '@stellar/stellar-sdk';
+
+const merchantKeypair = Keypair.fromSecret('S...'); // merchant account secret
+
+// Switch signer to merchant account for registration
+client.setSigner(async (tx) => {
+  tx.sign(merchantKeypair);
+  return tx;
+});
+
+// Check if already registered
+const isRegistered = await client.isRegistered(merchantKeypair.publicKey());
+
+if (!isRegistered) {
+  await client.registerMerchant(
+    merchantKeypair.publicKey(),
+    'My Test Store',
+    'Selling digital goods on Stellar',
+    'support@myteststore.example.com',
+    MerchantCategory.Retail,
+  );
+  console.log('Merchant registered:', merchantKeypair.publicKey());
+}
+```
+
+### Step 4: Submit a Payment
+
+```typescript
+import { LumenFlowClient } from '@lumenflow/sdk';
+import { Keypair } from '@stellar/stellar-sdk';
+import { signPaymentPayload } from '@lumenflow/sdk/signPaymentPayload';
+
+const payerKeypair = Keypair.fromSecret('S...'); // payer account secret
+
+// Switch signer to payer for payment
+client.setSigner(async (tx) => {
+  tx.sign(payerKeypair);
+  return tx;
+});
+
+const orderId = `ORDER_${Date.now()}`;
+const amount = 1000n; // in token's smallest unit (stroops for XLM)
+
+// The contract requires an ed25519 signature over the payment payload.
+// Use signPaymentPayload to build and sign the canonical payload.
+const { signature, publicKey } = await signPaymentPayload({
+  networkPassphrase: 'Test SDF Network ; September 2015',
+  contractId: CONTRACT_ID,
+  merchantAddress: merchantKeypair.publicKey(),
+  orderId,
+  amount,
+  merchantSecretKey: merchantKeypair.rawSecretKey(), // merchant signs the payment
+});
+
+await client.processPaymentWithSignature(
+  payerKeypair.publicKey(),
+  orderId,
+  merchantKeypair.publicKey(),
+  TOKEN_ADDRESS, // e.g. testnet USDC SAC address
+  amount,
+  'Quickstart test payment',
+  null, // tags
+  signature,
+  publicKey,
+);
+
+console.log('Payment submitted! Order ID:', orderId);
+```
+
+### Step 5: Check Payment History
+
+```typescript
+// Retrieve payment history for the merchant
+const history = await client.getMerchantPaymentHistory(
+  merchantKeypair.publicKey(),
+  null,  // cursor (null = start from beginning)
+  10,    // limit
+  null,  // filter
+  'Date',
+  'Descending',
+);
+
+console.log(`Found ${history.payments.length} payment(s):`);
+for (const payment of history.payments) {
+  console.log(`  ${payment.order_id}: ${payment.amount} — ${payment.status}`);
+}
+
+// Look up the specific payment you just submitted
+const receipt = await client.getPaymentSummary(orderId);
+console.log('Receipt:', receipt);
+```
+
+### Full end-to-end example
+
+A complete runnable script combining all steps above is available in the
+[smoke test](../scripts/smoke_test.sh). For TypeScript examples with error
+handling and retry logic, see [`sdk/tests/integration.test.ts`](tests/integration.test.ts).
+
+For batch payments (up to 10 items in one transaction), see
+[`docs/batch-payments.md`](../docs/batch-payments.md).
 
 ---
 
@@ -391,6 +513,8 @@ await client.batchPayment(payerAddress, [
 ]);
 ```
 
+> **Error recovery:** If a batch fails, all items are atomically reverted and can be safely retried with the same `order_id` values. For guidance on identifying the offending item, retry logic, and splitting batches for partial-success semantics, see [docs/batch-payments.md — Error Recovery Patterns](../docs/batch-payments.md#16-error-recovery-patterns).
+
 #### `getPaymentById(caller: string, orderId: string): Promise<PaymentOrder>`
 
 Retrieve full payment details. Caller must be the payer, merchant, or admin.
@@ -404,7 +528,7 @@ console.log(payment.status, payment.amount, payment.refundedAmount);
 
 #### `getPaymentSummary(orderId: string): Promise<PaymentSummary>`
 
-Retrieve a public summary of a payment (no auth required).
+Retrieve a public summary of a payment (no auth required). This read-only query works without configuring a signer.
 
 ```typescript
 const summary = await client.getPaymentSummary('ORDER-001');
@@ -671,6 +795,47 @@ Fulfil a payment request.
 await client.payPaymentRequest(payerAddress, 'REQ-001');
 ```
 
+#### `cancelPaymentRequest(caller: string, requestId: string): Promise<void>`
+
+Cancel an unexpired payment request before it has been paid. Only the merchant who created the request may call this.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `caller` | `string` | Address of the merchant cancelling the request |
+| `requestId` | `string` | Unique ID of the payment request to cancel |
+
+**Caller validation:** If `walletAddress` is configured on the client (via `ClientConfig.walletAddress` or `client.setWalletAddress()`), the supplied `caller` must match exactly. A mismatch throws `LumenFlowError` with code `Unauthorized` *before* any RPC call is made, saving a round-trip.
+
+```typescript
+// Option 1 — pass walletAddress at construction time
+const client = new LumenFlowClient({
+  contractId,
+  rpcUrl,
+  networkPassphrase: Networks.TESTNET,
+  walletAddress: merchantKeypair.publicKey(), // enables pre-flight check
+});
+client.setSigner(tx => { tx.sign(merchantKeypair); return tx; });
+
+await client.cancelPaymentRequest(merchantKeypair.publicKey(), 'REQ-001');
+
+// Option 2 — set wallet address after construction (e.g. after wallet connects)
+client.setWalletAddress(merchantAddress);
+await client.cancelPaymentRequest(merchantAddress, 'REQ-002');
+```
+
+**Error thrown on caller mismatch:**
+
+```typescript
+try {
+  // walletAddress = 'GCEZ…', caller = 'GBZX…'
+  await client.cancelPaymentRequest(differentAddress, 'REQ-003');
+} catch (err) {
+  if (err instanceof LumenFlowError && err.code === PaymentErrorCode.Unauthorized) {
+    console.error('Caller does not match the connected wallet');
+  }
+}
+```
+
 ---
 
 ### Subscriptions
@@ -870,6 +1035,23 @@ npm install
 npm run build
 npm test
 ```
+
+## Version and RPC diagnostics
+
+The installed SDK version is available as `VERSION` for diagnostics and User-Agent metadata:
+
+```typescript
+import { LumenFlowClient, VERSION } from '@lumenflow/sdk';
+
+console.log(VERSION);
+const client = new LumenFlowClient({
+  contractId: 'C...',
+  rpcUrl: 'https://rpc.example',
+  networkPassphrase: 'Test SDF Network ; September 2015',
+});
+```
+
+RPC calls made by `LumenFlowClient` include the same value in the `X-SDK-Version` header.
 
 ## Error Handling
 
@@ -1154,3 +1336,182 @@ await withRetry(async () => {
   await someApiCall();
 }, config);
 ```
+
+---
+
+## Browser and Environment Compatibility
+
+### Supported Browsers
+
+The `@lumenflow/sdk` uses the [WebCrypto API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Crypto_API) and standard ES2020 features. The following browser versions are officially supported and tested in CI:
+
+| Browser | Minimum Version | Notes |
+|---------|----------------|-------|
+| Chrome  | 90             | Full support |
+| Firefox | 89             | Full support |
+| Safari  | 15             | Full support (WebCrypto available since 15) |
+| Edge    | 90             | Full support (Chromium-based) |
+
+> **Note:** Safari versions below 15 have incomplete WebCrypto support and are **not** supported. Users on older Safari should upgrade their browser.
+
+### Supported Node.js Versions
+
+| Node.js | Support |
+|---------|---------|
+| 18.x (LTS) | ✅ Minimum supported version |
+| 20.x (LTS) | ✅ Fully supported |
+| 22.x (LTS) | ✅ Fully supported |
+
+Node.js 16.x and below are **not** supported.
+
+### Required Polyfills
+
+In environments that do not natively support the following APIs, you must include polyfills before importing the SDK:
+
+| API | Required In | Recommended Polyfill |
+|-----|------------|----------------------|
+| `globalThis` | IE, older Safari | [globalthis](https://www.npmjs.com/package/globalthis) |
+| `TextEncoder` / `TextDecoder` | Node.js < 18, IE | [text-encoding](https://www.npmjs.com/package/text-encoding) |
+| `WebCrypto` (`crypto.subtle`) | Node.js < 15, Safari < 15 | Use Node.js 18+ built-in or a server-side crypto library |
+
+Example — polyfilling `TextEncoder` in a legacy environment:
+
+```typescript
+import 'text-encoding'; // must come before SDK import
+import { LumenFlowClient } from '@lumenflow/sdk';
+```
+
+### Unsupported Environment Detection
+
+The SDK checks for required runtime APIs at initialisation time. If a required API is missing, it throws a descriptive error immediately rather than failing silently at call time:
+
+```
+LumenFlowInitError: The WebCrypto API (crypto.subtle) is not available in this
+environment. Upgrade to a supported browser (Chrome 90+, Firefox 89+, Safari 15+,
+Edge 90+) or Node.js 18+.
+```
+
+This ensures integrators catch configuration problems early in development rather than encountering cryptic errors at runtime.
+
+### CI Browser Matrix
+
+Browser compatibility is continuously validated by the `.github/workflows/compat-matrix.yml` workflow, which runs on every pull request and weekly on Mondays. The matrix tests the SDK against all documented Node.js versions and documented minimum browser targets via Playwright.
+
+---
+
+## Refund Recovery
+
+When a client-driven refund is interrupted mid-flow (network loss, process crash, etc.) the on-chain refund can be left in an intermediate state. The `RefundRecovery` utilities let merchants identify and re-attempt those stuck refunds.
+
+### Quick start
+
+```typescript
+import {
+  recoverRefund,
+  RefundRecoveryError,
+  RetryExhaustedError,
+  type RefundOps,
+} from '@lumenflow/sdk';
+
+// Wire up contract operations via your LumenFlowClient.
+const ops: RefundOps = {
+  getRefund:      (id)    => client.getRefund(id),
+  initiateRefund: (p)     => client.initiateRefund(p),
+  approveRefund:  (c, id) => client.approveRefund(c, id),
+  executeRefund:  (id)    => client.executeRefund(id),
+};
+
+const result = await recoverRefund(ops, {
+  refundId: 'REFUND_001',
+  orderId:  'ORDER_001',
+  amount:   BigInt(5_000_000),
+  reason:   'duplicate charge',
+  caller:   merchantKeypair.publicKey(),
+});
+
+console.log(result.finalStatus);   // 'Completed'
+console.log(result.stepsApplied);  // e.g. ['approve', 'execute']
+```
+
+### Finding stuck pending refunds
+
+Use `findStuckRefunds` to discover refunds stuck in `Pending` state beyond a configurable age threshold. The helper returns only refunds that are older than `thresholdMs` milliseconds and still in `Pending` status.
+
+```typescript
+import { findStuckRefunds } from '@lumenflow/sdk';
+
+const stuck = await findStuckRefunds({
+  // Fetch a page of refunds from your data source.
+  listRefunds: (cursor) => client.getRefunds({ cursor, limit: 50 }),
+  // Treat refunds older than 1 hour as stuck.
+  thresholdMs: 60 * 60 * 1000,
+});
+
+for (const refund of stuck) {
+  console.log(`Stuck refund: ${refund.id} (created ${refund.createdAt})`);
+}
+```
+
+### Retrying a stuck refund
+
+Once you have identified stuck refunds, pass each one to `recoverRefund`:
+
+```typescript
+import { recoverRefund, RefundRecoveryError, RetryExhaustedError } from '@lumenflow/sdk';
+
+for (const refund of stuck) {
+  try {
+    const result = await recoverRefund(ops, {
+      refundId: refund.id,
+      orderId:  refund.orderId,
+      amount:   refund.amount,
+      reason:   refund.reason,
+      caller:   merchantKeypair.publicKey(),
+      // Drive all the way through to Completed.
+      targetPhase: 'executed',
+      // Retry each step up to 3 times on transient errors.
+      maxRetriesPerStep: 3,
+      backoff: { baseDelayMs: 1000, maxDelayMs: 30_000, jitter: true },
+    });
+    console.log(`Recovered ${refund.id}: ${result.finalStatus}`);
+  } catch (err) {
+    if (err instanceof RefundRecoveryError) {
+      // Rejected or Disputed — requires human review.
+      console.error(`Manual action needed for ${refund.id}: ${err.message}`);
+    } else if (err instanceof RetryExhaustedError) {
+      // All retries exhausted — log and alert.
+      console.error(`Retry limit hit for step '${err.step}' on ${refund.id}`);
+    } else {
+      throw err;
+    }
+  }
+}
+```
+
+### Partial recovery
+
+To drive the refund only to a specific phase (e.g. `approved` but not yet `executed`), set `targetPhase`:
+
+```typescript
+await recoverRefund(ops, {
+  refundId: 'REFUND_001',
+  orderId:  'ORDER_001',
+  amount:   BigInt(5_000_000),
+  reason:   'duplicate charge',
+  caller:   merchantKeypair.publicKey(),
+  targetPhase: 'approved', // stop after approval, before execution
+});
+```
+
+### API reference
+
+| Export | Description |
+|--------|-------------|
+| `recoverRefund(ops, params)` | Reconciles and resumes an interrupted refund. Safe to call repeatedly and on already-completed refunds. |
+| `findStuckRefunds(options)` | Returns refunds in `Pending` state older than the configured threshold. |
+| `RefundRecoveryError` | Thrown when the refund is `Rejected`/`Disputed` or cannot converge. |
+| `RetryExhaustedError` | Thrown when all per-step retry attempts are exhausted. |
+| `computeBackoffDelay` | Utility for computing exponential backoff delay with optional jitter. |
+| `defaultIsTransient` | Default heuristic: `LumenFlowError` is permanent; network/timeout errors are transient. |
+
+See `sdk/src/refundRecovery.ts` for full type definitions and `sdk/src/tests/refundRecovery.test.ts` for usage examples.

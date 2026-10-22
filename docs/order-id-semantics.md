@@ -98,6 +98,17 @@ With `--idempotent` the CLI prints a note when a duplicate is detected and exits
 
 **Batch payments** — each item in a `batch_payment` call has its own `order_id`. The same uniqueness rules apply to each item individually.
 
+## Validation errors
+
+The contract enforces order ID constraints and returns distinct typed errors:
+
+| Condition | Error code | `PaymentError` variant |
+|-----------|-----------|------------------------|
+| `order_id` is empty | 55 | `InvalidOrderId` |
+| `order_id` exceeds 64 characters | 56 | `OrderIdTooLong` |
+
+Both errors can be caught by name in the SDK's error mapping. See [`docs/errors.md`](errors.md) for the full error catalogue.
+
 ## See also
 
 - [`docs/errors.md`](errors.md) — full error code reference, including `PaymentAlreadyExists` (code 21)
