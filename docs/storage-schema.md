@@ -46,16 +46,37 @@ Unchanged variants (already short or semantically significant):
 | `Merchant(Address)`  | Persistent   | Merchant profile |
 | `Payment(String)`    | Persistent   | Payment order keyed by `order_id` |
 | `Refund(String)`     | Persistent   | Refund record keyed by `refund_id` |
+| `RefundRetentionPeriod` | Instance  | Retention period for terminal-state refunds (seconds) |
 | `Dispute(String)`    | Persistent   | Dispute record keyed by `refund_id` |
 | `Multisig(String)`   | Persistent   | Multisig payment keyed by `payment_id` |
 | `PaymentRequest(String)` | Temporary | Payment request (auto-expires) |
+| `PaymentRequestIndex` | Temporary   | Index of all outstanding payment request IDs (for bulk cleanup) |
 | `Nonce(Address)`     | Persistent   | Per-payer replay-protection nonce |
+| `MerchantNonce(Address)` | Persistent | Per-merchant replay-protection nonce |
+| `RateLimitPerWindow` | Instance    | Max payments per merchant per rate-limit window |
+| `RateLimitCounter(Address, u32)` | Temporary | Rolling-window counter per merchant (keyed by `(merchant, window_start_ledger)`) |
+| `Escrow(String)`    | Persistent    | Time-locked escrow record keyed by `order_id` |
+| `AuthFailCount(Address)` | Temporary | Auth failure counter for rate-limiting (Issue #628) |
+| `AuthLockoutUntil(Address)` | Temporary | Auth lockout expiry ledger (Issue #628) |
+| `StoredContractVersion` | Instance  | Legacy alias — use `SV` for new code |
+| `StoredVersion`      | Instance     | Legacy alias — replaced by `SV` in v2 |
+| `StorageVersion`     | Instance    | Schema version for upgrade compatibility checks |
+| `AllowedIssuer(Address)` | Instance | Presence flag for approved token issuers |
+| `DeletionRequest(Address)` | Persistent | GDPR data-deletion request timestamp |
+| `ReferralFeeBps`     | Instance    | Global referral reward in basis points |
+| `MerchantCommitment(Address)` | Temporary | Commit-reveal registration commitment (Issue #614) |
 
 ---
 
 ## Full Key Layout
 
-| Key Variant | Storage Type | Value Type | TTL Policy | Notes |
+The table below documents **every** `DataKey` variant in `storage.rs`, the Soroban storage tier it uses, the value type stored, its TTL policy, and a rationale for the chosen tier. For the architectural reasoning behind using a typed `DataKey` enum, see [ADR-004](adr/ADR-004-storage-key-design.md).
+
+### Instance storage keys
+
+Instance storage lives with the contract instance itself — it is never independently evicted and does not support TTL extension. Values are small singletons or configuration knobs.
+
+| Key Variant | Tier | Value Type | TTL Policy | Notes |
 |---|---|---|---|---|
 | `Admin` | Instance | `Address` | Lives with contract instance | Set once; transfer via `transfer_admin` |
 | `Paused` | Instance | `bool` | Lives with contract instance | True when contract is paused |
@@ -75,19 +96,92 @@ Unchanged variants (already short or semantically significant):
 | `ULU` | Instance | `u64` (timestamp) | Lives with contract instance | Cleared on unpause |
 | `PG` | Instance | `Vec<Address>` | Lives with contract instance | Exactly 5 guardians |
 | `EPA` | Instance | `Vec<Address>` | Lives with contract instance | Cleared on unpause |
-| `Merchant(Address)` | Persistent | `Merchant` | TTL extended to 2 years on write | One entry per registered merchant |
-| `Payment(String)` | Persistent | `PaymentOrder` | TTL extended to 2 years on write | Keyed by `order_id` |
-| `MP(Address)` | Persistent | `Vec<String>` | TTL extended to 2 years on write | List of `order_id` values for a merchant |
-| `PP(Address)` | Persistent | `Vec<String>` | TTL extended to 2 years on write | List of `order_id` values for a payer |
-| `Refund(String)` | Persistent | `RefundRecord` | TTL extended to 1 year on write | Keyed by `refund_id` |
+| `RefundRetentionPeriod` | Instance | `u64` (seconds) | Lives with contract instance | Defaults to 7 776 000 (90 days) |
+| `RateLimitPerWindow` | Instance | `u32` | Lives with contract instance | Defaults to 100 |
+| `ReferralFeeBps` | Instance | `u32` (bps) | Lives with contract instance | Defaults to 0 |
+| `StorageVersion` | Instance | `u32` | Lives with contract instance | Schema version for upgrade compatibility |
+| `AllowedIssuer(Address)` | Instance | `()` (presence flag) | Lives with contract instance | Presence = approved issuer |
+| `StoredContractVersion` | Instance | `String` | Lives with contract instance | **Legacy** — use `SV` for new code |
+| `StoredVersion` | Instance | `String` | Lives with contract instance | **Legacy** — replaced by `SV` in v2 |
+
+### Persistent storage keys
+
+Persistent storage survives across contract upgrades and must be kept alive via `extend_ttl` on every write. TTL constants are listed in the [Storage TTL Constants](#storage-ttl-constants) section below.
+
+| Key Variant | Tier | Value Type | TTL Policy | Notes |
+|---|---|---|---|---|
+| `Merchant(Address)` | Persistent | `Merchant` | `MERCHANT_TTL_LEDGERS` (2 years) | One entry per registered merchant |
+| `Payment(String)` | Persistent | `PaymentOrder` | `PAYMENT_TTL_LEDGERS` (2 years) | Keyed by `order_id` |
+| `MP(Address)` | Persistent | `Vec<String>` | `PAYMENT_TTL_LEDGERS` (2 years) | List of `order_id` values for a merchant; capped at 10 000 |
+| `PP(Address)` | Persistent | `Vec<String>` | `PAYMENT_TTL_LEDGERS` (2 years) | List of `order_id` values for a payer; capped at 10 000 |
+| `Refund(String)` | Persistent | `RefundRecord` | `REFUND_TTL_LEDGERS` (1 year) | Keyed by `refund_id` |
 | `OR(String)` | Persistent | `Vec<String>` | No explicit TTL | Keyed by `order_id` |
-| `Dispute(String)` | Persistent | `DisputeRecord` | No explicit TTL | Keyed by `refund_id` |
-| `Multisig(String)` | Persistent | `MultisigPayment` | TTL extended to 1 year on write | Keyed by `payment_id` |
-| `PaymentRequest(String)` | Temporary | `PaymentRequest` | Expires with ledger TTL | Keyed by `request_id`; auto-expires |
-| `Nonce(Address)` | Persistent | `u64` | TTL extended to 2 years on write | Per-payer sequential nonce |
-| `SP(String)` | Persistent | `SubscriptionPlan` | TTL extended to 2 years on write | Keyed by `plan_id` |
-| `Sub(String)` | Persistent | `Subscription` | TTL extended to 2 years on write | Keyed by `subscription_id` |
-| `SR(Address, Address)` | Persistent | `i128` | TTL extended to 2 years on write | Keyed by `(subscriber, token)` |
+| `Dispute(String)` | Persistent | `DisputeRecord` | `REFUND_TTL_LEDGERS` (1 year) | Keyed by `refund_id` |
+| `Multisig(String)` | Persistent | `MultisigPayment` | `MULTISIG_TTL_LEDGERS` (1 year) | Keyed by `payment_id` |
+| `Nonce(Address)` | Persistent | `u64` | `PAYMENT_TTL_LEDGERS` (2 years) | Per-payer sequential nonce |
+| `MerchantNonce(Address)` | Persistent | `u64` | `PAYMENT_TTL_LEDGERS` (2 years) | Per-merchant sequential nonce |
+| `SP(String)` | Persistent | `SubscriptionPlan` | `SUBSCRIPTION_TTL_LEDGERS` (2 years) | Keyed by `plan_id` |
+| `Sub(String)` | Persistent | `Subscription` | `SUBSCRIPTION_TTL_LEDGERS` (2 years) | Keyed by `subscription_id` |
+| `SR(Address, Address)` | Persistent | `i128` | `SUBSCRIPTION_TTL_LEDGERS` (2 years) | Keyed by `(subscriber, token)` |
+| `Escrow(String)` | Persistent | `EscrowRecord` | `ESCROW_TTL_LEDGERS` (1 year) | Keyed by `order_id` |
+| `DeletionRequest(Address)` | Persistent | `u64` (timestamp) | `REFUND_TTL_LEDGERS` (1 year) | GDPR data-deletion request |
+
+### Temporary storage keys
+
+Temporary storage entries have a finite ledger TTL and are **silently evicted** when it expires. They are never persisted across contract upgrades. The TTL can be extended on write via `extend_ttl`, but temporary entries are inherently ephemeral.
+
+| Key Variant | Tier | Value Type | TTL Policy | Notes |
+|---|---|---|---|---|
+| `PaymentRequest(String)` | Temporary | `PaymentRequest` | No explicit TTL (default ledger eviction) | Keyed by `request_id`; auto-expires |
+| `PaymentRequestIndex` | Temporary | `Vec<String>` | No explicit TTL (default ledger eviction) | Index of outstanding request IDs for bulk cleanup |
+| `RateLimitCounter(Address, u32)` | Temporary | `u32` | `RATE_LIMIT_TTL_LEDGERS` (600 ledgers / ~5 min) | Rolling-window counter keyed by `(merchant, window_start_ledger)` |
+| `AuthFailCount(Address)` | Temporary | `(u32, u32)` | `AUTH_TTL_LEDGERS` (2 000 ledgers / ~2.8 h) | `(failure_count, window_start_ledger)` for brute-force protection |
+| `AuthLockoutUntil(Address)` | Temporary | `u32` | `AUTH_TTL_LEDGERS` (2 000 ledgers / ~2.8 h) | Ledger at which lockout expires |
+| `MerchantCommitment(Address)` | Temporary | `MerchantCommitment` | `COMMITMENT_TTL_LEDGERS` (100 ledgers / ~8 min) | Commit-reveal registration (Issue #614) |
+
+---
+
+## Tier Selection Rationale
+
+Soroban provides three storage tiers: **Instance**, **Persistent**, and **Temporary**. The choice of tier for each key follows the principles established in [ADR-004](adr/ADR-004-storage-key-design.md) and the characteristics of each tier.
+
+### Instance storage
+
+Instance storage lives with the contract instance itself. It is never independently evicted, does not support TTL extension, and is limited to a relatively small total size. Entries in instance storage are reconstructed automatically when the contract is re-uploaded.
+
+**Use Instance when:**
+- The value is a singleton (only one copy exists): `Admin`, `Paused`, `GlobalStats`, `CP`, `PFB`, `FR`, `RW`, `LPT`, `MRA`, `MED`, `SV`, `StorageVersion`, `ReferralFeeBps`, `RateLimitPerWindow`.
+- The value is a small bounded collection: `ML` (merchant list), `PG` (guardians, exactly 5), `EPA` (early unpause approvals, cleared on unpause).
+- The value is a per-address configuration flag or stat: `MS(Address)` (merchant stats), `AT(Address)` (allowed token), `AllowedIssuer(Address)`.
+- The value is tied to the pause lifecycle and should be cleared on unpause: `PR`, `ULU`, `EPA`.
+- The value is a legacy alias retained for backward compatibility: `StoredContractVersion`, `StoredVersion`.
+
+**Rationale:** Instance storage avoids per-entry rent and is always available as long as the contract instance exists. Configuration knobs and singletons never need to be evicted, so instance storage is the natural choice. See [ADR-004 § Consequences](adr/ADR-004-storage-key-design.md#consequences) for the original design discussion.
+
+### Persistent storage
+
+Persistent storage entries survive across contract upgrades and must be kept alive via `extend_ttl` on every write. If an entry's TTL expires, it is silently evicted by the Soroban host.
+
+**Use Persistent when:**
+- The value represents a durable business record that must survive across upgrades: `Merchant(Address)`, `Payment(String)`, `Refund(String)`, `Dispute(String)`, `Multisig(String)`, `Escrow(String)`.
+- The value is an index that accumulates over time: `MP(Address)`, `PP(Address)`, `OR(String)`.
+- The value is a replay-protection nonce that must persist between sessions: `Nonce(Address)`, `MerchantNonce(Address)`.
+- The value is a subscription record or reserve that must survive between billing cycles: `SP(String)`, `Sub(String)`, `SR(Address, Address)`.
+- The value is a GDPR data-deletion request that must persist until processed: `DeletionRequest(Address)`.
+
+**Rationale:** Persistent storage provides durability with a rent model. The TTL is extended on every write via `extend_ttl`, so actively updated records never expire. The TTL constants are sized to the expected business lifecycle of each record type (see [Storage TTL Constants](#storage-ttl-constants) below). Records that are never touched again (e.g. a completed refund) will eventually expire, keeping ledger bloat bounded.
+
+### Temporary storage
+
+Temporary storage entries have a finite ledger TTL and are always eventually evicted. They cannot survive contract upgrades.
+
+**Use Temporary when:**
+- The value is inherently short-lived: `PaymentRequest(String)` and `PaymentRequestIndex` (payment links that auto-expire).
+- The value is a rolling-window counter: `RateLimitCounter(Address, u32)` (TTL = 2 windows).
+- The value is an auth-failure counter or lockout that should auto-clear: `AuthFailCount(Address)`, `AuthLockoutUntil(Address)` (TTL = 2× lockout duration).
+- The value is a commit-reveal commitment that must expire if the reveal never arrives: `MerchantCommitment(Address)` (TTL = 100 ledgers / ~8 minutes).
+
+**Rationale:** Temporary storage avoids the rent model of persistent storage. Ephemeral data (rate-limit counters, auth lockouts, payment requests, commit-reveal commitments) should not consume persistent ledger rent. The TTL is explicitly set to match the expected lifetime of the data, so expired entries are cleaned up automatically without admin intervention.
 
 ---
 
@@ -128,6 +222,20 @@ Soroban serialises `#[contracttype]` enum variants as XDR `ScVal`. Each `DataKey
 | `SP(plan_id)` | `ScVec[ScSymbol("SP"), ScString(plan_id)]` |
 | `Sub(sub_id)` | `ScVec[ScSymbol("Sub"), ScString(sub_id)]` |
 | `SR(subscriber, token)` | `ScVec[ScSymbol("SR"), ScAddress(subscriber), ScAddress(token)]` |
+| `RefundRetentionPeriod` | `ScVec[ScSymbol("RefundRetentionPeriod")]` |
+| `PaymentRequestIndex` | `ScVec[ScSymbol("PaymentRequestIndex")]` |
+| `MerchantNonce(addr)` | `ScVec[ScSymbol("MerchantNonce"), ScAddress(addr)]` |
+| `RateLimitPerWindow` | `ScVec[ScSymbol("RateLimitPerWindow")]` |
+| `RateLimitCounter(addr, win)` | `ScVec[ScSymbol("RateLimitCounter"), ScAddress(addr), ScUint32(win)]` |
+| `Escrow(order_id)` | `ScVec[ScSymbol("Escrow"), ScString(order_id)]` |
+| `AuthFailCount(addr)` | `ScVec[ScSymbol("AuthFailCount"), ScAddress(addr)]` |
+| `AuthLockoutUntil(addr)` | `ScVec[ScSymbol("AuthLockoutUntil"), ScAddress(addr)]` |
+| `StoredContractVersion` | `ScVec[ScSymbol("StoredContractVersion")]` |
+| `StorageVersion` | `ScVec[ScSymbol("StorageVersion")]` |
+| `AllowedIssuer(addr)` | `ScVec[ScSymbol("AllowedIssuer"), ScAddress(addr)]` |
+| `DeletionRequest(addr)` | `ScVec[ScSymbol("DeletionRequest"), ScAddress(addr)]` |
+| `ReferralFeeBps` | `ScVec[ScSymbol("ReferralFeeBps")]` |
+| `MerchantCommitment(addr)` | `ScVec[ScSymbol("MerchantCommitment"), ScAddress(addr)]` |
 
 ---
 
@@ -154,10 +262,13 @@ Soroban persistent entries can be extended up to the network's maximum TTL (curr
 |---|---|---|---|
 | `MERCHANT_TTL_LEDGERS` | 12,614,400 | ~2 years | Persistent (`Merchant`, `MerchantPayments`, `PayerPayments`, nonces) |
 | `PAYMENT_TTL_LEDGERS` | 12,614,400 | ~2 years | Persistent (`Payment`, `MerchantPayments`, `PayerPayments`, nonces) |
-| `REFUND_TTL_LEDGERS` | 6,307,200 | ~1 year | Persistent (`Refund`) |
+| `REFUND_TTL_LEDGERS` | 6,307,200 | ~1 year | Persistent (`Refund`, `Dispute`, `DeletionRequest`) |
 | `MULTISIG_TTL_LEDGERS` | 6,307,200 | ~1 year | Persistent (`Multisig`) |
 | `SUBSCRIPTION_TTL_LEDGERS` | 12,614,400 | ~2 years | Persistent (`SubscriptionPlan`, `Subscription`, `SubscriptionReserve`) |
 | `ESCROW_TTL_LEDGERS` | 6,307,200 | ~1 year | Persistent (`Escrow`) |
+| `RATE_LIMIT_TTL_LEDGERS` | 600 | ~5 minutes | Temporary (`RateLimitCounter`) |
+| `AUTH_TTL_LEDGERS` | 2,000 | ~2.8 hours | Temporary (`AuthFailCount`, `AuthLockoutUntil`) |
+| `COMMITMENT_TTL_LEDGERS` | 100 | ~8.3 minutes | Temporary (`MerchantCommitment`) |
 
 **Calculation:**
 
@@ -241,6 +352,100 @@ const key = xdr.ScVal.scvVec([
   xdr.ScVal.scvAddress(Address.fromString(MERCHANT_ADDR).toScAddress()),
 ]);
 ```
+
+---
+
+## How to Add New Storage Keys
+
+New contributors adding a storage key to the contract should follow this checklist to ensure the key is correctly typed, tiered, documented, and compatible with existing on-chain data.
+
+### Step 1 — Add the `DataKey` variant
+
+Append a new variant to the `DataKey` enum in [`contracts/lumenflow/src/storage.rs`](../contracts/lumenflow/src/storage.rs). **Always append** — never insert or reorder, because Soroban serialises enum variants by discriminant index and reordering breaks on-chain compatibility (see [ADR-004 § Migration Rules](adr/ADR-004-storage-key-design.md#migration-rules)).
+
+```rust
+#[contracttype]
+pub enum DataKey {
+    // ... existing variants ...
+    /// Description of what this key stores.
+    MyNewKey(Address),
+}
+```
+
+### Step 2 — Choose the correct storage tier
+
+| If the value… | Use | Example |
+|---|---|---|
+| Is a singleton config knob or small bounded collection | **Instance** | `PFB`, `ML`, `PG` |
+| Is a durable business record or accumulating index | **Persistent** | `Payment(String)`, `MP(Address)` |
+| Is short-lived, ephemeral, or auto-expiring | **Temporary** | `PaymentRequest(String)`, `RateLimitCounter` |
+
+See [Tier Selection Rationale](#tier-selection-rationale) above for detailed guidance.
+
+### Step 3 — Write the helper functions
+
+Create `get_*` and `set_*` helper functions in `storage.rs`. For persistent keys, always call `extend_ttl` on write:
+
+```rust
+pub fn get_my_new_key(env: &Env, addr: &Address) -> Option<MyType> {
+    env.storage().persistent().get(&DataKey::MyNewKey(addr.clone()))
+}
+
+pub fn set_my_new_key(env: &Env, addr: &Address, value: &MyType) {
+    let key = DataKey::MyNewKey(addr.clone());
+    env.storage().persistent().set(&key, value);
+    // Always extend TTL on write for persistent entries
+    env.storage().persistent()
+        .extend_ttl(&key, MY_NEW_TTL_LEDGERS, MY_NEW_TTL_LEDGERS);
+}
+```
+
+For temporary keys, set the TTL explicitly:
+
+```rust
+pub fn set_my_temporary_key(env: &Env, addr: &Address, value: &MyType) {
+    let key = DataKey::MyNewKey(addr.clone());
+    env.storage().temporary().set(&key, value);
+    env.storage().temporary()
+        .extend_ttl(&key, MY_TTL_LEDGERS, MY_TTL_LEDGERS);
+}
+```
+
+For instance keys, no TTL is needed:
+
+```rust
+pub fn set_my_instance_key(env: &Env, value: &MyType) {
+    env.storage().instance().set(&DataKey::MyNewKey, value);
+}
+```
+
+### Step 4 — Define the TTL constant (persistent and temporary only)
+
+If using persistent or temporary storage, define a TTL constant near the top of `storage.rs` and add a compile-time assertion:
+
+```rust
+pub const MY_NEW_TTL_LEDGERS: u32 = 12_614_400; // 2 years
+
+const _: () = {
+    assert!(MY_NEW_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5, "MY_NEW_TTL_LEDGERS exceeds safe range");
+};
+```
+
+### Step 5 — Document the key
+
+Update this file (`docs/storage-schema.md`):
+
+1. Add the variant to the appropriate tier table in [Full Key Layout](#full-key-layout).
+2. Add the XDR encoding to the [XDR Encoding](#xdr-encoding) table.
+3. Add the TTL constant to the [Storage TTL Constants](#storage-ttl-constants) table (if applicable).
+4. If the key is subject to unbounded growth, document it in [Unbounded Growth Keys](#unbounded-growth-keys).
+
+### Step 6 — Add tests
+
+Add unit tests in `src/test.rs` that verify:
+- The key can be written and read back.
+- The TTL is extended correctly (for persistent/temporary keys).
+- The key is not accessible under a wrong type (type safety from `#[contracttype]`).
 
 ---
 
