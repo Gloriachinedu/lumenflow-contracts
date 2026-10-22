@@ -1,0 +1,96 @@
+name: Validate Dependabot Config
+
+# Resolves #1061 — validate .github/dependabot.yml is well-formed YAML and
+# covers all required package ecosystems on every change to the file.
+
+on:
+  pull_request:
+    paths:
+      - ".github/dependabot.yml"
+  push:
+    branches: [main, develop]
+    paths:
+      - ".github/dependabot.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate-dependabot:
+    name: Validate dependabot.yml
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Validate YAML syntax
+        run: |
+          python3 -c "
+          import yaml, sys
+          with open('.github/dependabot.yml') as f:
+              config = yaml.safe_load(f)
+          print('✅ dependabot.yml is valid YAML')
+          "
+
+      - name: Verify required ecosystems are configured
+        run: |
+          python3 - << 'EOF'
+          import yaml, sys
+
+          with open('.github/dependabot.yml') as f:
+              config = yaml.safe_load(f)
+
+          updates = config.get('updates', [])
+          configured = {
+              (u['package-ecosystem'], u['directory'])
+              for u in updates
+          }
+
+          required = [
+              ('cargo',          '/'),
+              ('github-actions', '/'),
+              ('npm',            '/'),
+              ('npm',            '/sdk'),
+              ('npm',            '/frontend'),
+              ('npm',            '/webhook'),
+              ('npm',            '/tests'),
+          ]
+
+          missing = [r for r in required if r not in configured]
+
+          if missing:
+              for eco, path in missing:
+                  print(f'::error::Missing dependabot config for ecosystem={eco} directory={path}')
+              sys.exit(1)
+
+          print(f'✅ All {len(required)} required ecosystems are configured')
+          for eco, path in required:
+              print(f'   - {eco} @ {path}')
+          EOF
+
+      - name: Verify weekly schedule on all entries
+        run: |
+          python3 - << 'EOF'
+          import yaml, sys
+
+          with open('.github/dependabot.yml') as f:
+              config = yaml.safe_load(f)
+
+          errors = []
+          for entry in config.get('updates', []):
+              eco = entry.get('package-ecosystem', '?')
+              directory = entry.get('directory', '?')
+              interval = entry.get('schedule', {}).get('interval', '')
+              if interval != 'weekly':
+                  errors.append(f'{eco} @ {directory} has interval={interval!r} (expected "weekly")')
+
+          if errors:
+              for e in errors:
+                  print(f'::error::{e}')
+              sys.exit(1)
+
+          print('✅ All entries use weekly update schedule')
+          EOF
