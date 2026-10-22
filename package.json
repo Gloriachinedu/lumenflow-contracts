@@ -7,6 +7,7 @@
     "test:e2e": "playwright test",
     "lint:html": "htmlhint \"frontend/**/*.html\" --config .htmlhintrc",
     "lint:js": "eslint \"frontend/**/*.js\" \"tests/**/*.js\"",
+    "check:i18n": "node scripts/check-i18n-locales.mjs",
     "check:roadmap": "node scripts/check-roadmap-tracking.mjs",
     "test:roadmap": "node --test \"scripts/*.test.mjs\""
   },
