@@ -150,10 +150,117 @@ jobs:
             git push origin "$BRANCH"
           fi
 
+  build-cli:
+    name: Build CLI — ${{ matrix.target }}
+    needs: [changelog, container-scan]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Linux x86_64 ──────────────────────────────────────────────────
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive_ext: tar.gz
+          # ── Linux ARM64 (AWS Graviton, Raspberry Pi) ──────────────────────
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive_ext: tar.gz
+          # ── macOS x86_64 ─────────────────────────────────────────────────
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive_ext: tar.gz
+          # ── macOS Apple Silicon ───────────────────────────────────────────
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive_ext: tar.gz
+          # ── Windows x86_64 ────────────────────────────────────────────────
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive_ext: zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c  # master
+        with:
+          toolchain: 1.87.0
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation toolchain (aarch64 Linux only)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Configure Cargo for cross-compilation (aarch64 Linux only)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          mkdir -p ~/.cargo
+          cat >> ~/.cargo/config.toml <<'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          EOF
+
+      - name: Cache cargo registry
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-cli-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build CLI binary
+        run: |
+          cargo build --locked --release --package lumenflow-cli --target ${{ matrix.target }}
+
+      - name: Package binary (Unix)
+        if: matrix.archive_ext == 'tar.gz'
+        run: |
+          BIN="target/${{ matrix.target }}/release/lumenflow-cli"
+          ARCHIVE="lumenflow-cli-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
+          tar -czf "$ARCHIVE" -C "$(dirname $BIN)" "$(basename $BIN)"
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
+
+      - name: Package binary (Windows)
+        if: matrix.archive_ext == 'zip'
+        shell: pwsh
+        run: |
+          $BIN = "target\${{ matrix.target }}\release\lumenflow-cli.exe"
+          $ARCHIVE = "lumenflow-cli-${{ github.ref_name }}-${{ matrix.target }}.zip"
+          Compress-Archive -Path $BIN -DestinationPath $ARCHIVE
+          echo "ARCHIVE=$ARCHIVE" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $hash = (Get-FileHash $ARCHIVE -Algorithm SHA256).Hash.ToLower()
+          "$hash  $ARCHIVE" | Out-File -FilePath "${ARCHIVE}.sha256" -Encoding utf8
+
+      - name: Smoke test binary (native targets only)
+        if: |
+          matrix.target == 'x86_64-unknown-linux-gnu' ||
+          matrix.target == 'x86_64-apple-darwin' ||
+          matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: |
+          BIN="target/${{ matrix.target }}/release/lumenflow-cli"
+          [ -f "${BIN}.exe" ] && BIN="${BIN}.exe"
+          "$BIN" --help
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1  # v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: |
+            lumenflow-cli-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive_ext }}
+            lumenflow-cli-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive_ext }}.sha256
+          retention-days: 1
+
   release:
     name: Build & Publish Release
     runs-on: ubuntu-latest
-    needs: [changelog, container-scan]
+    needs: [changelog, container-scan, build-cli]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
         with:
@@ -246,12 +353,20 @@ jobs:
           echo "${{ steps.hash.outputs.sha256 }}  lumenflow_${{ github.ref_name }}.wasm" \
             > lumenflow_${{ github.ref_name }}.wasm.sha256
 
+      - name: Download CLI artifacts
+        uses: actions/download-artifact@fa0a91b85d4f404e444306234feea0bfea40fee0  # v4
+        with:
+          pattern: cli-*
+          path: cli-artifacts
+          merge-multiple: true
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b  # v3.0.1
         with:
           files: |
             lumenflow_${{ github.ref_name }}.wasm
             lumenflow_${{ github.ref_name }}.wasm.sha256
+            cli-artifacts/*
           generate_release_notes: false
           draft: false
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
@@ -259,6 +374,20 @@ jobs:
             ${{ needs.changelog.outputs.changelog_body }}
 
             ---
+
+            ## CLI Installation
+
+            Pre-built CLI binaries are available for all major platforms. Download the archive for your platform and extract the `lumenflow-cli` binary.
+
+            | Platform | Archive |
+            |---|---|
+            | Linux x86\_64 | `lumenflow-cli-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz` |
+            | Linux ARM64 (Graviton / Raspberry Pi) | `lumenflow-cli-${{ github.ref_name }}-aarch64-unknown-linux-gnu.tar.gz` |
+            | macOS x86\_64 | `lumenflow-cli-${{ github.ref_name }}-x86_64-apple-darwin.tar.gz` |
+            | macOS Apple Silicon | `lumenflow-cli-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz` |
+            | Windows x86\_64 | `lumenflow-cli-${{ github.ref_name }}-x86_64-pc-windows-msvc.zip` |
+
+            SHA-256 checksums are published as `.sha256` files alongside each archive.
 
             ## WASM Verification
 
