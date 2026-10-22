@@ -94,6 +94,20 @@ SOURCE_ACCOUNT=<secret-key> ./scripts/local_up.sh
 - **Fill the PR template** — summary, what was tested, any blocked items
 - **CI must be green** before requesting review
 
+### PR Size Labels
+
+Every pull request is automatically labeled by the CI workflow (`.github/workflows/pr-size-label.yml`) based on the total number of lines changed (additions + deletions):
+
+| Label    | Lines changed | Description                              |
+|----------|---------------|------------------------------------------|
+| `size/XS` | < 50          | Extra-small — trivial fix or tiny change |
+| `size/S`  | 50 – 200      | Small — focused, easy to review          |
+| `size/M`  | 200 – 500     | Medium — moderate scope                  |
+| `size/L`  | 500 – 1000    | Large — consider splitting if possible   |
+| `size/XL` | > 1000        | Extra-large — please split into smaller PRs |
+
+Aim for `size/XS` or `size/S` whenever possible. Large PRs are harder to review thoroughly and more likely to introduce bugs. If your PR is labeled `size/L` or `size/XL`, consider breaking it into smaller, independent PRs — one per logical concern.
+
 ---
 
 ### Toolchain Version
