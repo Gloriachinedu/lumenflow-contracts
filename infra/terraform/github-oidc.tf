@@ -89,6 +89,7 @@ resource "aws_iam_role_policy" "github_actions" {
         Sid    = "ManageTerraformStateLocks"
         Effect = "Allow"
         Action = [
+          "dynamodb:DescribeTable",
           "dynamodb:DeleteItem",
           "dynamodb:GetItem",
           "dynamodb:PutItem",
