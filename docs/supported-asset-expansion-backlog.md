@@ -51,6 +51,9 @@ Ranks are reviewed monthly; new candidates enter the table scored, not appended.
 
 ## Rollout Checklist (per asset)
 
+For the operator-facing steps and CLI commands behind items 3–4 below, see
+[add-supported-token.md](add-supported-token.md).
+
 1. Score against criteria; record in this table with a dated entry.
 2. Issuer due diligence: reserves, audits, freeze/clawback terms, redemption.
 3. Add asset config (contract, decimals, issuer, display symbol) behind a flag.

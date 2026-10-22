@@ -4,7 +4,9 @@ extern crate alloc;
 
 use soroban_sdk::{testutils::Address as _, Address, Bytes, Env, String};
 
-use crate::{error::PaymentError, storage, PaymentProcessingContract, PaymentProcessingContractClient};
+use crate::{
+    error::PaymentError, storage, PaymentProcessingContract, PaymentProcessingContractClient,
+};
 
 fn setup() -> (Env, PaymentProcessingContractClient<'static>) {
     let env = Env::default();
@@ -63,7 +65,13 @@ fn test_error_refund_below_minimum_is_triggered() {
     client.set_admin(&admin);
     let merchant = Address::generate(&env);
     let payer = Address::generate(&env);
-    client.register_merchant(&merchant, &str(&env, "Demo"), &str(&env, "Demo"), &str(&env, "demo@example.com"), &crate::types::MerchantCategory::Retail);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Demo"),
+        &str(&env, "Demo"),
+        &str(&env, "demo@example.com"),
+        &crate::types::MerchantCategory::Retail,
+    );
     let order_id = str(&env, "refund-order");
     let result = client.try_initiate_refund(
         &payer,
@@ -83,11 +91,22 @@ fn test_error_subscription_interval_not_elapsed_is_triggered() {
     let merchant = Address::generate(&env);
     let subscriber = Address::generate(&env);
     let plan_id = str(&env, "plan");
-    let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
-    client.register_merchant(&merchant, &str(&env, "Demo"), &str(&env, "Demo"), &str(&env, "demo@example.com"), &crate::types::MerchantCategory::Retail);
+    let token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Demo"),
+        &str(&env, "Demo"),
+        &str(&env, "demo@example.com"),
+        &crate::types::MerchantCategory::Retail,
+    );
     client.add_allowed_token(&admin, &token);
     client.create_subscription_plan(&admin, &plan_id, &token, &1_000, &60, &1);
     client.subscribe(&merchant, &subscriber, &plan_id, &str(&env, "sub-1"));
     let result = client.try_charge_subscription(&merchant, &str(&env, "sub-1"));
-    assert_eq!(result, Err(Ok(PaymentError::SubscriptionIntervalNotElapsed)));
+    assert_eq!(
+        result,
+        Err(Ok(PaymentError::SubscriptionIntervalNotElapsed))
+    );
 }

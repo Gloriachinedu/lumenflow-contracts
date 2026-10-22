@@ -60,6 +60,9 @@ pub enum PaymentError {
     RefundLimitExceeded = 37,
 
     // Multisig
+    /// The signers list exceeds the configured maximum (default 10). Remediation: Reduce the
+    /// number of signers or ask an admin to raise the limit via set_max_signers.
+    TooManySigners = 47,
     /// The multi-signature payment request was not found. Remediation: Verify the payment ID.
     MultisigNotFound = 40,
     /// The caller has already signed this multi-signature payment. Remediation: Wait for other required signers.
@@ -89,7 +92,17 @@ pub enum PaymentError {
     /// The caller is not a registered pause guardian. Remediation: Only addresses set via set_pause_guardians can approve early unpause.
     NotAPauseGuardian = 75,
     /// The on-chain stored version does not match the binary version. Remediation: Call set_contract_version after upgrading.
-    VersionMismatch = 80,
+    VersionMismatch = 79,
+    /// The supplied token issuer is not on the approved issuer list.
+    InvalidIssuer = 80,
+    /// The on-chain storage was written by a newer contract binary.
+    StorageVersionTooNew = 81,
+    /// The on-chain storage requires migration to the current schema.
+    StorageMigrationRequired = 82,
+    CommitmentAlreadyExists = 84,
+    CommitmentNotFound = 85,
+    CommitmentExpired = 86,
+    CommitmentHashMismatch = 87,
 
     // General
     /// The provided input parameters are invalid. Remediation: Check the input values and format.
@@ -98,6 +111,8 @@ pub enum PaymentError {
     PaginationLimitExceeded = 51,
     /// The batch operation exceeds the maximum allowed items. Remediation: Reduce the number of items in the batch.
     BatchSizeExceeded = 52,
+    /// Two or more items within a single batch_payment call share the same order_id. Remediation: Ensure every order_id in the batch is unique.
+    DuplicateOrderId = 55,
     /// The provided tags exceed length or count limits. Remediation: Ensure tags are within the allowed limits (e.g., max 5 tags, max 20 chars per tag).
     InvalidTags = 53,
     /// The serialized payload for a batch item exceeds the maximum allowed size. Remediation: Reduce the size of memo, order_id, or other string fields.
@@ -106,7 +121,7 @@ pub enum PaymentError {
     // Referral
     /// The referral address is invalid: either it does not belong to a registered merchant or
     /// the caller attempted to refer themselves. Remediation: Provide a valid, distinct referrer address.
-    InvalidReferral = 80,
+    InvalidReferral = 83,
 
     // Subscriptions
     /// A subscription plan with the given ID already exists. Remediation: Use a unique plan ID.
@@ -151,4 +166,8 @@ pub enum PaymentError {
     DisputeRefundNotRejected = 112,
     /// The dispute has already been resolved. Remediation: No further action needed.
     DisputeAlreadyResolved = 113,
+    /// The dispute must be in Open or UnderReview state for this operation.
+    DisputeNotOpen = 114,
+    /// The dispute has already been escalated and cannot be escalated again.
+    DisputeAlreadyEscalated = 115,
 }

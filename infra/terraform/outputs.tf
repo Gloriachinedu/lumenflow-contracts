@@ -23,6 +23,11 @@ output "ci_runner_role_arn" {
   value       = aws_iam_role.ci_runner.arn
 }
 
+output "github_actions_role_arn" {
+  description = "IAM role ARN for GitHub Actions OIDC federation"
+  value       = aws_iam_role.github_actions.arn
+}
+
 output "alerts_topic_arn" {
   description = "SNS topic ARN for monitoring alerts"
   value       = aws_sns_topic.alerts.arn
@@ -31,4 +36,9 @@ output "alerts_topic_arn" {
 output "cloudwatch_log_group" {
   description = "CloudWatch log group name for LumenFlow application logs"
   value       = aws_cloudwatch_log_group.lumenflow.name
+}
+
+output "monthly_budget_name" {
+  description = "Name of the AWS Budget resource for this environment"
+  value       = aws_budgets_budget.monthly.name
 }

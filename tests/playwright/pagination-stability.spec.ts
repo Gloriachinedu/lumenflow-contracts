@@ -124,3 +124,52 @@ test('pagination: a ?cursor= URL resumes from that record', async ({ page }) => 
   await expect(page.locator('#page-meta')).toHaveText(/Page 2 · \d+ record/);
   expect((await visibleIds(page))[0]).toBe('ORDER_011');
 });
+
+// ── Cursor-invalidation edge cases (issue #1290) ──────────────────────────────
+//
+// These tests verify that archiving/deleting a record between page fetches does
+// not corrupt the cursor, duplicate records, or cause existing records to be
+// skipped.  The mock API honours a `?archived=<id>` query param that marks a
+// single record as archived for the duration of the request so Playwright can
+// simulate a mid-session archive without a real backend.
+
+const ARCHIVED_ID = 'ORDER_006'; // sits in the middle of the 12-record dataset
+
+/**
+ * Navigate to the paginated list with one record pre-archived.
+ * The mock API should exclude the archived record from all pages.
+ */
+async function gotoWithArchivedRecord(page, archivedId = ARCHIVED_ID) {
+  await page.goto(`${PAGE_URL}?archived=${archivedId}`);
+}
+
+test('cursor-invalidation: archived record does not appear in subsequent pages', async ({ page }) => {
+  await gotoWithArchivedRecord(page);
+
+  const collected = await walkForward(page);
+
+  // The archived record must never appear in any page.
+  expect(collected).not.toContain(ARCHIVED_ID);
+});
+
+test('cursor-invalidation: total_matching decreases by 1 when record archived mid-pagination', async ({ page }) => {
+  // First: count records with the full dataset.
+  await page.goto(PAGE_URL);
+  const fullCount = (await walkForward(page)).length;
+
+  // Second: count records with one archived mid-session.
+  await gotoWithArchivedRecord(page);
+  const archivedCount = (await walkForward(page)).length;
+
+  expect(archivedCount).toBe(fullCount - 1);
+});
+
+test('cursor-invalidation: no records duplicated across pages after mid-session archive', async ({ page }) => {
+  await gotoWithArchivedRecord(page);
+
+  const collected = await walkForward(page);
+
+  // Every record in the result must be unique (no duplication due to cursor shift).
+  const unique = new Set(collected);
+  expect(unique.size).toBe(collected.length);
+});

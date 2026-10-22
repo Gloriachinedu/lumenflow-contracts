@@ -672,6 +672,30 @@ stellar contract invoke --id $CONTRACT_ID --source-account $PAYER_KEY \
 
 ---
 
+## Proposed On-Chain Arbitration
+
+Issue #665 proposes an optional escalation path for an open dispute. This design
+note records the intended contract boundary before implementation:
+
+1. An arbitrator registers with a stake in XLM and can withdraw only when no
+  active panel assignment remains.
+2. `escalate_dispute(caller, dispute_id)` verifies that the caller may escalate
+  the open dispute and assigns three distinct eligible arbitrators using a
+  verifiable ledger-derived selection value.
+3. Each assigned arbitrator submits exactly one `resolve_as_refund` or
+  `resolve_as_reject` vote during a seven-day window.
+4. A two-of-three majority settles the dispute and applies the existing refund
+  execution path. A 1-1-1 result remains an explicit admin tie-break case.
+5. The disputed amount funds a bounded participation fee. Minority voters lose
+  a defined stake portion; timeout handling must distinguish an abstention from
+  a minority vote.
+
+The contract implementation still needs an audited storage model, deterministic
+randomness suitable for Soroban, fee and slashing constants, timeout settlement,
+and unit tests for quorum, tie-break, and arbitrator timeout. Until those pieces
+are implemented, disputes continue to use the administrator-only
+`resolve_dispute` flow documented above.
+
 ## Quick Reference: Per-Payment Refund Limit
 
 A maximum of **10 refunds** may be initiated against any single payment order.

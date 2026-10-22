@@ -8,11 +8,11 @@
     "test": "jest --testPathPattern=webhook/ --no-coverage"
   },
   "dependencies": {
-    "eventsource": "2.0.2",
-    "node-fetch": "2.7.0"
+    "eventsource": "5.1.2",
+    "node-fetch": "3.3.2"
   },
   "devDependencies": {
-    "jest": "29.7.0"
+    "jest": "30.5.2"
   },
   "peerDependencies": {
     "ioredis": ">=5"

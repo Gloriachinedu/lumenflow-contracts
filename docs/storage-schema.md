@@ -241,3 +241,11 @@ const key = xdr.ScVal.scvVec([
   xdr.ScVal.scvAddress(Address.fromString(MERCHANT_ADDR).toScAddress()),
 ]);
 ```
+
+---
+
+## Schema Migration
+
+When a contract upgrade changes the storage layout, a migration is required before the new code can read on-chain state written by the previous version.
+
+For the full migration process — identifying breaking changes, writing and testing migration functions, example before/after layouts, and rollback instructions — see **[docs/upgrade-guide.md § Storage Schema Migration](upgrade-guide.md#storage-schema-migration)**.

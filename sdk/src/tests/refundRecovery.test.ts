@@ -22,8 +22,10 @@
 import {
   recoverRefund,
   RefundRecoveryError,
+  RetryExhaustedError,
   RefundOps,
   defaultIsTransient,
+  computeBackoffDelay,
 } from '../refundRecovery';
 import { RefundRecord, RefundStatus } from '../types';
 import { LumenFlowError, PaymentErrorCode } from '../errors';
@@ -246,7 +248,7 @@ describe('recoverRefund — transient failures before the write', () => {
     expect(c.calls.filter((x) => x === 'execute')).toHaveLength(2); // 1 failed + 1 ok
   });
 
-  it('gives up after exhausting the retry budget for a step', async () => {
+  it('gives up after exhausting the retry budget and throws RetryExhaustedError', async () => {
     const c = new FakeRefundContract({ status: RefundStatus.Approved });
     const flakyOps: RefundOps = {
       getRefund: (id) => c.getRefund(id),
@@ -258,8 +260,12 @@ describe('recoverRefund — transient failures before the write', () => {
     };
 
     await expect(
-      recoverRefund(flakyOps, { ...PARAMS, maxRetriesPerStep: 2 }),
-    ).rejects.toThrow('network unreachable');
+      recoverRefund(flakyOps, {
+        ...PARAMS,
+        maxRetriesPerStep: 2,
+        sleep: async () => { /* no-op in tests */ },
+      }),
+    ).rejects.toBeInstanceOf(RetryExhaustedError);
   });
 });
 
@@ -307,5 +313,157 @@ describe('defaultIsTransient', () => {
     expect(defaultIsTransient(new Error('504 Gateway Timeout'))).toBe(true);
     expect(defaultIsTransient(new LumenFlowError(PaymentErrorCode.RefundNotApproved))).toBe(false);
     expect(defaultIsTransient(new Error('invalid amount'))).toBe(false);
+  });
+});
+
+// ── Exponential backoff tests ─────────────────────────────────────────────────
+
+describe('computeBackoffDelay — backoff progression', () => {
+  it('doubles the delay on each attempt', () => {
+    const base = 1000;
+    const max = 30_000;
+    expect(computeBackoffDelay(0, base, max, false)).toBe(1000);
+    expect(computeBackoffDelay(1, base, max, false)).toBe(2000);
+    expect(computeBackoffDelay(2, base, max, false)).toBe(4000);
+    expect(computeBackoffDelay(3, base, max, false)).toBe(8000);
+    expect(computeBackoffDelay(4, base, max, false)).toBe(16_000);
+    expect(computeBackoffDelay(5, base, max, false)).toBe(30_000); // capped at max
+    expect(computeBackoffDelay(99, base, max, false)).toBe(30_000); // stays at max
+  });
+
+  it('applies jitter within ±25% of the base delay', () => {
+    const base = 1000;
+    const max = 30_000;
+    // Run many times to exercise the jitter distribution
+    for (let i = 0; i < 200; i++) {
+      const delay = computeBackoffDelay(0, base, max, true);
+      expect(delay).toBeGreaterThanOrEqual(750);   // 1000 * 0.75
+      expect(delay).toBeLessThanOrEqual(1250);      // 1000 * 1.25
+    }
+  });
+
+  it('jitter-adjusted delay never exceeds maxDelayMs', () => {
+    for (let i = 0; i < 100; i++) {
+      const delay = computeBackoffDelay(10, 1000, 30_000, true);
+      expect(delay).toBeLessThanOrEqual(30_000);
+    }
+  });
+
+  it('respects a custom base and max', () => {
+    expect(computeBackoffDelay(0, 500, 5000, false)).toBe(500);
+    expect(computeBackoffDelay(1, 500, 5000, false)).toBe(1000);
+    expect(computeBackoffDelay(2, 500, 5000, false)).toBe(2000);
+    expect(computeBackoffDelay(3, 500, 5000, false)).toBe(4000);
+    expect(computeBackoffDelay(4, 500, 5000, false)).toBe(5000); // capped
+  });
+});
+
+describe('recoverRefund — backoff is applied between retries', () => {
+  it('sleeps with exponentially increasing delays between transient retries', async () => {
+    const c = new FakeRefundContract({ status: RefundStatus.Approved });
+    let executeCallCount = 0;
+    const sleepDelays: number[] = [];
+
+    const ops: RefundOps = {
+      getRefund: (id) => c.getRefund(id),
+      initiateRefund: (p) => c.initiateRefund(p),
+      approveRefund: (caller, id) => c.approveRefund(caller, id),
+      executeRefund: async () => {
+        executeCallCount++;
+        if (executeCallCount < 3) {
+          throw netErr('502 Bad Gateway');
+        }
+        // Succeed on the 3rd attempt — update state manually
+        await c.executeRefund('RF-1');
+      },
+    };
+
+    await recoverRefund(ops, {
+      ...PARAMS,
+      maxRetriesPerStep: 3,
+      backoff: { baseDelayMs: 100, maxDelayMs: 5000, jitter: false },
+      sleep: async (ms) => { sleepDelays.push(ms); },
+    });
+
+    // Two failures → two sleep calls
+    expect(sleepDelays).toHaveLength(2);
+    // Delays follow exponential progression: 100, 200
+    expect(sleepDelays[0]).toBe(100);
+    expect(sleepDelays[1]).toBe(200);
+  });
+
+  it('contract errors (non-retryable) do NOT trigger any sleep', async () => {
+    const c = new FakeRefundContract({ status: RefundStatus.Approved });
+    const sleepDelays: number[] = [];
+
+    const ops: RefundOps = {
+      getRefund: (id) => c.getRefund(id),
+      initiateRefund: (p) => c.initiateRefund(p),
+      approveRefund: (caller, id) => c.approveRefund(caller, id),
+      executeRefund: async () => {
+        throw new LumenFlowError(PaymentErrorCode.Unauthorized);
+      },
+    };
+
+    await expect(
+      recoverRefund(ops, {
+        ...PARAMS,
+        sleep: async (ms) => { sleepDelays.push(ms); },
+      }),
+    ).rejects.toBeInstanceOf(LumenFlowError);
+
+    expect(sleepDelays).toHaveLength(0);
+  });
+
+  it('backoff interval is configurable via RecoveryOptions.backoff', async () => {
+    const c = new FakeRefundContract({ status: RefundStatus.Approved });
+    let executeCalls = 0;
+    const sleepDelays: number[] = [];
+
+    const ops: RefundOps = {
+      getRefund: (id) => c.getRefund(id),
+      initiateRefund: (p) => c.initiateRefund(p),
+      approveRefund: (caller, id) => c.approveRefund(caller, id),
+      executeRefund: async () => {
+        executeCalls++;
+        if (executeCalls === 1) throw netErr('ECONNRESET');
+        await c.executeRefund('RF-1');
+      },
+    };
+
+    await recoverRefund(ops, {
+      ...PARAMS,
+      backoff: { baseDelayMs: 250, maxDelayMs: 10_000, jitter: false },
+      sleep: async (ms) => { sleepDelays.push(ms); },
+    });
+
+    expect(sleepDelays).toEqual([250]);
+  });
+
+  it('RetryExhaustedError carries step name, refundId, and attempt count', async () => {
+    const c = new FakeRefundContract({ status: RefundStatus.Approved });
+
+    const ops: RefundOps = {
+      getRefund: (id) => c.getRefund(id),
+      initiateRefund: (p) => c.initiateRefund(p),
+      approveRefund: (caller, id) => c.approveRefund(caller, id),
+      executeRefund: async () => { throw netErr('ECONNRESET'); },
+    };
+
+    let thrown: RetryExhaustedError | undefined;
+    try {
+      await recoverRefund(ops, {
+        ...PARAMS,
+        maxRetriesPerStep: 2,
+        sleep: async () => { /* no-op */ },
+      });
+    } catch (e) {
+      if (e instanceof RetryExhaustedError) thrown = e;
+    }
+
+    expect(thrown).toBeDefined();
+    expect(thrown!.refundId).toBe('RF-1');
+    expect(thrown!.step).toBe('execute');
+    expect(thrown!.attempts).toBe(3); // maxRetriesPerStep=2 → 3 total attempts
   });
 });

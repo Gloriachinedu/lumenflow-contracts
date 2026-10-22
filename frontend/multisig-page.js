@@ -1,4 +1,4 @@
-  import { CONTRACT_ID, RPC_URL, renderModeBanner, copyButtonHtml, initCopyButtons, formatAmount } from './lumenflow-shared.js';
+  import { CONTRACT_ID, RPC_URL, renderModeBanner, copyButtonHtml, initCopyButtons, formatAmount, formatDate } from './lumenflow-shared.js';
   import { validateOrderId, validateAmount, validateAddress, isValidStellarKey } from './validation.js';
 
   // ── State ──────────────────────────────────────────────────────────────────

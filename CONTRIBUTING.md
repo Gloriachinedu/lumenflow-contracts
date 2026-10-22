@@ -89,6 +89,7 @@ SOURCE_ACCOUNT=<secret-key> ./scripts/local_up.sh
 - **Branch names**: `feat/<slug>`, `fix/<slug>`, `docs/<slug>`, `ci/<slug>`, `test/<slug>`
 - **Commit messages**: follow [Conventional Commits](https://www.conventionalcommits.org/) — see the [Commits](#commits) section below for the full type list, breaking-change syntax, and examples. The `commit-msg` hook validates messages locally.
 - **Linking issues**: add `Closes #N` in the PR description body to auto-close the issue on merge
+- **Milestone assignment**: every new issue and PR **must** be assigned to a GitHub Milestone before it can be merged. Milestones correspond directly to the phases defined in [ROADMAP.md](ROADMAP.md) (`v0.4`, `v0.5`, `v0.6`, `Backlog`). If you are unsure which milestone applies, assign `Backlog` and a maintainer will re-triage. See [docs/roadmap-tracking.md](docs/roadmap-tracking.md#github-milestones) for the full milestone table and due dates.
 - **One concern per PR** — keep PRs focused; reviewers will ask you to split large ones
 - **Fill the PR template** — summary, what was tested, any blocked items
 - **CI must be green** before requesting review
@@ -121,7 +122,35 @@ To update a pinned action:
 2. Replace the SHA in the workflow file and update the version comment.
 3. Dependabot is configured to open PRs for these updates automatically (weekly).
 
+### Container Image Scanning
+
+Every Docker image built in CI is scanned for OS and library vulnerabilities by
+Trivy (`.github/workflows/docker-scan.yml`) **before** it can be used in any
+deployment:
+
+| Severity | Behaviour |
+|----------|-----------|
+| **Critical** | Workflow fails — image must not be deployed |
+| **High** | Warning annotation posted on the PR; workflow continues |
+| All results | Uploaded as SARIF to the GitHub Security tab |
+
+To suppress a false-positive finding, add a `.trivyignore` file at the
+repository root with the CVE IDs to skip, one per line, and include a comment
+explaining why the finding is not applicable.
+
 ## Development Setup
+
+### Secret Scanning Hook
+
+Install gitleaks, then enable the repository's pre-commit scan:
+
+```bash
+./scripts/install_hooks.sh
+```
+
+The hook scans the repository with `.gitleaks.toml` before each commit. Add
+reviewed false-positive exceptions to that configuration. For emergencies only,
+`SKIP_SECRET_SCAN=1 git commit ...` skips the scan and prints a warning.
 
 ```bash
 # Install Rust stable + WASM target
@@ -312,6 +341,33 @@ Use `scripts/release.sh <version>` to automate steps 1–4. Complete the remaini
 ## Reporting Security Issues
 
 Do **not** open a public issue for security vulnerabilities. See [SECURITY.md](SECURITY.md).
+
+## Stale Issue and PR Policy
+
+To keep the issue tracker clean and actionable, LumenFlow uses an automated stale bot
+(`.github/workflows/stale.yml`) that runs daily.
+
+### Issues
+
+| Threshold | Action |
+|-----------|--------|
+| 60 days with no activity | Labelled `stale` with a comment asking for an update |
+| 14 further days with no activity | Automatically closed with an explanatory comment |
+
+### Pull Requests
+
+| Threshold | Action |
+|-----------|--------|
+| 30 days with no activity | Labelled `stale` with a comment asking for an update |
+| 7 further days with no activity | Automatically closed with an explanatory comment |
+
+### Exemptions
+
+Issues and PRs labelled **`pinned`** or **`security`** are never labelled stale or
+automatically closed.
+
+If your issue or PR is closed by the stale bot, feel free to reopen it — there is no
+penalty for reopening work that is still relevant.
 
 ## Questions
 

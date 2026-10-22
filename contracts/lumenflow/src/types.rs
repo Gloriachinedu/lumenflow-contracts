@@ -10,7 +10,8 @@ pub enum MerchantCategory {
     Services,
     Digital,
     Other,
-    /// A custom category string. Must be non-empty and at most 32 characters.
+    /// A custom category string. Must be non-empty, at most 64 characters,
+    /// and contain only alphanumeric characters and spaces.
     Custom(String),
 }
 
@@ -60,6 +61,7 @@ pub struct PaymentOrder {
     pub payer: Address,
     pub token: Address,
     pub amount: i128,
+    pub version: u32,
     pub status: PaymentStatus,
     pub paid_at: u64,
     pub refunded_amount: i128,
@@ -213,6 +215,21 @@ pub struct PaymentPage {
     pub total_matching: u32,
 }
 
+// ── Merchant registration commitment (commit-reveal, issue #614) ─────────────
+
+/// A pending commitment created by `commit_merchant_registration`.
+/// Stored until the merchant calls `reveal_merchant_registration`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantCommitment {
+    /// The address that submitted the commitment.
+    pub merchant_address: Address,
+    /// SHA-256 hash of the pre-image: `merchant_address_bytes ++ name_bytes ++ nonce_bytes`.
+    pub commitment_hash: Bytes,
+    /// Ledger sequence at which this commitment was submitted.
+    pub committed_at_ledger: u32,
+}
+
 // ── Stats ─────────────────────────────────────────────────────────────────────
 
 #[contracttype]
@@ -265,16 +282,108 @@ pub struct EscrowRecord {
     pub created_at: u64,
 }
 
+/// Escrow state for conditional (condition-hash) holds.
+///
+/// Unlike time-locked escrows the funds here are held until an arbiter
+/// releases them (or the payer cancels before the timeout).  The
+/// `condition_hash` is a SHA-256 commitment to the off-chain condition
+/// document; it is recorded on-chain for auditability but is not verified
+/// inside the contract.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EscrowHoldStatus {
+    /// Funds are locked and waiting for arbiter release or timeout.
+    Held,
+    /// Arbiter or timeout released funds to merchant.
+    Released,
+    /// Payer cancelled before timeout; funds returned.
+    Cancelled,
+}
+
+/// A conditional escrow hold — funds locked until arbiter or timeout.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowHold {
+    /// Unique identifier for this escrow hold.
+    pub escrow_id: String,
+    /// The payer that deposited funds.
+    pub payer: Address,
+    /// Merchant that receives funds on release.
+    pub merchant: Address,
+    /// SPtoken contract address.
+    pub token: Address,
+    /// Amount held in stroops.
+    pub amount: i128,
+    /// SHA-256 hash of the off-chain condition document.
+    pub condition_hash: Bytes,
+    /// Arbiter address that may call `escrow_release`.
+    pub arbiter: Address,
+    /// Unix timestamp after which `escrow_release` can be called by anyone
+    /// (timeout fallback for the merchant).
+    pub timeout_at: u64,
+    pub status: EscrowHoldStatus,
+    pub created_at: u64,
+}
+
+/// Data payload for `lumenflow/escrow_held`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowHeldEvent {
+    pub escrow_id: String,
+    pub payer: Address,
+    pub merchant: Address,
+    pub amount: i128,
+    pub condition_hash: Bytes,
+}
+
+/// Data payload for `lumenflow/escrow_released`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowReleasedEvent {
+    pub escrow_id: String,
+    pub merchant: Address,
+    pub amount: i128,
+}
+
+/// Data payload for `lumenflow/escrow_cancelled`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowCancelledEvent {
+    pub escrow_id: String,
+    pub payer: Address,
+    pub amount: i128,
+}
+
 // ── Dispute ───────────────────────────────────────────────────────────────────
 
-/// Lifecycle states of a dispute.
+/// Full lifecycle state machine for a dispute.
+///
+/// ```text
+/// Open → UnderReview → Resolved(MerchantFavor | PayerFavor)
+///      ↘              ↗
+///        Escalated ──→
+/// ```
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DisputeStatus {
-    /// Dispute has been opened and is awaiting admin resolution.
+    /// Dispute has been opened; awaiting admin review.
     Open,
-    /// Admin has resolved the dispute (with or without a forced refund).
+    /// Admin has marked the dispute under active review.
+    UnderReview,
+    /// Admin has resolved the dispute in favour of one party.
     Resolved,
+    /// Admin has escalated the dispute (e.g. to an external arbitration layer).
+    Escalated,
+}
+
+/// Final outcome recorded when a dispute is resolved.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DisputeOutcome {
+    /// Resolved in the merchant's favour; no forced refund is issued.
+    MerchantFavor,
+    /// Resolved in the payer's favour; a forced refund is executed.
+    PayerFavor,
 }
 
 #[contracttype]
@@ -282,13 +391,19 @@ pub enum DisputeStatus {
 pub struct DisputeRecord {
     /// Unique identifier for this dispute.
     pub dispute_id: String,
-    /// The refund record being disputed (must be in `Rejected` state).
-    pub refund_id: String,
+    /// The order being disputed.
     pub order_id: String,
+    /// The refund associated with this dispute (if any). May be empty if
+    /// `initiate_dispute` is called before a refund exists.
+    pub refund_id: String,
+    /// The party that opened the dispute (payer or merchant).
     pub initiator: Address,
+    /// Human-readable reason; maximum 256 characters.
     pub reason: String,
     pub status: DisputeStatus,
-    /// Optional resolution notes written by the admin when resolving.
+    /// Set when the dispute is resolved.
+    pub outcome: Option<DisputeOutcome>,
+    /// Optional resolution or escalation notes written by the admin.
     pub resolution: Option<String>,
     pub created_at: u64,
 }
@@ -438,4 +553,52 @@ pub struct PaymentStatusUpdatedEvent {
     pub status: PaymentStatus,
     pub refunded_amount: i128,
     pub original_amount: i128,
+}
+
+// ── Admin Audit Log ───────────────────────────────────────────────────────────
+
+/// The type of admin action recorded in the audit log.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AdminActionType {
+    SetAdmin,
+    TransferAdmin,
+    PauseContract,
+    UnpauseContract,
+    AddAllowedToken,
+    RemoveAllowedToken,
+    SetPlatformFee,
+    SetLargePaymentThreshold,
+    SetPaymentCleanupPeriod,
+    SetMultisigExpiryDuration,
+    SetRefundWindow,
+    SetMinRefundAmount,
+    DeactivateMerchant,
+    ReactivateMerchant,
+    VerifyMerchant,
+    UnverifyMerchant,
+    ArchivePaymentRecord,
+    CleanupExpiredPayments,
+    SetPauseGuardians,
+    UpgradeContract,
+    ConfirmMerchantDataDeletion,
+    Other,
+}
+
+/// A single immutable entry in the admin audit log.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminAuditEntry {
+    /// Sequential index (0-based) of this entry in the log.
+    pub index: u32,
+    /// The type of admin action performed.
+    pub action: AdminActionType,
+    /// The admin address that performed the action.
+    pub caller: Address,
+    /// Optional human-readable summary of key parameters (e.g. "token=C...").
+    pub params: String,
+    /// Unix timestamp of the ledger at the time of the action.
+    pub timestamp: u64,
+    /// Ledger sequence number at the time of the action.
+    pub ledger_sequence: u32,
 }
