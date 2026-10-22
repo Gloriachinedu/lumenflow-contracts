@@ -22,7 +22,7 @@ test = false
 doc = false
 
 [[bin]]
-name = "fuzz_batch_payment_deserialize"
-path = "fuzz_targets/fuzz_batch_payment_deserialize.rs"
+name = "fuzz_verify_signature"
+path = "fuzz_targets/fuzz_verify_signature.rs"
 test = false
 doc = false

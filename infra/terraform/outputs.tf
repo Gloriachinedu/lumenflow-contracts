@@ -37,3 +37,8 @@ output "cloudwatch_log_group" {
   description = "CloudWatch log group name for LumenFlow application logs"
   value       = aws_cloudwatch_log_group.lumenflow.name
 }
+
+output "monthly_budget_name" {
+  description = "Name of the AWS Budget resource for this environment"
+  value       = aws_budgets_budget.monthly.name
+}

@@ -51,6 +51,7 @@ VDR-012 | covered | contracts/lumenflow/src/test.rs                        | Str
 VDR-013 | covered | contracts/lumenflow/src/test.rs                        | Refund auth security tests                       | Refund authorization matrix (#45)
 VDR-014 | gap     | contracts/lumenflow/src/test.rs                        | RateLimitExceeded                                | Per-merchant payment rate-limit bypass (#565) — NO regression test yet
 VDR-015 | covered | contracts/lumenflow/src/helper.rs                      | test_constant_time_eq_bytes                      | Timing side-channel in byte comparison — audit + constant_time_eq_bytes helper (#1098)
+VDR-016 | covered | contracts/lumenflow/tests/admin_access_control_regression.rs | admin_only_functions_reject_non_admin_caller | Admin-only access control regression: all 12 functions reject non-admin (#1268)
 EOF
 
 usage() {

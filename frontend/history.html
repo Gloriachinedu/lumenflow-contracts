@@ -325,10 +325,62 @@
     .verified-badge {
       display: inline-flex;
       align-items: center;
-      gap: 0.25rem;
-      font-size: 0.7rem;
+      gap: 0.2rem;
+      font-size: 0.65rem;
       color: #1a9e5c;
       font-weight: 600;
+      cursor: help;
+      position: relative;
+      vertical-align: middle;
+      margin-left: 0.3rem;
+    }
+
+    .verified-badge .verified-tooltip {
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%) translateY(-4px);
+      background: #1a1a2e;
+      color: #fff;
+      font-size: 0.72rem;
+      font-weight: 400;
+      padding: 0.4rem 0.6rem;
+      border-radius: 6px;
+      white-space: normal;
+      width: max-content;
+      max-width: 240px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.15s ease;
+      z-index: 10;
+    }
+
+    .verified-badge:hover .verified-tooltip,
+    .verified-badge:focus .verified-tooltip {
+      opacity: 1;
+    }
+
+    .verified-badge .verified-tooltip::after {
+      content: '';
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      border: 5px solid transparent;
+      border-top-color: #1a1a2e;
+    }
+
+    [data-theme="dark"] .verified-badge {
+      color: #34d48a;
+    }
+
+    [data-theme="dark"] .verified-badge .verified-tooltip {
+      background: #e8e8f0;
+      color: #1a1a2e;
+    }
+
+    [data-theme="dark"] .verified-badge .verified-tooltip::after {
+      border-top-color: #e8e8f0;
     }
 
     /* ── Skip link ───────────────────────────────────────────────────────── */

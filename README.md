@@ -173,9 +173,14 @@ For interactive contract testing, load the OpenAPI file in Swagger UI or any com
 
 | Tool | Install |
 |------|---------|
-| Rust (stable) | https://rustup.rs |
+| Rust (stable, ≥ 1.81.0) | https://rustup.rs |
 | Stellar CLI | https://developers.stellar.org/docs/tools/stellar-cli |
 | Docker Desktop (local network) | https://www.docker.com/products/docker-desktop |
+
+**Minimum Supported Rust Version (MSRV): 1.81.0.**
+The workspace declares `rust-version = "1.81.0"` in `Cargo.toml`. CI enforces
+this via a dedicated MSRV job in `.github/workflows/toolchain-matrix.yml`.
+Any Rust stable release ≥ 1.81.0 will work; earlier versions are not supported.
 
 Verify:
 
@@ -1124,3 +1129,8 @@ All Critical findings will have remediation PRs before mainnet deployment. A re-
 ## License
 
 [MIT](LICENSE) © 2026 LumenFlow Contributors
+
+## Handsoff notes
+
+<!-- handsoff-issue-1332 -->
+- #1332: [Frontend] Ensure all icon SVGs have accessible title and desc elements

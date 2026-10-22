@@ -362,3 +362,83 @@ export async function recoverRefund(
     alreadyComplete,
   };
 }
+
+// ─── findStuckRefunds ────────────────────────────────────────────────────────
+
+/** A minimal refund record shape expected by {@link findStuckRefunds}. */
+export interface StuckRefundCandidate {
+  id: string;
+  orderId: string;
+  amount: bigint;
+  reason: string;
+  status: RefundStatus;
+  /** Unix timestamp in milliseconds when the refund was created. */
+  createdAtMs: number;
+}
+
+/** Page returned by the list function. */
+export interface RefundPage {
+  items: StuckRefundCandidate[];
+  /** Pass to the next call to retrieve the next page; `null` when exhausted. */
+  nextCursor: string | null;
+}
+
+export interface FindStuckRefundsOptions {
+  /**
+   * Async function that fetches a page of refunds. Pass `null` as the cursor
+   * for the first call. Return `nextCursor: null` when there are no more pages.
+   */
+  listRefunds(cursor: string | null): Promise<RefundPage>;
+  /**
+   * Age threshold in milliseconds. Refunds in `Pending` state whose
+   * `createdAtMs` is older than `Date.now() - thresholdMs` are returned.
+   * Default: 3600000 (1 hour).
+   */
+  thresholdMs?: number;
+  /**
+   * Maximum number of pages to scan. Prevents unbounded iteration over very
+   * large datasets. Default: 100.
+   */
+  maxPages?: number;
+}
+
+/**
+ * Scans paginated refund records and returns those in `Pending` state that are
+ * older than the configured threshold — i.e. refunds that appear stuck.
+ *
+ * @example
+ * const stuck = await findStuckRefunds({
+ *   listRefunds: (cursor) => client.getRefunds({ cursor, limit: 50 }),
+ *   thresholdMs: 60 * 60 * 1000, // 1 hour
+ * });
+ */
+export async function findStuckRefunds(
+  options: FindStuckRefundsOptions,
+): Promise<StuckRefundCandidate[]> {
+  const {
+    listRefunds,
+    thresholdMs = 3_600_000,
+    maxPages = 100,
+  } = options;
+
+  const cutoff = Date.now() - thresholdMs;
+  const stuck: StuckRefundCandidate[] = [];
+  let cursor: string | null = null;
+  let pages = 0;
+
+  do {
+    const page = await listRefunds(cursor);
+    for (const refund of page.items) {
+      if (
+        refund.status === RefundStatus.Pending &&
+        refund.createdAtMs < cutoff
+      ) {
+        stuck.push(refund);
+      }
+    }
+    cursor = page.nextCursor;
+    pages++;
+  } while (cursor !== null && pages < maxPages);
+
+  return stuck;
+}

@@ -994,6 +994,10 @@ feat/sdk-rpc-retry-integration
     });
   }
 </script>
+<script type="module">
+  import { initDarkMode } from './dark-mode.js';
+  initDarkMode();
+</script>
 <!-- CSP violation reporter: logs policy violations to the console in development -->
 <script>
   document.addEventListener('securitypolicyviolation', function(e) {
