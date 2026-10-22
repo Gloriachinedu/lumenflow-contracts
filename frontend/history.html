@@ -222,10 +222,51 @@
     .status-fullyrefunded      { background: #fce8e8; color: #c0392b; }
     .status-unknown            { background: #f0f0f0; color: #666; }
 
+    /* ── Empty State (Illustrated) ─────────────────────────────────────────── */
     .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1rem;
       padding: 4rem 2rem;
       text-align: center;
+    }
+    .empty-state-illustration {
+      width: 120px;
+      height: 120px;
+      opacity: 0.5;
+    }
+    .empty-state-title {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: #4a4a6a;
+      margin: 0;
+    }
+    .empty-state-message {
+      font-size: 0.9rem;
       color: #888;
+      max-width: 400px;
+      line-height: 1.5;
+      margin: 0;
+    }
+    .empty-state-cta {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.6rem 1.5rem;
+      border-radius: 8px;
+      background: #6c47ff;
+      color: #fff;
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-decoration: none;
+      transition: background 0.15s;
+      margin-top: 0.5rem;
+    }
+    .empty-state-cta:hover { background: #5032d1; }
+    .empty-state-cta:focus-visible {
+      outline: 2px solid #6c47ff;
+      outline-offset: 2px;
     }
 
     /* ── Accessibility ────────────────────────────────────────────────────────── */
@@ -339,8 +380,20 @@
         <!-- Rows will be rendered here -->
       </tbody>
     </table>
-    <div id="empty-state" class="empty-state" style="display:none">
-      No payments found matching your filters.
+    <div id="empty-state" class="empty-state" style="display:none" role="region" aria-label="Empty payment history" aria-labelledby="empty-state-title">
+      <svg class="empty-state-illustration" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <circle cx="60" cy="60" r="56" stroke="#e0e0e0" stroke-width="2" stroke-dasharray="8 8" />
+        <rect x="32" y="34" width="56" height="64" rx="8" fill="#f5f7fa" stroke="#e0e0e0" stroke-width="2"/>
+        <line x1="40" y1="48" x2="80" y2="48" stroke="#d0d0d0" stroke-width="2" stroke-linecap="round"/>
+        <line x1="40" y1="58" x2="72" y2="58" stroke="#d0d0d0" stroke-width="2" stroke-linecap="round"/>
+        <line x1="40" y1="68" x2="68" y2="68" stroke="#d0d0d0" stroke-width="2" stroke-linecap="round"/>
+        <line x1="40" y1="78" x2="64" y2="78" stroke="#d0d0d0" stroke-width="2" stroke-linecap="round"/>
+        <circle cx="92" cy="88" r="16" fill="#6c47ff" opacity="0.12"/>
+        <path d="M86 88l4 4 8-8" stroke="#6c47ff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <h2 id="empty-state-title" class="empty-state-title" data-i18n="empty_state_title">No payments yet</h2>
+      <p class="empty-state-message" data-i18n="empty_state_message">When you receive your first payment, it will appear here. Create a payment request to get started.</p>
+      <a href="receipt.html" class="empty-state-cta" data-i18n="empty_state_cta">Create a payment request →</a>
     </div>
   </div>
 </div>
@@ -350,6 +403,46 @@
   const CONTRACT_ID = window.LUMENFLOW_CONTRACT_ID || '';
   const RPC_URL     = window.LUMENFLOW_RPC_URL     || 'https://soroban-testnet.stellar.org';
   const DEMO_MODE   = !CONTRACT_ID;
+
+  // ── i18n ─────────────────────────────────────────────────────────────────────
+  const I18N = {
+    en: {
+      empty_state_title:   'No payments yet',
+      empty_state_message: 'When you receive your first payment, it will appear here. Create a payment request to get started.',
+      empty_state_cta:     'Create a payment request →',
+      empty_state_filtered_title:   'No payments found',
+      empty_state_filtered_message: 'No payments match your current filters. Try adjusting or clearing them.',
+    },
+    es: {
+      empty_state_title:   'Aún no hay pagos',
+      empty_state_message: 'Cuando reciba su primer pago, aparecerá aquí. Cree una solicitud de pago para comenzar.',
+      empty_state_cta:     'Crear una solicitud de pago →',
+      empty_state_filtered_title:   'No se encontraron pagos',
+      empty_state_filtered_message: 'Ningún pago coincide con sus filtros actuales. Intente ajustarlos o borrarlos.',
+    },
+    pt: {
+      empty_state_title:   'Ainda não há pagamentos',
+      empty_state_message: 'Quando receber seu primeiro pagamento, ele aparecerá aqui. Crie uma solicitação de pagamento para começar.',
+      empty_state_cta:     'Criar uma solicitação de pagamento →',
+      empty_state_filtered_title:   'Nenhum pagamento encontrado',
+      empty_state_filtered_message: 'Nenhum pagamento corresponde aos filtros atuais. Tente ajustá-los ou limpá-los.',
+    },
+  };
+
+  /** Returns translations for the current page language. */
+  function getLang() {
+    const htmlLang = document.documentElement.lang || 'en';
+    return I18N[htmlLang] || I18N.en;
+  }
+
+  /** Applies i18n strings to all elements with data-i18n attributes. */
+  function applyI18n() {
+    const strings = getLang();
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+      const key = el.getAttribute('data-i18n');
+      if (strings[key]) el.textContent = strings[key];
+    });
+  }
 
   // ── State Management ────────────────────────────────────────────────────────
 
@@ -508,7 +601,16 @@
     const empty = document.getElementById('empty-state');
     body.innerHTML = '';
     if (!payments.length) {
-      empty.style.display = 'block';
+      const strings = getLang();
+      const hasActiveFilters = Object.values(filters).some(v => v && v !== 'Any');
+      if (hasActiveFilters) {
+        document.querySelector('.empty-state-title').textContent = strings.empty_state_filtered_title;
+        document.querySelector('.empty-state-message').textContent = strings.empty_state_filtered_message;
+      } else {
+        document.querySelector('.empty-state-title').textContent = strings.empty_state_title;
+        document.querySelector('.empty-state-message').textContent = strings.empty_state_message;
+      }
+      empty.style.display = 'flex';
       return;
     }
     empty.style.display = 'none';
@@ -536,8 +638,9 @@
     if (!merchant) {
       showTable();
       renderRows([]);
-      document.getElementById('empty-state').style.display = 'block';
-      document.getElementById('empty-state').textContent   = 'Enter a merchant address to load payment history.';
+      const strings = getLang();
+      document.querySelector('.empty-state-title').textContent = strings.empty_state_title;
+      document.querySelector('.empty-state-message').textContent = strings.empty_state_message;
       return;
     }
 
@@ -575,6 +678,7 @@
   window.removeFilter = removeFilter;
   window.retryFetch   = retryFetch;
   window.addEventListener('popstate', initFromUrl);
+  applyI18n();
   renderModeBanner();
   initFromUrl();
 </script>
