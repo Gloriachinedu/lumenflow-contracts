@@ -30,7 +30,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -57,7 +57,7 @@ jobs:
       # The cache key includes the pinned SDK version so it is invalidated on
       # any version bump.
       - name: Cache smoke-signer npm modules
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: scripts/.smoke_node_modules
           key: ${{ runner.os }}-smoke-npm-stellar-sdk-13.8.0
@@ -133,7 +133,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry

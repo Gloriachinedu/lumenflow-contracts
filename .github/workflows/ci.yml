@@ -212,7 +212,7 @@ jobs:
         run: rustc --version | grep "1.87.0"
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -241,7 +241,7 @@ jobs:
           toolchain: 1.87.0
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
