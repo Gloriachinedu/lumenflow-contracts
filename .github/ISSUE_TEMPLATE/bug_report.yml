@@ -5,7 +5,12 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to report a bug. Please fill out the sections below.
+        > 💬 **Have a question or need help?** Please use [GitHub Discussions](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/developer-help) instead of opening an issue.
+        >
+        > This template is **only** for confirmed bugs in the contract code. For general questions, integration help, or ideas, visit the relevant Discussion category:
+        > - 🙋 [Q&A](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/q-a) — Ask questions and get answers from the community
+        > - 🛠️ [Developer Help](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/developer-help) — SDK, tooling, and integration questions
+        > - 💡 [Feature Requests](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/feature-requests) — Suggest improvements
 
   - type: textarea
     id: description
