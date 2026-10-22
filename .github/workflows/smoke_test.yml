@@ -23,7 +23,7 @@ jobs:
       # Node.js is required by scripts/generate_smoke_keypair.sh to build
       # and sign the canonical payment payload (see docs/signature-format.md).
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "20"
 
