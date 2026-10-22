@@ -20,7 +20,7 @@ jobs:
     environment: testnet
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # ── Rust ────────────────────────────────────────────────────────────────
       - name: Install Rust toolchain
@@ -30,7 +30,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -49,7 +49,7 @@ jobs:
 
       # ── Node.js (required by generate_smoke_keypair.sh) ─────────────────────
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "20"
 
@@ -57,7 +57,7 @@ jobs:
       # The cache key includes the pinned SDK version so it is invalidated on
       # any version bump.
       - name: Cache smoke-signer npm modules
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: scripts/.smoke_node_modules
           key: ${{ runner.os }}-smoke-npm-stellar-sdk-13.8.0
@@ -114,3 +114,60 @@ jobs:
           PAYER_ADDRESS: ${{ secrets.TESTNET_PAYER_ADDRESS }}
           # SMOKE_SIG, SMOKE_PUBKEY, SMOKE_NONCE, SMOKE_ORDER_ID are set via GITHUB_ENV above
         run: ./scripts/smoke_test.sh
+
+  escrow-smoke:
+    name: Escrow Smoke Test
+    runs-on: ubuntu-latest
+    environment: testnet
+    # Depends on escrow hold/release implementation (issue #1111).
+    # Remove the `if` condition once #1111 is merged and deployed.
+    if: ${{ vars.ESCROW_SMOKE_ENABLED == 'true' }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.87.0
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-smoke-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-smoke-
+
+      - name: Build WASM
+        run: cargo build --target wasm32-unknown-unknown --release --package lumenflow
+
+      - name: Install Stellar CLI
+        run: |
+          cargo install stellar-cli --locked --version 22.8.1
+
+      - name: Deploy contract to testnet
+        id: deploy-escrow
+        env:
+          SOURCE_ACCOUNT: ${{ secrets.TESTNET_ADMIN_KEY }}
+          NETWORK: ${{ github.event.inputs.network || 'testnet' }}
+        run: |
+          CONTRACT_ID=$(NETWORK="$NETWORK" SOURCE_ACCOUNT="$SOURCE_ACCOUNT" ./scripts/deploy.sh \
+            | grep "Contract ID" | awk '{print $NF}')
+          echo "contract_id=$CONTRACT_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Run escrow smoke test
+        env:
+          CONTRACT_ID: ${{ steps.deploy-escrow.outputs.contract_id }}
+          NETWORK: ${{ github.event.inputs.network || 'testnet' }}
+          ADMIN_KEY: ${{ secrets.TESTNET_ADMIN_KEY }}
+          ADMIN_ADDRESS: ${{ secrets.TESTNET_ADMIN_ADDRESS }}
+          MERCHANT_KEY: ${{ secrets.TESTNET_MERCHANT_KEY }}
+          MERCHANT_ADDRESS: ${{ secrets.TESTNET_MERCHANT_ADDRESS }}
+          PAYER_KEY: ${{ secrets.TESTNET_PAYER_KEY }}
+          PAYER_ADDRESS: ${{ secrets.TESTNET_PAYER_ADDRESS }}
+          TOKEN_ADDRESS: ${{ secrets.TESTNET_TOKEN_ADDRESS }}
+        run: ./scripts/smoke_test_escrow.sh

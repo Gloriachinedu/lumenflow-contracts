@@ -191,3 +191,120 @@ of hot-path costs is stable and useful for prioritising optimisations.
 
 For reproducible comparisons, always run benchmarks on the same machine and
 avoid background load.  Use `--baseline` to compare across branches.
+
+---
+
+## Benchmark Regression CI
+
+The `benchmark-regression` job in `.github/workflows/ci.yml` runs automatically
+on every pull request and gates merges that would introduce a performance
+regression.
+
+### Baseline file
+
+The baseline is stored in:
+
+```
+contracts/lumenflow/benches/benchmark_baseline.json
+```
+
+It records the expected mean execution time (in nanoseconds) and the regression
+threshold for each tracked benchmark:
+
+```json
+{
+  "version": 1,
+  "updated_at": "2026-10-20",
+  "benchmarks": {
+    "process_payment_with_signature": { "mean_ns": 45000, "threshold_percent": 10 },
+    "merchant_payment_history_query": { "mean_ns": 12000, "threshold_percent": 10 },
+    "cleanup_expired_payments":       { "mean_ns": 8000,  "threshold_percent": 10 }
+  }
+}
+```
+
+### How the CI check works
+
+1. The `benchmark-regression` job checks out the PR branch and installs the
+   pinned Rust toolchain (1.87.0).
+2. It runs `./scripts/check-benchmark-regression.sh`, which:
+   - Executes `cargo bench --manifest-path contracts/lumenflow/Cargo.toml`.
+   - Parses Criterion's stdout for each benchmark's mean time.
+   - Converts the measured value to nanoseconds.
+   - Compares it to `baseline_mean × (1 + threshold_percent / 100)`.
+   - Prints a summary table to stdout and writes a markdown report to
+     `benchmark-results.md`.
+   - Exits with code 1 if **any** benchmark exceeds its allowed maximum.
+3. Regardless of the script's exit code, the `Post benchmark results as PR comment`
+   step reads `benchmark-results.md` and posts (or updates) a PR comment with
+   the full result table, making it easy to review at a glance.
+4. If the script exited non-zero the job fails and the PR check is marked as
+   failing, blocking merge until the regression is addressed.
+
+### Regression threshold
+
+The threshold is **10%** above the recorded baseline mean.  For example, if
+`process_payment_with_signature` has a baseline of 45,000 ns, any measurement
+above 49,500 ns causes a failure.
+
+The threshold is configurable per benchmark inside `benchmark_baseline.json` by
+adjusting `threshold_percent`.
+
+### Updating the baseline
+
+When an intentional performance change is made (e.g., an optimisation that
+genuinely improves hot-path speed), update the baseline to reflect the new
+measurements:
+
+```bash
+./scripts/update-benchmark-baseline.sh
+```
+
+The script:
+1. Runs `cargo bench` on the local machine.
+2. Parses the output and replaces each `mean_ns` in
+   `contracts/lumenflow/benches/benchmark_baseline.json` with the new value.
+3. Updates `updated_at` to today's date.
+
+After running the script, review the diff and commit the updated file alongside
+the change that caused the improvement:
+
+```bash
+git diff contracts/lumenflow/benches/benchmark_baseline.json
+git add contracts/lumenflow/benches/benchmark_baseline.json
+git commit -m "perf: update benchmark baseline after <description>"
+```
+
+> **Important:** never update the baseline to paper over a regression.
+> Only update it when the change represents a genuine improvement or a
+> deliberate architectural trade-off that has been reviewed by the team.
+
+---
+
+## Load Test Baseline (k6 concurrent batch payments)
+
+In addition to the in-memory Criterion benchmarks above, `scripts/load-test.sh`
+runs a k6-based network load test against a deployed contract (see
+`.github/workflows/load-test.yml`). The `concurrent_batch_payments` scenario
+(added in Issue #1084) simulates `BATCH_CLIENTS` (default: 10) concurrent
+clients, each submitting a single `batch_payment` call containing
+`BATCH_ITEMS` (default: 10) items.
+
+**Recorded baseline (testnet, 10 clients x 10 items):**
+
+| Metric | Baseline |
+|--------|---------:|
+| P95 latency | 1200 ms |
+| Throughput | ~8 payments/sec |
+| Error rate | < 1% |
+
+**Regression gate:** CI fails the load test if the measured P95 latency for
+the `concurrent_batch_payments` scenario exceeds the baseline by more than
+**20%** (i.e. > 1440 ms). This is enforced via the `BASELINE_P95_MS` env var
+and a k6 threshold on the `lumenflow_batch_payment_duration` metric, and is
+reported alongside throughput and error rate in the load test JSON output
+and CI job summary.
+
+To re-baseline after an intentional performance change, update
+`BASELINE_P95_MS` in `.github/workflows/load-test.yml` and the table above
+to the new measured value.

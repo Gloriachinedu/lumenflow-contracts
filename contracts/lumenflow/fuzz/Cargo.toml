@@ -20,3 +20,9 @@ name = "fuzz_auth"
 path = "fuzz_targets/fuzz_auth.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "fuzz_verify_signature"
+path = "fuzz_targets/fuzz_verify_signature.rs"
+test = false
+doc = false

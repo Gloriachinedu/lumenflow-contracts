@@ -21,3 +21,8 @@ github_repo         = "Gloriachinedu/lumenflow-contracts"
 
 # Alerting
 alert_email = ""
+
+# Budget alerts
+# monthly_budget_usd = 100      # override per environment in terraform.tfvars
+# ops_alert_email    = "ops@example.com"
+# alert_sns_topic_arn = "arn:aws:sns:us-east-1:123456789012:lumenflow-alerts"

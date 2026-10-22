@@ -14,11 +14,11 @@ sharing. Please use the category that best fits your topic:
 
 | Category | Use for |
 |----------|---------|
-| [🙋 Q&A](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/q-a) | General questions about LumenFlow — how it works, what's supported, usage patterns |
-| [🛠️ Developer Help](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/developer-help) | SDK integration, contract deployment, tooling, and debugging help |
-| [💡 Feature Requests](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/feature-requests) | Propose new features, vote on existing ones, discuss direction |
-| [🎉 Show and Tell](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/show-and-tell) | Share what you have built on top of LumenFlow |
-| [📢 Announcements](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/announcements) | Official releases, breaking changes, and project news (maintainers only) |
+| [🙋 Q&A](https://github.com/Gloriachinedu/lumenflow-contracts/discussions/categories/q-a) | General questions about LumenFlow — how it works, what's supported, usage patterns |
+| [🛠️ Developer Help](https://github.com/Gloriachinedu/lumenflow-contracts/discussions/categories/developer-help) | SDK integration, contract deployment, tooling, and debugging help |
+| [💡 Feature Requests](https://github.com/Gloriachinedu/lumenflow-contracts/discussions/categories/feature-requests) | Propose new features, vote on existing ones, discuss direction |
+| [🎉 Show and Tell](https://github.com/Gloriachinedu/lumenflow-contracts/discussions/categories/show-and-tell) | Share what you have built on top of LumenFlow |
+| [📢 Announcements](https://github.com/Gloriachinedu/lumenflow-contracts/discussions/categories/announcements) | Official releases, breaking changes, and project news (maintainers only) |
 
 ### Discord
 
@@ -28,11 +28,11 @@ For real-time chat, quick questions, and community conversations, join our
 ## Where to report bugs
 
 If you have found a confirmed bug in the contract code, please open a
-[GitHub Issue](https://github.com/PrincessnJoy/lumenflow-contracts/issues)
+[GitHub Issue](https://github.com/Gloriachinedu/lumenflow-contracts/issues)
 using the **Bug Report** template.
 
 > **Not sure if it's a bug?** Ask in
-> [Developer Help](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/developer-help)
+> [Developer Help](https://github.com/Gloriachinedu/lumenflow-contracts/discussions/categories/developer-help)
 > first — it may be a configuration issue or expected behaviour.
 
 When reporting a confirmed bug:
@@ -44,7 +44,7 @@ When reporting a confirmed bug:
 ## Feature Requests
 
 Have an idea for a new feature? Start the conversation in
-[Feature Requests discussions](https://github.com/PrincessnJoy/lumenflow-contracts/discussions/categories/feature-requests)
+[Feature Requests discussions](https://github.com/Gloriachinedu/lumenflow-contracts/discussions/categories/feature-requests)
 to get community feedback. Once there is consensus, a maintainer will open a
 tracking issue linked to the roadmap.
 

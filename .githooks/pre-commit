@@ -6,7 +6,12 @@ cd "$(git rev-parse --show-toplevel)"
 # ── Secrets scanning (Issue #627) ─────────────────────────────────────────────
 # Run gitleaks before every commit to prevent accidental key commits.
 # Install gitleaks: https://github.com/gitleaks/gitleaks#installing
-if command -v gitleaks &>/dev/null; then
+if [[ "${SKIP_SECRET_SCAN:-0}" == "1" ]]; then
+  echo "WARNING: secret scanning skipped because SKIP_SECRET_SCAN=1." >&2
+elif ! command -v gitleaks &>/dev/null; then
+  echo "ERROR: gitleaks is required. Install gitleaks or use SKIP_SECRET_SCAN=1 only for an emergency." >&2
+  exit 1
+else
   echo "🔍 Running gitleaks secrets scan..."
   if ! gitleaks protect --staged --config .gitleaks.toml --redact; then
     echo ""
@@ -17,12 +22,6 @@ if command -v gitleaks &>/dev/null; then
     exit 1
   fi
   echo "✅ No secrets detected in staged files."
-else
-  echo "⚠️  gitleaks is not installed — secrets scan skipped."
-  echo "   Install it to protect against accidental key commits:"
-  echo "   https://github.com/gitleaks/gitleaks#installing"
-  echo "   Or run: brew install gitleaks  (macOS)"
-  echo "           curl -sSfL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_x64.tar.gz | tar -xz -C /usr/local/bin"
 fi
 
 cargo fmt --all -- --check

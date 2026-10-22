@@ -58,6 +58,32 @@ docker compose down -v
 
 ## Install
 
+### SDK (JavaScript / TypeScript)
+
+```bash
+npm install @lumenflow/sdk
+```
+
+```ts
+import { LumenFlowClient } from '@lumenflow/sdk';
+```
+
+See the [SDK quickstart guide](sdk/README.md#quick-start) for full usage.
+
+### CLI (Rust / crates.io)
+
+```bash
+cargo install lumenflow-cli
+```
+
+Verify the installation:
+
+```bash
+lumenflow-cli --version
+```
+
+### Pre-built CLI binaries
+
 Pre-built CLI binaries are published with every [GitHub Release](https://github.com/Gloriachinedu/lumenflow-contracts/releases).
 
 **Linux (x86_64)**
@@ -122,6 +148,7 @@ LumenFlow is a production-grade payment processing smart contract for the [Stell
 - Contributor onboarding video script available in [docs/onboarding-video-script.md](docs/onboarding-video-script.md)
 - Secrets and secure local environment setup in [`docs/secrets-and-local-env.md`](docs/secrets-and-local-env.md)
 - Payment link generator guide in [`docs/payment-link-guide.md`](docs/payment-link-guide.md)
+- **SDK quickstart guide** (install → init → register merchant → submit payment → check history): [`sdk/README.md#quick-start`](sdk/README.md#quick-start)
 
 ## Refund lifecycle overview
 
@@ -146,9 +173,14 @@ For interactive contract testing, load the OpenAPI file in Swagger UI or any com
 
 | Tool | Install |
 |------|---------|
-| Rust (stable) | https://rustup.rs |
+| Rust (stable, ≥ 1.81.0) | https://rustup.rs |
 | Stellar CLI | https://developers.stellar.org/docs/tools/stellar-cli |
 | Docker Desktop (local network) | https://www.docker.com/products/docker-desktop |
+
+**Minimum Supported Rust Version (MSRV): 1.81.0.**
+The workspace declares `rust-version = "1.81.0"` in `Cargo.toml`. CI enforces
+this via a dedicated MSRV job in `.github/workflows/toolchain-matrix.yml`.
+Any Rust stable release ≥ 1.81.0 will work; earlier versions are not supported.
 
 Verify:
 
@@ -483,6 +515,62 @@ To run the smoke test from GitHub Actions, set these repository secrets:
 - `TESTNET_PAYER_ADDRESS`
 
 The CI workflows (`testnet-smoke.yml` and `smoke_test.yml`) automatically run `generate_smoke_keypair.sh` before the smoke test step — no additional secrets are needed for signature generation.
+
+---
+
+## Escrow Smoke Test
+
+The escrow smoke test validates the full escrow hold/release/cancel lifecycle
+once the escrow functions from [#1111] are deployed.
+
+### Run the escrow smoke test
+
+```bash
+CONTRACT_ID=<contract-id> \
+ADMIN_KEY=<admin-secret>       ADMIN_ADDRESS=<admin-address> \
+MERCHANT_KEY=<merchant-secret> MERCHANT_ADDRESS=<merchant-address> \
+PAYER_KEY=<payer-secret>       PAYER_ADDRESS=<payer-address> \
+TOKEN_ADDRESS=<token-address> \
+NETWORK=testnet \
+./scripts/smoke_test_escrow.sh
+```
+
+### Required environment variables
+
+Same as the standard smoke test plus `ADMIN_ADDRESS`, `MERCHANT_ADDRESS`, and `PAYER_ADDRESS` (all already listed above).
+
+### Expected success criteria
+
+The escrow smoke test covers two paths and passes when all steps exit zero:
+
+**Path A — hold → release**
+
+1. `escrow_hold` — payer locks funds in escrow
+2. Verify payer balance decreased (funds locked)
+3. `get_escrow` — confirm escrow record exists on-chain
+4. `escrow_release` — merchant releases funds
+5. Verify merchant balance increased
+6. `get_escrow` — confirm record removed after release
+
+**Path B — hold → cancel**
+
+1. `escrow_hold` — payer locks funds in escrow
+2. `escrow_cancel` — payer cancels and reclaims funds
+3. Verify payer balance restored
+4. `get_escrow` — confirm record removed after cancel
+
+On success the script prints:
+
+```text
+✅ Escrow smoke test passed.
+```
+
+### CI integration
+
+The `escrow-smoke` job in `.github/workflows/testnet-smoke.yml` runs the
+escrow smoke test automatically. It is gated by the repository variable
+`ESCROW_SMOKE_ENABLED=true` — set this once [#1111] is merged and deployed to
+testnet. The same GitHub Actions secrets used by the standard smoke test apply.
 
 ---
 
@@ -1063,8 +1151,9 @@ We maintain localized versions of the README to support Spanish and Portuguese r
 
 1. `README.md` — primary project overview and getting started guide.
 2. `SECURITY.md` — responsible disclosure and incident reporting.
-3. `docs/events-reference.md` — event payload definitions and integrations.
-4. `sdk/README.md` — SDK usage and helper method guidance.
+3. `docs/errors.md` — complete error code catalogue, descriptions, and remediation steps.
+4. `docs/events-reference.md` — event payload definitions and integrations.
+5. `sdk/README.md` — SDK usage and helper method guidance.
 
 ## Security
 
@@ -1096,3 +1185,8 @@ All Critical findings will have remediation PRs before mainnet deployment. A re-
 ## License
 
 [MIT](LICENSE) © 2026 LumenFlow Contributors
+
+## Handsoff notes
+
+<!-- handsoff-issue-1332 -->
+- #1332: [Frontend] Ensure all icon SVGs have accessible title and desc elements

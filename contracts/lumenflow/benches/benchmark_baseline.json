@@ -1,0 +1,19 @@
+{
+  "_comment": "Benchmark baseline for CI regression checks. Update via: cargo bench --manifest-path contracts/lumenflow/Cargo.toml 2>&1 | node scripts/update-benchmark-baseline.js",
+  "version": 1,
+  "updated_at": "2026-10-20",
+  "benchmarks": {
+    "process_payment_with_signature": {
+      "mean_ns": 45000,
+      "threshold_percent": 10
+    },
+    "merchant_payment_history_query": {
+      "mean_ns": 12000,
+      "threshold_percent": 10
+    },
+    "cleanup_expired_payments": {
+      "mean_ns": 8000,
+      "threshold_percent": 10
+    }
+  }
+}

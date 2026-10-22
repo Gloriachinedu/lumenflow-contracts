@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -39,7 +40,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -56,7 +57,7 @@ jobs:
           sudo apt-get install -y gcc-mingw-w64-x86-64
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -111,12 +112,17 @@ jobs:
             ${{ env.ARCHIVE }}.sha256
           retention-days: 7
 
-      - name: Upload to S3 (optional — requires AWS_ACCESS_KEY_ID secret)
-        if: env.AWS_ACCESS_KEY_ID != ''
+      - name: Configure AWS credentials with OIDC
+        if: vars.AWS_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Upload to S3 (optional — requires AWS_ROLE_ARN repository variable)
+        if: vars.AWS_ROLE_ARN != ''
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+          AWS_DEFAULT_REGION: us-east-1
         run: |
           aws s3 cp "${{ env.ARCHIVE }}" \
             "s3://lumenflow-artifacts-prod/nightly/${{ steps.meta.outputs.date }}/${{ env.ARCHIVE }}"
@@ -136,7 +142,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -147,7 +153,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -157,7 +163,7 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-integration-
 
       - name: Set up Node.js (for generate_smoke_keypair.sh)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
 
@@ -169,7 +175,7 @@ jobs:
           stellar --version
 
       - name: Download linux CLI binary artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: lumenflow-cli-nightly-x86_64-unknown-linux-gnu
           path: /tmp/cli-artifact

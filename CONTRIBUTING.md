@@ -89,9 +89,24 @@ SOURCE_ACCOUNT=<secret-key> ./scripts/local_up.sh
 - **Branch names**: `feat/<slug>`, `fix/<slug>`, `docs/<slug>`, `ci/<slug>`, `test/<slug>`
 - **Commit messages**: follow [Conventional Commits](https://www.conventionalcommits.org/) — see the [Commits](#commits) section below for the full type list, breaking-change syntax, and examples. The `commit-msg` hook validates messages locally.
 - **Linking issues**: add `Closes #N` in the PR description body to auto-close the issue on merge
+- **Milestone assignment**: every new issue and PR **must** be assigned to a GitHub Milestone before it can be merged. Milestones correspond directly to the phases defined in [ROADMAP.md](ROADMAP.md) (`v0.4`, `v0.5`, `v0.6`, `Backlog`). If you are unsure which milestone applies, assign `Backlog` and a maintainer will re-triage. See [docs/roadmap-tracking.md](docs/roadmap-tracking.md#github-milestones) for the full milestone table and due dates.
 - **One concern per PR** — keep PRs focused; reviewers will ask you to split large ones
 - **Fill the PR template** — summary, what was tested, any blocked items
 - **CI must be green** before requesting review
+
+### PR Size Labels
+
+Every pull request is automatically labeled by the CI workflow (`.github/workflows/pr-size-label.yml`) based on the total number of lines changed (additions + deletions):
+
+| Label    | Lines changed | Description                              |
+|----------|---------------|------------------------------------------|
+| `size/XS` | < 50          | Extra-small — trivial fix or tiny change |
+| `size/S`  | 50 – 200      | Small — focused, easy to review          |
+| `size/M`  | 200 – 500     | Medium — moderate scope                  |
+| `size/L`  | 500 – 1000    | Large — consider splitting if possible   |
+| `size/XL` | > 1000        | Extra-large — please split into smaller PRs |
+
+Aim for `size/XS` or `size/S` whenever possible. Large PRs are harder to review thoroughly and more likely to introduce bugs. If your PR is labeled `size/L` or `size/XL`, consider breaking it into smaller, independent PRs — one per logical concern.
 
 ---
 
@@ -121,7 +136,35 @@ To update a pinned action:
 2. Replace the SHA in the workflow file and update the version comment.
 3. Dependabot is configured to open PRs for these updates automatically (weekly).
 
+### Container Image Scanning
+
+Every Docker image built in CI is scanned for OS and library vulnerabilities by
+Trivy (`.github/workflows/docker-scan.yml`) **before** it can be used in any
+deployment:
+
+| Severity | Behaviour |
+|----------|-----------|
+| **Critical** | Workflow fails — image must not be deployed |
+| **High** | Warning annotation posted on the PR; workflow continues |
+| All results | Uploaded as SARIF to the GitHub Security tab |
+
+To suppress a false-positive finding, add a `.trivyignore` file at the
+repository root with the CVE IDs to skip, one per line, and include a comment
+explaining why the finding is not applicable.
+
 ## Development Setup
+
+### Secret Scanning Hook
+
+Install gitleaks, then enable the repository's pre-commit scan:
+
+```bash
+./scripts/install_hooks.sh
+```
+
+The hook scans the repository with `.gitleaks.toml` before each commit. Add
+reviewed false-positive exceptions to that configuration. For emergencies only,
+`SKIP_SECRET_SCAN=1 git commit ...` skips the scan and prints a warning.
 
 ```bash
 # Install Rust stable + WASM target
@@ -139,6 +182,118 @@ cargo clippy --all-targets --all-features -- -D warnings
 # Build WASM
 cargo build --target wasm32-unknown-unknown --release
 ```
+
+## Git Hooks
+
+The `.githooks/` directory contains two Git hooks that are installed locally
+when you run the setup command below.  They run automatically before each
+commit and catch common mistakes early, before code reaches CI.
+
+### Installation
+
+Run this once after cloning the repository:
+
+```bash
+./scripts/install_hooks.sh
+```
+
+The script symlinks `.githooks/pre-commit` and `.githooks/commit-msg` into
+`.git/hooks/` and ensures both are executable.
+
+### `commit-msg` — Conventional Commits format
+
+The `commit-msg` hook validates every commit message against the
+[Conventional Commits](https://www.conventionalcommits.org/) specification.
+It rejects messages that do not match the pattern:
+
+```
+<type>[(scope)][!]: <subject>
+```
+
+Valid types are: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `ci`,
+`chore`, `perf`, `revert`, `security`, `build`.
+
+The hook also rejects header lines longer than 100 characters.
+
+Example of a valid commit message:
+
+```
+feat(payments): add batch processing endpoint
+```
+
+### `pre-commit` — Lint and secret scanning
+
+The `pre-commit` hook runs two checks before every commit:
+
+1. **Secret scanning** — runs [gitleaks](https://github.com/gitleaks/gitleaks)
+   against the repository using `.gitleaks.toml` to detect accidentally staged
+   secrets (API keys, private keys, tokens, etc.).
+2. **Rust lint** — runs `cargo fmt --check` and
+   `cargo clippy -- -D warnings` to catch formatting and lint regressions
+   before they reach CI.
+
+Both checks must pass for the commit to be recorded.
+
+> **Emergency escape hatch:** if you need to commit without the secret scan
+> (e.g., to fix a broken hook configuration), set `SKIP_SECRET_SCAN=1`:
+> ```bash
+> SKIP_SECRET_SCAN=1 git commit -m "ci: fix hook configuration"
+> ```
+> Use this sparingly — the scan exists to prevent credential leaks.
+
+### Troubleshooting
+
+**Hook not running at all**
+
+Check that the hook files are executable:
+
+```bash
+ls -la .githooks/
+```
+
+Both `pre-commit` and `commit-msg` must have execute permission (`-rwxr-xr-x`).
+If they do not, re-run the install script:
+
+```bash
+./scripts/install_hooks.sh
+```
+
+**Commit rejected for bad message format**
+
+The `commit-msg` hook prints the reason for rejection and an example.  A valid
+conventional commit looks like:
+
+```
+fix(refunds): prevent duplicate refund_id on initiation
+```
+
+If your commit covers multiple concerns, split it into separate commits — one
+per logical change — or use the multi-line body format:
+
+```
+feat: resolve issues #1337 #1338
+
+- #1337: add confirmation dialog modal to multisig.html
+- #1338: add Git Hooks section to CONTRIBUTING.md
+```
+
+**Secret scan false positive**
+
+If gitleaks flags a string that is not a real secret (e.g., a test fixture or
+a documentation example), add an exception to `.gitleaksignore` in the
+repository root:
+
+```
+# .gitleaksignore
+# False positive: test fixture public key — not a real credential
+abc123def456...  # git object hash of the flagged commit
+```
+
+Alternatively, add an `[allowlist]` entry to `.gitleaks.toml` for a path or
+regex pattern that should always be ignored.  Open a PR with a comment
+explaining why the exception is safe.
+
+---
 
 ## Contribution Guidelines
 
@@ -163,6 +318,52 @@ When adding a new translation, please follow the naming convention `README.[lang
 - Every new feature or bug fix must include a test.
 - Tests live in `src/test.rs` using `soroban-sdk` testutils.
 - Use `mock_all_auths()` for unit tests; integration tests should use real auth.
+
+### Snapshot Tests
+
+The project uses two kinds of snapshot tests that require special handling when you change the UI:
+
+#### HTML DOM structure snapshots (Playwright)
+
+File: `tests/playwright/payment-history-snapshot.spec.ts`
+
+These tests capture the serialised HTML structure of the payment history page and fail CI when the DOM changes unexpectedly. They are **not** pixel-level visual comparisons — they check element IDs, ARIA roles, table headers, filter controls, and pagination elements.
+
+**When to update snapshots:**
+
+Update the baseline snapshots whenever you make an **intentional** structural change to `frontend/payment-history.html` (e.g., adding a column, renaming a filter control, restructuring the pagination nav).
+
+**How to update snapshots:**
+
+```bash
+# From the tests/ directory
+npm install            # first time only
+npx playwright test payment-history-snapshot --update-snapshots
+```
+
+Or from the workspace root:
+
+```bash
+cd tests && npx playwright test payment-history-snapshot --update-snapshots
+```
+
+The updated `.txt` snapshot files are stored in `tests/playwright/screenshots/`. **Commit them alongside your HTML change** and explain the structural change in your PR description.
+
+**How CI uses them:**
+
+On every pull request, `npx playwright test payment-history-snapshot` runs and compares the rendered HTML against the committed baselines. A mismatch fails the job and prints a diff showing exactly what changed.
+
+#### Rust contract snapshots
+
+File: `contracts/lumenflow/test_snapshots/`
+
+Contract-level snapshot tests use the `expect-test` crate. To update them:
+
+```bash
+UPDATE_EXPECT=1 cargo test --all-features
+```
+
+Commit any updated snapshot files with your change.
 
 ### Reproducible Builds
 

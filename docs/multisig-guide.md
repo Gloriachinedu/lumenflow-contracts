@@ -71,6 +71,43 @@ The `required_signatures` parameter (threshold) should be chosen based on your t
    - `sign_multisig_payment`: Requires `signer` auth.
    - `execute_multisig_payment`: Requires `payer` auth.
 
+## Maximum Signers Limit
+
+To prevent unbounded storage consumption and denial-of-service through excessive iteration, `initiate_multisig_payment` enforces a configurable cap on the number of signers per payment.
+
+| Scenario | Result |
+|---|---|
+| `signers.len() ≤ limit` | Accepted |
+| `signers.len() > limit` | `ContractError::TooManySigners` |
+| `signers.len() == 0` | `ContractError::InvalidInput` |
+
+### Default Limit
+
+The default maximum is **10 signers**. This accommodates the vast majority of multi-party approval workflows (e.g. 5-of-7, 3-of-5, 2-of-3) while bounding on-chain iteration to a fixed cost.
+
+### Admin Configuration
+
+An administrator can raise or lower the limit at any time using `set_max_signers`:
+
+```bash
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN --network testnet \
+  -- set_max_signers \
+  --admin $ADMIN_ADDR \
+  --max_signers 20
+```
+
+The change takes effect immediately for all subsequent calls to `initiate_multisig_payment`. Existing multisig payments already in storage are unaffected.
+
+### Choosing a Limit
+
+| Use Case | Recommended Limit |
+|---|---|
+| Standard corporate treasury (2-of-3 / 3-of-5) | 10 (default) |
+| Large governance boards | 15–20 |
+| High-security council voting | 20+ (raise via admin) |
+
+> **Note:** Raising the limit significantly increases the per-call compute and storage cost. Benchmark your use case on testnet before deploying to mainnet.
+
 ## CLI Example
 
 ```bash
