@@ -141,3 +141,79 @@ VERSION=v0.1.0 \
 ```
 
 This creates a tamper-evident audit trail in `deployments/testnet.json` that is version-controlled alongside the source.
+
+---
+
+## Cosign Keyless Signing (Issue #1352)
+
+Starting from the first release published after this change, every WASM artifact is signed
+using [Sigstore Cosign](https://docs.sigstore.dev/cosign/overview/) with GitHub OIDC-based
+keyless signing. No private key is managed — the identity is anchored to the GitHub Actions
+workflow that ran the release job.
+
+Each release publishes three additional files alongside the WASM:
+
+| File | Description |
+|------|-------------|
+| `lumenflow_v<VERSION>.wasm.sig` | Base64-encoded Cosign signature blob |
+| `lumenflow_v<VERSION>.wasm.cert` | PEM certificate issued by Sigstore's Fulcio CA |
+| `lumenflow_v<VERSION>.wasm.sha256` | SHA-256 checksum (as before) |
+
+### Verifying with Cosign
+
+Install Cosign (v2+):
+
+```bash
+# Linux / macOS (via Homebrew)
+brew install cosign
+
+# Or download from GitHub Releases
+# https://github.com/sigstore/cosign/releases
+```
+
+Verify the WASM artifact from a GitHub release:
+
+```bash
+VERSION=v1.2.0   # replace with the target release tag
+
+# Download the artifact and its signature bundle
+curl -fsSLO https://github.com/Gloriachinedu/lumenflow-contracts/releases/download/${VERSION}/lumenflow_${VERSION}.wasm
+curl -fsSLO https://github.com/Gloriachinedu/lumenflow-contracts/releases/download/${VERSION}/lumenflow_${VERSION}.wasm.sig
+curl -fsSLO https://github.com/Gloriachinedu/lumenflow-contracts/releases/download/${VERSION}/lumenflow_${VERSION}.wasm.cert
+
+# Verify the signature
+cosign verify-blob \
+  --signature lumenflow_${VERSION}.wasm.sig \
+  --certificate lumenflow_${VERSION}.wasm.cert \
+  --certificate-identity-regexp "https://github.com/Gloriachinedu/lumenflow-contracts/.github/workflows/release.yml" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  lumenflow_${VERSION}.wasm
+```
+
+A successful verification prints:
+
+```
+Verified OK
+```
+
+A failed verification prints an error and exits non-zero — the artifact should not be trusted.
+
+### What does verification prove?
+
+- The artifact was signed by a GitHub Actions job running the `release.yml` workflow in the
+  `Gloriachinedu/lumenflow-contracts` repository.
+- The signing certificate was issued by [Sigstore's Fulcio CA](https://docs.sigstore.dev/fulcio/),
+  which embeds the OIDC identity claim from GitHub.
+- The signature and certificate are logged in [Rekor](https://docs.sigstore.dev/rekor/) for
+  public auditability — you can look up the entry with `cosign triangulate`.
+
+### Transparency log lookup
+
+```bash
+cosign triangulate lumenflow_${VERSION}.wasm \
+  --signature lumenflow_${VERSION}.wasm.sig \
+  --certificate lumenflow_${VERSION}.wasm.cert
+```
+
+This prints the Rekor log entry URL, which you can inspect to confirm the signing timestamp
+and workflow identity are consistent with the release tag.

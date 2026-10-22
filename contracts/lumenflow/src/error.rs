@@ -37,6 +37,9 @@ pub enum PaymentError {
     InvalidSignature = 23,
     /// The payment request has expired. Remediation: Create a new payment request.
     PaymentExpired = 24,
+    /// The signature timestamp is older than the configured expiry window (default 5 minutes).
+    /// Remediation: Generate a fresh signature with a current timestamp and resubmit.
+    SignatureExpired = 27,
     /// The payer does not have enough tokens to complete the payment. Remediation: Ensure the payer has sufficient funds in the specified token.
     InsufficientBalance = 25,
     /// The specified token is not accepted. Remediation: Use a supported token.

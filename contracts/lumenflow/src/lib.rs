@@ -426,7 +426,39 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
-    /// Reset the auth failure lockout for a specific address (admin only).
+    /// Set the signature expiry window in seconds (default 300 s = 5 minutes). Admin only.
+    ///
+    /// Signatures submitted to `process_payment_with_signature` must embed a
+    /// `timestamp` value (Unix seconds) no older than `window_secs` from the
+    /// current ledger time. Older signatures are rejected with
+    /// [`PaymentError::SignatureExpired`].
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator address.
+    /// * `window_secs` - Maximum acceptable age of a signature in seconds. Must be > 0.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    /// * [`PaymentError::InvalidInput`] — `window_secs` is zero.
+    pub fn set_signature_expiry_window(
+        env: Env,
+        admin: Address,
+        window_secs: u64,
+    ) -> Result<(), PaymentError> {
+        require_admin_rate_limited(&env, &admin)?;
+        if window_secs == 0 {
+            return Err(PaymentError::InvalidInput);
+        }
+        storage::set_signature_expiry_window(&env, window_secs);
+        env.events()
+            .publish(("lumenflow", "signature_expiry_window_set"), window_secs);
+        Ok(())
+    }
+
+
     ///
     /// Clears both the failure counter and the lockout expiry for `address`.
     /// This allows an admin to manually intervene when a legitimate user is
@@ -1131,10 +1163,14 @@ impl PaymentProcessingContract {
     ///
     /// Transfers `amount` tokens from `payer` to `merchant_address` after verifying
     /// the merchant's ed25519 signature over the canonical payload
-    /// (`network_id || contract_address_xdr || nonce_be_u64 || order_id_xdr || amount_be_i128`).
+    /// (`network_id || contract_address_xdr || nonce_be_u64 || order_id_xdr || amount_be_i128 || timestamp_be_u64`).
     /// The `nonce` field must equal `current_merchant_nonce + 1`; on success the
     /// merchant's nonce counter is incremented, permanently invalidating any
     /// previously intercepted signature.
+    ///
+    /// The `timestamp` field must be within the configured signature expiry window
+    /// (default 5 minutes) of the current ledger time. Signatures older than the
+    /// window are rejected with [`PaymentError::SignatureExpired`].
     ///
     /// # Arguments
     /// * `payer` - Address funding the payment. Must sign the call.
@@ -1145,6 +1181,8 @@ impl PaymentProcessingContract {
     /// * `memo` - Optional free-text note; maximum 256 characters.
     /// * `tags` - Optional list of string tags; each tag ≤ 32 characters, max 10 tags.
     /// * `nonce` - Must equal `get_merchant_nonce(merchant_address) + 1`. Prevents replay.
+    /// * `timestamp` - Unix timestamp (seconds) at which the signature was produced.
+    ///   Must be within the configured expiry window of the current ledger time.
     /// * `signature` - 64-byte ed25519 signature produced by the merchant's private key.
     /// * `merchant_public_key` - 32-byte ed25519 public key corresponding to the signature.
     ///
@@ -1160,6 +1198,8 @@ impl PaymentProcessingContract {
     /// * [`PaymentError::MerchantNotFound`] — no merchant registered at `merchant_address`.
     /// * [`PaymentError::MerchantInactive`] — the merchant has been deactivated.
     /// * [`PaymentError::InvalidNonce`] — `nonce` does not equal current merchant nonce + 1.
+    /// * [`PaymentError::SignatureExpired`] — the signature `timestamp` is older than the
+    ///   configured expiry window.
     /// * [`PaymentError::InvalidSignature`] — the ed25519 signature verification failed.
     pub fn process_payment_with_signature(
         env: Env,
@@ -1171,6 +1211,7 @@ impl PaymentProcessingContract {
         memo: String,
         tags: Option<Vec<String>>,
         nonce: u64,
+        timestamp: u64,
         signature: Bytes,
         merchant_public_key: Bytes,
     ) -> Result<(), PaymentError> {
@@ -1201,12 +1242,20 @@ impl PaymentProcessingContract {
             return Err(PaymentError::InvalidNonce);
         }
 
-        // Reject disallowed tokens
+        // Timestamp expiry check (Issue #1350): reject signatures older than the window.
+        let now = env.ledger().timestamp();
+        let expiry_window = storage::get_signature_expiry_window(&env);
+        if timestamp < now.saturating_sub(expiry_window) {
+            return Err(PaymentError::SignatureExpired);
+        }
+
+        // Reject disallowed tokens (second check after nonce — keeps token check near top
+        // but also guards against re-entrance between the first check and here).
         if !storage::is_token_allowed(&env, &token_address) {
             return Err(PaymentError::TokenNotAllowed);
         }
 
-        // Build payload: network_id || contract_address || nonce || order_id || amount
+        // Build payload: network_id || contract_address || nonce || order_id || amount || timestamp
         let mut payload = Bytes::new(&env);
         let network_id_bytes: Bytes = env.ledger().network_id().into();
         payload.append(&network_id_bytes);
@@ -1214,6 +1263,7 @@ impl PaymentProcessingContract {
         payload.append(&Bytes::from_slice(&env, &nonce.to_be_bytes()));
         payload.append(&order_id.clone().to_xdr(&env));
         payload.append(&Bytes::from_slice(&env, &amount.to_be_bytes()));
+        payload.append(&Bytes::from_slice(&env, &timestamp.to_be_bytes()));
         verify_signature(&env, &merchant_public_key, &payload, &signature)?;
 
         // Advance merchant nonce before any external calls (checks-effects-interactions)
@@ -1243,8 +1293,6 @@ impl PaymentProcessingContract {
                 token_client.transfer(&payer, &recipient, &platform_fee);
             }
         }
-
-        let now = env.ledger().timestamp();
         let payment = PaymentOrder {
             order_id: order_id.clone(),
             merchant_address: merchant_address.clone(),
