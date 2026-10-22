@@ -319,6 +319,52 @@ When adding a new translation, please follow the naming convention `README.[lang
 - Tests live in `src/test.rs` using `soroban-sdk` testutils.
 - Use `mock_all_auths()` for unit tests; integration tests should use real auth.
 
+### Snapshot Tests
+
+The project uses two kinds of snapshot tests that require special handling when you change the UI:
+
+#### HTML DOM structure snapshots (Playwright)
+
+File: `tests/playwright/payment-history-snapshot.spec.ts`
+
+These tests capture the serialised HTML structure of the payment history page and fail CI when the DOM changes unexpectedly. They are **not** pixel-level visual comparisons — they check element IDs, ARIA roles, table headers, filter controls, and pagination elements.
+
+**When to update snapshots:**
+
+Update the baseline snapshots whenever you make an **intentional** structural change to `frontend/payment-history.html` (e.g., adding a column, renaming a filter control, restructuring the pagination nav).
+
+**How to update snapshots:**
+
+```bash
+# From the tests/ directory
+npm install            # first time only
+npx playwright test payment-history-snapshot --update-snapshots
+```
+
+Or from the workspace root:
+
+```bash
+cd tests && npx playwright test payment-history-snapshot --update-snapshots
+```
+
+The updated `.txt` snapshot files are stored in `tests/playwright/screenshots/`. **Commit them alongside your HTML change** and explain the structural change in your PR description.
+
+**How CI uses them:**
+
+On every pull request, `npx playwright test payment-history-snapshot` runs and compares the rendered HTML against the committed baselines. A mismatch fails the job and prints a diff showing exactly what changed.
+
+#### Rust contract snapshots
+
+File: `contracts/lumenflow/test_snapshots/`
+
+Contract-level snapshot tests use the `expect-test` crate. To update them:
+
+```bash
+UPDATE_EXPECT=1 cargo test --all-features
+```
+
+Commit any updated snapshot files with your change.
+
 ### Reproducible Builds
 
 - `Cargo.lock` must be committed to the repository.
