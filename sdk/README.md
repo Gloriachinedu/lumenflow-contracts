@@ -1121,6 +1121,41 @@ When a limit is exceeded Horizon responds with **HTTP 429 Too Many Requests** an
 
 The SDK includes a production-ready exponential backoff helper in [`src/retry.ts`](src/retry.ts) that is applied automatically to all RPC read operations performed through `LumenFlowClient`. The default policy retries up to **3 attempts** with a base delay of **200 ms**, capped at **5 000 ms**, and **20% jitter** to avoid thundering-herd behaviour.
 
+### HTTP 429 — Rate Limit Handling
+
+When a **429 Too Many Requests** response is received the retry helper:
+
+1. **Reads the `Retry-After` header** — if present and valid (a positive integer number of seconds), the SDK waits exactly that duration before the next attempt.
+2. **Falls back to exponential back-off** — if `Retry-After` is absent, zero, or non-numeric, standard exponential back-off with jitter is used instead.
+3. **Respects the configured retry limit** — regardless of the `Retry-After` value, the retry count is never exceeded.
+
+```typescript
+import { withRetry, getRetryAfterMs } from '@lumenflow/sdk/retry';
+
+// The helper automatically handles Retry-After:
+const result = await withRetry(
+  () => sorobanRpcCall(),
+  { maxRetries: 3, baseDelayMs: 200, maxDelayMs: 5000 }
+);
+
+// You can also inspect the Retry-After value yourself:
+const delayMs = getRetryAfterMs(error); // returns null if not a 429 or no header
+```
+
+The `RetryExhaustedError` class is thrown when all retry attempts fail, and includes `retryCount` and `lastError` properties for observability:
+
+```typescript
+import { withRetry, RetryExhaustedError } from '@lumenflow/sdk/retry';
+
+try {
+  await withRetry(() => rpcCall(), { maxRetries: 2 });
+} catch (err) {
+  if (err instanceof RetryExhaustedError) {
+    console.error(`Failed after ${err.retryCount} retries:`, err.lastError);
+  }
+}
+```
+
 ### Contract event validation
 
 `fetchContractEvents` validates every event against the SDK event catalog before returning it. Malformed events are discarded and logged with `console.warn` by default. Set `strict: true` in the poller options to throw an `EventCompatError` instead:
