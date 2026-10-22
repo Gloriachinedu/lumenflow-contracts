@@ -20,7 +20,7 @@ jobs:
     environment: testnet
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # ── Rust ────────────────────────────────────────────────────────────────
       - name: Install Rust toolchain
@@ -124,7 +124,7 @@ jobs:
     if: ${{ vars.ESCROW_SMOKE_ENABLED == 'true' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
