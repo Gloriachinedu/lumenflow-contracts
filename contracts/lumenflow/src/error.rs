@@ -120,6 +120,10 @@ pub enum PaymentError {
     InvalidTags = 53,
     /// The serialized payload for a batch item exceeds the maximum allowed size. Remediation: Reduce the size of memo, order_id, or other string fields.
     SerializedPayloadTooLarge = 54,
+    /// The order_id field is empty. Remediation: Provide a non-empty order ID string.
+    InvalidOrderId = 55,
+    /// The order_id field exceeds the maximum allowed length of 64 characters. Remediation: Shorten the order ID to 64 characters or fewer.
+    OrderIdTooLong = 56,
 
     // Referral
     /// The referral address is invalid: either it does not belong to a registered merchant or

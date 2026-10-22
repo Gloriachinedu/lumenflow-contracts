@@ -25,6 +25,7 @@ LumenFlow es un contrato inteligente de procesamiento de pagos de grado de produ
 
 - Política de seguridad y divulgación responsable: [SECURITY.es.md](SECURITY.es.md)
 - Códigos de error del contrato y pasos de remediación: [docs/errors.es.md](docs/errors.es.md)
+- Política de privacidad y eliminación de datos: [PRIVACY.es.md](PRIVACY.es.md)
 - Plan de auditoría y alcance publicado en `docs/audit/audit-report.md`
 - Diagrama de estado del ciclo de vida de reembolsos disponible en `docs/refund-lifecycle.md`
 - Guía de pruebas disponible en `docs/testing-guide.md`
