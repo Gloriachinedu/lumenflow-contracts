@@ -246,10 +246,13 @@ function renderRows(payments) {
       ? convertToXlm(p.amount, p.token)
       : formatTokenAmount(p.amount, p.token);
     const tr = document.createElement('tr');
+    const verifiedBadgeHtml = p.merchant_verified
+      ? '<span class="verified-badge" role="img" aria-label="Verified merchant — this merchant has been verified by LumenFlow" tabindex="0">✔<span class="verified-tooltip">This merchant has been verified by LumenFlow, confirming their identity and business legitimacy.</span></span>'
+      : '';
     tr.innerHTML = `
       <td data-label="Date">${formatDate(p.paid_at)}</td>
       <td data-label="Order ID"><code>${p.order_id}</code>${copyButtonHtml(p.order_id, 'Copy order ID')}</td>
-      <td data-label="Merchant"><code title="${p.merchant_address}">${p.merchant_address.slice(0,8)}…</code>${copyButtonHtml(p.merchant_address, 'Copy address')}</td>
+      <td data-label="Merchant"><code title="${p.merchant_address}">${p.merchant_address.slice(0,8)}…</code>${copyButtonHtml(p.merchant_address, 'Copy address')}${verifiedBadgeHtml}</td>
       <td data-label="Amount" class="amount-cell">${amountDisplay}</td>
       <td data-label="Status">${statusBadgeHtml(p.status)}</td>`;
     body.appendChild(tr);
