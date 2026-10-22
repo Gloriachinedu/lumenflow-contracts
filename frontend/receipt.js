@@ -10,17 +10,77 @@ function getOrderId() {
   return new URLSearchParams(window.location.search).get('orderId');
 }
 
-// ── Formatting helpers ────────────────────────────────────────────────────────
+// ── Formatting helpers (issue #1017 — Intl API localization) ─────────────────
 
-function formatAmount(amount, decimals = 7) {
-  return (Number(amount) / Math.pow(10, decimals)).toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: decimals,
-  });
+/**
+ * Detects the user's browser locale.
+ * Falls back to 'en-US' if detection fails (e.g., in headless environments).
+ * @returns {string}
+ */
+function detectLocale() {
+  try {
+    return (navigator.languages && navigator.languages[0]) || navigator.language || 'en-US';
+  } catch (e) {
+    return 'en-US';
+  }
 }
 
+/**
+ * Formats a raw integer amount using Intl.NumberFormat with the user's locale.
+ * Falls back to 'en-US' if locale detection fails.
+ *
+ * @param {bigint|number|string} amount   - Raw amount in smallest unit (e.g. stroops)
+ * @param {number}               decimals - Decimal precision (default 7 for XLM)
+ * @returns {string}
+ */
+function formatAmount(amount, decimals = 7) {
+  const locale = detectLocale();
+  const value = Number(amount) / Math.pow(10, decimals);
+  try {
+    return new Intl.NumberFormat(locale, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: decimals,
+    }).format(value);
+  } catch (e) {
+    // Fallback to en-US if the detected locale is invalid
+    return new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: decimals,
+    }).format(value);
+  }
+}
+
+/**
+ * Formats a Unix timestamp (seconds) using Intl.DateTimeFormat with the
+ * user's browser locale and local timezone.
+ * Falls back to 'en-US' if locale detection fails.
+ *
+ * @param {bigint|number|string} timestamp - Unix seconds (UTC)
+ * @returns {string}
+ */
 function formatDate(timestamp) {
-  return new Date(Number(timestamp) * 1000).toLocaleString();
+  const locale = detectLocale();
+  const date = new Date(Number(timestamp) * 1000);
+  try {
+    return new Intl.DateTimeFormat(locale, {
+      year:   'numeric',
+      month:  'short',
+      day:    'numeric',
+      hour:   '2-digit',
+      minute: '2-digit',
+      timeZoneName: 'short',
+    }).format(date);
+  } catch (e) {
+    // Fallback to en-US if the detected locale is invalid
+    return new Intl.DateTimeFormat('en-US', {
+      year:   'numeric',
+      month:  'short',
+      day:    'numeric',
+      hour:   '2-digit',
+      minute: '2-digit',
+      timeZoneName: 'short',
+    }).format(date);
+  }
 }
 
 function statusBadge(status) {
@@ -34,18 +94,95 @@ function statusBadge(status) {
 
 function refundStatusLabel(status) {
   const map = {
-    Pending:   '⏳ Pending review',
-    Approved:  '✔ Approved',
-    Rejected:  '✗ Rejected',
-    Completed: '✔ Refunded',
+    Pending:   'Pending Review',
+    Approved:  'Approved',
+    Rejected:  'Rejected',
+    Completed: 'Refunded',
   };
   return map[status] || status;
 }
 
+function refundStatusIcon(status) {
+  return { Pending: '⏳', Approved: '✔', Rejected: '✗', Completed: '✅' }[status] || '•';
+}
+
+function escapeHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function buildRefundTimeline(r) {
+  const steps = [];
+
+  // Step 1 — always present: submitted
+  steps.push(`<div class="timeline-step step-status-approved">
+    <em class="refund-status-icon">📩</em> Submitted — ${formatDate(r.created_at)}
+  </div>`);
+
+  // Step 2 — middle state
+  if (r.status === 'Completed' || r.status === 'Approved') {
+    steps.push(`<div class="timeline-step step-status-approved">
+      <em class="refund-status-icon">✔</em> Approved
+    </div>`);
+  } else if (r.status === 'Rejected') {
+    steps.push(`<div class="timeline-step step-status-rejected">
+      <em class="refund-status-icon">✗</em> Rejected
+    </div>`);
+  } else {
+    steps.push(`<div class="timeline-step step-status-pending">
+      <em class="refund-status-icon">⏳</em> Awaiting merchant review
+    </div>`);
+  }
+
+  // Step 3 — completed transfer
+  if (r.status === 'Completed' && r.executed_at) {
+    steps.push(`<div class="timeline-step step-status-completed">
+      <em class="refund-status-icon">✅</em> Refund transferred — ${formatDate(r.executed_at)}
+    </div>`);
+  }
+
+  return `<div class="refund-timeline">${steps.join('')}</div>`;
+}
+
 // ── Data fetching ─────────────────────────────────────────────────────────────
+//
+// Privacy note (resolves #354):
+//   The receipt page is publicly shareable, so we use `get_payment_summary`
+//   (the minimal, non-authenticated public endpoint) instead of
+//   `get_payment_by_id`.  This ensures that sensitive fields such as the
+//   payer address, memo, and tags are never loaded into the browser at all —
+//   not merely omitted at render time.
+//
+//   Fields fetched and rendered:  order_id, merchant_address (name only),
+//                                 amount, token, status, paid_at.
+//   Fields intentionally excluded: payer address, memo, tags, signatures.
 
 const CONTRACT_ID = window.LUMENFLOW_CONTRACT_ID || '';
 const RPC_URL     = window.LUMENFLOW_RPC_URL     || 'https://soroban-testnet.stellar.org';
+
+/**
+ * Extract only the fields the receipt page is allowed to display.
+ * Acts as a data-minimisation guard: even if the contract response
+ * shape changes, no unexpected sensitive field leaks through.
+ *
+ * @param {object} raw - raw payment object from the contract or demo data
+ * @returns {{ order_id, merchant_address, amount, token, status, paid_at }}
+ */
+function toPublicPaymentSummary(raw) {
+  return {
+    order_id:         raw.order_id,
+    merchant_address: raw.merchant_address,
+    amount:           raw.amount,
+    token:            raw.token,
+    status:           raw.status,
+    paid_at:          raw.paid_at,
+    // payer, memo, tags, signature — intentionally omitted
+  };
+}
 
 async function fetchPayment(orderId) {
   if (!CONTRACT_ID) return getDemoData(orderId);
@@ -56,15 +193,19 @@ async function fetchPayment(orderId) {
   const server   = new SorobanRpc.Server(RPC_URL);
   const contract = new Contract(CONTRACT_ID);
 
-  const callerArg = nativeToScVal('GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN', { type: 'address' });
-  const idArg     = nativeToScVal(orderId, { type: 'string' });
+  const idArg = nativeToScVal(orderId, { type: 'string' });
 
   try {
+    // Use get_payment_summary — the public endpoint that returns only
+    // non-sensitive metadata.  No caller address required.
     const result = await server.simulateTransaction(
-      contract.call('get_payment_by_id', callerArg, idArg)
+      contract.call('get_payment_summary', idArg)
     );
     if (SorobanRpc.Api.isSimulationError(result)) return null;
-    const payment = scValToNative(result.result.retval);
+
+    const rawPayment = scValToNative(result.result.retval);
+    // Apply allow-list to strip any unexpected fields
+    const payment = toPublicPaymentSummary(rawPayment);
 
     const merchantArg = nativeToScVal(payment.merchant_address, { type: 'address' });
     const mResult = await server.simulateTransaction(
@@ -82,27 +223,42 @@ async function fetchPayment(orderId) {
 
 function getDemoData(orderId) {
   if (orderId === 'NOT_FOUND') return null;
+  const now = Math.floor(Date.now() / 1000);
   return {
+    // Demo data matches the shape of get_payment_summary (public fields only).
+    // Sensitive fields (payer address, memo, tags) are intentionally absent.
     payment: {
       order_id:         orderId,
       merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON',
-      payer:            'GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN',
       token:            'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
       amount:           50000000n,
       status:           'Completed',
       paid_at:          BigInt(Math.floor(Date.now() / 1000) - 3600),
-      refunded_amount:  0n,
-      memo:             'Invoice #001',
     },
     merchant: { name: 'Demo Store', verified: true },
     refunds: [
       {
-        refund_id: 'REFUND_001',
-        amount: 10000000n,
-        reason: 'Item out of stock',
-        status: 'Completed',
-        created_at: BigInt(Math.floor(Date.now() / 1000) - 1800),
-        executed_at: BigInt(Math.floor(Date.now() / 1000) - 900),
+        refund_id:   'REFUND_001',
+        amount:      5000000n,
+        reason:      'Item damaged in transit',
+        status:      'Completed',
+        created_at:  BigInt(now - 3600),
+        executed_at: BigInt(now - 1800),
+      },
+      {
+        refund_id:  'REFUND_002',
+        amount:     10000000n,
+        reason:     'Wrong size delivered',
+        status:     'Pending',
+        created_at: BigInt(now - 900),
+      },
+      {
+        refund_id:      'REFUND_003',
+        amount:         5000000n,
+        reason:         'Change of mind',
+        status:         'Rejected',
+        created_at:     BigInt(now - 5400),
+        dispute_reason: 'Item was used before return request was submitted.',
       },
     ],
   };
@@ -153,7 +309,11 @@ function renderReceipt({ payment, merchant, refunds }) {
 
 function copyLink() {
   navigator.clipboard.writeText(window.location.href)
-    .then(() => alert('Link copied!'))
+    .then(() => {
+      if (typeof window.showToast === 'function') {
+        window.showToast('Link copied!', 'success');
+      }
+    })
     .catch(() => prompt('Copy this link:', window.location.href));
 }
 
