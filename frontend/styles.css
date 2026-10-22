@@ -424,6 +424,86 @@ button, input, textarea, select { min-height: 44px; min-width: 44px; }
   outline-offset: 2px;
 }
 
+/* ── Reduced Motion — WCAG 2.1 SC 2.3.3 ─────────────────────────────────────
+   Users who have enabled "Reduce Motion" in their OS accessibility settings
+   (macOS: System Settings → Accessibility → Motion; iOS: Settings →
+   Accessibility → Motion; Windows: Settings → Ease of Access → Display)
+   will be served these overrides. All CSS transitions are collapsed to 0 ms
+   and all animations are disabled so that no decorative motion is presented.
+
+   Toast notifications, alerts, and skeleton loaders remain visible but appear
+   instantly — without slide, fade, or shimmer effects.
+   ─────────────────────────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  /* Universal baseline — collapse every transition and animation in the tree */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Form field focus border — instant colour change, no transition */
+  .field input,
+  .field select {
+    transition: none;
+  }
+
+  /* Buttons — remove opacity fade and shadow transitions */
+  .btn {
+    transition: none;
+  }
+
+  /* Icon buttons — remove background and shadow transitions */
+  .btn-icon {
+    transition: none;
+  }
+
+  /* Dark mode toggle — remove background, border-colour, and scale transitions */
+  #lf-dark-toggle {
+    transition: none;
+  }
+  /* Also disable the hover scale so there is no transform on interaction */
+  #lf-dark-toggle:hover {
+    transform: none;
+  }
+
+  /* Skeleton loaders — display as static grey placeholders (no shimmer).
+     The skeleton colours are already defined as CSS custom properties;
+     we simply set a fixed background and remove any animation that a
+     component-level stylesheet might add. */
+  [class*="skeleton"],
+  .skeleton,
+  .skeleton-line,
+  .skeleton-block {
+    animation: none !important;
+    background: var(--color-skeleton-from) !important;
+    background-image: none !important;
+  }
+
+  /* Toast / notification banners — appear instantly; no slide or fade.
+     Components that apply enter/exit animations via class toggling will
+     have those transitions collapsed to 0 ms by the universal rule above,
+     so toasts remain fully visible and functional. */
+  .toast,
+  .alert,
+  [role="status"],
+  [role="alert"] {
+    animation: none !important;
+    transition: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  /* Status badge pulsing (if any component adds a pulse animation) */
+  .badge {
+    animation: none !important;
+  }
+}
+
 /* ── Print ──────────────────────────────────────────────────────────────────── */
 @media print {
   body { background: #fff; padding: 0; }
