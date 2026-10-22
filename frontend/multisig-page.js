@@ -387,113 +387,98 @@
     }
   }
 
-  // ── Confirmation modal (#1337) ─────────────────────────────────────────────
-  //
-  // Shows a summary dialog before the user commits the multisig payment
-  // on-chain.  Supports keyboard accessibility:
-  //   • Focus is trapped inside the modal while it is open.
-  //   • Escape closes the modal without submitting.
-  //   • Focus moves to the Cancel button when the modal opens and returns to
-  //     the submit button when it closes.
+  // ── Polling ────────────────────────────────────────────────────────────────
+  // Polls get_multisig_payment every 10 seconds while the payment is pending.
+  // Stops automatically when the signature threshold is met, the payment is
+  // executed/cancelled, or expires.
 
-  /** @type {HTMLElement | null} — element that had focus before modal opened */
-  let _modalReturnFocus = null;
+  /** @type {ReturnType<typeof setInterval>|null} */
+  let _pollInterval = null;
 
   /**
-   * Open the confirmation modal and populate the review fields.
-   * @param {{ merchantAddress: string, amount: string|number, tokenAddress: string, signers: string[], required: number }} details
+   * Query the contract for the current multisig payment state.
+   * In demo mode returns the local in-memory state so the UI stays functional
+   * without a live contract.
+   *
+   * @param {string} paymentId
+   * @returns {Promise<{success: boolean, data?: object, error?: string}>}
    */
-  function showConfirmModal({ merchantAddress, amount, tokenAddress, signers, required }) {
-    const modal = document.getElementById('confirmModal');
-    document.getElementById('confirmMerchant').textContent = merchantAddress;
-    document.getElementById('confirmAmount').textContent   = amount.toString();
-    document.getElementById('confirmToken').textContent    = tokenAddress;
-    document.getElementById('confirmSigners').textContent  = `${required} of ${signers.length}`;
-
-    // Record the element to restore focus to on close.
-    _modalReturnFocus = document.getElementById('submit-btn');
-
-    modal.style.display = 'flex';
-
-    // Move focus to Cancel button as initial focus target.
-    document.getElementById('confirmModalCancel').focus();
-  }
-
-  /** Hide the confirmation modal and restore focus. */
-  function hideConfirmModal() {
-    const modal = document.getElementById('confirmModal');
-    modal.style.display = 'none';
-    if (_modalReturnFocus) {
-      _modalReturnFocus.focus();
-      _modalReturnFocus = null;
+  async function callGetMultisigPayment(paymentId) {
+    if (!CONTRACT_ID) {
+      // Demo mode: mirror local state so tests / previews work without a contract.
+      return { success: true, data: state };
+    }
+    if (!connectedPublicKey) {
+      return { success: false, error: 'Wallet not connected.' };
+    }
+    try {
+      const { SorobanRpc, Contract, nativeToScVal, Networks, TransactionBuilder, BASE_FEE, scValToNative } =
+        await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
+      const server   = new SorobanRpc.Server(RPC_URL);
+      const contract = new Contract(CONTRACT_ID);
+      const account  = await server.getAccount(connectedPublicKey);
+      const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase: Networks.TESTNET })
+        .addOperation(contract.call(
+          'get_multisig_payment',
+          nativeToScVal(connectedPublicKey, { type: 'address' }),
+          nativeToScVal(paymentId,          { type: 'string'  }),
+        ))
+        .setTimeout(30)
+        .build();
+      const sim = await server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(sim)) throw new Error(sim.error);
+      const result = scValToNative(sim.result?.retval);
+      return { success: true, data: result };
+    } catch (e) {
+      return { success: false, error: e.message };
     }
   }
 
   /**
-   * Trap Tab / Shift-Tab focus within the modal.
-   * @param {KeyboardEvent} e
+   * Start polling get_multisig_payment every 10 seconds.
+   * Polling stops when:
+   *   – collected signatures >= required_signatures (threshold met)
+   *   – payment is marked executed or cancelled
+   *   – payment expires (expires_at in the past)
    */
-  function _handleModalKeydown(e) {
-    const modal = document.getElementById('confirmModal');
-    if (modal.style.display === 'none') return;
+  function startPolling() {
+    stopPolling(); // clear any previous interval
+    _pollInterval = setInterval(async () => {
+      if (!state) { stopPolling(); return; }
 
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      hideConfirmModal();
-      return;
-    }
+      const result = await callGetMultisigPayment(state.paymentId);
+      if (!result.success) return; // transient error — keep polling
 
-    if (e.key !== 'Tab') return;
+      const ms = result.data;
 
-    // Collect all focusable elements inside the modal content.
-    const focusable = Array.from(
-      modal.querySelectorAll(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-      )
-    ).filter(el => !el.disabled && el.offsetParent !== null);
-
-    if (focusable.length === 0) { e.preventDefault(); return; }
-
-    const first = focusable[0];
-    const last  = focusable[focusable.length - 1];
-
-    if (e.shiftKey) {
-      if (document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
+      // Sync signatures into local state from the contract response
+      if (ms && ms.collected && Array.isArray(ms.collected)) {
+        ms.collected.forEach(entry => {
+          const addr = entry.signer ?? entry;
+          if (addr) state.signatures.add(addr);
+        });
       }
-    } else {
-      if (document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
+
+      renderProgress();
+
+      // Determine stopping conditions
+      const thresholdMet  = state.signatures.size >= state.required;
+      const isExecuted    = ms && ms.executed;
+      const isCancelled   = ms && ms.cancelled;
+      const isExpired     = ms && ms.expires_at && (Date.now() / 1000) > ms.expires_at;
+
+      if (thresholdMet || isExecuted || isCancelled || isExpired) {
+        stopPolling();
       }
-    }
+    }, 10_000); // poll every 10 seconds
   }
 
-  // Attach modal event listeners once on init.
-  document.addEventListener('keydown', _handleModalKeydown);
-
-  document.getElementById('confirmModalBackdrop').addEventListener('click', () => {
-    hideConfirmModal();
-  });
-
-  document.getElementById('confirmModalCancel').addEventListener('click', () => {
-    hideConfirmModal();
-  });
-
-  // The Confirm button delegates to the actual submission logic captured in a
-  // closure below (set by showConfirmModal callers via _pendingSubmit).
-  /** @type {(() => void) | null} */
-  let _pendingSubmit = null;
-
-  document.getElementById('confirmModalConfirm').addEventListener('click', () => {
-    hideConfirmModal();
-    if (_pendingSubmit) {
-      const fn = _pendingSubmit;
-      _pendingSubmit = null;
-      fn();
+  function stopPolling() {
+    if (_pollInterval !== null) {
+      clearInterval(_pollInterval);
+      _pollInterval = null;
     }
-  });
+  }
 
   // ── Submit ─────────────────────────────────────────────────────────────────
 
@@ -549,7 +534,9 @@
     document.getElementById('form-panel').style.display = 'none';
     renderProgress();
     document.getElementById('progress-panel').style.display = 'block';
-    _submitting = false;
+
+    // Begin live polling for signature updates (issue #1355)
+    startPolling();
   }
 
   // ── Progress ───────────────────────────────────────────────────────────────
@@ -570,6 +557,7 @@
     idDisplay.innerHTML = `Payment ID: <code>${paymentId}</code>${copyButtonHtml(paymentId, 'Copy payment ID')}`;
 
     document.getElementById('progress-bar').style.width = pct + '%';
+    document.getElementById('progress-bar').setAttribute('aria-valuenow', String(pct));
     document.getElementById('progress-fraction').textContent = `${signed} / ${signers.length} signed`;
     document.getElementById('progress-label').textContent =
       signed >= required
@@ -592,7 +580,9 @@
     });
 
     const execBtn = document.getElementById('execute-btn');
-    execBtn.disabled = signed < required;
+    const thresholdMet = signed >= required;
+    execBtn.disabled = !thresholdMet;
+    execBtn.setAttribute('aria-disabled', String(!thresholdMet));
   }
 
   async function signPayment(signerAddress) {
@@ -619,6 +609,7 @@
     const result = await callExecuteMultisig(state.paymentId);
 
     if (result.success) {
+      stopPolling(); // threshold met and executed — no more polling needed
       showExecuteAlert('✔ Payment executed successfully!', true);
       btn.textContent = 'Executed';
     } else {
@@ -647,6 +638,7 @@
   window.signPayment     = signPayment;
   window.executePayment  = executePayment;
   window.connectWallet   = connectWallet;
+  window.stopPolling     = stopPolling;
 
   document.getElementById('required-sigs').addEventListener('input', () => {
     validateThreshold();

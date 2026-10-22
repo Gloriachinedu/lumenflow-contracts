@@ -85,3 +85,28 @@ variable "alert_email" {
   type        = string
   default     = ""
 }
+
+# ─── Budget alerts ────────────────────────────────────────────────────────────
+
+variable "monthly_budget_usd" {
+  description = "Monthly AWS cost budget in USD. Alerts fire at 80 % (forecasted) and 100 % (actual)."
+  type        = number
+  default     = 100
+
+  validation {
+    condition     = var.monthly_budget_usd > 0
+    error_message = "monthly_budget_usd must be a positive number."
+  }
+}
+
+variable "ops_alert_email" {
+  description = "E-mail address that receives budget threshold alerts. Leave empty to skip e-mail notifications."
+  type        = string
+  default     = ""
+}
+
+variable "alert_sns_topic_arn" {
+  description = "SNS topic ARN for budget alerts (e.g. connected to Slack via AWS Chatbot). Leave empty to skip SNS notifications."
+  type        = string
+  default     = ""
+}

@@ -52,7 +52,7 @@ import { verifyWebhookSignature } from "@lumenflow/sdk";
 const valid = verifyWebhookSignature(rawBody, request.headers["x-lumenflow-signature"], process.env.WEBHOOK_SECRET);
 ```
 
-`rawBody` must be the original request bytes. The helper uses HMAC-SHA256 and a timing-safe comparison, returns `false` for a bad secret or payload, and throws for an empty secret or malformed signature.
+`rawBody` must be the original request bytes. The helper uses HMAC-SHA256 and a timing-safe comparison for equal-length digests, returns `false` for a bad secret, payload, or digest length, and throws for an empty secret or malformed signature.
 
 Events delivered via Horizon are signed by the Stellar network validators. To verify an event is genuine:
 

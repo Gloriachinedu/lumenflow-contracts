@@ -89,9 +89,24 @@ SOURCE_ACCOUNT=<secret-key> ./scripts/local_up.sh
 - **Branch names**: `feat/<slug>`, `fix/<slug>`, `docs/<slug>`, `ci/<slug>`, `test/<slug>`
 - **Commit messages**: follow [Conventional Commits](https://www.conventionalcommits.org/) — see the [Commits](#commits) section below for the full type list, breaking-change syntax, and examples. The `commit-msg` hook validates messages locally.
 - **Linking issues**: add `Closes #N` in the PR description body to auto-close the issue on merge
+- **Milestone assignment**: every new issue and PR **must** be assigned to a GitHub Milestone before it can be merged. Milestones correspond directly to the phases defined in [ROADMAP.md](ROADMAP.md) (`v0.4`, `v0.5`, `v0.6`, `Backlog`). If you are unsure which milestone applies, assign `Backlog` and a maintainer will re-triage. See [docs/roadmap-tracking.md](docs/roadmap-tracking.md#github-milestones) for the full milestone table and due dates.
 - **One concern per PR** — keep PRs focused; reviewers will ask you to split large ones
 - **Fill the PR template** — summary, what was tested, any blocked items
 - **CI must be green** before requesting review
+
+### PR Size Labels
+
+Every pull request is automatically labeled by the CI workflow (`.github/workflows/pr-size-label.yml`) based on the total number of lines changed (additions + deletions):
+
+| Label    | Lines changed | Description                              |
+|----------|---------------|------------------------------------------|
+| `size/XS` | < 50          | Extra-small — trivial fix or tiny change |
+| `size/S`  | 50 – 200      | Small — focused, easy to review          |
+| `size/M`  | 200 – 500     | Medium — moderate scope                  |
+| `size/L`  | 500 – 1000    | Large — consider splitting if possible   |
+| `size/XL` | > 1000        | Extra-large — please split into smaller PRs |
+
+Aim for `size/XS` or `size/S` whenever possible. Large PRs are harder to review thoroughly and more likely to introduce bugs. If your PR is labeled `size/L` or `size/XL`, consider breaking it into smaller, independent PRs — one per logical concern.
 
 ---
 
@@ -120,6 +135,22 @@ To update a pinned action:
 1. Find the new commit SHA for the desired release on the action's GitHub releases page.
 2. Replace the SHA in the workflow file and update the version comment.
 3. Dependabot is configured to open PRs for these updates automatically (weekly).
+
+### Container Image Scanning
+
+Every Docker image built in CI is scanned for OS and library vulnerabilities by
+Trivy (`.github/workflows/docker-scan.yml`) **before** it can be used in any
+deployment:
+
+| Severity | Behaviour |
+|----------|-----------|
+| **Critical** | Workflow fails — image must not be deployed |
+| **High** | Warning annotation posted on the PR; workflow continues |
+| All results | Uploaded as SARIF to the GitHub Security tab |
+
+To suppress a false-positive finding, add a `.trivyignore` file at the
+repository root with the CVE IDs to skip, one per line, and include a comment
+explaining why the finding is not applicable.
 
 ## Development Setup
 
