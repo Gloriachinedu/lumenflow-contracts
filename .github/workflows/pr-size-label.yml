@@ -1,0 +1,32 @@
+name: PR Size Labeler
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label-size:
+    name: Label PR by size
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply size label
+        uses: codelytv/pr-size-labeler@f0c4cdde2802b7f244aba8d23cf9f0d7dc7be490  # v1.10.1
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          xs_max_size: 49
+          s_max_size: 200
+          m_max_size: 500
+          l_max_size: 1000
+          xs_label: "size/XS"
+          s_label:  "size/S"
+          m_label:  "size/M"
+          l_label:  "size/L"
+          xl_label: "size/XL"
+          fail_if_xl: false
+          message_if_xl: >
+            ⚠️ This PR is **extra-large** (>1000 lines changed).
+            Please consider splitting it into smaller, focused PRs to make review easier.
