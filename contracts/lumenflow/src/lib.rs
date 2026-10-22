@@ -3454,6 +3454,8 @@ impl PaymentProcessingContract {
     /// * `amount` - Positive amount the payer must send.
     /// * `memo` - Optional description attached to the resulting payment record.
     /// * `ttl` - Time-to-live in seconds from the current ledger timestamp.
+    ///           Must be greater than zero and must not overflow when added to
+    ///           the current ledger timestamp.
     ///
     /// # Returns
     /// `Ok(())` on success.
@@ -3461,6 +3463,8 @@ impl PaymentProcessingContract {
     /// # Errors
     /// * [`PaymentError::InvalidAmount`] — `amount` is not positive.
     /// * [`PaymentError::InvalidInput`] — `request_id` is empty.
+    /// * [`PaymentError::InvalidTtl`] — `ttl` is zero, or `now + ttl` overflows
+    ///   `u64`, or the computed expiry is in the past.
     /// * [`PaymentError::TokenNotAllowed`] — `token` is not on the allow-list.
     /// * [`PaymentError::PaymentAlreadyExists`] — a request with `request_id` already exists.
     pub fn create_payment_request(
@@ -3477,6 +3481,26 @@ impl PaymentProcessingContract {
         require_positive(amount)?;
         require_bounded_string(&request_id, 1, 64)?;
 
+        // ── TTL validation ────────────────────────────────────────────────
+        // Reject zero TTL — a zero TTL would create a request that expires
+        // at exactly the current ledger timestamp (already expired).
+        if ttl == 0 {
+            return Err(PaymentError::InvalidTtl);
+        }
+
+        let now = env.ledger().timestamp();
+
+        // Reject TTL values that would overflow u64 when added to the current
+        // ledger timestamp.  u64::MAX - now gives the maximum safe TTL.
+        let expires_at = now.checked_add(ttl).ok_or(PaymentError::InvalidTtl)?;
+
+        // Reject TTL values that produce a computed expiry in the past.
+        // This can occur if the ledger clock is ahead of the expiry, or if an
+        // extremely small non-zero TTL was supplied.
+        if expires_at <= now {
+            return Err(PaymentError::InvalidTtl);
+        }
+
         if !storage::is_token_allowed(&env, &token) {
             return Err(PaymentError::TokenNotAllowed);
         }
@@ -3484,8 +3508,6 @@ impl PaymentProcessingContract {
         if storage::get_payment_request(&env, &request_id).is_some() {
             return Err(PaymentError::PaymentAlreadyExists);
         }
-
-        let expires_at = env.ledger().timestamp().saturating_add(ttl);
 
         let pr = PaymentRequest {
             request_id,
