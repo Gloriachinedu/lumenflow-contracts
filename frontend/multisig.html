@@ -156,6 +156,18 @@
     #demo-security-notice strong { display: block; margin-bottom: 0.35rem; font-size: 0.95rem; }
     #demo-security-notice a { color: #856404; font-weight: 600; }
 
+    /* Confirmation modal (#1337) */
+    .modal { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; }
+    .modal__backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.5); }
+    .modal__content { position: relative; background: #fff; border-radius: 8px; padding: 2rem; max-width: 480px; width: 90%; box-shadow: 0 4px 24px rgba(0,0,0,0.18); }
+    .modal__title { margin: 0 0 0.5rem; font-size: 1.25rem; }
+    .modal__subtitle { margin: 0 0 1rem; color: #555; }
+    .modal__details { margin: 0 0 1rem; display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
+    .modal__details dt { font-weight: 600; color: #333; }
+    .modal__details dd { margin: 0; word-break: break-all; }
+    .modal__warning { color: #b45309; font-size: 0.9rem; margin: 0 0 1.5rem; }
+    .modal__actions { display: flex; gap: 1rem; justify-content: flex-end; }
+
     /* ── Mobile responsive (320 px – 480 px) ───────────────────────────────── */
     @media (max-width: 480px) {
       body {
@@ -1109,6 +1121,29 @@ feat/sdk-rpc-retry-integration
     });
   });
 </script>
+<!-- Confirmation Dialog Modal (#1337) -->
+<div id="confirmModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle" style="display:none;">
+  <div class="modal__backdrop" id="confirmModalBackdrop"></div>
+  <div class="modal__content" role="document">
+    <h2 id="confirmModalTitle" class="modal__title">Confirm Multisig Payment</h2>
+    <p class="modal__subtitle">Please review the payment details before submitting:</p>
+    <dl class="modal__details">
+      <dt>Merchant Address</dt>
+      <dd id="confirmMerchant"></dd>
+      <dt>Amount</dt>
+      <dd id="confirmAmount"></dd>
+      <dt>Token</dt>
+      <dd id="confirmToken"></dd>
+      <dt>Required Signers</dt>
+      <dd id="confirmSigners"></dd>
+    </dl>
+    <p class="modal__warning">⚠️ This transaction is irreversible once submitted on-chain.</p>
+    <div class="modal__actions">
+      <button id="confirmModalCancel" class="btn btn--secondary" type="button">Cancel</button>
+      <button id="confirmModalConfirm" class="btn btn--primary" type="button">Confirm &amp; Submit</button>
+    </div>
+  </div>
+</div>
 
 </main>
 </body>

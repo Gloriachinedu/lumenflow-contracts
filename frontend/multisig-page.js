@@ -485,17 +485,35 @@
   async function submitForm() {
     if (!validateForm()) return;
 
+    const paymentId       = document.getElementById('payment-id').value.trim();
+    const merchantAddress = document.getElementById('merchant-address').value.trim();
+    const tokenAddress    = document.getElementById('token-address').value.trim();
+    const amount          = Number(document.getElementById('amount').value.trim());
+    const signers         = getSignerValues();
+    const required        = parseInt(document.getElementById('required-sigs').value, 10);
+
+    // Show the confirmation modal.  The actual RPC call is deferred until the
+    // user clicks "Confirm & Submit".
+    _pendingSubmit = () => _doSubmit({ paymentId, merchantAddress, tokenAddress, amount, signers, required });
+    showConfirmModal({ merchantAddress, amount, tokenAddress, signers, required });
+  }
+
+  /**
+   * Perform the actual multisig initiation after modal confirmation.
+   */
+  async function _doSubmit({ paymentId, merchantAddress, tokenAddress, amount, signers, required }) {
+    // Idempotency guard: reject any concurrent submission attempt.
+    if (_submitting) return;
+    _submitting = true;
+
     const btn = document.getElementById('submit-btn');
     btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
     btn.textContent = 'Initiating…';
 
-    const paymentId      = document.getElementById('payment-id').value.trim();
-    const merchantAddress = document.getElementById('merchant-address').value.trim();
-    const tokenAddress   = document.getElementById('token-address').value.trim();
-    // Number() matches validateAmount; parseInt would read '1e3' as 1.
-    const amount         = Number(document.getElementById('amount').value.trim());
-    const signers        = getSignerValues();
-    const required       = parseInt(document.getElementById('required-sigs').value, 10);
+    // Clear any previous alert
+    const alertEl = document.getElementById('form-alert');
+    alertEl.style.display = 'none';
 
     const result = await callInitiateMultisig({ paymentId, merchantAddress, tokenAddress, amount, signers, required });
 
@@ -505,11 +523,13 @@
       alert.className   = 'alert alert-error';
       alert.style.display = 'block';
       btn.disabled = false;
+      btn.removeAttribute('aria-busy');
       btn.textContent = 'Initiate Payment';
+      _submitting = false;
       return;
     }
 
-    // Store state and show progress panel
+    // Store state and show progress panel.
     state = { paymentId, merchantAddress, tokenAddress, amount, signers, required, signatures: new Set() };
     document.getElementById('form-panel').style.display = 'none';
     renderProgress();
