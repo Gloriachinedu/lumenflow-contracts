@@ -1,5 +1,5 @@
 # Core dependencies
-requests==2.32.3
+requests==2.33.0
 prometheus-client==0.21.1
 
 # OpenTelemetry — only needed when OTEL_EXPORTER_OTLP_ENDPOINT is configured.

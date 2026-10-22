@@ -156,6 +156,18 @@
     #demo-security-notice strong { display: block; margin-bottom: 0.35rem; font-size: 0.95rem; }
     #demo-security-notice a { color: #856404; font-weight: 600; }
 
+    /* Confirmation modal (#1337) */
+    .modal { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; }
+    .modal__backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.5); }
+    .modal__content { position: relative; background: #fff; border-radius: 8px; padding: 2rem; max-width: 480px; width: 90%; box-shadow: 0 4px 24px rgba(0,0,0,0.18); }
+    .modal__title { margin: 0 0 0.5rem; font-size: 1.25rem; }
+    .modal__subtitle { margin: 0 0 1rem; color: #555; }
+    .modal__details { margin: 0 0 1rem; display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
+    .modal__details dt { font-weight: 600; color: #333; }
+    .modal__details dd { margin: 0; word-break: break-all; }
+    .modal__warning { color: #b45309; font-size: 0.9rem; margin: 0 0 1.5rem; }
+    .modal__actions { display: flex; gap: 1rem; justify-content: flex-end; }
+
     /* ── Mobile responsive (320 px – 480 px) ───────────────────────────────── */
     @media (max-width: 480px) {
       body {
@@ -795,6 +807,94 @@ feat/sdk-rpc-retry-integration
     }
   }
 
+  // ── Polling (issue #1355) ──────────────────────────────────────────────────
+  // Polls get_multisig_payment every 10 seconds while the payment is pending.
+  // Stops automatically when the signature threshold is met, the payment is
+  // executed/cancelled, or expires.
+
+  /** @type {ReturnType<typeof setInterval>|null} */
+  let _pollInterval = null;
+
+  /**
+   * Query the contract for the current multisig payment state.
+   * In demo mode returns the local in-memory state (no contract call needed).
+   *
+   * @param {string} paymentId
+   * @returns {Promise<{success: boolean, data?: object, error?: string}>}
+   */
+  async function callGetMultisigPayment(paymentId) {
+    if (!CONTRACT_ID) {
+      // Demo mode: reflect local state — no contract call.
+      return { success: true, data: state };
+    }
+    if (!connectedPublicKey) {
+      return { success: false, error: 'Wallet not connected.' };
+    }
+    try {
+      const { SorobanRpc, Contract, nativeToScVal, Networks, TransactionBuilder, BASE_FEE, scValToNative } =
+        await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
+      const server   = new SorobanRpc.Server(RPC_URL);
+      const contract = new Contract(CONTRACT_ID);
+      const account  = await server.getAccount(connectedPublicKey);
+      const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase: Networks.TESTNET })
+        .addOperation(contract.call(
+          'get_multisig_payment',
+          nativeToScVal(connectedPublicKey, { type: 'address' }),
+          nativeToScVal(paymentId,          { type: 'string'  }),
+        ))
+        .setTimeout(30)
+        .build();
+      const sim = await server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(sim)) throw new Error(sim.error);
+      const result = scValToNative(sim.result?.retval);
+      return { success: true, data: result };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  }
+
+  /**
+   * Start polling get_multisig_payment every 10 seconds.
+   * Polling stops when the threshold is met, payment executes/cancels, or expires.
+   */
+  function startPolling() {
+    stopPolling(); // clear any previous interval
+    _pollInterval = setInterval(async () => {
+      if (!state) { stopPolling(); return; }
+
+      const result = await callGetMultisigPayment(state.paymentId);
+      if (!result.success) return; // transient error — keep polling
+
+      const ms = result.data;
+
+      // Merge newly collected signatures into local state
+      if (ms && ms.collected && Array.isArray(ms.collected)) {
+        ms.collected.forEach(entry => {
+          const addr = entry.signer ?? entry;
+          if (addr) state.signatures.add(addr);
+        });
+      }
+
+      renderProgress();
+
+      const thresholdMet = state.signatures.size >= state.required;
+      const isExecuted   = ms && ms.executed;
+      const isCancelled  = ms && ms.cancelled;
+      const isExpired    = ms && ms.expires_at && (Date.now() / 1000) > ms.expires_at;
+
+      if (thresholdMet || isExecuted || isCancelled || isExpired) {
+        stopPolling();
+      }
+    }, 10_000); // 10-second interval per issue #1355
+  }
+
+  function stopPolling() {
+    if (_pollInterval !== null) {
+      clearInterval(_pollInterval);
+      _pollInterval = null;
+    }
+  }
+
   // ── Submission guard (issue #787) ──────────────────────────────────────────
   // Tracks whether a submission is in-flight to prevent duplicate submissions
   // while the wallet confirmation dialog is open or the RPC call is pending.
@@ -840,6 +940,16 @@ feat/sdk-rpc-retry-integration
       btn.textContent = 'Initiate Payment';
       return;
     }
+
+    // Store state, transition to progress panel, begin polling (issue #1355)
+    state = { paymentId, merchantAddress, tokenAddress, amount, signers, required, signatures: new Set() };
+    _submitting = false;
+    document.getElementById('form-panel').style.display = 'none';
+    renderProgress();
+    document.getElementById('progress-panel').style.display = 'block';
+
+    // Poll contract every 10 seconds for new signatures (issue #1355)
+    startPolling();
   }
 
   // ── Progress ───────────────────────────────────────────────────────────────
@@ -860,6 +970,7 @@ feat/sdk-rpc-retry-integration
     idDisplay.innerHTML = `Payment ID: <code>${paymentId}</code>${copyButtonHtml(paymentId, 'Copy payment ID')}`;
 
     document.getElementById('progress-bar').style.width = pct + '%';
+    document.getElementById('progress-bar').setAttribute('aria-valuenow', String(pct));
     document.getElementById('progress-fraction').textContent = `${signed} / ${signers.length} signed`;
     document.getElementById('progress-label').textContent =
       signed >= required
@@ -879,9 +990,6 @@ feat/sdk-rpc-retry-integration
         <button class="sign-btn" onclick="signPayment('${addr}')" ${isSigned ? 'disabled' : ''}>
           ${isSigned ? 'Signed' : 'Sign'}
         </button>`;
-      // Append copy button for the full address
-      const copyBtn = makeCopyButton(addr, 'Copy signer address');
-      li.querySelector('.sig-addr').appendChild(copyBtn);
       list.appendChild(li);
     });
 
@@ -902,7 +1010,7 @@ feat/sdk-rpc-retry-integration
     hideLoadingOverlay();
 
     if (result.success) {
-      store.get().multisig.signatures.add(signerAddress);
+      state.signatures.add(signerAddress);
       renderProgress();
     } else {
       if (btn) { btn.disabled = false; btn.textContent = 'Sign'; }
@@ -928,6 +1036,7 @@ feat/sdk-rpc-retry-integration
     hideLoadingOverlay();
 
     if (result.success) {
+      stopPolling(); // payment executed — stop polling (issue #1355)
       showExecuteAlert('✔ Payment executed successfully!', true);
       btn.textContent = 'Executed';
       // Also announce via accessible toast (issue #790)
@@ -959,6 +1068,7 @@ feat/sdk-rpc-retry-integration
   window.signPayment     = signPayment;
   window.executePayment  = executePayment;
   window.connectWallet   = connectWallet;
+  window.stopPolling     = stopPolling;
 
   document.getElementById('required-sigs').addEventListener('input', () => {
     validateThreshold();
@@ -994,6 +1104,10 @@ feat/sdk-rpc-retry-integration
     });
   }
 </script>
+<script type="module">
+  import { initDarkMode } from './dark-mode.js';
+  initDarkMode();
+</script>
 <!-- CSP violation reporter: logs policy violations to the console in development -->
 <script>
   document.addEventListener('securitypolicyviolation', function(e) {
@@ -1007,6 +1121,29 @@ feat/sdk-rpc-retry-integration
     });
   });
 </script>
+<!-- Confirmation Dialog Modal (#1337) -->
+<div id="confirmModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle" style="display:none;">
+  <div class="modal__backdrop" id="confirmModalBackdrop"></div>
+  <div class="modal__content" role="document">
+    <h2 id="confirmModalTitle" class="modal__title">Confirm Multisig Payment</h2>
+    <p class="modal__subtitle">Please review the payment details before submitting:</p>
+    <dl class="modal__details">
+      <dt>Merchant Address</dt>
+      <dd id="confirmMerchant"></dd>
+      <dt>Amount</dt>
+      <dd id="confirmAmount"></dd>
+      <dt>Token</dt>
+      <dd id="confirmToken"></dd>
+      <dt>Required Signers</dt>
+      <dd id="confirmSigners"></dd>
+    </dl>
+    <p class="modal__warning">⚠️ This transaction is irreversible once submitted on-chain.</p>
+    <div class="modal__actions">
+      <button id="confirmModalCancel" class="btn btn--secondary" type="button">Cancel</button>
+      <button id="confirmModalConfirm" class="btn btn--primary" type="button">Confirm &amp; Submit</button>
+    </div>
+  </div>
+</div>
 
 </main>
 </body>

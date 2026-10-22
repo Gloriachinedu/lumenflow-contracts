@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Onboarding Analytics — LumenFlow</title>
+  <link rel="stylesheet" href="../shared.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <header class="site-header">
+    <div class="header-inner">
+      <h1 class="site-title">LumenFlow <span class="title-sub">Onboarding Analytics</span></h1>
+      <nav class="header-nav" aria-label="Dashboard navigation">
+        <a href="../index.html" class="nav-link">Overview</a>
+        <a href="../merchant-dashboard/index.html" class="nav-link">Merchant Refunds</a>
+        <a href="../fraud-analytics/index.html" class="nav-link">Fraud Analytics</a>
+        <a href="index.html" class="nav-link active" aria-current="page">Onboarding Analytics</a>
+      </nav>
+      <div class="header-controls">
+        <label for="date-from" class="sr-only">From date</label>
+        <input type="date" id="date-from" class="date-input" aria-label="Filter from date" />
+        <span aria-hidden="true">–</span>
+        <label for="date-to" class="sr-only">To date</label>
+        <input type="date" id="date-to" class="date-input" aria-label="Filter to date" />
+        <button id="apply-filter-btn" class="btn btn-sm" aria-label="Apply date range filter">Apply</button>
+        <button id="refresh-btn" class="btn btn-sm" aria-label="Refresh dashboard data">↻ Refresh</button>
+        <span id="last-refresh" class="last-refresh" aria-live="polite"></span>
+      </div>
+    </div>
+  </header>
+
+  <main id="main-content" class="dashboard-main">
+
+    <!-- KPI summary row -->
+    <section class="kpi-row" aria-label="Onboarding key metrics">
+      <div class="kpi-card">
+        <div class="kpi-value" id="kpi-started">—</div>
+        <div class="kpi-label">Onboardings Started</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-value" id="kpi-completed">—</div>
+        <div class="kpi-label">Onboardings Completed</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-value" id="kpi-completion-rate">—</div>
+        <div class="kpi-label">Completion Rate</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-value" id="kpi-avg-duration">—</div>
+        <div class="kpi-label">Avg. Duration (completed)</div>
+      </div>
+    </section>
+
+    <div class="panels-grid">
+
+      <!-- Funnel chart -->
+      <section class="panel panel-wide" aria-labelledby="panel-funnel-title">
+        <div class="panel-header">
+          <h2 id="panel-funnel-title" class="panel-title">Registration Funnel</h2>
+          <span class="panel-subtitle" id="funnel-date-label" aria-live="polite"></span>
+        </div>
+        <div class="panel-body">
+          <div id="funnel-loading" class="loading-msg" role="status" aria-live="polite">Loading…</div>
+          <div id="funnel-chart" class="funnel-chart" role="img" aria-label="Merchant registration funnel chart" hidden></div>
+          <table id="funnel-table" class="data-table sr-only" aria-label="Funnel step completion data">
+            <caption>Merchant registration funnel — step completion counts and drop-off rates</caption>
+            <thead>
+              <tr>
+                <th scope="col">Step</th>
+                <th scope="col">Count</th>
+                <th scope="col">Drop-off %</th>
+              </tr>
+            </thead>
+            <tbody id="funnel-table-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Step completion breakdown -->
+      <section class="panel" aria-labelledby="panel-steps-title">
+        <div class="panel-header">
+          <h2 id="panel-steps-title" class="panel-title">Step Completion Breakdown</h2>
+        </div>
+        <div class="panel-body">
+          <div id="steps-loading" class="loading-msg" role="status" aria-live="polite">Loading…</div>
+          <table id="steps-table" class="data-table" aria-label="Per-step completion rates" hidden>
+            <thead>
+              <tr>
+                <th scope="col">Step</th>
+                <th scope="col">Stage</th>
+                <th scope="col">Completed</th>
+                <th scope="col">Drop-off</th>
+                <th scope="col">Completion %</th>
+              </tr>
+            </thead>
+            <tbody id="steps-body"></tbody>
+          </table>
+          <div id="steps-empty" class="empty-msg" hidden>No data for the selected period.</div>
+        </div>
+      </section>
+
+      <!-- Wallet connect outcomes -->
+      <section class="panel" aria-labelledby="panel-wallet-title">
+        <div class="panel-header">
+          <h2 id="panel-wallet-title" class="panel-title">Wallet Connect Outcomes</h2>
+        </div>
+        <div class="panel-body">
+          <div id="wallet-loading" class="loading-msg" role="status" aria-live="polite">Loading…</div>
+          <table id="wallet-table" class="data-table" aria-label="Wallet connection outcomes by provider" hidden>
+            <thead>
+              <tr>
+                <th scope="col">Provider</th>
+                <th scope="col">Attempts</th>
+                <th scope="col">Connected</th>
+                <th scope="col">Failed</th>
+                <th scope="col">Success %</th>
+              </tr>
+            </thead>
+            <tbody id="wallet-body"></tbody>
+          </table>
+          <div id="wallet-empty" class="empty-msg" hidden>No wallet data for the selected period.</div>
+        </div>
+      </section>
+
+    </div><!-- /panels-grid -->
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

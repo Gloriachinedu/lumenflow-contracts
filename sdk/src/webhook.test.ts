@@ -15,6 +15,14 @@ describe("verifyWebhookSignature", () => {
     expect(verifyWebhookSignature(payload, signature, "wrong-secret")).toBe(false);
   });
 
+  it("rejects incorrect signatures with matching and mismatched lengths", () => {
+    const incorrectSignature = `sha256=${"0".repeat(64)}`;
+    const shortSignature = `sha256=${"0".repeat(62)}`;
+
+    expect(verifyWebhookSignature(payload, incorrectSignature, secret)).toBe(false);
+    expect(verifyWebhookSignature(payload, shortSignature, secret)).toBe(false);
+  });
+
   it("throws for an empty secret or malformed signature", () => {
     expect(() => verifyWebhookSignature(payload, signature, "")).toThrow();
     expect(() => verifyWebhookSignature(payload, "not-a-signature", secret)).toThrow();

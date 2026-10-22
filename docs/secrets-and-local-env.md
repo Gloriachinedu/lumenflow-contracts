@@ -232,3 +232,20 @@ The policy is validated in CI using the `htmlhint` linter (configured in
 ```bash
 cd frontend && npx htmlhint "*.html"
 ```
+
+## Quarterly secret rotation reminder
+
+The `.github/workflows/secret-rotation-reminder.yml` workflow runs automatically
+on the first day of each quarter (1 Jan, 1 Apr, 1 Jul, 1 Oct) and opens a GitHub
+issue with a rotation checklist for all GitHub Actions secrets.
+
+The checklist covers all secrets defined in `docs/credential-separation.md`:
+
+- `TESTNET_DEPLOYER_KEY`, `TESTNET_ADMIN_KEY`, `TESTNET_MERCHANT_KEY`, `TESTNET_PAYER_KEY`
+- `TESTNET_TOKEN_ADDRESS`, `TESTNET_SOURCE_ACCOUNT` and associated public addresses
+- `MAINNET_DEPLOYER_KEY`, `MAINNET_ADMIN_KEY`, `MAINNET_SOURCE_ACCOUNT` and public address
+
+Issues are automatically assigned to `@Gloriachinedu` (CODEOWNERS). To perform a
+manual rotation outside the quarterly cycle, use the issue template at
+`.github/ISSUE_TEMPLATE/secret_rotation.yml` or trigger the workflow manually from
+the Actions tab using the `workflow_dispatch` event.
