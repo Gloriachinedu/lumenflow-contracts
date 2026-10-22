@@ -51,7 +51,7 @@ jobs:
 
       # Install the Rust toolchain for the current matrix cell.
       - name: Install Rust ${{ matrix.toolchain }}
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8  # master
         with:
           toolchain: ${{ matrix.toolchain }}
           targets: wasm32-unknown-unknown
@@ -100,7 +100,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust 1.81.0 (MSRV)
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8  # master
         with:
           toolchain: "1.81.0"
           targets: wasm32-unknown-unknown
