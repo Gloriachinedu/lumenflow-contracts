@@ -28,7 +28,7 @@ jobs:
           node-version: "20"
 
       - name: Cache smoke-signer npm modules
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: scripts/.smoke_node_modules
           key: ${{ runner.os }}-smoke-npm-stellar-sdk-13.8.0

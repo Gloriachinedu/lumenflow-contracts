@@ -44,7 +44,7 @@ jobs:
 
       - name: Cache cargo registry (PR builds)
         if: github.event_name == 'pull_request'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
