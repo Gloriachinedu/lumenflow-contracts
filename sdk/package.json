@@ -40,7 +40,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@stellar/stellar-sdk": "^17.1.0",
+    "@stellar/stellar-sdk": "^17.2.1",
     "tweetnacl": "1.0.3"
   },
   "devDependencies": {
