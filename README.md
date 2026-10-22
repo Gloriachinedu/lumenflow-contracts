@@ -518,6 +518,62 @@ The CI workflows (`testnet-smoke.yml` and `smoke_test.yml`) automatically run `g
 
 ---
 
+## Escrow Smoke Test
+
+The escrow smoke test validates the full escrow hold/release/cancel lifecycle
+once the escrow functions from [#1111] are deployed.
+
+### Run the escrow smoke test
+
+```bash
+CONTRACT_ID=<contract-id> \
+ADMIN_KEY=<admin-secret>       ADMIN_ADDRESS=<admin-address> \
+MERCHANT_KEY=<merchant-secret> MERCHANT_ADDRESS=<merchant-address> \
+PAYER_KEY=<payer-secret>       PAYER_ADDRESS=<payer-address> \
+TOKEN_ADDRESS=<token-address> \
+NETWORK=testnet \
+./scripts/smoke_test_escrow.sh
+```
+
+### Required environment variables
+
+Same as the standard smoke test plus `ADMIN_ADDRESS`, `MERCHANT_ADDRESS`, and `PAYER_ADDRESS` (all already listed above).
+
+### Expected success criteria
+
+The escrow smoke test covers two paths and passes when all steps exit zero:
+
+**Path A — hold → release**
+
+1. `escrow_hold` — payer locks funds in escrow
+2. Verify payer balance decreased (funds locked)
+3. `get_escrow` — confirm escrow record exists on-chain
+4. `escrow_release` — merchant releases funds
+5. Verify merchant balance increased
+6. `get_escrow` — confirm record removed after release
+
+**Path B — hold → cancel**
+
+1. `escrow_hold` — payer locks funds in escrow
+2. `escrow_cancel` — payer cancels and reclaims funds
+3. Verify payer balance restored
+4. `get_escrow` — confirm record removed after cancel
+
+On success the script prints:
+
+```text
+✅ Escrow smoke test passed.
+```
+
+### CI integration
+
+The `escrow-smoke` job in `.github/workflows/testnet-smoke.yml` runs the
+escrow smoke test automatically. It is gated by the repository variable
+`ESCROW_SMOKE_ENABLED=true` — set this once [#1111] is merged and deployed to
+testnet. The same GitHub Actions secrets used by the standard smoke test apply.
+
+---
+
 ## Contract API
 
 For a complete list of contract error codes, their descriptions, and remediation steps, see **[docs/errors.md](docs/errors.md)**.
