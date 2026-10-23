@@ -87,7 +87,16 @@
 
     <!-- Alerts table -->
     <section class="card" aria-labelledby="alertsTitle">
-      <h2 id="alertsTitle" class="panel-title">Active Alerts</h2>
+      <div class="alerts-toolbar">
+        <h2 id="alertsTitle" class="panel-title">Active Alerts</h2>
+        <div class="alert-filters">
+          <label for="alertDateFrom">From</label>
+          <input id="alertDateFrom" type="date" aria-label="Filter alerts from date" />
+          <label for="alertDateTo">To</label>
+          <input id="alertDateTo" type="date" aria-label="Filter alerts through date" />
+          <button id="exportFlagged" type="button" class="btn-primary">Export Flagged Transactions</button>
+        </div>
+      </div>
       <div id="alertsEmpty" class="empty-state" style="display:none">No alerts detected with current thresholds.</div>
       <div class="table-wrapper">
         <table id="alertsTable" class="alert-table" role="table" aria-label="Suspicious activity alerts">

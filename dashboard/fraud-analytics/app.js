@@ -149,6 +149,8 @@ export function generateAlerts(payments) {
       alerts.push({
         id:        `alert-large-${p.order_id}`,
         order_id:  p.order_id,
+        merchant:  p.merchant,
+        payer:     p.payer,
         type:      'Large Payment',
         amount:    p.amount,
         token:     p.token,
@@ -165,6 +167,8 @@ export function generateAlerts(payments) {
         alerts.push({
           id:        `alert-refund-${p.order_id}`,
           order_id:  p.order_id,
+          merchant:  p.merchant,
+          payer:     p.payer,
           type:      'High Refund Rate',
           amount:    p.amount,
           token:     p.token,
@@ -198,7 +202,7 @@ export function renderAlerts(alerts) {
 
   tbody.innerHTML = '';
 
-  const visible = alerts.filter(a => a.status !== 'dismissed');
+  const visible = getVisibleAlerts(alerts);
 
   if (!visible.length) {
     emptyState.style.display = 'block';
@@ -260,8 +264,9 @@ export function renderAlerts(alerts) {
  * @param {object[]} payments — full payment list used for refund rate
  */
 export function renderMetrics(alerts, payments) {
-  const flagged   = alerts.filter(a => a.status !== 'dismissed').length;
-  const highValue = alerts.filter(a => a.risk === 'high' && a.status !== 'dismissed').length;
+  const visibleAlerts = getVisibleAlerts(alerts);
+  const flagged   = visibleAlerts.length;
+  const highValue = visibleAlerts.filter(a => a.risk === 'high').length;
 
   // Aggregate refund rate across all payments
   const totalAmount   = payments.reduce((sum, p) => sum + p.amount, 0);
@@ -360,6 +365,46 @@ function currentPayments() {
   return DEMO_MODE ? DEMO_PAYMENTS : [];   // live mode would return fetched payments
 }
 
+function getVisibleAlerts(alerts) {
+  const fromValue = document.getElementById('alertDateFrom').value;
+  const toValue = document.getElementById('alertDateTo').value;
+  const from = fromValue ? new Date(`${fromValue}T00:00:00`).getTime() : -Infinity;
+  const to = toValue ? new Date(`${toValue}T23:59:59.999`).getTime() : Infinity;
+
+  return alerts.filter(alert =>
+    alert.status !== 'dismissed' && alert.timestamp >= from && alert.timestamp <= to
+  );
+}
+
+function csvCell(value) {
+  let text = String(value ?? '');
+  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function exportFlaggedTransactions() {
+  const rows = [
+    ['timestamp', 'merchant', 'payer', 'amount', 'flag reason'],
+    ...getVisibleAlerts(activeAlerts).map(alert => [
+      new Date(alert.timestamp).toISOString(),
+      alert.merchant,
+      alert.payer,
+      alert.amount,
+      alert.type,
+    ]),
+  ];
+  const csv = rows.map(row => row.map(csvCell).join(',')).join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  const environment = String(NETWORK ?? 'testnet').toLowerCase().includes('mainnet') ? 'mainnet' : 'testnet';
+
+  link.href = url;
+  link.download = `flagged-transactions-${new Date().toISOString().slice(0, 10)}-${environment}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 // ---------------------------------------------------------------------------
 // Full analysis pass — called on load and when thresholds change
 // ---------------------------------------------------------------------------
@@ -414,6 +459,16 @@ document.getElementById('dismissBanner').addEventListener('click', () => {
   const banner = document.getElementById('demoBanner');
   banner.style.display = 'none';
 });
+
+document.getElementById('alertDateFrom').addEventListener('change', () => {
+  renderAlerts(activeAlerts);
+  renderMetrics(activeAlerts, currentPayments());
+});
+document.getElementById('alertDateTo').addEventListener('change', () => {
+  renderAlerts(activeAlerts);
+  renderMetrics(activeAlerts, currentPayments());
+});
+document.getElementById('exportFlagged').addEventListener('click', exportFlaggedTransactions);
 
 // ---------------------------------------------------------------------------
 // Initialisation
