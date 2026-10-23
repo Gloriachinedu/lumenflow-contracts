@@ -1,0 +1,150 @@
+/* ==========================================================================
+   LumenFlow Dashboard — Shared CSS Variables
+   Loaded by all dashboard pages to avoid duplication and keep theme tokens
+   consistent between merchant-dashboard and fraud-analytics.
+   ========================================================================== */
+
+/* ── Light mode (default) ─────────────────────────────────────────────────── */
+:root {
+  /* Colour palette */
+  --color-bg:             #f5f7fa;
+  --color-surface:        #ffffff;
+  --color-surface-alt:    #f0f2f5;
+  --color-border:         #e0e0e6;
+  --color-text:           #0b1726;
+  --color-text-muted:     #5a6880;
+  --color-accent:         #0b66ff;
+  --color-accent-hover:   #0050cc;
+  --color-accent-text:    #ffffff;
+  --color-danger:         #d63031;
+  --color-danger-hover:   #b02020;
+  --color-success:        #00b894;
+  --color-warning:        #fdcb6e;
+  --color-warning-text:   #7a5200;
+
+  /* Status indicator colours */
+  --color-live:           #00b894;   /* green  */
+  --color-reconnecting:   #fdcb6e;   /* yellow */
+
+  /* Shadows */
+  --shadow-card:          0 2px 8px rgba(0, 0, 0, 0.07);
+
+  /* Spacing / sizing */
+  --radius:               6px;
+  --radius-lg:            10px;
+}
+
+/* ── Dark mode ────────────────────────────────────────────────────────────── */
+[data-theme="dark"] {
+  --color-bg:             #0d1117;
+  --color-surface:        #161b22;
+  --color-surface-alt:    #1c2330;
+  --color-border:         #30363d;
+  --color-text:           #e6edf3;
+  --color-text-muted:     #8b949e;
+  --color-accent:         #58a6ff;
+  --color-accent-hover:   #79b8ff;
+  --color-accent-text:    #0d1117;
+  --color-danger:         #f85149;
+  --color-danger-hover:   #da3633;
+  --color-success:        #3fb950;
+  --color-warning:        #d29922;
+  --color-warning-text:   #f0e68c;
+
+  --color-live:           #3fb950;
+  --color-reconnecting:   #d29922;
+
+  --shadow-card:          0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+/* ── System dark-mode preference (no explicit localStorage value) ─────────── */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-bg:             #0d1117;
+    --color-surface:        #161b22;
+    --color-surface-alt:    #1c2330;
+    --color-border:         #30363d;
+    --color-text:           #e6edf3;
+    --color-text-muted:     #8b949e;
+    --color-accent:         #58a6ff;
+    --color-accent-hover:   #79b8ff;
+    --color-accent-text:    #0d1117;
+    --color-danger:         #f85149;
+    --color-danger-hover:   #da3633;
+    --color-success:        #3fb950;
+    --color-warning:        #d29922;
+    --color-warning-text:   #f0e68c;
+
+    --color-live:           #3fb950;
+    --color-reconnecting:   #d29922;
+
+    --shadow-card:          0 2px 8px rgba(0, 0, 0, 0.4);
+  }
+}
+
+/* ── Base resets (shared across dashboards) ───────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+/* ── Theme toggle utility ─────────────────────────────────────────────────── */
+.theme-toggle {
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.theme-toggle:hover {
+  background: var(--color-border);
+}
+
+.theme-toggle:focus {
+  outline: 3px solid rgba(88, 166, 255, 0.4);
+  outline-offset: 2px;
+}
+
+/* ── Connection status indicator ──────────────────────────────────────────── */
+.status-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 99px;
+  border: 1px solid currentColor;
+}
+
+.status-indicator.live {
+  color: var(--color-live);
+  border-color: var(--color-live);
+}
+
+.status-indicator.reconnecting {
+  color: var(--color-reconnecting);
+  border-color: var(--color-reconnecting);
+}
+
+.status-indicator::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.status-indicator.live::before {
+  animation: pulse-live 2s ease-in-out infinite;
+}
+
+@keyframes pulse-live {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
