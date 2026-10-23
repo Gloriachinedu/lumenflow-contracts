@@ -1,30 +1,285 @@
 name: Release
 
+# Triggered when a semver tag (e.g. v1.2.3, v1.2.3-rc.1) is pushed.
 on:
   push:
     tags:
-      - "v*.*.*"
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
 
 permissions:
   contents: write
+  id-token: write  # required for Cosign OIDC keyless signing (Issue #1352)
 
 jobs:
-  release:
-    name: Build & Release
+  validate-tag:
+    name: Validate Tag & Version Alignment
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
         with:
           persist-credentials: false
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # master
+      # Ensure the pushed tag matches the version in contracts/lumenflow/Cargo.toml
+      - name: Check contract version matches tag
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"   # strip leading "v"
+          CARGO_VER=$(grep '^version' contracts/lumenflow/Cargo.toml | head -1 | sed 's/.*= *"\(.*\)"/\1/')
+          echo "Tag version  : $TAG"
+          echo "Cargo version: $CARGO_VER"
+          if [ "$TAG" != "$CARGO_VER" ]; then
+            echo "ERROR: tag v$TAG does not match Cargo.toml version $CARGO_VER" >&2
+            exit 1
+          fi
+
+      # Ensure the pushed tag matches the version in sdk/package.json
+      - name: Check SDK version matches tag
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          SDK_VER=$(node -p "require('./sdk/package.json').version")
+          echo "Tag version: $TAG"
+          echo "SDK version: $SDK_VER"
+          if [ "$TAG" != "$SDK_VER" ]; then
+            echo "ERROR: tag v$TAG does not match sdk/package.json version $SDK_VER" >&2
+            exit 1
+          fi
+
+  container-scan:
+    name: Container Image Vulnerability Scan
+    runs-on: ubuntu-latest
+    needs: validate-tag
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # Container images shipped in the project's compose stack. A CRITICAL,
+        # fixable CVE in any of them blocks the release.
+        image:
+          - stellar/quickstart:latest
+          - ubuntu:22.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
         with:
-          toolchain: stable
-          targets: wasm32-unknown-unknown
+          persist-credentials: false
+
+      - name: Scan ${{ matrix.image }} with Trivy
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ matrix.image }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-${{ matrix.image }}
+
+  changelog:
+    name: Generate & Commit CHANGELOG
+    runs-on: ubuntu-latest
+    needs: validate-tag
+    outputs:
+      changelog_body: ${{ steps.extract.outputs.body }}
+    steps:
+      # Need full history so conventional-changelog can walk all commits since the last tag
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          fetch-depth: 0
+          # credentials are required so we can push the changelog commit back
+          persist-credentials: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: "20"
+
+      - name: Install conventional-changelog-cli
+        run: npm install --no-save conventional-changelog-cli@5.0.0
+
+      - name: Generate CHANGELOG.md
+        run: |
+          # -p conventionalcommits  – use the conventional-commits preset
+          # -i / -s                 – read from and write to CHANGELOG.md in place
+          # -r 0                    – regenerate the full changelog, not just the latest tag
+          # --config                – custom grouping/transform defined in changelog.config.js
+          node_modules/.bin/conventional-changelog \
+            -p conventionalcommits \
+            -i CHANGELOG.md \
+            -s \
+            -r 0 \
+            --config changelog.config.js
+
+      - name: Extract release section for release notes
+        id: extract
+        run: |
+          # Pull out everything between the first and second "## [" headers
+          # so we can embed it in the GitHub Release body.
+          BODY=$(awk '/^## \[/{found++} found==1{print} found==2{exit}' CHANGELOG.md)
+          # Store as a multi-line output (GitHub Actions supports this via delimiter)
+          {
+            echo "body<<CHANGELOG_EOF"
+            echo "$BODY"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Commit updated CHANGELOG.md
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Only commit if the file actually changed
+          if git diff --quiet CHANGELOG.md; then
+            echo "CHANGELOG.md is already up to date — nothing to commit."
+          else
+            # Push the commit to the branch that the tag points at (usually main)
+            BRANCH=$(git branch -r --contains "$GITHUB_REF_NAME" \
+                       | grep -v HEAD \
+                       | sed 's|origin/||' \
+                       | head -1 \
+                       | tr -d ' ')
+            git checkout "$BRANCH"
+            git add CHANGELOG.md
+            git commit -m "docs(changelog): update for ${{ github.ref_name }} [skip ci]"
+            git push origin "$BRANCH"
+          fi
+
+  build-cli:
+    name: Build CLI — ${{ matrix.target }}
+    needs: [changelog, container-scan]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Linux x86_64 ──────────────────────────────────────────────────
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive_ext: tar.gz
+          # ── Linux ARM64 (AWS Graviton, Raspberry Pi) ──────────────────────
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive_ext: tar.gz
+          # ── macOS x86_64 ─────────────────────────────────────────────────
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive_ext: tar.gz
+          # ── macOS Apple Silicon ───────────────────────────────────────────
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive_ext: tar.gz
+          # ── Windows x86_64 ────────────────────────────────────────────────
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive_ext: zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c  # master
+        with:
+          toolchain: 1.87.0
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation toolchain (aarch64 Linux only)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Configure Cargo for cross-compilation (aarch64 Linux only)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          mkdir -p ~/.cargo
+          cat >> ~/.cargo/config.toml <<'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          EOF
 
       - name: Cache cargo registry
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-cli-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build CLI binary
+        run: |
+          cargo build --locked --release --package lumenflow-cli --target ${{ matrix.target }}
+
+      - name: Package binary (Unix)
+        if: matrix.archive_ext == 'tar.gz'
+        run: |
+          BIN="target/${{ matrix.target }}/release/lumenflow-cli"
+          ARCHIVE="lumenflow-cli-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
+          tar -czf "$ARCHIVE" -C "$(dirname $BIN)" "$(basename $BIN)"
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
+
+      - name: Package binary (Windows)
+        if: matrix.archive_ext == 'zip'
+        shell: pwsh
+        run: |
+          $BIN = "target\${{ matrix.target }}\release\lumenflow-cli.exe"
+          $ARCHIVE = "lumenflow-cli-${{ github.ref_name }}-${{ matrix.target }}.zip"
+          Compress-Archive -Path $BIN -DestinationPath $ARCHIVE
+          echo "ARCHIVE=$ARCHIVE" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $hash = (Get-FileHash $ARCHIVE -Algorithm SHA256).Hash.ToLower()
+          "$hash  $ARCHIVE" | Out-File -FilePath "${ARCHIVE}.sha256" -Encoding utf8
+
+      - name: Smoke test binary (native targets only)
+        if: |
+          matrix.target == 'x86_64-unknown-linux-gnu' ||
+          matrix.target == 'x86_64-apple-darwin' ||
+          matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: |
+          BIN="target/${{ matrix.target }}/release/lumenflow-cli"
+          [ -f "${BIN}.exe" ] && BIN="${BIN}.exe"
+          "$BIN" --help
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1  # v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: |
+            lumenflow-cli-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive_ext }}
+            lumenflow-cli-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive_ext }}.sha256
+          retention-days: 1
+
+  release:
+    name: Build & Publish Release
+    runs-on: ubuntu-latest
+    needs: [changelog, container-scan]
+    outputs:
+      hashes: ${{ steps.provenance-hash.outputs.hashes }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8  # master
+        with:
+          toolchain: 1.87.0
+          targets: wasm32-unknown-unknown
+
+      - name: Verify toolchain version
+        run: rustc --version | grep "1.87.0"
+
+      - name: Cache cargo registry
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -45,10 +300,22 @@ jobs:
 
       - name: Build WASM (release)
         run: |
-          cargo build \
+          cargo build --locked \
             --target wasm32-unknown-unknown \
             --release \
-            --package lumenflow
+            --package lumenflow \
+            --locked
+
+      - name: Compute SHA-256 hash
+        id: hash
+        run: |
+          HASH=$(sha256sum target/wasm32-unknown-unknown/release/lumenflow.wasm | awk '{print $1}')
+          echo "sha256=$HASH" >> "$GITHUB_OUTPUT"
+          echo "## WASM Hash" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "SHA-256: $HASH" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Published SHA-256: $HASH"
 
       - name: Install Stellar CLI
         run: |
@@ -84,10 +351,130 @@ jobs:
           cp target/wasm32-unknown-unknown/release/lumenflow.wasm \
              lumenflow_${{ github.ref_name }}.wasm
 
+      - name: Prepare SLSA subject
+        id: provenance-hash
+        run: |
+          echo "hashes=$(sha256sum lumenflow_${{ github.ref_name }}.wasm | base64 -w0)" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Write SHA-256 checksum file
+        run: |
+          echo "${{ steps.hash.outputs.sha256 }}  lumenflow_${{ github.ref_name }}.wasm" \
+            > lumenflow_${{ github.ref_name }}.wasm.sha256
+
+      # ── Cosign keyless signing (Issue #1352) ──────────────────────────────
+      # Sign the WASM artifact using Sigstore Cosign with the GitHub OIDC token
+      # so that every release artifact is cryptographically verifiable without
+      # managing private keys.  The signature bundle (.sig) and certificate (.cert)
+      # are published alongside the artifact in the GitHub Release.
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da  # v3.7.0
+
+      - name: Sign WASM artifact (keyless, OIDC)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign sign-blob \
+            --yes \
+            --output-signature lumenflow_${{ github.ref_name }}.wasm.sig \
+            --output-certificate lumenflow_${{ github.ref_name }}.wasm.cert \
+            lumenflow_${{ github.ref_name }}.wasm
+          echo "### Cosign Signature" >> "$GITHUB_STEP_SUMMARY"
+          echo "Artifact: lumenflow_${{ github.ref_name }}.wasm" >> "$GITHUB_STEP_SUMMARY"
+          echo "Signature: lumenflow_${{ github.ref_name }}.wasm.sig" >> "$GITHUB_STEP_SUMMARY"
+          echo "Certificate: lumenflow_${{ github.ref_name }}.wasm.cert" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v3.0.0
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
         with:
-          files: lumenflow_${{ github.ref_name }}.wasm
-          generate_release_notes: true
+          files: |
+            lumenflow_${{ github.ref_name }}.wasm
+            lumenflow_${{ github.ref_name }}.wasm.sha256
+            lumenflow_${{ github.ref_name }}.wasm.sig
+            lumenflow_${{ github.ref_name }}.wasm.cert
+          generate_release_notes: false
           draft: false
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
+          body: |
+            ${{ needs.changelog.outputs.changelog_body }}
+
+            ---
+
+            ## CLI Installation
+
+            Pre-built CLI binaries are available for all major platforms. Download the archive for your platform and extract the `lumenflow-cli` binary.
+
+            | Platform | Archive |
+            |---|---|
+            | Linux x86\_64 | `lumenflow-cli-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz` |
+            | Linux ARM64 (Graviton / Raspberry Pi) | `lumenflow-cli-${{ github.ref_name }}-aarch64-unknown-linux-gnu.tar.gz` |
+            | macOS x86\_64 | `lumenflow-cli-${{ github.ref_name }}-x86_64-apple-darwin.tar.gz` |
+            | macOS Apple Silicon | `lumenflow-cli-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz` |
+            | Windows x86\_64 | `lumenflow-cli-${{ github.ref_name }}-x86_64-pc-windows-msvc.zip` |
+
+            SHA-256 checksums are published as `.sha256` files alongside each archive.
+
+            ## WASM Verification
+
+            To verify the WASM binary, run:
+            ```bash
+            VERSION=${{ github.ref_name }} ./scripts/verify-build.sh
+            ```
+
+            **SHA-256:** `${{ steps.hash.outputs.sha256 }}`
+
+            See [docs/release-hashes.md](docs/release-hashes.md) for the full hash table and verification instructions.
+
+  publish-cli:
+    name: Publish CLI to crates.io
+    runs-on: ubuntu-latest
+    needs: [changelog, container-scan]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8  # master
+        with:
+          toolchain: 1.87.0
+
+      - name: Verify toolchain version
+        run: rustc --version | grep "1.87.0"
+
+      - name: Cache cargo registry
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-crates-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Validate CLI version matches tag
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CLI_VERSION=$(grep '^version' cli/lumenflow-cli/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          echo "Tag version : $TAG_VERSION"
+          echo "CLI version : $CLI_VERSION"
+          if [ "$TAG_VERSION" != "$CLI_VERSION" ]; then
+            echo "ERROR: tag $GITHUB_REF_NAME does not match cli/lumenflow-cli/Cargo.toml version $CLI_VERSION" >&2
+            exit 1
+          fi
+
+      - name: Publish lumenflow-cli to crates.io
+        run: cargo publish --package lumenflow-cli --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  provenance:
+    name: Generate SLSA Provenance
+    needs: release
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.release.outputs.hashes }}
+      upload-assets: true

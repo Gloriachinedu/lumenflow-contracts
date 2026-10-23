@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "_comment": "Branch protection policy for lumenflow-contracts. Apply with: scripts/apply-branch-protection.sh",
+  "branch": "main",
+  "required_status_checks": {
+    "strict": true,
+    "contexts": [
+      "Lint",
+      "Test",
+      "Auth Tests",
+      "Build WASM"
+    ]
+  },
+  "enforce_admins": true,
+  "required_pull_request_reviews": {
+    "required_approving_review_count": 1,
+    "dismiss_stale_reviews": true,
+    "require_code_owner_reviews": true,
+    "require_last_push_approval": true
+  },
+  "restrictions": null,
+  "allow_force_pushes": false,
+  "allow_deletions": false,
+  "required_conversation_resolution": true,
+  "required_linear_history": true,
+  "lock_branch": false
+}

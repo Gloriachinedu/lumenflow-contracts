@@ -27,6 +27,12 @@ type SubscribeOptions = {
   horizonUrl?: string;
   /** Cursor to resume from. Defaults to "now". */
   cursor?: string;
+  /** Called before a retry, with its one-based attempt number and delay. */
+  onReconnecting?: (attempt: number, delayMs: number) => void;
+  /** Called when a retry successfully opens the stream. */
+  onReconnected?: () => void;
+  /** Called after all reconnect attempts fail. */
+  onError?: (error: Event) => void;
 };
 
 /**
@@ -50,15 +56,23 @@ export function subscribe(
 
   let es: EventSource | null = null;
   let stopped = false;
-  let retryDelay = 1_000; // ms, doubles on each failure up to 30s
+  let retries = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let hasConnected = false;
+  const maxRetries = 5;
+  const initialRetryDelay = 1_000;
 
   function connect() {
     if (stopped) return;
 
     es = new EventSource(url);
+    es.onopen = () => {
+      if (hasConnected) options.onReconnected?.();
+      hasConnected = true;
+      retries = 0;
+    };
 
     es.onmessage = (msg: MessageEvent) => {
-      retryDelay = 1_000; // reset on success
       try {
         const raw = JSON.parse(msg.data as string);
         const event: LumenFlowEvent = {
@@ -75,13 +89,20 @@ export function subscribe(
       }
     };
 
-    es.onerror = () => {
+    es.onerror = (event: Event) => {
       es?.close();
       es = null;
-      if (!stopped) {
-        setTimeout(connect, retryDelay);
-        retryDelay = Math.min(retryDelay * 2, 30_000);
+      if (stopped) return;
+
+      if (retries >= maxRetries) {
+        options.onError?.(event);
+        return;
       }
+
+      retries += 1;
+      const delayMs = initialRetryDelay * 2 ** (retries - 1);
+      options.onReconnecting?.(retries, delayMs);
+      reconnectTimer = setTimeout(connect, delayMs);
     };
   }
 
@@ -89,6 +110,7 @@ export function subscribe(
 
   return () => {
     stopped = true;
+    if (reconnectTimer !== null) clearTimeout(reconnectTimer);
     es?.close();
     es = null;
   };
