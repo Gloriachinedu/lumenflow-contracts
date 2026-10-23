@@ -20,7 +20,14 @@ function createServer() {
         res.end('Not found');
         return;
       }
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      const ext = path.extname(filePath).toLowerCase();
+      let contentType = 'text/html; charset=utf-8';
+      if (ext === '.js') {
+        contentType = 'application/javascript; charset=utf-8';
+      } else if (ext === '.css') {
+        contentType = 'text/css; charset=utf-8';
+      }
+      res.writeHead(200, { 'Content-Type': contentType });
       res.end(data);
     });
   });

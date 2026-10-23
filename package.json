@@ -2,9 +2,20 @@
   "name": "lumenflow-contracts-ui-tests",
   "private": true,
   "scripts": {
-    "test:receipt": "playwright test tests/receipt.spec.js"
+    "test:receipt": "playwright test tests/receipt.spec.js",
+    "test:playwright": "playwright test tests/playwright/",
+    "test:e2e": "playwright test",
+    "lint:html": "htmlhint \"frontend/**/*.html\" --config .htmlhintrc",
+    "lint:js": "eslint \"frontend/**/*.js\" \"tests/**/*.js\"",
+    "check:i18n": "node scripts/check-i18n-locales.mjs",
+    "check:roadmap": "node scripts/check-roadmap-tracking.mjs",
+    "test:roadmap": "node --test \"scripts/*.test.mjs\""
   },
   "devDependencies": {
-    "@playwright/test": "^1.48.2"
+    "@html-eslint/eslint-plugin": "^0.67.0",
+    "@playwright/test": "^1.63.0",
+    "eslint": "^10.13.0",
+    "globals": "^17.13.0",
+    "htmlhint": "^1.9.2"
   }
 }

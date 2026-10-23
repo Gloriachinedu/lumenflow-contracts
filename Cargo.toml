@@ -1,8 +1,17 @@
 [workspace]
 resolver = "2"
-members = ["cli/lumenflow-cli",
+members = [
+    "cli/lumenflow-cli",
     "contracts/lumenflow",
+    "contracts/router",
 ]
+
+[workspace.package]
+# Minimum Supported Rust Version (MSRV).
+# CI enforces this via the msrv job in .github/workflows/toolchain-matrix.yml.
+# Bump only when a new language/stdlib feature is intentionally required, and
+# update toolchain-matrix.yml + README.md Prerequisites at the same time.
+rust-version = "1.81.0"
 
 [profile.release]
 opt-level = "z"

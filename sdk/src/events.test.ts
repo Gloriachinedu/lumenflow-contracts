@@ -5,6 +5,7 @@ class MockEventSource {
   static instances: MockEventSource[] = [];
   url: string;
   onmessage: ((e: MessageEvent) => void) | null = null;
+  onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
   closed = false;
 
@@ -18,7 +19,11 @@ class MockEventSource {
   }
 
   triggerError() {
-    this.onerror?.();
+    this.onerror?.(new Event('error'));
+  }
+
+  open() {
+    this.onopen?.();
   }
 
   close() {
@@ -76,6 +81,43 @@ test('reconnects on error', () => {
 
   jest.advanceTimersByTime(1_100);
   expect(MockEventSource.instances).toHaveLength(2);
+
+  unsub();
+  jest.useRealTimers();
+});
+
+test('emits reconnecting and reconnected lifecycle callbacks', () => {
+  jest.useFakeTimers();
+  const onReconnecting = jest.fn();
+  const onReconnected = jest.fn();
+  const unsub = subscribe('CONTRACT_ID', {}, () => {}, { onReconnecting, onReconnected });
+
+  MockEventSource.instances[0].triggerError();
+  expect(onReconnecting).toHaveBeenCalledWith(1, 1_000);
+  jest.advanceTimersByTime(1_000);
+  MockEventSource.instances[1].open();
+  expect(onReconnected).toHaveBeenCalledTimes(1);
+
+  unsub();
+  jest.useRealTimers();
+});
+
+test('emits an error and stops after five failed reconnect attempts', () => {
+  jest.useFakeTimers();
+  const onError = jest.fn();
+  const unsub = subscribe('CONTRACT_ID', {}, () => {}, { onError });
+  const retryDelays = [1_000, 2_000, 4_000, 8_000, 16_000];
+
+  for (const delayMs of retryDelays) {
+    MockEventSource.instances[MockEventSource.instances.length - 1].triggerError();
+    jest.advanceTimersByTime(delayMs);
+  }
+  MockEventSource.instances[MockEventSource.instances.length - 1].triggerError();
+
+  expect(MockEventSource.instances).toHaveLength(6);
+  expect(onError).toHaveBeenCalledTimes(1);
+  jest.advanceTimersByTime(60_000);
+  expect(MockEventSource.instances).toHaveLength(6);
 
   unsub();
   jest.useRealTimers();
