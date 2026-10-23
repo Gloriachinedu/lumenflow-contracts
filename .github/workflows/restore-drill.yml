@@ -1,0 +1,77 @@
+name: Monthly Restore Drill
+
+on:
+  schedule:
+    - cron: "0 6 1-7 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  restore-drill:
+    name: Restore Drill (staging)
+    runs-on: ubuntu-latest
+    environment: staging
+    timeout-minutes: 15
+
+    steps:
+      - name: Check whether this is the first Monday
+        id: calendar
+        run: |
+          if [[ "${{ github.event_name }}" != "schedule" ]] || \
+            [[ "$(date -u +%u)" == "1" && "$(date -u +%-d)" -le 7 ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping: scheduled restore drills run on the first Monday of each month."
+          fi
+
+      - name: Check staging restore drill
+        id: drill
+        if: steps.calendar.outputs.run == 'true'
+        run: |
+          started_ms=$(date +%s%3N)
+          exit_code=0
+          node scripts/restore-drill.mjs codecov.yml Makefile Cargo.toml > restore-drill.log 2>&1 || exit_code=$?
+          cat restore-drill.log
+          duration_ms=$(( $(date +%s%3N) - started_ms ))
+          status=success
+          if [[ "$exit_code" -ne 0 ]]; then
+            status=failure
+          fi
+
+          printf '{"environment":"staging","status":"%s","timestamp":"%s","duration_ms":%s}\n' \
+            "$status" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$duration_ms" > restore-drill-report.json
+          echo "restore_duration_ms=$duration_ms" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Restore drill duration::${duration_ms} ms"
+          echo "### Staging restore drill: $status" >> "$GITHUB_STEP_SUMMARY"
+          echo "Duration: ${duration_ms} ms" >> "$GITHUB_STEP_SUMMARY"
+
+          exit "$exit_code"
+
+      - name: Archive drill results
+        if: always() && steps.calendar.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: restore-drill-${{ github.run_id }}
+          path: |
+            restore-drill.log
+            restore-drill-report.json
+          if-no-files-found: error
+          retention-days: 365
+
+      - name: Alert on drill failure
+        if: failure() && steps.calendar.outputs.run == 'true'
+        env:
+          ALERT_WEBHOOK: ${{ secrets.RESTORE_DRILL_ALERT_WEBHOOK }}
+        run: |
+          if [[ -z "$ALERT_WEBHOOK" ]]; then
+            echo "::warning::RESTORE_DRILL_ALERT_WEBHOOK is not configured; GitHub Actions will report this failed run."
+            exit 0
+          fi
+
+          curl --fail --silent --show-error \
+            --header 'Content-Type: application/json' \
+            --data "{\"text\":\"Staging restore drill failed. Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}" \
+            "$ALERT_WEBHOOK"

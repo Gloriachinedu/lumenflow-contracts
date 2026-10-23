@@ -1,0 +1,185 @@
+name: Multi-Region Failover Drill
+
+on:
+  schedule:
+    # Run at 00:00 UTC on the 1st of every month
+    - cron: '0 0 1 * *'
+  workflow_dispatch:
+    inputs:
+      network:
+        description: 'Target network for the drill'
+        required: false
+        default: 'testnet'
+
+# Prevent concurrent failover drills
+concurrency:
+  group: failover-drill
+  cancel-in-progress: false
+
+jobs:
+  failover-drill:
+    name: Failover Drill
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RTO_TARGET_SECONDS: 900 # 15 minutes
+      DRILL_START_TIME: ${{ github.run_started_at }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Stellar CLI
+        run: |
+          curl -sSL https://github.com/stellar/stellar-cli/releases/latest/download/stellar-cli-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /usr/local/bin
+
+      - name: Record failover start time
+        id: timing
+        run: |
+          START_EPOCH=$(date +%s)
+          echo "start_epoch=$START_EPOCH" >> "$GITHUB_OUTPUT"
+          echo "Drill started at $(date -u -d @$START_EPOCH '+%Y-%m-%dT%H:%M:%SZ')"
+
+      - name: Verify secondary region RPC is reachable
+        id: secondary-check
+        env:
+          FAILOVER_RPC_URL: ${{ secrets.FAILOVER_RPC_URL }}
+        run: |
+          echo "Checking secondary region RPC endpoint: ${FAILOVER_RPC_URL:-https://soroban-testnet.stellar.org}"
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            --connect-timeout 10 --max-time 30 \
+            "${FAILOVER_RPC_URL:-https://soroban-testnet.stellar.org}/health" || true)
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::warning::Secondary RPC returned HTTP $HTTP_CODE (expected 200). Continuing with drill..."
+            echo "secondary_reachable=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Secondary RPC is healthy (HTTP 200)"
+            echo "secondary_reachable=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run smoke test against secondary region
+        id: smoke
+        env:
+          CONTRACT_ID: ${{ secrets.FAILOVER_CONTRACT_ID }}
+          ADMIN_KEY: ${{ secrets.FAILOVER_ADMIN_KEY }}
+          MERCHANT_KEY: ${{ secrets.FAILOVER_MERCHANT_KEY }}
+          PAYER_KEY: ${{ secrets.FAILOVER_PAYER_KEY }}
+          TOKEN_ADDRESS: ${{ secrets.FAILOVER_TOKEN_ADDRESS }}
+          ADMIN_ADDRESS: ${{ secrets.FAILOVER_ADMIN_ADDRESS }}
+          MERCHANT_ADDRESS: ${{ secrets.FAILOVER_MERCHANT_ADDRESS }}
+          PAYER_ADDRESS: ${{ secrets.FAILOVER_PAYER_ADDRESS }}
+          NETWORK: ${{ github.event.inputs.network || secrets.FAILOVER_NETWORK || 'testnet' }}
+        run: |
+          set +e
+          ./scripts/smoke_test.sh 2>&1 | tee /tmp/smoke_output.txt
+          SMOKE_EXIT=$?
+          set -e
+
+          if [ $SMOKE_EXIT -eq 0 ]; then
+            echo "smoke_passed=true" >> "$GITHUB_OUTPUT"
+            echo "Smoke test PASSED in secondary region"
+          else
+            echo "smoke_passed=false" >> "$GITHUB_OUTPUT"
+            echo "Smoke test FAILED in secondary region (exit code: $SMOKE_EXIT)"
+          fi
+
+      - name: Simulate DNS switchover
+        id: dns
+        env:
+          FAILOVER_RPC_URL: ${{ secrets.FAILOVER_RPC_URL }}
+        run: |
+          echo "Simulating DNS switchover to secondary region..."
+          # In a real failover, this is where DNS records would be updated.
+          # For the drill, we simulate the TTL wait (60s configured TTL).
+          sleep 2
+          echo "DNS switchover simulated (TTL: 60s in production, 2s in drill)"
+          echo "dns_switched=true" >> "$GITHUB_OUTPUT"
+
+      - name: Calculate RTO
+        id: rto
+        run: |
+          END_EPOCH=$(date +%s)
+          START_EPOCH=${{ steps.timing.outputs.start_epoch }}
+          RTO_SECONDS=$((END_EPOCH - START_EPOCH))
+          RTO_MINUTES=$((RTO_SECONDS / 60))
+
+          echo "rto_seconds=$RTO_SECONDS" >> "$GITHUB_OUTPUT"
+          echo "rto_minutes=$RTO_MINUTES" >> "$GITHUB_OUTPUT"
+
+          if [ "$RTO_SECONDS" -le "$RTO_TARGET_SECONDS" ]; then
+            echo "rto_within_target=true" >> "$GITHUB_OUTPUT"
+            echo "RTO: ${RTO_SECONDS}s (${RTO_MINUTES}m) — WITHIN 15-minute target ✅"
+          else
+            echo "rto_within_target=false" >> "$GITHUB_OUTPUT"
+            echo "RTO: ${RTO_SECONDS}s (${RTO_MINUTES}m) — EXCEEDS 15-minute target ❌"
+          fi
+
+      - name: Post workflow summary
+        if: always()
+        env:
+          SMOKE_PASSED: ${{ steps.smoke.outputs.smoke_passed }}
+          SECONDARY_REACHABLE: ${{ steps.secondary-check.outputs.secondary_reachable }}
+          DNS_SWITCHED: ${{ steps.dns.outputs.dns_switched }}
+          RTO_SECONDS: ${{ steps.rto.outputs.rto_seconds }}
+          RTO_MINUTES: ${{ steps.rto.outputs.rto_minutes }}
+          RTO_WITHIN: ${{ steps.rto.outputs.rto_within_target }}
+        run: |
+          echo "## Multi-Region Failover Drill Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Metric | Result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Secondary RPC reachable | $([ "$SECONDARY_REACHABLE" = "true" ] && echo '✅ Yes' || echo '❌ No') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Smoke test (secondary) | $([ "$SMOKE_PASSED" = "true" ] && echo '✅ Passed' || echo '❌ Failed') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| DNS switchover | $([ "$DNS_SWITCHED" = "true" ] && echo '✅ Simulated' || echo '❌ Not completed') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| RTO measured | ${RTO_SECONDS}s (${RTO_MINUTES}m) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| RTO within 15-min target | $([ "$RTO_WITHIN" = "true" ] && echo '✅ Yes' || echo '❌ No') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          OVERALL="PASSED"
+          if [ "$SMOKE_PASSED" != "true" ] || [ "$RTO_WITHIN" != "true" ]; then
+            OVERALL="FAILED"
+          fi
+          echo "**Overall: $OVERALL**" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Alert on-call on failure
+        if: failure()
+        env:
+          ONCALL_SLACK_WEBHOOK: ${{ secrets.ONCALL_SLACK_WEBHOOK }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          MESSAGE="🚨 *Multi-Region Failover Drill FAILED*
+
+          The monthly failover drill did not pass. Immediate review is required.
+
+          *Workflow:* ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          *RTO Target:* 15 minutes
+          *Time:* $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+          if [ -n "$ONCALL_SLACK_WEBHOOK" ]; then
+            curl -s -X POST "$ONCALL_SLACK_WEBHOOK" \
+              -H "Content-Type: application/json" \
+              -d "{\"text\": \"$MESSAGE\"}"
+            echo "Alert sent to on-call via Slack"
+          else
+            echo "::warning::ONCALL_SLACK_WEBHOOK not configured — cannot send alert"
+            echo "$MESSAGE"
+          fi
+
+          echo "::error::Failover drill failed — on-call has been alerted"
+
+      - name: Fail job if drill did not pass
+        if: always()
+        env:
+          SMOKE_PASSED: ${{ steps.smoke.outputs.smoke_passed }}
+          RTO_WITHIN: ${{ steps.rto.outputs.rto_within_target }}
+        run: |
+          if [ "$SMOKE_PASSED" != "true" ] || [ "$RTO_WITHIN" != "true" ]; then
+            echo "Drill failed: smoke_passed=$SMOKE_PASSED, rto_within_target=$RTO_WITHIN"
+            exit 1
+          fi
+          echo "Drill passed all checks ✅"
