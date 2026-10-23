@@ -9,4 +9,4 @@ prometheus-client==0.21.1
 # tracing if they are not installed.
 opentelemetry-sdk==1.28.4
 opentelemetry-exporter-otlp-proto-grpc==1.28.4
-opentelemetry-api==1.28.4
+opentelemetry-api==1.45.1
