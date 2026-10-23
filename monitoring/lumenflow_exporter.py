@@ -1,3 +1,33 @@
+
+Polls the Stellar Horizon API for LumenFlow contract events, exposes
+Prometheus metrics, and emits OpenTelemetry (OTLP) trace spans so each
+poll cycle can be correlated with specific RPC calls and ledger delays.
+
+Environment Variables
+---------------------
+CONTRACT_ID         Soroban contract address to monitor (required)
+HORIZON_URL         Horizon API base URL (default: https://horizon-testnet.stellar.org)
+POLL_INTERVAL_SECS  Seconds between poll cycles (default: 10)
+METRICS_PORT        Port for the Prometheus /metrics endpoint (default: 8000)
+OTLP_ENDPOINT       OTLP gRPC endpoint for trace export
+                    (default: http://localhost:4317)
+OTEL_SERVICE_NAME   Service name reported in traces
+                    (default: lumenflow-exporter)
+CURSOR_FILE         Path used to persist the last-seen paging token
+                    (default: /tmp/lumenflow_cursor.txt)
+LOG_LEVEL           Python logging level (default: INFO)
+
+Dependencies (pip install)
+--------------------------
+    prometheus_client>=0.20
+    requests>=2.31
+    opentelemetry-api>=1.24
+    opentelemetry-sdk>=1.24
+    opentelemetry-exporter-otlp-proto-grpc>=1.24
+
+Usage
+-----
+    python lumenflow_exporter.py
 Polls the Stellar Horizon SSE event stream for LumenFlow contract events,
 exposes Prometheus metrics, and (optionally) emits OpenTelemetry distributed
 traces.
