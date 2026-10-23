@@ -1,0 +1,130 @@
+# .gitleaks.toml — Gitleaks secrets scanning configuration for LumenFlow
+#
+# Gitleaks is a SAST tool for detecting secrets (keys, tokens, passwords)
+# committed to git repos. This file configures custom rules specific to the
+# Stellar/Soroban ecosystem alongside built-in gitleaks detectors.
+#
+# Install: https://github.com/gitleaks/gitleaks#installing
+# Run:     gitleaks detect --source . --config .gitleaks.toml
+
+title = "LumenFlow Secrets Scanning"
+
+# ── Custom rules ──────────────────────────────────────────────────────────────
+
+[[rules]]
+id          = "stellar-secret-key"
+description = "Stellar secret key (seed phrase S...)"
+regex       = '''(?i)(?:^|[^a-z0-9])(S[A-Z2-7]{55})(?:[^A-Z2-7]|$)'''
+tags        = ["stellar", "key", "critical"]
+severity    = "CRITICAL"
+
+  [rules.allowlist]
+  description = "Allow placeholder Stellar secret keys used in docs and tests"
+  regexTarget = "line"
+  # Allow clearly fake placeholder values used in README and docs
+  regexes = [
+    # e.g. SXXXXX... or S...<secret>
+    '''SXXXXX''',
+    '''<[^>]*secret[^>]*>''',
+    '''<[^>]*key[^>]*>''',
+    '''<admin-secret>''',
+    '''<merchant-secret>''',
+    '''<payer-secret>''',
+    '''<your-local-secret-key>''',
+    # Test fixture keys that are obviously fake
+    '''SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA''',
+  ]
+
+[[rules]]
+id          = "stellar-secret-key-env"
+description = "Stellar secret key assigned to environment variable"
+regex       = '''(?i)(?:SOURCE_ACCOUNT|ADMIN_KEY|MERCHANT_KEY|PAYER_KEY|SECRET_KEY)\s*=\s*(S[A-Z2-7]{55})'''
+tags        = ["stellar", "env", "critical"]
+severity    = "CRITICAL"
+
+[[rules]]
+id          = "private-key-pem"
+description = "Private key PEM block"
+regex       = '''-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY(?: BLOCK)?-----'''
+tags        = ["private-key", "pem", "critical"]
+severity    = "CRITICAL"
+
+[[rules]]
+id          = "env-secret-assignment"
+description = "Suspicious plaintext secret assigned to common env var names"
+regex       = '''(?i)(?:password|passwd|secret|api_key|auth_token|access_token)\s*=\s*["\']?[A-Za-z0-9+/=_\-]{16,}["\']?'''
+tags        = ["env", "password", "high"]
+severity    = "HIGH"
+# Exclude common placeholder patterns
+  [rules.allowlist]
+  description = "Exclude placeholder values"
+  regexTarget = "line"
+  regexes = [
+    '''<[^>]+>''',
+    '''your[_-]''',
+    '''REPLACE_ME''',
+    '''TODO''',
+    '''example''',
+    '''test''',
+    '''dummy''',
+    '''placeholder''',
+    '''changeme''',
+  ]
+
+[[rules]]
+id          = "mnemonic-seed-phrase"
+description = "BIP-39 mnemonic seed phrase (12 or 24 words)"
+regex       = '''(?i)(?:mnemonic|seed\s+phrase|recovery\s+phrase)[^\n]{0,30}:\s*[a-z]+(?: [a-z]+){11,23}'''
+tags        = ["mnemonic", "seed", "critical"]
+severity    = "CRITICAL"
+
+[[rules]]
+id          = "github-pat"
+description = "GitHub personal access token (classic or fine-grained)"
+regex       = '''(?:ghp_[A-Za-z0-9_]{36,}|github_pat_[A-Za-z0-9_]{82,})'''
+tags        = ["github", "token", "high"]
+severity    = "HIGH"
+
+[[rules]]
+id          = "aws-access-key"
+description = "AWS access key ID"
+regex       = '''AKIA[0-9A-Z]{16}'''
+tags        = ["aws", "key", "high"]
+severity    = "HIGH"
+
+# ── Global allowlist ──────────────────────────────────────────────────────────
+# Paths and patterns that are known-safe and should never trigger alerts.
+
+[allowlist]
+description = "Global allowlist — known safe paths and patterns"
+
+# Files and paths that legitimately contain placeholder keys or test fixtures
+paths = [
+  # Example env files with obviously fake placeholder values
+  '''.env.example''',
+  # Test snapshot JSON files (contain no secrets)
+  '''contracts/lumenflow/test_snapshots/''',
+  # This config file itself
+  '''.gitleaks.toml''',
+  # Documentation files that use placeholder addresses
+  '''README.md''',
+  '''README.es.md''',
+  '''README.pt.md''',
+  '''docs/''',
+  # Scripts that reference placeholder values via shell variables
+  '''scripts/smoke_test.sh''',
+  '''scripts/seed.sh''',
+  '''scripts/deploy.sh''',
+  '''scripts/local_up.sh''',
+]
+
+# Global regex patterns that are never secrets regardless of context
+regexes = [
+  # Clearly fake 56-char placeholder (all 'A') — used in tests for zero-key
+  '''SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA''',
+  # Base64-encoded all-zeros bytes used in test fixtures (not real keys)
+  '''AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA''',
+]
+
+# Specific commits that were audited and contain no real secrets
+# commits = []

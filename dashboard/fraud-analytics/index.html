@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Fraud Analytics — LumenFlow</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <header class="site-header">
+    <div class="header-inner">
+      <h1 class="site-title">LumenFlow <span class="title-sub">Fraud Analytics</span></h1>
+      <nav class="header-nav" aria-label="Dashboard navigation">
+        <a href="../merchant-dashboard/index.html" class="nav-link">Merchant Refunds</a>
+        <a href="index.html" class="nav-link active" aria-current="page">Fraud Analytics</a>
+      </nav>
+      <div class="header-controls">
+        <span id="alert-badge" class="alert-badge" role="status" aria-live="polite" hidden>
+          <span class="alert-icon" aria-hidden="true">⚠</span>
+          <span id="alert-count">0</span> new alerts
+        </span>
+        <span id="last-refresh" class="last-refresh" aria-live="polite"></span>
+        <button id="settings-btn" class="btn btn-sm btn-outline" aria-label="Open alert threshold settings" aria-expanded="false" aria-controls="settings-panel">
+          ⚙ Settings
+        </button>
+        <button id="refresh-btn" class="btn btn-sm" aria-label="Refresh dashboard data">
+          ↻ Refresh
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Settings panel (slide-in) -->
+  <aside
+    id="settings-panel"
+    class="settings-panel"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="settings-panel-title"
+    hidden
+  >
+    <div class="settings-panel-inner">
+      <div class="settings-header">
+        <h2 id="settings-panel-title" class="settings-title">Alert Threshold Settings</h2>
+        <button id="settings-close" class="btn btn-sm btn-ghost" aria-label="Close settings panel">✕</button>
+      </div>
+
+      <form id="settings-form" class="settings-form" novalidate>
+        <div class="settings-group">
+          <label class="settings-label" for="setting-large-payment-threshold">
+            Large Payment Threshold (XLM)
+            <span class="settings-hint">Payments at or above this amount are flagged as large.</span>
+          </label>
+          <input
+            id="setting-large-payment-threshold"
+            class="settings-input"
+            type="number"
+            min="0.0000001"
+            step="0.0000001"
+            required
+            aria-describedby="setting-large-payment-threshold-error"
+          />
+          <span id="setting-large-payment-threshold-error" class="settings-error" role="alert" hidden></span>
+        </div>
+
+        <div class="settings-group">
+          <label class="settings-label" for="setting-velocity-limit">
+            Velocity Limit (payments per hour per merchant)
+            <span class="settings-hint">Merchants exceeding this rate trigger a velocity anomaly alert.</span>
+          </label>
+          <input
+            id="setting-velocity-limit"
+            class="settings-input"
+            type="number"
+            min="1"
+            step="1"
+            required
+            aria-describedby="setting-velocity-limit-error"
+          />
+          <span id="setting-velocity-limit-error" class="settings-error" role="alert" hidden></span>
+        </div>
+
+        <div class="settings-actions">
+          <button type="submit" class="btn btn-primary">Save &amp; Apply</button>
+          <button type="button" id="settings-reset" class="btn btn-ghost">Reset to defaults</button>
+        </div>
+
+        <div id="settings-saved-msg" class="settings-saved-msg" role="status" aria-live="polite" hidden>
+          ✓ Settings saved and applied.
+        </div>
+      </form>
+    </div>
+  </aside>
+
+  <main id="main-content" class="dashboard-main">
+    <!-- KPI summary row -->
+    <section class="kpi-row" aria-label="Key metrics">
+      <div class="kpi-card">
+        <div class="kpi-value" id="kpi-suspicious">—</div>
+        <div class="kpi-label">Suspicious Events (24h)</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-value" id="kpi-large-payments">—</div>
+        <div class="kpi-label">Large Payments (24h)</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-value" id="kpi-high-refund-merchants">—</div>
+        <div class="kpi-label">High-Refund-Rate Merchants</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-value" id="kpi-velocity-anomalies">—</div>
+        <div class="kpi-label">Velocity Anomalies (24h)</div>
+      </div>
+    </section>
+
+    <div class="panels-grid">
+      <!-- Recent suspicious_activity events -->
+      <section class="panel" aria-labelledby="panel-events-title">
+        <div class="panel-header">
+          <h2 id="panel-events-title" class="panel-title">Recent Suspicious Activity Events</h2>
+          <span class="panel-badge" id="events-count" aria-live="polite">0</span>
+        </div>
+        <div class="panel-body">
+          <div id="events-loading" class="loading-msg" role="status" aria-live="polite">Loading…</div>
+          <table id="events-table" class="data-table" aria-label="Suspicious activity events" hidden>
+            <thead>
+              <tr>
+                <th scope="col">Time</th>
+                <th scope="col">Merchant</th>
+                <th scope="col">Reason</th>
+                <th scope="col">Amount</th>
+              </tr>
+            </thead>
+            <tbody id="events-body"></tbody>
+          </table>
+          <div id="events-empty" class="empty-msg" hidden>No suspicious events in the last 24 hours.</div>
+        </div>
+      </section>
+
+      <!-- Top merchants by refund rate -->
+      <section class="panel" aria-labelledby="panel-refund-title">
+        <div class="panel-header">
+          <h2 id="panel-refund-title" class="panel-title">Top Merchants by Refund Rate</h2>
+        </div>
+        <div class="panel-body">
+          <div id="refund-loading" class="loading-msg" role="status" aria-live="polite">Loading…</div>
+          <table id="refund-table" class="data-table" aria-label="Top merchants by refund rate" hidden>
+            <thead>
+              <tr>
+                <th scope="col">Merchant</th>
+                <th scope="col">Payments</th>
+                <th scope="col">Refunds</th>
+                <th scope="col">Rate</th>
+              </tr>
+            </thead>
+            <tbody id="refund-body"></tbody>
+          </table>
+          <div id="refund-empty" class="empty-msg" hidden>No refund data available.</div>
+        </div>
+      </section>
+
+      <!-- Payments above large_payment_threshold in last 24h -->
+      <section class="panel panel-wide" aria-labelledby="panel-large-title">
+        <div class="panel-header">
+          <h2 id="panel-large-title" class="panel-title">Large Payments — Last 24 Hours</h2>
+          <span class="threshold-note" id="threshold-label"></span>
+        </div>
+        <div class="panel-body">
+          <div id="large-loading" class="loading-msg" role="status" aria-live="polite">Loading…</div>
+          <table id="large-table" class="data-table" aria-label="Large payments in last 24 hours" hidden>
+            <thead>
+              <tr>
+                <th scope="col">Time</th>
+                <th scope="col">Order ID</th>
+                <th scope="col">Merchant</th>
+                <th scope="col">Payer</th>
+                <th scope="col">Amount (XLM)</th>
+              </tr>
+            </thead>
+            <tbody id="large-body"></tbody>
+          </table>
+          <div id="large-empty" class="empty-msg" hidden>No large payments in the last 24 hours.</div>
+        </div>
+      </section>
+
+      <!-- Velocity anomalies -->
+      <section class="panel panel-wide" aria-labelledby="panel-velocity-title">
+        <div class="panel-header">
+          <h2 id="panel-velocity-title" class="panel-title">Velocity Anomalies</h2>
+          <span class="panel-subtitle">Merchants with unusually high payment frequency</span>
+        </div>
+        <div class="panel-body">
+          <div id="velocity-loading" class="loading-msg" role="status" aria-live="polite">Loading…</div>
+          <table id="velocity-table" class="data-table" aria-label="Velocity anomaly merchants" hidden>
+            <thead>
+              <tr>
+                <th scope="col">Merchant</th>
+                <th scope="col">Payments (1h)</th>
+                <th scope="col">Avg / Hour (7d)</th>
+                <th scope="col">Spike Factor</th>
+              </tr>
+            </thead>
+            <tbody id="velocity-body"></tbody>
+          </table>
+          <div id="velocity-empty" class="empty-msg" hidden>No velocity anomalies detected.</div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>
