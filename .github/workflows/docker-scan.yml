@@ -1,0 +1,117 @@
+# Container Image Scanning — resolves issue #1336
+#
+# Builds the Docker image and scans it with Trivy for OS and library CVEs
+# before it can be used in any deployment.
+#
+#   • Critical CVEs  → workflow fails (exit 1)
+#   • High CVEs      → warning annotation posted on the PR; workflow continues
+#   • Scan results   → uploaded as SARIF to the GitHub Security tab
+#
+# All third-party actions are pinned to full commit SHAs for supply-chain
+# security.  SHA comments identify the human-readable tag at pin time.
+
+name: Docker Image Scan
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'Dockerfile'
+      - 'docker-compose*.yml'
+      - '.github/workflows/docker-scan.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'Dockerfile'
+      - 'docker-compose*.yml'
+      - '.github/workflows/docker-scan.yml'
+
+permissions:
+  contents: read
+  security-events: write   # required to upload SARIF to the Security tab
+  pull-requests: write     # required to post warning annotations on PRs
+
+jobs:
+  docker-scan:
+    name: Build and scan Docker image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Checkout
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      # -----------------------------------------------------------------------
+      # 2. Set up Docker Buildx (required for cache-from/to and multi-platform)
+      # -----------------------------------------------------------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5730b38e59ac2e97b860e5bba2f4e3e4a28a6b1  # v3.10.0
+
+      # -----------------------------------------------------------------------
+      # 3. Build the Docker image
+      #    Tag it with a deterministic local name so Trivy can address it.
+      # -----------------------------------------------------------------------
+      - name: Build Docker image
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1  # v6.16.0
+        with:
+          context: .
+          push: false
+          load: true
+          tags: lumenflow:scan-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # -----------------------------------------------------------------------
+      # 4. Trivy scan — SARIF output (uploaded to Security tab)
+      #    Severity filter: CRITICAL,HIGH for SARIF (informational record).
+      # -----------------------------------------------------------------------
+      - name: Scan image with Trivy (SARIF)
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8  # v0.30.0
+        with:
+          image-ref: lumenflow:scan-${{ github.sha }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '0'   # do not fail here; failure is handled separately below
+          ignore-unfixed: false
+
+      # -----------------------------------------------------------------------
+      # 5. Upload SARIF to GitHub Security tab
+      # -----------------------------------------------------------------------
+      - name: Upload Trivy SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@28deaeda66b76a05916b6923827895f2b14ab96a  # v3.28.16
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-container
+
+      # -----------------------------------------------------------------------
+      # 6. Trivy scan — table output for Critical CVEs (fails the workflow)
+      # -----------------------------------------------------------------------
+      - name: Fail on Critical CVEs
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8  # v0.30.0
+        with:
+          image-ref: lumenflow:scan-${{ github.sha }}
+          format: table
+          severity: CRITICAL
+          exit-code: '1'          # hard fail on any Critical finding
+          ignore-unfixed: false
+
+      # -----------------------------------------------------------------------
+      # 7. Trivy scan — High CVEs generate a PR warning annotation only
+      #    (continue-on-error keeps the step non-blocking)
+      # -----------------------------------------------------------------------
+      - name: Warn on High CVEs
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8  # v0.30.0
+        continue-on-error: true
+        with:
+          image-ref: lumenflow:scan-${{ github.sha }}
+          format: table
+          severity: HIGH
+          exit-code: '1'          # non-zero so GitHub shows it as a warning annotation
+          ignore-unfixed: false
