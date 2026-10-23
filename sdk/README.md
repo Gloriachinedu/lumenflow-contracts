@@ -901,6 +901,40 @@ const { signature, publicKey } = signPaymentPayload(
 
 ---
 
+### Utility: `verifyWebhookSignature`
+
+Verify the HMAC-SHA256 signature of an incoming webhook payload using constant-time
+comparison to prevent timing attacks.
+
+```typescript
+import { verifyWebhookSignature } from '@lumenflow/sdk';
+
+// In your webhook handler (e.g. Express):
+app.post('/webhooks/lumenflow', (req, res) => {
+  const rawBody = req.rawBody; // Buffer, not parsed JSON
+  const signature = req.headers['x-lumenflow-signature'] as string;
+  const secret = process.env.LUMENFLOW_WEBHOOK_SECRET!;
+
+  const valid = verifyWebhookSignature(rawBody, signature, secret);
+  if (!valid) {
+    return res.status(401).send('Invalid signature');
+  }
+
+  // Process the verified event...
+});
+```
+
+**Throws** on malformed inputs (null payload, empty signature, or empty secret).
+Returns `true` for valid signatures, `false` for invalid.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `payload` | `Buffer \| string` | Raw webhook body |
+| `signature` | `string` | Hex-encoded HMAC-SHA256 digest from the webhook header |
+| `secret` | `string` | Shared secret used to compute the expected HMAC |
+
+---
+
 ## Types
 
 ### `Merchant`
