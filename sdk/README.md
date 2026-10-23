@@ -8,24 +8,163 @@ TypeScript SDK for the LumenFlow Soroban smart contract on Stellar.
 npm install @lumenflow/sdk
 ```
 
+## Quality & Testing
+
+### Differential Testing
+
+The SDK is **differentially tested** against the raw `@stellar/stellar-sdk` library on every PR and weekly on Mondays. Differential tests call each SDK method _and_ the equivalent direct `stellar-sdk` invocation, then compare the results byte-for-byte. Any discrepancy — wrong XDR encoding, wrong field name, off-by-one in serialization — causes the test to fail with a descriptive diff showing exactly which bytes differ.
+
+The differential test suite lives in `sdk/src/tests/differential.test.ts` and is tagged `@differential`. Run it locally:
+
+```bash
+cd sdk
+npm test -- --testPathPattern="differential" --verbose
+```
+
+The CI workflow `.github/workflows/differential-tests.yml` runs the full suite weekly (Monday 08:00 UTC) and on every pull request. Test results and coverage are uploaded as build artifacts.
+
+---
+
 ## Quick Start
+
+Get from zero to your first successful payment in under 10 minutes using the testnet.
+
+### Step 1: Install
+
+```bash
+npm install @lumenflow/sdk @stellar/stellar-sdk
+```
+
+> **Need testnet XLM?** Fund your account via the [Stellar Friendbot](https://friendbot.stellar.org/?addr=YOUR_ADDRESS).
+
+### Step 2: Initialize the Client
+
+```typescript
+// quickstart.ts
+import { LumenFlowClient } from '@lumenflow/sdk';
+import { Keypair } from '@stellar/stellar-sdk';
+
+// Replace with your deployed testnet contract ID
+const CONTRACT_ID = 'CC...'; // e.g. from scripts/deploy.sh output
+
+const client = new LumenFlowClient({
+  contractId: CONTRACT_ID,
+  rpcUrl: 'https://soroban-testnet.stellar.org',
+  networkPassphrase: 'Test SDF Network ; September 2015',
+});
+
+// Set the signer — used to authorize all state-changing contract calls
+const adminKeypair = Keypair.fromSecret('S...'); // your admin account secret
+client.setSigner(async (tx) => {
+  tx.sign(adminKeypair);
+  return tx;
+});
+```
+
+### Step 3: Register a Merchant
 
 ```typescript
 import { LumenFlowClient, MerchantCategory } from '@lumenflow/sdk';
 import { Keypair } from '@stellar/stellar-sdk';
 
-const client = new LumenFlowClient({
-  contractId: 'CC...',
-  rpcUrl: 'https://soroban-testnet.stellar.org',
-  networkPassphrase: 'Test SDF Network ; September 2015',
-});
+const merchantKeypair = Keypair.fromSecret('S...'); // merchant account secret
 
-const keypair = Keypair.fromSecret('S...');
+// Switch signer to merchant account for registration
 client.setSigner(async (tx) => {
-  tx.sign(keypair);
+  tx.sign(merchantKeypair);
   return tx;
 });
+
+// Check if already registered
+const isRegistered = await client.isRegistered(merchantKeypair.publicKey());
+
+if (!isRegistered) {
+  await client.registerMerchant(
+    merchantKeypair.publicKey(),
+    'My Test Store',
+    'Selling digital goods on Stellar',
+    'support@myteststore.example.com',
+    MerchantCategory.Retail,
+  );
+  console.log('Merchant registered:', merchantKeypair.publicKey());
+}
 ```
+
+### Step 4: Submit a Payment
+
+```typescript
+import { LumenFlowClient } from '@lumenflow/sdk';
+import { Keypair } from '@stellar/stellar-sdk';
+import { signPaymentPayload } from '@lumenflow/sdk/signPaymentPayload';
+
+const payerKeypair = Keypair.fromSecret('S...'); // payer account secret
+
+// Switch signer to payer for payment
+client.setSigner(async (tx) => {
+  tx.sign(payerKeypair);
+  return tx;
+});
+
+const orderId = `ORDER_${Date.now()}`;
+const amount = 1000n; // in token's smallest unit (stroops for XLM)
+
+// The contract requires an ed25519 signature over the payment payload.
+// Use signPaymentPayload to build and sign the canonical payload.
+const { signature, publicKey } = await signPaymentPayload({
+  networkPassphrase: 'Test SDF Network ; September 2015',
+  contractId: CONTRACT_ID,
+  merchantAddress: merchantKeypair.publicKey(),
+  orderId,
+  amount,
+  merchantSecretKey: merchantKeypair.rawSecretKey(), // merchant signs the payment
+});
+
+await client.processPaymentWithSignature(
+  payerKeypair.publicKey(),
+  orderId,
+  merchantKeypair.publicKey(),
+  TOKEN_ADDRESS, // e.g. testnet USDC SAC address
+  amount,
+  'Quickstart test payment',
+  null, // tags
+  signature,
+  publicKey,
+);
+
+console.log('Payment submitted! Order ID:', orderId);
+```
+
+### Step 5: Check Payment History
+
+```typescript
+// Retrieve payment history for the merchant
+const history = await client.getMerchantPaymentHistory(
+  merchantKeypair.publicKey(),
+  null,  // cursor (null = start from beginning)
+  10,    // limit
+  null,  // filter
+  'Date',
+  'Descending',
+);
+
+console.log(`Found ${history.payments.length} payment(s):`);
+for (const payment of history.payments) {
+  console.log(`  ${payment.order_id}: ${payment.amount} — ${payment.status}`);
+}
+
+// Look up the specific payment you just submitted
+const receipt = await client.getPaymentSummary(orderId);
+console.log('Receipt:', receipt);
+```
+
+### Full end-to-end example
+
+A complete runnable script combining all steps above is available in the
+[smoke test](../scripts/smoke_test.sh). For TypeScript examples with error
+handling and retry logic, see [`sdk/tests/integration.test.ts`](tests/integration.test.ts).
+
+For batch payments (up to 10 items in one transaction), see
+[`docs/batch-payments.md`](../docs/batch-payments.md).
 
 ---
 
@@ -103,6 +242,32 @@ await client.setMaxRefundsPerOrder(adminAddress, 5);
 
 ---
 
+### MerchantCategory
+
+`MerchantCategory` is a tagged union type that mirrors the Rust contract's enum.
+Simple variants are plain string literals; the `Custom` variant carries an
+arbitrary label (1–32 characters).
+
+```typescript
+// Simple variants — use the string literal directly or the namespace helper
+const category: MerchantCategory = "Retail";        // plain string
+const category: MerchantCategory = MerchantCategory.Food; // namespace helper
+
+// Custom variant — use an object with a Custom key
+const category: MerchantCategory = { Custom: "Handmade" };
+
+// Or use the namespace helper for Custom
+const category: MerchantCategory = MerchantCategory.custom("Handmade");
+```
+
+Available simple variants: `"Retail"` | `"Food"` | `"Services"` | `"Digital"` | `"Other"`
+
+The `Custom` label must be non-empty and at most 32 characters. Passing an empty
+string or a string longer than 32 characters throws synchronously before any RPC
+call is made.
+
+---
+
 ### Merchant Management
 
 #### `registerMerchant(merchantAddress, name, description, contactInfo, category): Promise<void>`
@@ -115,15 +280,57 @@ Register a new merchant. The caller must be the merchant address.
 | `name` | `string` | Display name |
 | `description` | `string` | Business description |
 | `contactInfo` | `string` | Contact email or URL |
-| `category` | `MerchantCategory` | One of `Retail`, `Food`, `Services`, `Digital`, `Other` |
+| `category` | `MerchantCategory` | A simple variant string or `{ Custom: string }` for a custom category |
 
 ```typescript
+// Register with a standard category
 await client.registerMerchant(
   keypair.publicKey(),
   'My Store',
   'Best prices in town',
   'support@mystore.com',
   MerchantCategory.Retail,
+);
+
+// Register with a custom category
+await client.registerMerchant(
+  keypair.publicKey(),
+  'Artisan Goods',
+  'Handcrafted items from local artisans',
+  'hello@artisan.com',
+  { Custom: 'Handmade' },
+);
+```
+
+#### `updateMerchant(merchantAddress, name, description, contactInfo, category): Promise<void>`
+
+Update an existing merchant profile. The caller must be the merchant address.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `merchantAddress` | `string` | Merchant's Stellar address |
+| `name` | `string` | Updated display name |
+| `description` | `string` | Updated business description |
+| `contactInfo` | `string` | Updated contact email or URL |
+| `category` | `MerchantCategory` | Updated category — any simple variant or `{ Custom: string }` |
+
+```typescript
+// Update to a custom category
+await client.updateMerchant(
+  keypair.publicKey(),
+  'Artisan Goods',
+  'Handcrafted & vintage items',
+  'hello@artisan.com',
+  { Custom: 'Handmade' },
+);
+
+// Update back to a standard category
+await client.updateMerchant(
+  keypair.publicKey(),
+  'Artisan Goods',
+  'Online marketplace',
+  'hello@artisan.com',
+  MerchantCategory.Digital,
 );
 ```
 
@@ -306,6 +513,8 @@ await client.batchPayment(payerAddress, [
 ]);
 ```
 
+> **Error recovery:** If a batch fails, all items are atomically reverted and can be safely retried with the same `order_id` values. For guidance on identifying the offending item, retry logic, and splitting batches for partial-success semantics, see [docs/batch-payments.md — Error Recovery Patterns](../docs/batch-payments.md#16-error-recovery-patterns).
+
 #### `getPaymentById(caller: string, orderId: string): Promise<PaymentOrder>`
 
 Retrieve full payment details. Caller must be the payer, merchant, or admin.
@@ -319,7 +528,7 @@ console.log(payment.status, payment.amount, payment.refundedAmount);
 
 #### `getPaymentSummary(orderId: string): Promise<PaymentSummary>`
 
-Retrieve a public summary of a payment (no auth required).
+Retrieve a public summary of a payment (no auth required). This read-only query works without configuring a signer.
 
 ```typescript
 const summary = await client.getPaymentSummary('ORDER-001');
@@ -586,6 +795,47 @@ Fulfil a payment request.
 await client.payPaymentRequest(payerAddress, 'REQ-001');
 ```
 
+#### `cancelPaymentRequest(caller: string, requestId: string): Promise<void>`
+
+Cancel an unexpired payment request before it has been paid. Only the merchant who created the request may call this.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `caller` | `string` | Address of the merchant cancelling the request |
+| `requestId` | `string` | Unique ID of the payment request to cancel |
+
+**Caller validation:** If `walletAddress` is configured on the client (via `ClientConfig.walletAddress` or `client.setWalletAddress()`), the supplied `caller` must match exactly. A mismatch throws `LumenFlowError` with code `Unauthorized` *before* any RPC call is made, saving a round-trip.
+
+```typescript
+// Option 1 — pass walletAddress at construction time
+const client = new LumenFlowClient({
+  contractId,
+  rpcUrl,
+  networkPassphrase: Networks.TESTNET,
+  walletAddress: merchantKeypair.publicKey(), // enables pre-flight check
+});
+client.setSigner(tx => { tx.sign(merchantKeypair); return tx; });
+
+await client.cancelPaymentRequest(merchantKeypair.publicKey(), 'REQ-001');
+
+// Option 2 — set wallet address after construction (e.g. after wallet connects)
+client.setWalletAddress(merchantAddress);
+await client.cancelPaymentRequest(merchantAddress, 'REQ-002');
+```
+
+**Error thrown on caller mismatch:**
+
+```typescript
+try {
+  // walletAddress = 'GCEZ…', caller = 'GBZX…'
+  await client.cancelPaymentRequest(differentAddress, 'REQ-003');
+} catch (err) {
+  if (err instanceof LumenFlowError && err.code === PaymentErrorCode.Unauthorized) {
+    console.error('Caller does not match the connected wallet');
+  }
+}
+```
+
 ---
 
 ### Subscriptions
@@ -803,6 +1053,40 @@ interface GlobalStats {
 
 ---
 
+## Installation
+
+```bash
+npm install @lumenflow/sdk
+```
+
+## Development
+
+To build the SDK from source:
+
+```bash
+cd sdk
+npm install
+npm run build
+npm test
+```
+
+## Version and RPC diagnostics
+
+The installed SDK version is available as `VERSION` for diagnostics and User-Agent metadata:
+
+```typescript
+import { LumenFlowClient, VERSION } from '@lumenflow/sdk';
+
+console.log(VERSION);
+const client = new LumenFlowClient({
+  contractId: 'C...',
+  rpcUrl: 'https://rpc.example',
+  networkPassphrase: 'Test SDF Network ; September 2015',
+});
+```
+
+RPC calls made by `LumenFlowClient` include the same value in the `X-SDK-Version` header.
+
 ## Error Handling
 
 Contract errors surface as `LumenFlowError` with a typed `code` property:
@@ -830,7 +1114,121 @@ try {
 
 See [`src/errors.ts`](src/errors.ts) for the full list of error codes.
 
+### Error shape and serialization
+
+Every `LumenFlowError` exposes:
+
+| Member | Description |
+|---|---|
+| `code` | Numeric `PaymentErrorCode`. Unknown codes are preserved as-is. |
+| `codeName` | Enum name (e.g. `"InvalidSignature"`), or `"Unknown"`. |
+| `message` | Catalogue message for the code, or an "unknown error" fallback. |
+| `messageKey` | Localization key (e.g. `"error.invalidsignature"`, `"error.unknown"`). |
+| `details` | Optional extra context (the raw RPC message, an object, etc.). |
+| `toJSON()` | Plain, JSON-safe object — used automatically by `JSON.stringify`. |
+
+Because `LumenFlowError` implements `toJSON()`, it survives being logged or sent
+across a process / network boundary (a bare `Error` would `JSON.stringify` to
+`{}`):
+
+```typescript
+JSON.stringify(err);
+// {"name":"LumenFlowError","code":23,"codeName":"InvalidSignature",
+//  "message":"The provided signature is invalid or does not match the public key.",
+//  "messageKey":"error.invalidsignature"}
+```
+
+Raw contract / RPC failures are normalized to a `LumenFlowError` internally
+(`normalizeContractError`): a recognised numeric `code` maps to its
+`PaymentErrorCode`; anything else becomes `PaymentErrorCode.InvalidInput` with the
+original text kept in `details`.
+
 ---
+
+## Rate Limiting
+
+The LumenFlow SDK communicates with Stellar Horizon and Soroban RPC endpoints. Both are subject to rate limits. The SDF public Horizon instance allows **3 600 requests per hour per IP** in standard REST mode, and up to **100 events/second** on Server-Sent Events streaming connections.
+
+When a limit is exceeded Horizon responds with **HTTP 429 Too Many Requests** and a `Retry-After` header indicating how many seconds to wait before retrying.
+
+### Built-in retry logic
+
+The SDK includes a production-ready exponential backoff helper in [`src/retry.ts`](src/retry.ts) that is applied automatically to all RPC read operations performed through `LumenFlowClient`. The default policy retries up to **3 attempts** with a base delay of **200 ms**, capped at **5 000 ms**, and **20% jitter** to avoid thundering-herd behaviour.
+
+### HTTP 429 — Rate Limit Handling
+
+When a **429 Too Many Requests** response is received the retry helper:
+
+1. **Reads the `Retry-After` header** — if present and valid (a positive integer number of seconds), the SDK waits exactly that duration before the next attempt.
+2. **Falls back to exponential back-off** — if `Retry-After` is absent, zero, or non-numeric, standard exponential back-off with jitter is used instead.
+3. **Respects the configured retry limit** — regardless of the `Retry-After` value, the retry count is never exceeded.
+
+```typescript
+import { withRetry, getRetryAfterMs } from '@lumenflow/sdk/retry';
+
+// The helper automatically handles Retry-After:
+const result = await withRetry(
+  () => sorobanRpcCall(),
+  { maxRetries: 3, baseDelayMs: 200, maxDelayMs: 5000 }
+);
+
+// You can also inspect the Retry-After value yourself:
+const delayMs = getRetryAfterMs(error); // returns null if not a 429 or no header
+```
+
+The `RetryExhaustedError` class is thrown when all retry attempts fail, and includes `retryCount` and `lastError` properties for observability:
+
+```typescript
+import { withRetry, RetryExhaustedError } from '@lumenflow/sdk/retry';
+
+try {
+  await withRetry(() => rpcCall(), { maxRetries: 2 });
+} catch (err) {
+  if (err instanceof RetryExhaustedError) {
+    console.error(`Failed after ${err.retryCount} retries:`, err.lastError);
+  }
+}
+```
+
+### Contract event validation
+
+`fetchContractEvents` validates every event against the SDK event catalog before returning it. Malformed events are discarded and logged with `console.warn` by default. Set `strict: true` in the poller options to throw an `EventCompatError` instead:
+
+```ts
+const events = await fetchContractEvents({
+  rpcUrl,
+  contractId,
+  strict: true,
+});
+```
+
+The same validation is applied before `pollContractEvents` invokes its callback, so invalid RPC payloads never reach application code.
+
+You can override the retry policy per call:
+
+```typescript
+const merchant = await client.getMerchant(address, {
+  maxAttempts: 5,
+  baseDelayMs: 500,
+  maxDelayMs: 15_000,
+  jitter: 0.3,
+});
+```
+
+The `withRetry` helper can also be used directly for custom Horizon queries:
+
+```typescript
+import { withRetry } from '@lumenflow/sdk/retry';
+
+const stats = await withRetry(
+  () => fetch('https://horizon-testnet.stellar.org/fee_stats').then(r => r.json()),
+  { maxAttempts: 4, baseDelayMs: 300 }
+);
+```
+
+Errors that are automatically retried: `TypeError` (network failure), HTTP 408, 429, 500, 502, 503, 504. `LumenFlowError` contract errors are **not** retried and propagate immediately.
+
+For full documentation on Horizon rate limits, `Retry-After` header handling, and a standalone exponential backoff implementation, see **[docs/api-rate-limits.md](../docs/api-rate-limits.md)**.
 
 ## Development
 
@@ -841,3 +1239,348 @@ npm run build
 # Test
 npm test
 ```
+
+---
+
+## Real-Time Payment Notifications
+
+`subscribeToPayments` opens a Horizon [Server-Sent Events](https://developers.stellar.org/docs/data/horizon/api-reference/resources/operations/object/payment) (SSE) stream for a merchant address and delivers strongly-typed `PaymentEvent` objects to a callback in real time.
+
+- Lower latency than HTTP polling
+- Automatic reconnection after 30 seconds of inactivity
+- Cleanly closable via `unsubscribe()`
+
+### Basic usage
+
+```typescript
+import { subscribeToPayments } from '@lumenflow/sdk';
+
+const subscription = subscribeToPayments(
+  'GABC...merchantAddress',           // Stellar merchant account
+  (event) => {
+    console.log('Payment received!');
+    console.log('  From:    ', event.payer);
+    console.log('  Amount:  ', event.amount.toString(), 'stroops');
+    console.log('  Token:   ', event.token);
+    console.log('  Order ID:', event.order_id);
+  },
+  {
+    horizonUrl: 'https://horizon-testnet.stellar.org', // default: testnet
+  },
+);
+
+// When you no longer need the subscription:
+subscription.unsubscribe();
+```
+
+### Options
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `horizonUrl` | `string` | testnet URL | Horizon base URL |
+| `inactivityTimeoutMs` | `number` | `30_000` | Reconnect after N ms of silence |
+| `eventSourceFactory` | `EventSourceFactory` | Global `EventSource` | Override in tests or custom environments |
+
+### PaymentEvent shape
+
+```typescript
+interface PaymentEvent {
+  type: string;             // e.g. "payment"
+  order_id: string;         // Horizon operation ID
+  merchant_address: string; // "to" address
+  payer: string;            // "from" address
+  token: string;            // asset code or "native"
+  amount: bigint;           // in stroops (1 XLM = 10_000_000 stroops)
+  timestamp: bigint;        // Unix seconds
+  raw: Record<string, unknown>; // full Horizon payload
+}
+```
+
+### Testnet vs mainnet
+
+```typescript
+// Testnet
+const sub = subscribeToPayments(merchant, callback, {
+  horizonUrl: 'https://horizon-testnet.stellar.org',
+});
+
+// Mainnet
+const sub = subscribeToPayments(merchant, callback, {
+  horizonUrl: 'https://horizon.stellar.org',
+});
+```
+
+## Address Validation
+
+For frontend applications, the SDK provides utilities to validate Stellar addresses:
+
+```typescript
+import { isValidStellarAddress, isValidStellarContractId } from '@lumenflow/sdk';
+
+// Validate a Stellar public key (G-address)
+const isValid = isValidStellarAddress('GD6WUVRX7XJ6E5Q5K2L2K3K4K5K6K7K8K9K0K1K2K3K4K5K6K7K8K9K0K1K2');
+console.log(isValid); // true
+
+// Validate a Stellar contract ID (C-address)
+const isContractValid = isValidStellarContractId('CD6WUVRX7XJ6E5Q5K2L2K3K4K5K6K7K8K9K0K1K2K3K4K5K6K7K8K9K0K1K2');
+console.log(isContractValid); // true
+```
+
+### Validation Rules
+
+- **Stellar Public Keys (G-address)**: Must start with 'G', be exactly 56 characters, and use valid base32 encoding
+- **Stellar Contract IDs (C-address)**: Must start with 'C', be exactly 56 characters, and use valid base32 encoding
+
+**Note**: The validation functions perform lightweight format checking. For production use with full checksum validation, consider using `@stellar/stellar-sdk`'s `StrKey` utilities:
+
+```typescript
+import { StrKey } from '@stellar/stellar-sdk';
+
+try {
+  StrKey.decodeEd25519PublicKey(address);
+  // Valid address
+} catch {
+  // Invalid address
+}
+```
+
+## Retry Configuration
+
+The SDK provides automatic retry logic for transient HTTP errors (429, 503, 504, network failures) when using the `Client` class.
+
+### Default Retry Configuration
+
+```typescript
+import { DEFAULT_RETRY_CONFIG } from '@lumenflow/sdk';
+
+console.log(DEFAULT_RETRY_CONFIG);
+// {
+//   maxAttempts: 5,
+//   initialDelayMs: 100,
+//   maxDelayMs: 10000,
+//   backoffMultiplier: 2,
+//   jitterFactor: 0.1,
+//   retryableStatusCodes: [429, 503, 504],
+// }
+```
+
+### Using the Client with Custom Retry Config
+
+```typescript
+import { Client, ClientConfig } from '@lumenflow/sdk';
+
+const config: ClientConfig = {
+  rpcUrl: 'https://soroban-testnet.stellar.org',
+  contractId: 'your-contract-id',
+  retryConfig: {
+    maxAttempts: 10,           // Increase max attempts
+    initialDelayMs: 200,       // Start with longer delay
+    maxDelayMs: 30000,          // Allow longer max delay
+  },
+};
+
+const client = new Client(config);
+```
+
+### Retry Behavior
+
+- **Transient errors** (429, 503, 504, network failures) are automatically retried with exponential backoff and jitter
+- **Business logic errors** (`LumenFlowError`) are not retried and propagate immediately
+- **Non-retryable HTTP errors** (400, 401, 403, etc.) are not retried
+
+### Manual Retry
+
+You can also use the `withRetry` utility directly:
+
+```typescript
+import { withRetry, RetryConfig } from '@lumenflow/sdk';
+
+const config: Partial<RetryConfig> = {
+  maxAttempts: 3,
+  initialDelayMs: 100,
+};
+
+await withRetry(async () => {
+  // Your async operation here
+  await someApiCall();
+}, config);
+```
+
+---
+
+## Browser and Environment Compatibility
+
+### Supported Browsers
+
+The `@lumenflow/sdk` uses the [WebCrypto API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Crypto_API) and standard ES2020 features. The following browser versions are officially supported and tested in CI:
+
+| Browser | Minimum Version | Notes |
+|---------|----------------|-------|
+| Chrome  | 90             | Full support |
+| Firefox | 89             | Full support |
+| Safari  | 15             | Full support (WebCrypto available since 15) |
+| Edge    | 90             | Full support (Chromium-based) |
+
+> **Note:** Safari versions below 15 have incomplete WebCrypto support and are **not** supported. Users on older Safari should upgrade their browser.
+
+### Supported Node.js Versions
+
+| Node.js | Support |
+|---------|---------|
+| 18.x (LTS) | ✅ Minimum supported version |
+| 20.x (LTS) | ✅ Fully supported |
+| 22.x (LTS) | ✅ Fully supported |
+
+Node.js 16.x and below are **not** supported.
+
+### Required Polyfills
+
+In environments that do not natively support the following APIs, you must include polyfills before importing the SDK:
+
+| API | Required In | Recommended Polyfill |
+|-----|------------|----------------------|
+| `globalThis` | IE, older Safari | [globalthis](https://www.npmjs.com/package/globalthis) |
+| `TextEncoder` / `TextDecoder` | Node.js < 18, IE | [text-encoding](https://www.npmjs.com/package/text-encoding) |
+| `WebCrypto` (`crypto.subtle`) | Node.js < 15, Safari < 15 | Use Node.js 18+ built-in or a server-side crypto library |
+
+Example — polyfilling `TextEncoder` in a legacy environment:
+
+```typescript
+import 'text-encoding'; // must come before SDK import
+import { LumenFlowClient } from '@lumenflow/sdk';
+```
+
+### Unsupported Environment Detection
+
+The SDK checks for required runtime APIs at initialisation time. If a required API is missing, it throws a descriptive error immediately rather than failing silently at call time:
+
+```
+LumenFlowInitError: The WebCrypto API (crypto.subtle) is not available in this
+environment. Upgrade to a supported browser (Chrome 90+, Firefox 89+, Safari 15+,
+Edge 90+) or Node.js 18+.
+```
+
+This ensures integrators catch configuration problems early in development rather than encountering cryptic errors at runtime.
+
+### CI Browser Matrix
+
+Browser compatibility is continuously validated by the `.github/workflows/compat-matrix.yml` workflow, which runs on every pull request and weekly on Mondays. The matrix tests the SDK against all documented Node.js versions and documented minimum browser targets via Playwright.
+
+---
+
+## Refund Recovery
+
+When a client-driven refund is interrupted mid-flow (network loss, process crash, etc.) the on-chain refund can be left in an intermediate state. The `RefundRecovery` utilities let merchants identify and re-attempt those stuck refunds.
+
+### Quick start
+
+```typescript
+import {
+  recoverRefund,
+  RefundRecoveryError,
+  RetryExhaustedError,
+  type RefundOps,
+} from '@lumenflow/sdk';
+
+// Wire up contract operations via your LumenFlowClient.
+const ops: RefundOps = {
+  getRefund:      (id)    => client.getRefund(id),
+  initiateRefund: (p)     => client.initiateRefund(p),
+  approveRefund:  (c, id) => client.approveRefund(c, id),
+  executeRefund:  (id)    => client.executeRefund(id),
+};
+
+const result = await recoverRefund(ops, {
+  refundId: 'REFUND_001',
+  orderId:  'ORDER_001',
+  amount:   BigInt(5_000_000),
+  reason:   'duplicate charge',
+  caller:   merchantKeypair.publicKey(),
+});
+
+console.log(result.finalStatus);   // 'Completed'
+console.log(result.stepsApplied);  // e.g. ['approve', 'execute']
+```
+
+### Finding stuck pending refunds
+
+Use `findStuckRefunds` to discover refunds stuck in `Pending` state beyond a configurable age threshold. The helper returns only refunds that are older than `thresholdMs` milliseconds and still in `Pending` status.
+
+```typescript
+import { findStuckRefunds } from '@lumenflow/sdk';
+
+const stuck = await findStuckRefunds({
+  // Fetch a page of refunds from your data source.
+  listRefunds: (cursor) => client.getRefunds({ cursor, limit: 50 }),
+  // Treat refunds older than 1 hour as stuck.
+  thresholdMs: 60 * 60 * 1000,
+});
+
+for (const refund of stuck) {
+  console.log(`Stuck refund: ${refund.id} (created ${refund.createdAt})`);
+}
+```
+
+### Retrying a stuck refund
+
+Once you have identified stuck refunds, pass each one to `recoverRefund`:
+
+```typescript
+import { recoverRefund, RefundRecoveryError, RetryExhaustedError } from '@lumenflow/sdk';
+
+for (const refund of stuck) {
+  try {
+    const result = await recoverRefund(ops, {
+      refundId: refund.id,
+      orderId:  refund.orderId,
+      amount:   refund.amount,
+      reason:   refund.reason,
+      caller:   merchantKeypair.publicKey(),
+      // Drive all the way through to Completed.
+      targetPhase: 'executed',
+      // Retry each step up to 3 times on transient errors.
+      maxRetriesPerStep: 3,
+      backoff: { baseDelayMs: 1000, maxDelayMs: 30_000, jitter: true },
+    });
+    console.log(`Recovered ${refund.id}: ${result.finalStatus}`);
+  } catch (err) {
+    if (err instanceof RefundRecoveryError) {
+      // Rejected or Disputed — requires human review.
+      console.error(`Manual action needed for ${refund.id}: ${err.message}`);
+    } else if (err instanceof RetryExhaustedError) {
+      // All retries exhausted — log and alert.
+      console.error(`Retry limit hit for step '${err.step}' on ${refund.id}`);
+    } else {
+      throw err;
+    }
+  }
+}
+```
+
+### Partial recovery
+
+To drive the refund only to a specific phase (e.g. `approved` but not yet `executed`), set `targetPhase`:
+
+```typescript
+await recoverRefund(ops, {
+  refundId: 'REFUND_001',
+  orderId:  'ORDER_001',
+  amount:   BigInt(5_000_000),
+  reason:   'duplicate charge',
+  caller:   merchantKeypair.publicKey(),
+  targetPhase: 'approved', // stop after approval, before execution
+});
+```
+
+### API reference
+
+| Export | Description |
+|--------|-------------|
+| `recoverRefund(ops, params)` | Reconciles and resumes an interrupted refund. Safe to call repeatedly and on already-completed refunds. |
+| `findStuckRefunds(options)` | Returns refunds in `Pending` state older than the configured threshold. |
+| `RefundRecoveryError` | Thrown when the refund is `Rejected`/`Disputed` or cannot converge. |
+| `RetryExhaustedError` | Thrown when all per-step retry attempts are exhausted. |
+| `computeBackoffDelay` | Utility for computing exponential backoff delay with optional jitter. |
+| `defaultIsTransient` | Default heuristic: `LumenFlowError` is permanent; network/timeout errors are transient. |
+
+See `sdk/src/refundRecovery.ts` for full type definitions and `sdk/src/tests/refundRecovery.test.ts` for usage examples.
