@@ -1,118 +1,49 @@
 /**
- * LumenFlow Frontend — Payment Amount Validation
- *
- * Validates that a payment amount is a positive integer before
- * the transaction is submitted to the Soroban contract.
- *
- * Rules (matching contract-side constraints):
- *  - Must be a finite number
- *  - Must be greater than zero
- *  - Must be a whole number (no decimals)
- *
- * Usage:
- *   import { validatePaymentAmount, attachAmountValidation } from './validation.js';
- *
- *   // Programmatic check
- *   const result = validatePaymentAmount(value);
- *   if (!result.valid) showError(result.message);
- *
- *   // Auto-wire blur + submit validation to an <input> element
- *   attachAmountValidation(inputEl, errorEl, formEl);
+ * validation.js
+ * Shared input validators for LumenFlow frontend forms.
+ * Every validator returns an error message string, or '' when the value is
+ * valid, so pages can render the result directly as an inline field error.
  */
 
-// ── Core validator ────────────────────────────────────────────────────────────
+export const ORDER_ID_MAX_LENGTH = 64;
 
-/**
- * Validates a payment amount value.
- *
- * @param {unknown} value - The raw value from the input field (string or number).
- * @returns {{ valid: boolean, message: string }}
- */
-export function validatePaymentAmount(value) {
-  // Empty / missing
-  if (value === '' || value === null || value === undefined) {
-    return { valid: false, message: 'Amount is required.' };
-  }
+// StrKey format check: 1-char type prefix + 55 base32 chars (A-Z, 2-7).
+// G = account/public key, C = contract. The checksum is verified by the
+// SDK/contract; the frontend only enforces shape and length.
+const STELLAR_KEY_BODY = /^[A-Z2-7]{55}$/;
 
-  const num = Number(value);
-
-  // Non-numeric (NaN, Infinity, strings like "abc")
-  if (!Number.isFinite(num)) {
-    return { valid: false, message: 'Amount must be a valid number.' };
-  }
-
-  // Negative
-  if (num < 0) {
-    return { valid: false, message: 'Amount must be a positive number.' };
-  }
-
-  // Zero
-  if (num === 0) {
-    return { valid: false, message: 'Amount must be greater than zero.' };
-  }
-
-  // Decimal / non-integer
-  if (!Number.isInteger(num)) {
-    return {
-      valid: false,
-      message: 'Amount must be a whole number (no decimals allowed).',
-    };
-  }
-
-  return { valid: true, message: '' };
+export function isValidStellarKey(value, prefixes = ['G']) {
+  if (typeof value !== 'string' || value.length !== 56) return false;
+  if (!prefixes.includes(value[0])) return false;
+  return STELLAR_KEY_BODY.test(value.slice(1));
 }
 
-// ── DOM helpers ───────────────────────────────────────────────────────────────
-
-/**
- * Displays an inline validation error for a form field.
- *
- * @param {HTMLElement} errorEl - The element used to display the error message.
- * @param {string} message - Error text, or '' to clear the error.
- */
-export function showAmountError(errorEl, message) {
-  if (!errorEl) return;
-  errorEl.textContent = message;
-  errorEl.hidden = message === '';
-  errorEl.setAttribute('aria-live', 'polite');
+export function validateOrderId(value, label = 'Order ID') {
+  const v = (value || '').trim();
+  if (!v) return `${label} is required.`;
+  if (v.length > ORDER_ID_MAX_LENGTH) {
+    return `${label} must be ${ORDER_ID_MAX_LENGTH} characters or fewer.`;
+  }
+  return '';
 }
 
-/**
- * Wires blur-time and submit-time validation to a payment amount input.
- *
- * @param {HTMLInputElement} inputEl - The amount <input> element.
- * @param {HTMLElement}      errorEl - Element that renders inline error text.
- * @param {HTMLFormElement}  [formEl] - Optional parent form; blocks submit on error.
- * @returns {() => void} Cleanup function that removes the event listeners.
- */
-export function attachAmountValidation(inputEl, errorEl, formEl) {
-  if (!inputEl) {
-    throw new Error('attachAmountValidation: inputEl is required.');
+export function validateAmount(value, { label = 'Amount', integer = false, allowZero = false, required = true } = {}) {
+  const raw = (value == null ? '' : String(value)).trim();
+  if (!raw) return required ? `${label} is required.` : '';
+  const num = Number(raw);
+  if (!Number.isFinite(num)) return `${label} must be a number.`;
+  if (integer && !Number.isInteger(num)) return `${label} must be a whole number.`;
+  if (allowZero ? num < 0 : num <= 0) {
+    return allowZero ? `${label} cannot be negative.` : `${label} must be greater than zero.`;
   }
+  return '';
+}
 
-  function handleBlur() {
-    const result = validatePaymentAmount(inputEl.value);
-    showAmountError(errorEl, result.valid ? '' : result.message);
+export function validateAddress(value, { label = 'Address', prefixes = ['G'], required = true } = {}) {
+  const v = (value || '').trim();
+  if (!v) return required ? `${label} is required.` : '';
+  if (!isValidStellarKey(v, prefixes)) {
+    return `${label} must be a valid Stellar address (starts with ${prefixes.join(' or ')}, 56 characters).`;
   }
-
-  function handleSubmit(event) {
-    const result = validatePaymentAmount(inputEl.value);
-    if (!result.valid) {
-      event.preventDefault();
-      showAmountError(errorEl, result.message);
-      inputEl.focus();
-    }
-  }
-
-  inputEl.addEventListener('blur', handleBlur);
-  if (formEl) {
-    formEl.addEventListener('submit', handleSubmit);
-  }
-
-  return function cleanup() {
-    inputEl.removeEventListener('blur', handleBlur);
-    if (formEl) {
-      formEl.removeEventListener('submit', handleSubmit);
-    }
-  };
+  return '';
 }
