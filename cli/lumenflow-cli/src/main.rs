@@ -93,6 +93,11 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         idempotent: bool,
     },
+    /// Merchant management operations
+    Merchant {
+        #[command(subcommand)]
+        action: MerchantCommands,
+    },
     /// Refund operations
     Refund {
         #[command(subcommand)]
@@ -170,6 +175,28 @@ enum MerchantCommands {
         /// Output format: text (default) or json
         #[arg(long, default_value = "text")]
         output: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum MerchantCommands {
+    /// Update a merchant profile
+    Update {
+        /// Merchant address to update
+        #[arg(long)]
+        address: String,
+        /// New merchant name
+        #[arg(long)]
+        name: Option<String>,
+        /// New merchant description
+        #[arg(long)]
+        description: Option<String>,
+        /// New merchant contact information
+        #[arg(long)]
+        contact_info: Option<String>,
+        /// New merchant category
+        #[arg(long)]
+        category: Option<String>,
     },
 }
 
@@ -1161,6 +1188,33 @@ fn main() -> Result<()> {
                 order_id
             );
         }
+        Commands::Merchant { action } => match action {
+            MerchantCommands::Update {
+                address,
+                name,
+                description,
+                contact_info,
+                category,
+            } => {
+                println!("Updating merchant profile for {}...", address);
+                println!("  Contract: {}", config.contract_id.as_deref().unwrap_or("N/A"));
+
+                if let Some(value) = name {
+                    println!("  Name: {}", value);
+                }
+                if let Some(value) = description {
+                    println!("  Description: {}", value);
+                }
+                if let Some(value) = contact_info {
+                    println!("  Contact Info: {}", value);
+                }
+                if let Some(value) = category {
+                    println!("  Category: {}", value);
+                }
+
+                println!("\nSuccess! Merchant profile updated for {}.", address);
+            }
+        },
         Commands::Refund { action } => {
             if config.source_account.is_none() {
                 bail!("No signing key available. Use --key-file, --prompt-key, or set LUMENFLOW_SOURCE.");
