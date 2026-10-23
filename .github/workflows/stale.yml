@@ -1,0 +1,63 @@
+name: Stale issue and PR management
+
+on:
+  schedule:
+    # Run daily at 01:00 UTC
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@5bef64f19d7facfed25b8b884e0375c6b0d6d6e  # v9.1.0
+        with:
+          # ── Issues ─────────────────────────────────────────────────────────
+          # Label applied after 60 days of inactivity
+          stale-issue-label: "stale"
+          # Label applied to issues that are exempt from the stale policy
+          exempt-issue-labels: "pinned,security"
+          # Days of inactivity before an issue is labelled stale
+          days-before-issue-stale: 60
+          # Days after being labelled stale before the issue is closed
+          days-before-issue-close: 14
+          stale-issue-message: >
+            This issue has had no activity for 60 days and has been labelled
+            **stale**. If it is still relevant please leave a comment or remove
+            the `stale` label. It will be closed automatically in 14 days if
+            there is no further activity.
+          close-issue-message: >
+            This issue has been automatically closed due to 74 days of
+            inactivity. Feel free to reopen it if the problem is still present
+            or you have new information. See [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md)
+            for our stale-issue policy.
+
+          # ── Pull Requests ───────────────────────────────────────────────────
+          stale-pr-label: "stale"
+          exempt-pr-labels: "pinned,security"
+          # Days of inactivity before a PR is labelled stale
+          days-before-pr-stale: 30
+          # Days after being labelled stale before the PR is closed
+          days-before-pr-close: 7
+          stale-pr-message: >
+            This pull request has had no activity for 30 days and has been
+            labelled **stale**. If it is still being worked on please leave a
+            comment or push a new commit. It will be closed automatically in
+            7 days if there is no further activity.
+          close-pr-message: >
+            This pull request has been automatically closed due to 37 days of
+            inactivity. Feel free to reopen it if you would like to continue
+            the work. See [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md) for
+            our stale-PR policy.
+
+          # ── Misc ────────────────────────────────────────────────────────────
+          # Remove the stale label when activity resumes
+          remove-stale-when-updated: true
+          # Do not close issues or PRs that were already labelled stale before
+          # this workflow was introduced, to avoid a sudden mass-close.
+          delete-branch: false
+          repo-token: ${{ secrets.GITHUB_TOKEN }}

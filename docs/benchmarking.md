@@ -1,53 +1,310 @@
 # Benchmarking
 
-This document describes the benchmark harness for the LumenFlow contract and how to run hot-path performance measurements.
+**Version:** 1.0.0 — **Last updated:** 2026-07-26
+
+This document describes the benchmark harness for the LumenFlow smart contract,
+how to run hot-path performance measurements, the expected storage operation
+counts per function, and the CI regression gate.
+
+---
 
 ## Goals
 
-The benchmark harness measures relative runtime across key contract operations, including:
+The benchmark harness measures relative runtime across all public hot-path
+contract operations to:
 
-- `process_payment_with_signature`
-- `get_merchant_payment_history`
-- `cleanup_expired_payments`
+- Establish baseline performance metrics for each release.
+- Detect regressions (>10 % wall-clock increase) before they reach `main`.
+- Guide optimisation work by identifying the costliest storage and compute paths.
 
-These benchmarks help identify optimization targets and track regressions as code changes.
+---
+
+## Measured hot paths
+
+| Benchmark | Reads | Writes | Dominant cost |
+|-----------|------:|-------:|---------------|
+| `process_payment_with_signature` | ~8 | ~6 | ed25519 verification |
+| `get_merchant_payment_history` | ~22 | 0 | index scan + sort |
+| `cleanup_expired_payments` | ~12 | ~10 | index scan + remove |
+| `batch_payment` (10 items) | ~60 | ~40 | per-item sig verify + storage |
+| `create_escrow` | ~5 | ~3 | token transfer + write |
+| `release_escrow` | ~3 | ~2 | timestamp check + transfer |
+
+> **Note:** "Reads" and "Writes" are approximate counts of Soroban storage
+> operations (persistent + temporary + instance).  Actual instruction-unit
+> consumption in a live network depends on entry sizes, key complexity, and
+> XDR serialisation overhead.
+
+---
 
 ## Running benchmarks
 
-From the repository root:
-
 ```bash
+# From the workspace root
 cargo bench --manifest-path contracts/lumenflow/Cargo.toml
 ```
 
-The harness uses `criterion` to report relative timing and statistical summaries.
+Criterion prints a statistical summary including mean, standard deviation, and
+change vs the saved baseline.  The first run saves the baseline automatically
+under `contracts/lumenflow/target/criterion/`.
+
+### Save a named baseline
+
+```bash
+cargo bench --manifest-path contracts/lumenflow/Cargo.toml -- --save-baseline v1.0.0
+```
+
+### Compare against a saved baseline
+
+```bash
+cargo bench --manifest-path contracts/lumenflow/Cargo.toml -- --baseline v1.0.0
+```
+
+---
+
+## CI regression gate
+
+The CI pipeline runs on every PR targeting a release branch (`release/*`).
+After benchmarks complete, a script compares each benchmark's mean against the
+most recently saved baseline in `contracts/lumenflow/benches/baselines/`.
+
+**Threshold:** any benchmark that regresses by more than **10 %** causes the CI
+step to exit non-zero and blocks the PR merge.
+
+```yaml
+# .github/workflows/ci.yml (excerpt)
+- name: Run benchmarks
+  run: cargo bench --manifest-path contracts/lumenflow/Cargo.toml -- --output-format bencher | tee bench_output.txt
+
+- name: Check regression threshold
+  run: python3 scripts/check_bench_regression.py bench_output.txt 10
+```
+
+---
 
 ## Benchmark harness
 
-The benchmark harness is implemented in `contracts/lumenflow/benches/benchmark.rs`.
-It executes a Soroban in-memory contract environment and exercises the contract entrypoints in realistic scenarios.
+The harness is in `contracts/lumenflow/benches/benchmark.rs`.  It uses an
+in-memory Soroban test environment (`Env::default()` + `mock_all_auths()`) so
+that results are deterministic and reproducible without a live network.
 
-### Measured hot paths
+### `benchmark_process_payment`
 
-- `process_payment_with_signature`
-  - measures token transfer, signature validation, payment storage, merchant/payer indexing, and stats updates.
-- `get_merchant_payment_history`
-  - measures history retrieval, pagination, filtering, and sorting over an in-memory payment dataset.
-- `cleanup_expired_payments`
-  - measures scanning merchant payment indexes and deleting outdated records.
+Exercises the full `process_payment_with_signature` path:
+
+1. Merchant nonce validation (`get_merchant_nonce`)
+2. Rate-limit counter check and increment
+3. Payload construction (network ID + contract address + nonce + order_id + amount)
+4. Ed25519 signature verification (dominant CPU cost)
+5. Platform fee calculation
+6. Token transfer (payer → merchant)
+7. Payment record write + merchant and payer index appends
+8. Merchant stats update
+9. Global stats update
+10. Suspicious-activity threshold check
+11. Event emission
+
+### `benchmark_query_history`
+
+Pre-loads 20 payment records then exercises `get_merchant_payment_history`:
+
+1. Merchant payment index read
+2. 20 individual payment record reads
+3. Filter pass (no filter — full pass)
+4. `sort_unstable_by` over native `Vec`
+5. Cursor-based pagination slice
+6. Result construction
+
+### `benchmark_cleanup`
+
+Pre-loads 10 payments then advances time past the cleanup window before exercising
+`cleanup_expired_payments`:
+
+1. Merchant list read
+2. Per-merchant payment index read
+3. Per-payment age check
+4. Storage removal for expired records
+
+### `benchmark_batch_payment`
+
+Creates a 10-item batch and exercises the full batch path for each item:
+
+1. Rate-limit check and increment per merchant
+2. Token-allow check
+3. Ed25519 verification
+4. Token transfer
+5. Payment storage write + index updates
+6. Stats updates
+
+### `benchmark_create_escrow`
+
+Exercises `create_escrow`:
+
+1. Token-allow check
+2. Merchant active check
+3. Token transfer (payer → contract address)
+4. Escrow record write
+
+### `benchmark_release_escrow`
+
+Exercises `release_escrow` after `unlock_at` has passed:
+
+1. Escrow record read
+2. Status and timestamp checks
+3. Escrow status update write
+4. Token transfer (contract → merchant)
+
+---
 
 ## Interpreting results
 
-The benchmark output reports execution time for each hot path. Use it to compare relative costs and to detect performance regressions.
+Criterion outputs results in this form:
 
-### Optimization targets
+```
+process_payment_with_signature
+                        time:   [12.345 µs 12.567 µs 12.789 µs]
+                        change: [−0.23% +0.42% +1.07%] (p = 0.38 > 0.05)
+                        No change in performance detected.
+```
+
+- The three numbers are the lower bound, mean, and upper bound of the
+  confidence interval.
+- A **positive change > 10 %** with p < 0.05 is treated as a regression.
+- A **negative change** is an improvement.
+
+### Optimisation targets
 
 Benchmark results can highlight:
 
-- expensive signature verification and payload construction
-- storage index scanning costs for history queries
-- cleanup iteration costs across merchants and payments
+- **Signature verification** — the single largest CPU cost in `process_payment_with_signature`.
+- **Storage index scanning** — grows linearly with the number of payments per merchant.
+- **Batch payment** — dominated by per-item signature verification.
+- **Cleanup iteration** — cost scales with merchant count × payment count.
+
+---
 
 ## Notes
 
-This harness is intended for local performance analysis. Soroban execution costs in production may differ from in-memory benchmark timings, but the relative ordering of hot-path costs is useful for prioritizing optimizations.
+This harness measures in-memory timings.  Soroban's on-chain instruction-unit
+(CPU + memory) costs may differ from wall-clock time, but the relative ordering
+of hot-path costs is stable and useful for prioritising optimisations.
+
+For reproducible comparisons, always run benchmarks on the same machine and
+avoid background load.  Use `--baseline` to compare across branches.
+
+---
+
+## Benchmark Regression CI
+
+The `benchmark-regression` job in `.github/workflows/ci.yml` runs automatically
+on every pull request and gates merges that would introduce a performance
+regression.
+
+### Baseline file
+
+The baseline is stored in:
+
+```
+contracts/lumenflow/benches/benchmark_baseline.json
+```
+
+It records the expected mean execution time (in nanoseconds) and the regression
+threshold for each tracked benchmark:
+
+```json
+{
+  "version": 1,
+  "updated_at": "2026-10-20",
+  "benchmarks": {
+    "process_payment_with_signature": { "mean_ns": 45000, "threshold_percent": 10 },
+    "merchant_payment_history_query": { "mean_ns": 12000, "threshold_percent": 10 },
+    "cleanup_expired_payments":       { "mean_ns": 8000,  "threshold_percent": 10 }
+  }
+}
+```
+
+### How the CI check works
+
+1. The `benchmark-regression` job checks out the PR branch and installs the
+   pinned Rust toolchain (1.87.0).
+2. It runs `./scripts/check-benchmark-regression.sh`, which:
+   - Executes `cargo bench --manifest-path contracts/lumenflow/Cargo.toml`.
+   - Parses Criterion's stdout for each benchmark's mean time.
+   - Converts the measured value to nanoseconds.
+   - Compares it to `baseline_mean × (1 + threshold_percent / 100)`.
+   - Prints a summary table to stdout and writes a markdown report to
+     `benchmark-results.md`.
+   - Exits with code 1 if **any** benchmark exceeds its allowed maximum.
+3. Regardless of the script's exit code, the `Post benchmark results as PR comment`
+   step reads `benchmark-results.md` and posts (or updates) a PR comment with
+   the full result table, making it easy to review at a glance.
+4. If the script exited non-zero the job fails and the PR check is marked as
+   failing, blocking merge until the regression is addressed.
+
+### Regression threshold
+
+The threshold is **10%** above the recorded baseline mean.  For example, if
+`process_payment_with_signature` has a baseline of 45,000 ns, any measurement
+above 49,500 ns causes a failure.
+
+The threshold is configurable per benchmark inside `benchmark_baseline.json` by
+adjusting `threshold_percent`.
+
+### Updating the baseline
+
+When an intentional performance change is made (e.g., an optimisation that
+genuinely improves hot-path speed), update the baseline to reflect the new
+measurements:
+
+```bash
+./scripts/update-benchmark-baseline.sh
+```
+
+The script:
+1. Runs `cargo bench` on the local machine.
+2. Parses the output and replaces each `mean_ns` in
+   `contracts/lumenflow/benches/benchmark_baseline.json` with the new value.
+3. Updates `updated_at` to today's date.
+
+After running the script, review the diff and commit the updated file alongside
+the change that caused the improvement:
+
+```bash
+git diff contracts/lumenflow/benches/benchmark_baseline.json
+git add contracts/lumenflow/benches/benchmark_baseline.json
+git commit -m "perf: update benchmark baseline after <description>"
+```
+
+> **Important:** never update the baseline to paper over a regression.
+> Only update it when the change represents a genuine improvement or a
+> deliberate architectural trade-off that has been reviewed by the team.
+
+---
+
+## Load Test Baseline (k6 concurrent batch payments)
+
+In addition to the in-memory Criterion benchmarks above, `scripts/load-test.sh`
+runs a k6-based network load test against a deployed contract (see
+`.github/workflows/load-test.yml`). The `concurrent_batch_payments` scenario
+(added in Issue #1084) simulates `BATCH_CLIENTS` (default: 10) concurrent
+clients, each submitting a single `batch_payment` call containing
+`BATCH_ITEMS` (default: 10) items.
+
+**Recorded baseline (testnet, 10 clients x 10 items):**
+
+| Metric | Baseline |
+|--------|---------:|
+| P95 latency | 1200 ms |
+| Throughput | ~8 payments/sec |
+| Error rate | < 1% |
+
+**Regression gate:** CI fails the load test if the measured P95 latency for
+the `concurrent_batch_payments` scenario exceeds the baseline by more than
+**20%** (i.e. > 1440 ms). This is enforced via the `BASELINE_P95_MS` env var
+and a k6 threshold on the `lumenflow_batch_payment_duration` metric, and is
+reported alongside throughput and error rate in the load test JSON output
+and CI job summary.
+
+To re-baseline after an intentional performance change, update
+`BASELINE_P95_MS` in `.github/workflows/load-test.yml` and the table above
+to the new measured value.
