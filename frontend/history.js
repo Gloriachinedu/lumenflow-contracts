@@ -2,7 +2,7 @@ import { validateAddress, validateAmount } from './validation.js';
 import {
   DEMO_MODE, CONTRACT_ID, NETWORK,
   renderModeBanner, copyButtonHtml, initCopyButtons,
-  formatTokenAmount, convertToXlm, getTokenMetadata,
+  formatTokenAmount, convertToXlm, getTokenMetadata, formatDate,
 } from './lumenflow-shared.js';
 
 // ── State Management ────────────────────────────────────────────────────────
@@ -92,10 +92,8 @@ function statusBadgeHtml(status) {
   return `<span class="status-badge ${entry.cls}">${entry.label}</span>`;
 }
 
-function formatAmount(amount) {
-  return (Number(amount) / 1e7).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 7 }) + ' XLM';
-}
-function formatDate(ts) { return new Date(Number(ts) * 1000).toLocaleString(); }
+// formatDate is imported from lumenflow-shared.js (Intl.DateTimeFormat, issue #1017)
+// formatTokenAmount is imported from lumenflow-shared.js (Intl.NumberFormat, issue #1017)
 
 // ── Mock data (demo mode) ───────────────────────────────────────────────────
 const MOCK_DATA = [
@@ -248,10 +246,13 @@ function renderRows(payments) {
       ? convertToXlm(p.amount, p.token)
       : formatTokenAmount(p.amount, p.token);
     const tr = document.createElement('tr');
+    const verifiedBadgeHtml = p.merchant_verified
+      ? '<span class="verified-badge" role="img" aria-label="Verified merchant — this merchant has been verified by LumenFlow" tabindex="0">✔<span class="verified-tooltip">This merchant has been verified by LumenFlow, confirming their identity and business legitimacy.</span></span>'
+      : '';
     tr.innerHTML = `
       <td data-label="Date">${formatDate(p.paid_at)}</td>
       <td data-label="Order ID"><code>${p.order_id}</code>${copyButtonHtml(p.order_id, 'Copy order ID')}</td>
-      <td data-label="Merchant"><code title="${p.merchant_address}">${p.merchant_address.slice(0,8)}…</code>${copyButtonHtml(p.merchant_address, 'Copy address')}</td>
+      <td data-label="Merchant"><code title="${p.merchant_address}">${p.merchant_address.slice(0,8)}…</code>${copyButtonHtml(p.merchant_address, 'Copy address')}${verifiedBadgeHtml}</td>
       <td data-label="Amount" class="amount-cell">${amountDisplay}</td>
       <td data-label="Status">${statusBadgeHtml(p.status)}</td>`;
     body.appendChild(tr);

@@ -78,6 +78,22 @@ Emitted when the contract administrator is successfully initialized.
 
 ---
 
+### `admin_transferred`
+Emitted when the current administrator transfers administration to another account.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful call to `transfer_admin`. |
+| **Topics** | `["lumenflow", "admin_transferred"]` |
+| **Payload** | `(old_admin: Address, new_admin: Address, timestamp: u64)` |
+
+**Payload Details:**
+- `old_admin`: The address of the administrator who initiated the transfer.
+- `new_admin`: The address receiving administrator privileges.
+- `timestamp`: The ledger timestamp when the transfer was recorded.
+
+---
+
 ### `merchant_registered`
 Emitted when a new merchant profile is created.
 
@@ -290,6 +306,29 @@ the admin bulk-cleanup call.
 | **Trigger** | Successful call to `cancel_payment_request`, or each request removed by `cancel_expired_payment_requests`. |
 | **Topics** | `["lumenflow", "payment_request_cancelled"]` |
 | **Data** | `request_id: String` |
+
+---
+
+### `config_updated`
+Emitted when an admin changes a configurable contract parameter via `set_platform_fee`, `set_refund_window`, `set_min_refund_amount`, or `set_multisig_expiry_duration`.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful call to any admin `set_*` configuration function. |
+| **Topics** | `["lumenflow", "config_updated"]` |
+| **Payload** | `(param: String, old_value: i128, new_value: i128, admin: Address, timestamp: u64)` |
+
+**Payload Details:**
+- `param`: Name of the parameter changed. One of: `"platform_fee"`, `"refund_window"`, `"min_refund_amount"`, `"multisig_expiry_duration"`.
+- `old_value`: The previous value of the parameter before the update.
+- `new_value`: The new value of the parameter after the update.
+- `admin`: The `Address` of the administrator who made the change.
+- `timestamp`: The ledger timestamp at the time of the change.
+
+**Example Decoded Payload:**
+```json
+["platform_fee", 0, 250, "G...ADMIN", 1750000000]
+```
 
 ---
 

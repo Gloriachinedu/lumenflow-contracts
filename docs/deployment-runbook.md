@@ -315,7 +315,10 @@ frontend environment variables, webhook consumers) with the new `CONTRACT_ID`.
 
 ## 6. Post-Deployment Verification
 
-Run these steps after **every** deployment (local, testnet, or mainnet).
+Run these steps after **every** deployment (local, testnet, or mainnet). To
+whitelist a new token/asset on a deployed contract, see
+[add-supported-token.md](add-supported-token.md) instead — that procedure
+builds on the smoke test in section 6.1 below.
 
 ### 6.1 Smoke test
 
@@ -564,7 +567,7 @@ Add a row to the published hashes table:
 
 For major upgrades requiring storage migration, deploy a one-time migration
 contract before calling `upgrade`, or use a two-phase approach. See
-[docs/upgrade-guide.md](upgrade-guide.md) for details.
+[docs/upgrade-guide.md — Storage Schema Migration](upgrade-guide.md#storage-schema-migration) for the full process: identifying breaking changes, writing and testing migration functions, example before/after layouts, and rollback steps.
 
 ---
 
@@ -574,7 +577,55 @@ contract before calling `upgrade`, or use a two-phase approach. See
 > downgrade. Rollback means deploying a new contract instance from the previous
 > release tag and migrating traffic to it.
 
-### Step 1 — Deploy the previous version
+### 9.0 Automated rollback (CI-triggered)
+
+The `deploy-mainnet.yml` workflow automatically triggers a rollback when the
+post-deploy smoke test fails. No human intervention is required for the initial
+recovery step.
+
+**How it works:**
+
+1. After the `Run post-deploy smoke test` step exits non-zero, the
+   `Auto-rollback on smoke test failure` step runs `scripts/rollback.sh`.
+2. `rollback.sh` calls `set_active_slot` on the router contract to atomically
+   restore the previous active slot (blue or green). This is a single storage
+   write and is safe to repeat.
+3. The rollback result (`success` or `failed`) is written to the CI step
+   summary and uploaded as an artifact
+   (`mainnet-rollback-results-<run_id>`).
+4. A Slack notification is sent to `#deploys` with the rollback result and a
+   link to the run.
+5. If `rollback.sh` itself fails, the step falls back to pausing the contract
+   via `pause_contract` to stop live traffic, then reports the failure in the
+   step summary.
+
+**Idempotency:** `rollback.sh` is safe to run multiple times. Re-running the
+workflow or manually executing the script after an automated rollback will
+query the current active slot and, if it already matches the target, the
+script completes without making any change.
+
+**Required secrets (mainnet environment):**
+
+| Secret | Description |
+|--------|-------------|
+| `MAINNET_SOURCE_ACCOUNT` | Secret key used to sign the rollback transaction |
+| `MAINNET_ROUTER_CONTRACT_ID` | Deployed router contract ID |
+| `MAINNET_ADMIN_ADDRESS` | Admin address registered on the router |
+
+**Smoke test log artifact:** the smoke test output is available in the
+`mainnet-smoke-results-<run_id>` artifact (90-day retention) — inspect it to
+diagnose the root cause before the next deploy attempt.
+
+**After an automated rollback:**
+
+1. Inspect the smoke test log artifact for the failure root cause.
+2. Fix the issue and validate on testnet before attempting another mainnet deploy.
+3. Do **not** re-deploy until `scripts/smoke_test.sh` passes on testnet.
+4. Document the incident per step 7 (below).
+
+---
+
+### Step 1 — Deploy the previous version (manual fallback)
 
 ```bash
 git checkout <previous-release-tag>
@@ -822,7 +873,7 @@ steps and then unpause.
 |----------|---------|
 | [docs/deployment-guide.md](deployment-guide.md) | Full narrative deployment walkthrough |
 | [docs/deployment-environments.md](deployment-environments.md) | Per-environment config files |
-| [docs/upgrade-guide.md](upgrade-guide.md) | Versioning policy and TTL recalibration |
+| [docs/upgrade-guide.md](upgrade-guide.md) | Versioning policy, storage schema migration, and TTL recalibration |
 | [docs/release-hashes.md](release-hashes.md) | Published SHA-256 hashes per release |
 | [docs/release-workflow.md](release-workflow.md) | How to cut a release and push a tag |
 | [docs/monitoring.md](monitoring.md) | Horizon SSE, Prometheus, Grafana |

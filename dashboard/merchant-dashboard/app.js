@@ -196,9 +196,53 @@ function handleCopyLink() {
   }
 }
 
+/**
+ * Downloads the rendered QR code as a PNG file.
+ * The qrcode.js library renders a <canvas> element inside #plg-qr — we grab
+ * that canvas, convert it to a data URL, and trigger a browser download.
+ */
+function handleDownloadQr() {
+  const container = document.getElementById('plg-qr');
+  const canvas = container.querySelector('canvas');
+
+  if (!canvas) {
+    // qrcode.js may render an <img> instead of a <canvas> in some environments
+    const img = container.querySelector('img');
+    if (img) {
+      // Create a temporary canvas to export the image
+      const tmpCanvas = document.createElement('canvas');
+      tmpCanvas.width  = img.naturalWidth  || img.width  || 192;
+      tmpCanvas.height = img.naturalHeight || img.height || 192;
+      const ctx = tmpCanvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      triggerQrDownload(tmpCanvas);
+    } else {
+      alert('QR code not yet generated. Please generate a payment link first.');
+    }
+    return;
+  }
+
+  triggerQrDownload(canvas);
+}
+
+/**
+ * Triggers a PNG download from a canvas element.
+ * @param {HTMLCanvasElement} canvas
+ */
+function triggerQrDownload(canvas) {
+  const dataUrl = canvas.toDataURL('image/png');
+  const link = document.createElement('a');
+  link.href = dataUrl;
+  link.download = 'lumenflow-payment-qr.png';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
 // Wire up payment link form events
 document.getElementById('paymentLinkForm').addEventListener('submit', handleGenerateLink);
 document.getElementById('copyLinkBtn').addEventListener('click', handleCopyLink);
+document.getElementById('downloadQrBtn').addEventListener('click', handleDownloadQr);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  REFUND MANAGEMENT

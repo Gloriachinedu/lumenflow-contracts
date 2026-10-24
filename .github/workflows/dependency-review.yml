@@ -1,0 +1,55 @@
+# Dependency Review Workflow
+#
+# Blocks pull requests that introduce new dependencies with known
+# vulnerabilities at High or Critical severity.
+#
+# Documentation: docs/security/dependency-review.md
+# Action docs:   https://github.com/actions/dependency-review-action
+#
+# Requires the repository to have the Dependency Graph feature enabled
+# (Settings → Code security and analysis → Dependency graph).
+
+name: Dependency Review
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write   # allows the action to post a PR comment summary
+
+jobs:
+  dependency-review:
+    name: Dependency Review
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          # Block merge for High and Critical vulnerabilities.
+          # Set to 'critical' to only block on Critical, or 'moderate'/'low'
+          # to tighten the threshold further.
+          fail-on-severity: high
+
+          # Allow licenses that are compatible with this project's MIT licence.
+          # Extend or restrict this list to match your legal requirements.
+          allow-licenses: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, 0BSD, CC0-1.0, Unlicense
+
+          # Deny any dependency under a copyleft licence that is incompatible
+          # with MIT distribution.
+          deny-licenses: GPL-2.0, GPL-3.0, LGPL-2.0, LGPL-2.1, LGPL-3.0, AGPL-3.0
+
+          # Do NOT block PRs for vulnerabilities that only affect dev/test
+          # dependencies (e.g. cargo dev-dependencies, npm devDependencies).
+          # Set to true if you want stricter enforcement.
+          allow-dependencies-licenses: ""
+
+          # Post a comment on the PR summarising any findings (even when the
+          # check passes) so reviewers have full visibility.
+          comment-summary-in-pr: always

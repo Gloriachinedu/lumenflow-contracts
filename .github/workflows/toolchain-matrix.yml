@@ -45,13 +45,13 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
       # Install the Rust toolchain for the current matrix cell.
       - name: Install Rust ${{ matrix.toolchain }}
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8  # master
         with:
           toolchain: ${{ matrix.toolchain }}
           targets: wasm32-unknown-unknown
@@ -69,7 +69,7 @@ jobs:
           fi
 
       - name: Cache cargo registry
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684  # v4.2.3
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -80,6 +80,56 @@ jobs:
 
       # Normal path: run the full test suite.
       - name: Run tests
+        run: cargo test --locked --all-features
+
+  # ---------------------------------------------------------------------------
+  # Job 1b — MSRV (Minimum Supported Rust Version) check
+  #
+  # Builds and tests on exactly the version declared as `rust-version` in the
+  # workspace Cargo.toml.  CI fails if the code requires a higher version,
+  # catching accidental MSRV bumps before they ship.
+  # ---------------------------------------------------------------------------
+  msrv:
+    name: MSRV (Rust 1.81.0)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.81.0 (MSRV)
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8  # master
+        with:
+          toolchain: "1.81.0"
+          targets: wasm32-unknown-unknown
+
+      # Hard failure guard: confirm the installed rustc matches the declared MSRV
+      # exactly.  Any mismatch means the runner ended up with the wrong toolchain.
+      - name: Verify MSRV toolchain version
+        run: |
+          RUSTC_VERSION=$(rustc --version)
+          echo "Active toolchain: $RUSTC_VERSION"
+          echo "$RUSTC_VERSION" | grep -F "1.81.0" || \
+            { echo "ERROR: expected rustc 1.81.0 (MSRV), got: $RUSTC_VERSION"; exit 1; }
+
+      - name: Cache cargo registry (MSRV)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-msrv-1.81.0-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-msrv-1.81.0-
+
+      # Build and test on the MSRV.  Uses --locked to ensure Cargo.lock is
+      # respected and no newer dependency versions are silently pulled in.
+      - name: Build on MSRV
+        run: cargo build --locked --all-features
+
+      - name: Test on MSRV
         run: cargo test --locked --all-features
 
   # ---------------------------------------------------------------------------
@@ -103,13 +153,13 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
       # Set up the Node.js version for the current matrix cell.
       - name: Set up Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -152,7 +202,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 

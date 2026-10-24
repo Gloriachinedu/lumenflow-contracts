@@ -12,7 +12,7 @@ jobs:
     name: Smoke Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install Stellar CLI
         run: |
@@ -23,12 +23,12 @@ jobs:
       # Node.js is required by scripts/generate_smoke_keypair.sh to build
       # and sign the canonical payment payload (see docs/signature-format.md).
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "20"
 
       - name: Cache smoke-signer npm modules
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: scripts/.smoke_node_modules
           key: ${{ runner.os }}-smoke-npm-stellar-sdk-13.8.0

@@ -96,6 +96,50 @@ keys, and the `integer` / `allowZero` / `required` / `prefixes` option flags.
 - Remember that ledger time advances are local to the test environment and do not persist across separate `Env` instances.
 - Prefer explicit `try_*` calls when asserting contract errors.
 
+## Property-Based Tests (proptest)
+
+Property-based tests verify that refund invariants hold across **arbitrary** sequences of partial refunds, not just hand-picked examples.
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `contracts/lumenflow/src/invariant_refund.rs` | Pure invariant definitions (no contract dependencies) |
+| `contracts/lumenflow/src/prop_tests.rs` | proptest strategies and property assertions |
+
+### Running
+
+```bash
+cargo test --all-features prop_
+```
+
+This runs all tests whose names start with `prop_`. For full CI coverage use:
+
+```bash
+cargo test --all-features
+```
+
+### Invariants verified
+
+1. **Cumulative refunds ≤ original amount** — the sum of all executed partial refunds never exceeds the original payment amount.
+2. **Refund window respected** — a refund initiated more than 30 days after payment is always rejected with `RefundWindowExpired`.
+3. **Order independence** — the total refunded amount is the same regardless of the order partial refunds are applied.
+4. **Remaining balance non-negative** — at any point, `original_amount - sum(executed_refunds) >= 0`.
+
+### Adding new strategies
+
+New refund invariants can be added to `invariant_refund.rs` and then exercised in `prop_tests.rs` using `proptest!` macros:
+
+```rust
+proptest! {
+    #[test]
+    fn prop_my_new_invariant(amount in 1_i128..=100_000_i128) {
+        // ... exercise the contract or call invariant functions directly
+        prop_assert!(my_invariant(amount));
+    }
+}
+```
+
 ## Dependency Security Audits
 
 Dependency audits run automatically in CI for every push and pull request.
@@ -163,6 +207,77 @@ combinations, corrupt contract IDs, random / bit-flipped / truncated signatures,
 and tampered payloads are all rejected deterministically rather than crashing or
 silently accepting a bad signature.
 
+## Fuzz target: `fuzz_batch_payment_deserialize` (Issue #1354)
+
+The `fuzz_batch_payment_deserialize` fuzz target exercises the `batch_payment`
+function's deserialization and validation path with arbitrary byte sequences to
+verify that no inputs cause a panic.
+
+**Location:** `contracts/lumenflow/fuzz/fuzz_targets/fuzz_batch_payment_deserialize.rs`
+
+### What is fuzzed
+
+| Scenario | Expected outcome |
+|----------|-----------------|
+| Empty array (`n = 0`) | `Ok(())` — accepted immediately |
+| Single item (`n = 1`) | Validated normally; invalid data returns a typed error |
+| Max 10 items (`n = 10`) | Accepted (mock zeroed signatures pass the test harness) |
+| 11+ items (`n = 11`) | Rejected with `BatchSizeExceeded` — never a panic |
+| Malformed / arbitrary bytes | Contract returns a typed `PaymentError`, never panics |
+
+### Key invariant
+
+For every input:
+
+```text
+batch_payment(env, payer, payments) → Ok(_) | Err(PaymentError::*)
+```
+
+A Rust `panic!`, arithmetic overflow, array out-of-bounds, or any other unwind
+is treated as a fuzzer finding and surfaces as a crash artifact in
+`contracts/lumenflow/fuzz/artifacts/fuzz_batch_payment_deserialize/`.
+
+### Running locally
+
+```bash
+# Install cargo-fuzz once
+cargo install cargo-fuzz
+
+# Run 100 k iterations (matches CI gate)
+cargo fuzz run fuzz_batch_payment_deserialize \
+    --manifest-path contracts/lumenflow/fuzz/Cargo.toml \
+    -- -runs=100000
+
+# Run until timeout (60 seconds continuous fuzzing)
+cargo fuzz run fuzz_batch_payment_deserialize \
+    --manifest-path contracts/lumenflow/fuzz/Cargo.toml \
+    -- -max_total_time=60
+```
+
+### Reproducing a crash
+
+```bash
+cargo fuzz run fuzz_batch_payment_deserialize \
+    --manifest-path contracts/lumenflow/fuzz/Cargo.toml \
+    contracts/lumenflow/fuzz/artifacts/fuzz_batch_payment_deserialize/<crash-file>
+```
+
+### CI integration
+
+The GitHub Actions `ci.yml` workflow runs this harness with `-runs=100000`
+(100 k iterations) on every push to `main` and on pull requests that touch
+contract source files, satisfying the acceptance criterion of 100 k iterations
+run without panics in CI.
+
+### Adding corpus entries
+
+Seed inputs improve initial coverage. Place small valid `BatchPaymentItem`
+JSON blobs (encoded as raw bytes matching the Soroban XDR format) in
+`contracts/lumenflow/fuzz/corpus/fuzz_batch_payment_deserialize/` and
+`cargo-fuzz` will use them as starting inputs before mutating.
+
+
+
 ## Failure-injection tests for upstream Horizon outages
 
 `sdk/src/tests/horizonOutage.test.ts` injects Horizon SSE connection errors and
@@ -182,3 +297,59 @@ node scripts/restore-drill.mjs                       # drill critical repo confi
 node scripts/restore-drill.mjs codecov.yml Makefile  # drill specific files
 npm run test:roadmap                                 # runs scripts/*.test.mjs, incl. the drill tests
 ```
+
+## Cargo fuzz targets for signature verification edge cases
+
+The `contracts/lumenflow/fuzz/` directory contains libfuzzer-based fuzz targets
+built with [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz).
+
+### fuzz_verify_signature
+
+`contracts/lumenflow/fuzz/fuzz_targets/fuzz_verify_signature.rs`
+
+Fuzzes `verify_signature` — the ed25519 signature boundary called from
+`process_payment_with_signature` — with arbitrary byte inputs. It exercises:
+
+| Input class | Expected outcome |
+|---|---|
+| All-zero 32-byte key + 64-byte signature | `Ok(())` (test-harness mock convention) |
+| Any truncated key (< 32 bytes) | `Err(InvalidSignature)` — no panic |
+| Any oversized key (> 32 bytes) | `Err(InvalidSignature)` — no panic |
+| Truncated signature (< 64 bytes) | `Err(InvalidSignature)` — no panic |
+| Oversized signature (> 64 bytes) | `Err(InvalidSignature)` — no panic |
+| Correct lengths, non-zero arbitrary bytes | `Err(InvalidSignature)` — no panic |
+| Empty payload | handled gracefully — no panic |
+| Large payload (up to 1 KB) | handled gracefully — no panic |
+
+**Run locally (60-second time limit):**
+
+```bash
+cargo install cargo-fuzz
+cargo fuzz run fuzz_verify_signature \
+    --manifest-path contracts/lumenflow/fuzz/Cargo.toml \
+    -- -max_total_time=60
+```
+
+**Run for 100 k iterations (CI gate):**
+
+```bash
+cargo fuzz run fuzz_verify_signature \
+    --manifest-path contracts/lumenflow/fuzz/Cargo.toml \
+    -- -runs=100000
+```
+
+**Reproduce a crash artifact:**
+
+```bash
+cargo fuzz run fuzz_verify_signature \
+    --manifest-path contracts/lumenflow/fuzz/Cargo.toml \
+    contracts/lumenflow/fuzz/artifacts/fuzz_verify_signature/<crash-file>
+```
+
+### fuzz_auth (existing)
+
+`contracts/lumenflow/fuzz/fuzz_targets/fuzz_auth.rs`
+
+Fuzzes `batch_payment` boundary conditions — empty batches, over-limit batches
+(> 10 items), and batches containing zero/negative amounts, oversized
+`order_id`, and oversized memo fields. See the file header for full details.

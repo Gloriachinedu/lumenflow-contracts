@@ -14,8 +14,8 @@ use crate::{
     error::PaymentError,
     storage,
     types::{
-        BatchPaymentItem, MerchantCategory, PaymentFilter, SortField, SortOrder, StatusFilter,
-        SubscriptionStatus,
+        BatchPaymentItem, MerchantCategory, PaymentFilter, PaymentOrder, PaymentStatus, SortField,
+        SortOrder, StatusFilter, SubscriptionStatus,
     },
     PaymentProcessingContract, PaymentProcessingContractClient,
 };
@@ -964,7 +964,8 @@ fn test_batch_payment_intra_batch_duplicate_fails() {
         });
     }
     let result = client.try_batch_payment(&payer, &payments);
-    assert_eq!(result, Err(Ok(PaymentError::PaymentAlreadyExists)));
+    // Intra-batch duplicates return the dedicated DuplicateOrderId error (55)
+    assert_eq!(result, Err(Ok(PaymentError::DuplicateOrderId)));
 }
 
 #[test]
@@ -1308,6 +1309,28 @@ fn test_refund_respects_admin_min_amount() {
         &500,
         &str(&env, "at"),
     );
+}
+
+#[test]
+fn test_concurrent_partial_refunds_cannot_exceed_original() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "ORDER_RACE", 1_000);
+
+    for refund_id in ["REFUND_RACE_1", "REFUND_RACE_2"] {
+        client.initiate_refund(
+            &payer,
+            &str(&env, refund_id),
+            &str(&env, "ORDER_RACE"),
+            &600,
+            &str(&env, "Partial refund"),
+        );
+        client.approve_refund(&merchant, &str(&env, refund_id));
+    }
+
+    client.execute_refund(&str(&env, "REFUND_RACE_1"));
+
+    let result = client.try_execute_refund(&str(&env, "REFUND_RACE_2"));
+    assert_eq!(result, Err(Ok(PaymentError::RefundExceedsOriginal)));
 }
 
 #[test]
@@ -2680,8 +2703,8 @@ fn test_cleanup_expired_payments() {
     client.set_payment_cleanup_period(&admin, &1);
     env.ledger().with_mut(|l| l.timestamp += 10);
 
-    let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 1);
+    let removed = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(removed.cleaned, 1);
 }
 
 #[test]
@@ -3321,6 +3344,157 @@ fn test_unpause_emits_event() {
 
 // ── build_page sort tests ─────────────────────────────────────────────────────
 
+fn next_property_random(state: &mut u64) -> u64 {
+    *state = state
+        .wrapping_mul(6_364_136_223_846_793_005)
+        .wrapping_add(1_442_695_040_888_963_407);
+    *state >> 16
+}
+
+fn seed_random_history(
+    env: &Env,
+    client: &PaymentProcessingContractClient,
+    merchant: &Address,
+    payer: &Address,
+    token: &Address,
+    count: u32,
+    seed: u64,
+) -> alloc::vec::Vec<(String, u64, i128)> {
+    let mut expected = alloc::vec::Vec::new();
+    let mut random_state = seed;
+
+    env.as_contract(&client.address, || {
+        for index in 0..count {
+            let order_id = str(env, &format!("PROP_{seed}_{index}"));
+            let paid_at = next_property_random(&mut random_state);
+            let amount = (next_property_random(&mut random_state) % 1_000_000) as i128 + 1;
+            let payment = PaymentOrder {
+                order_id: order_id.clone(),
+                merchant_address: merchant.clone(),
+                payer: payer.clone(),
+                token: token.clone(),
+                amount,
+                version: 1,
+                status: PaymentStatus::Completed,
+                paid_at,
+                refunded_amount: 0,
+                memo: str(env, "generated history test payment"),
+                tags: None,
+                platform_fee: 0,
+            };
+
+            storage::set_payment(env, &payment);
+            storage::add_merchant_payment_id(env, merchant, &order_id).unwrap();
+            storage::add_payer_payment_id(env, payer, &order_id).unwrap();
+            expected.push((order_id, paid_at, amount));
+        }
+    });
+
+    expected
+}
+
+fn collect_merchant_history(
+    client: &PaymentProcessingContractClient,
+    merchant: &Address,
+    sort_field: SortField,
+    sort_order: SortOrder,
+) -> alloc::vec::Vec<PaymentOrder> {
+    let mut cursor = None;
+    let mut payments = alloc::vec::Vec::new();
+
+    loop {
+        let page = client.get_merchant_payment_history(
+            merchant,
+            &cursor,
+            &13,
+            &None,
+            &sort_field,
+            &sort_order,
+        );
+        payments.extend(page.payments.iter());
+        match page.next_cursor {
+            Some(next_cursor) => cursor = Some(next_cursor),
+            None => break,
+        }
+    }
+
+    payments
+}
+
+fn assert_history_matches_dataset(actual: &[PaymentOrder], expected: &[(String, u64, i128)]) {
+    assert_eq!(actual.len(), expected.len());
+    for (order_id, _, _) in expected {
+        assert_eq!(
+            actual
+                .iter()
+                .filter(|payment| payment.order_id == *order_id)
+                .count(),
+            1,
+            "payment must appear exactly once across all pages"
+        );
+    }
+}
+
+#[test]
+fn test_date_ascending_pagination_is_complete_for_random_datasets() {
+    for count in [1, 10, 50, 100] {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        let expected = seed_random_history(
+            &env,
+            &client,
+            &merchant,
+            &payer,
+            &token,
+            count,
+            0xA11CE + count as u64,
+        );
+        let actual = collect_merchant_history(
+            &client,
+            &merchant,
+            SortField::Date,
+            SortOrder::Ascending,
+        );
+
+        assert_history_matches_dataset(&actual, &expected);
+        assert!(
+            actual
+                .windows(2)
+                .all(|pair| pair[0].paid_at <= pair[1].paid_at),
+            "Date ascending order must hold across page boundaries"
+        );
+    }
+}
+
+#[test]
+fn test_amount_descending_pagination_is_complete_for_random_datasets() {
+    for count in [1, 10, 50, 100] {
+        let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+        let expected = seed_random_history(
+            &env,
+            &client,
+            &merchant,
+            &payer,
+            &token,
+            count,
+            0xB0B + count as u64,
+        );
+        let actual = collect_merchant_history(
+            &client,
+            &merchant,
+            SortField::Amount,
+            SortOrder::Descending,
+        );
+
+        assert_history_matches_dataset(&actual, &expected);
+        assert!(
+            actual
+                .windows(2)
+                .all(|pair| pair[0].amount >= pair[1].amount),
+            "Amount descending order must hold across page boundaries"
+        );
+    }
+}
+
 #[test]
 fn test_sort_by_amount_ascending() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
@@ -3865,7 +4039,26 @@ fn test_register_merchant_custom_category_success() {
 fn test_register_merchant_custom_category_max_length_success() {
     let (env, client) = setup();
     let merchant = Address::generate(&env);
-    // Exactly 32 characters — should pass
+    // Exactly 64 characters — should pass (new max per issue #1027)
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Custom(str(&env, "1234567890123456789012345678901234567890123456789012345678901234")),
+    );
+    let stored = client.get_merchant(&merchant);
+    assert_eq!(
+        stored.category,
+        MerchantCategory::Custom(str(&env, "1234567890123456789012345678901234567890123456789012345678901234"))
+    );
+}
+
+/// Previously valid 32-char categories must still be accepted at the new 64-char limit.
+#[test]
+fn test_register_merchant_custom_category_32_chars_still_valid() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
     client.register_merchant(
         &merchant,
         &str(&env, "Store"),
@@ -3898,15 +4091,80 @@ fn test_register_merchant_custom_category_empty_fails() {
 fn test_register_merchant_custom_category_too_long_fails() {
     let (env, client) = setup();
     let merchant = Address::generate(&env);
-    // 33 characters — should fail
+    // 65 characters — should fail (max is 64 per issue #1027)
     let result = client.try_register_merchant(
         &merchant,
         &str(&env, "Store"),
         &str(&env, "desc"),
         &str(&env, "c@c.com"),
-        &MerchantCategory::Custom(str(&env, "123456789012345678901234567890123")),
+        &MerchantCategory::Custom(str(&env, "12345678901234567890123456789012345678901234567890123456789012345")),
     );
     assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+#[test]
+fn test_update_merchant_custom_category_empty_fails() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Retail,
+    );
+    let result = client.try_update_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Custom(str(&env, "")),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidCategory)));
+}
+
+#[test]
+fn test_update_merchant_custom_category_too_long_fails() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Retail,
+    );
+    // 65 characters — should fail
+    let result = client.try_update_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Custom(str(&env, "12345678901234567890123456789012345678901234567890123456789012345")),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidCategory)));
+}
+
+#[test]
+fn test_update_merchant_custom_category_valid_succeeds() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Retail,
+    );
+    client.update_merchant(
+        &merchant,
+        &str(&env, "Store"),
+        &str(&env, "desc"),
+        &str(&env, "c@c.com"),
+        &MerchantCategory::Custom(str(&env, "Artisan Crafts")),
+    );
+    let stored = client.get_merchant(&merchant);
+    assert_eq!(stored.category, MerchantCategory::Custom(str(&env, "Artisan Crafts")));
 }
 
 // ── Contract event subscription and provenance tests (#301) ──────────────────
@@ -4235,8 +4493,8 @@ fn test_cleanup_respects_period_does_not_remove_recent_payments() {
     make_payment(&env, &client, &merchant, &payer, &token, "RECENT_001", 500);
     env.ledger().with_mut(|l| l.timestamp += 50);
 
-    let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 0, "recent payment must not be removed");
+    let removed = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(removed.cleaned, 0, "recent payment must not be removed");
 
     // The payment should still be retrievable.
     let p = client.get_payment_by_id(&payer, &str(&env, "RECENT_001"));
@@ -4257,8 +4515,8 @@ fn test_cleanup_only_removes_payments_older_than_period() {
     // NEW_PAY is created after the cutoff — it should survive.
     make_payment(&env, &client, &merchant, &payer, &token, "NEW_PAY", 200);
 
-    let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 1, "only the expired payment should be removed");
+    let removed = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(removed.cleaned, 1, "only the expired payment should be removed");
 
     // NEW_PAY must still exist.
     let p = client.get_payment_by_id(&payer, &str(&env, "NEW_PAY"));
@@ -4273,8 +4531,8 @@ fn test_cleanup_with_no_expired_payments_returns_zero() {
     client.set_payment_cleanup_period(&admin, &86_400);
     make_payment(&env, &client, &merchant, &payer, &token, "SAFE_001", 300);
 
-    let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 0);
+    let removed = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(removed.cleaned, 0);
 }
 
 #[test]
@@ -4286,8 +4544,8 @@ fn test_cleanup_empty_contract_returns_zero() {
     client.set_payment_cleanup_period(&admin, &1);
     env.ledger().with_mut(|l| l.timestamp += 10);
 
-    let removed = client.cleanup_expired_payments(&admin);
-    assert_eq!(removed, 0);
+    let removed = client.cleanup_expired_payments(&admin, &None);
+    assert_eq!(removed.cleaned, 0);
 }
 
 #[test]
@@ -5125,7 +5383,7 @@ fn test_cleanup_expired_payments_unauthorized() {
     let admin = Address::generate(&env);
     let non_admin = Address::generate(&env);
     client.set_admin(&admin);
-    let result = client.try_cleanup_expired_payments(&non_admin);
+    let result = client.try_cleanup_expired_payments(&non_admin, &None);
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
 
@@ -9438,4 +9696,271 @@ fn test_replay_in_batch_payment_fails() {
         Err(Ok(PaymentError::PaymentAlreadyExists)),
         "batch containing existing order_id must fail"
     );
+}
+
+// ── Issue #1025: config_updated event tests ───────────────────────────────────
+
+#[test]
+fn test_set_platform_fee_emits_config_updated() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    // Should succeed without error
+    client.set_platform_fee(&admin, &250); // 2.5%
+}
+
+#[test]
+fn test_set_refund_window_emits_config_updated() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let new_window = 14 * 24 * 3600u64; // 14 days
+    client.set_refund_window(&admin, &new_window);
+}
+
+#[test]
+fn test_set_min_refund_amount_emits_config_updated() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    client.set_min_refund_amount(&admin, &100i128);
+}
+
+#[test]
+fn test_set_multisig_expiry_duration_emits_config_updated() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let new_duration = 3 * 24 * 3600u64; // 3 days
+    client.set_multisig_expiry_duration(&admin, &new_duration);
+}
+
+#[test]
+fn test_set_platform_fee_unauthorized_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_set_platform_fee(&non_admin, &100);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_set_refund_window_unauthorized_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_set_refund_window(&non_admin, &(7 * 24 * 3600));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_set_min_refund_amount_unauthorized_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_set_min_refund_amount(&non_admin, &50i128);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_set_multisig_expiry_duration_unauthorized_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_set_multisig_expiry_duration(&non_admin, &86400);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_add_and_remove_allowed_token() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+    client.set_admin(&admin);
+
+    // Add token - should succeed
+    client.add_allowed_token(&admin, &token);
+
+    // Remove token - should succeed
+    client.remove_allowed_token(&admin, &token);
+}
+
+#[test]
+fn test_add_allowed_token_unauthorized_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+    client.set_admin(&admin);
+
+    let result = client.try_add_allowed_token(&non_admin, &token);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_set_min_refund_amount_zero_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    // Zero is not a valid positive amount
+    let result = client.try_set_min_refund_amount(&admin, &0i128);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
+}
+
+// ── Max signers limit tests (issue #1269) ─────────────────────────────────────
+
+/// Helper: build a Vec<Address> of `n` freshly generated addresses.
+fn make_signers(env: &Env, n: usize) -> Vec<Address> {
+    let mut v = Vec::new(env);
+    for _ in 0..n {
+        v.push_back(Address::generate(env));
+    }
+    v
+}
+
+/// Exactly 10 signers (the default limit) must be accepted.
+#[test]
+fn test_multisig_exactly_max_signers_accepted() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let _ = admin; // silence unused warning; admin already set by setup_payment_env
+    let signers = make_signers(&env, 10);
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_MAX_OK"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &1,
+        &None,
+    );
+    assert!(result.is_ok(), "10 signers should be accepted by default");
+}
+
+/// 11 signers must be rejected with TooManySigners.
+#[test]
+fn test_multisig_exceeds_max_signers_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signers = make_signers(&env, 11);
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_TOO_MANY"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &1,
+        &None,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TooManySigners)));
+}
+
+/// 0 signers must still be rejected with InvalidInput (existing guard).
+#[test]
+fn test_multisig_zero_signers_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signers = make_signers(&env, 0);
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_ZERO"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &1,
+        &None,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+/// 1 signer must be accepted.
+#[test]
+fn test_multisig_single_signer_accepted() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signers = make_signers(&env, 1);
+
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_ONE"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &1,
+        &None,
+    );
+    assert!(result.is_ok(), "1 signer should be accepted");
+}
+
+/// Admin can raise the limit via set_max_signers; after raising to 15 a list
+/// of 15 signers must be accepted.
+#[test]
+fn test_set_max_signers_admin_configurable() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    // Raise the limit to 15.
+    client.set_max_signers(&admin, &15u32);
+
+    let signers = make_signers(&env, 15);
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_RAISED"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &1,
+        &None,
+    );
+    assert!(result.is_ok(), "15 signers should be accepted after raising the limit to 15");
+}
+
+/// After raising the limit to 15, a list of 16 must still be rejected.
+#[test]
+fn test_set_max_signers_still_enforced_after_admin_change() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    client.set_max_signers(&admin, &15u32);
+
+    let signers = make_signers(&env, 16);
+    let result = client.try_initiate_multisig_payment(
+        &payer,
+        &str(&env, "MS_RAISED_TOO_MANY"),
+        &merchant,
+        &token,
+        &1_000,
+        &signers,
+        &1,
+        &None,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::TooManySigners)));
+}
+
+/// set_max_signers with 0 must be rejected with InvalidInput.
+#[test]
+fn test_set_max_signers_zero_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_set_max_signers(&admin, &0u32);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
 }

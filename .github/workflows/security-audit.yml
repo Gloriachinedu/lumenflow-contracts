@@ -18,7 +18,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c  # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8  # master
         with:
           toolchain: 1.87.0
 
@@ -48,6 +48,21 @@ jobs:
           name: cargo-audit-report
           path: cargo-audit-report.json
           retention-days: 30
+
+  security-regression-check:
+    name: Security Regression Coverage Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
+
+      - name: Run security regression check
+        run: ./scripts/security-regression-check.sh
+
+      - name: Run security regression check (strict — fail on gaps)
+        run: ./scripts/security-regression-check.sh --strict
+        continue-on-error: true
 
   npm-audit:
     name: npm Audit (Node.js)

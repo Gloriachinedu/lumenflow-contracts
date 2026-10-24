@@ -30,6 +30,7 @@ This document lists all the error codes returned by the LumenFlow contract, alon
 | `PaymentExpired` | 24 | The payment request has expired. | Create a new payment request. |
 | `InsufficientBalance` | 25 | The payer does not have enough tokens to complete the payment. | Ensure the payer has sufficient funds in the specified token. |
 | `TokenNotAllowed` | 26 | The specified token is not accepted. | Use a supported token. |
+| `InvalidTtl` | 27 | The `ttl` parameter is zero, would overflow the ledger timestamp type, or would produce an expiry timestamp in the past. | Provide a positive `ttl` value (seconds) that does not cause `current_ledger_timestamp + ttl` to overflow `u64`. Typical valid values range from `1` (1 second) to `31536000` (1 year). |
 
 ## Refund Errors
 
@@ -64,6 +65,7 @@ This document lists all the error codes returned by the LumenFlow contract, alon
 | `BatchSizeExceeded` | 52 | The batch operation exceeds the maximum allowed items. | Reduce the number of items in the batch. |
 | `InvalidTags` | 53 | The provided tags exceed length or count limits. | Ensure tags are within the allowed limits (e.g., max 5 tags, max 20 chars per tag). |
 | `SerializedPayloadTooLarge` | 54 | The serialized payload for a batch item exceeds the maximum allowed size (1 024 bytes). | Reduce the size of memo, order_id, or other string fields in the batch item. |
+| `DuplicateOrderId` | 55 | Two or more items within a single `batch_payment` call share the same `order_id`. | Ensure every `order_id` in the batch is unique. Unlike `PaymentAlreadyExists` (21), this error signals an intra-batch collision rather than a collision with an existing on-chain record. |
 
 ## Subscription Errors
 

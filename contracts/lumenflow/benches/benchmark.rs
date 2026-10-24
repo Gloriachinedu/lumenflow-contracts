@@ -183,7 +183,7 @@ fn benchmark_cleanup(c: &mut Criterion) {
 
     c.bench_function("cleanup_expired_payments", |b| {
         b.iter(|| {
-            client.cleanup_expired_payments(&admin);
+            client.cleanup_expired_payments(&admin, &Option::<u32>::None);
         });
     });
 }

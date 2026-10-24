@@ -4,6 +4,68 @@ Client/edge-side security primitives shipped in `@lumenflow/sdk` under
 `src/security/` (import from `@lumenflow/sdk`). They enforce the same
 invariants the contract and backend enforce, but fail fast and locally.
 
+## Content Security Policy (CSP) for frontend pages (#1011)
+
+All five frontend HTML pages (`history.html`, `receipt.html`, `multisig.html`,
+`onboarding.html`, `dashboard.html`) include a `<meta http-equiv="Content-Security-Policy">` tag with the following policy:
+
+```
+default-src 'self';
+script-src 'self' https://cdn.jsdelivr.net;
+style-src 'self' 'unsafe-inline';
+connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://horizon.stellar.org;
+img-src 'self' data:;
+font-src 'self';
+object-src 'none';
+frame-ancestors 'none';
+```
+
+### Policy rationale
+
+| Directive | Value | Reason |
+|-----------|-------|--------|
+| `default-src` | `'self'` | Restricts all resource types to same origin by default |
+| `script-src` | `'self' https://cdn.jsdelivr.net` | Allows only self-hosted scripts and the CDN used for Stellar SDK bundles; **no `'unsafe-inline'`** |
+| `style-src` | `'self' 'unsafe-inline'` | Inline styles are required by dynamically rendered UI components; will be tightened with nonces in a future iteration |
+| `connect-src` | self + Stellar RPC/Horizon endpoints | Required for Soroban RPC and Horizon API calls; Freighter wallet communicates via browser extension messaging, not fetch |
+| `object-src` | `'none'` | Prevents Flash and other plugin-based attacks |
+| `frame-ancestors` | `'none'` | Blocks clickjacking — equivalent to `X-Frame-Options: DENY` |
+
+### Freighter wallet compatibility
+
+Freighter (and compatible Stellar browser wallets) communicates with the page
+through the browser extension messaging API (`window.postMessage` /
+`chrome.runtime`), not via `fetch` or script injection. The policy above does
+not interfere with this mechanism.
+
+### CSP violation logging
+
+Every page registers a `securitypolicyviolation` event listener that writes
+full violation details to `console.error` in development:
+
+```js
+document.addEventListener('securitypolicyviolation', function(e) {
+  console.error('[CSP Violation]', {
+    blockedURI: e.blockedURI,
+    violatedDirective: e.violatedDirective,
+    effectiveDirective: e.effectiveDirective,
+    originalPolicy: e.originalPolicy,
+    sourceFile: e.sourceFile,
+    lineNumber: e.lineNumber,
+  });
+});
+```
+
+In production, violations should be forwarded to a monitoring endpoint. Wire
+a `report-uri` or `report-to` directive once a report collector is available.
+
+### Future hardening
+
+- Replace `style-src 'unsafe-inline'` with nonce-based or hash-based inline
+  style allowance once the build pipeline supports nonce injection.
+- Add a `report-to` directive pointing to a CSP violation reporting endpoint.
+- Consider adding `require-trusted-types-for 'script'` for high-risk pages.
+
 ## Secure cookie, transport and browser headers (#897)
 
 `buildSecurityHeaders(options?)` returns the recommended response headers for

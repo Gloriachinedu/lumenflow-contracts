@@ -1,49 +1,86 @@
 version: 2
 updates:
-  # Rust / Cargo — workspace root
+  # ── Rust / Cargo ─────────────────────────────────────────────────────────
+
+  # Cargo — workspace root (Cargo.toml + Cargo.lock)
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
     reviewers:
       - "maintainer-team"
+    open-pull-requests-limit: 10
 
-  # Rust / Cargo — main contract
+  # Cargo — main lumenflow contract
   - package-ecosystem: "cargo"
     directory: "/contracts/lumenflow"
     schedule:
       interval: "weekly"
+      day: "monday"
     reviewers:
       - "maintainer-team"
+    open-pull-requests-limit: 10
 
-  # GitHub Actions
+  # ── GitHub Actions ────────────────────────────────────────────────────────
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
     reviewers:
       - "maintainer-team"
+    open-pull-requests-limit: 10
 
-  # npm — root (Playwright e2e tests)
+  # ── npm ───────────────────────────────────────────────────────────────────
+
+  # npm — workspace root (Playwright e2e tests, tooling)
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
     reviewers:
       - "maintainer-team"
+    open-pull-requests-limit: 10
 
   # npm — TypeScript SDK
   - package-ecosystem: "npm"
     directory: "/sdk"
     schedule:
       interval: "weekly"
+      day: "monday"
     reviewers:
       - "maintainer-team"
+    open-pull-requests-limit: 10
 
   # npm — Frontend static pages
   - package-ecosystem: "npm"
     directory: "/frontend"
     schedule:
       interval: "weekly"
+      day: "monday"
     reviewers:
       - "maintainer-team"
+    open-pull-requests-limit: 10
+
+  # npm — Webhook server (webhook/package.json)
+  - package-ecosystem: "npm"
+    directory: "/webhook"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    reviewers:
+      - "maintainer-team"
+    open-pull-requests-limit: 10
+
+  # npm — Integration / contract tests (tests/package.json)
+  - package-ecosystem: "npm"
+    directory: "/tests"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    reviewers:
+      - "maintainer-team"
+    open-pull-requests-limit: 10

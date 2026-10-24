@@ -3,6 +3,17 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- Inline theme bootstrap: runs synchronously before first paint to prevent dark-mode flash.
+       Must appear before the CSP meta so it executes regardless of inline-script restrictions. -->
+  <script>
+    (function() {
+      try {
+        var stored = localStorage.getItem('lf-theme');
+        var theme = stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', theme);
+      } catch (e) {}
+    })();
+  </script>
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://horizon.stellar.org; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none';" />
   <title>Payment History – LumenFlow</title>
   <meta name="description" content="View and filter your complete LumenFlow payment history, sorted and paginated for easy browsing." />
@@ -16,6 +27,8 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="LumenFlow" />
   <link rel="apple-touch-icon" href="icons/icon.svg" />
+  <!-- focus-visible polyfill: adds .focus-visible class for Safari < 15.4 (issue #1016) -->
+  <script src="focus-visible-polyfill.js"></script>
   <link rel="stylesheet" href="styles.css" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -240,9 +253,49 @@
 
     /* ── Empty state ─────────────────────────────────────────────────────────── */
     .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1rem;
       padding: 4rem 2rem;
       text-align: center;
+    }
+    .empty-state-illustration {
+      width: 120px;
+      height: 120px;
+      opacity: 0.5;
+    }
+    .empty-state-title {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: #4a4a6a;
+      margin: 0;
+    }
+    .empty-state-message {
+      font-size: 0.9rem;
       color: #888;
+      max-width: 400px;
+      line-height: 1.5;
+      margin: 0;
+    }
+    .empty-state-cta {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.6rem 1.5rem;
+      border-radius: 8px;
+      background: #6c47ff;
+      color: #fff;
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-decoration: none;
+      transition: background 0.15s;
+      margin-top: 0.5rem;
+    }
+    .empty-state-cta:hover { background: #5032d1; }
+    .empty-state-cta:focus-visible {
+      outline: 2px solid #6c47ff;
+      outline-offset: 2px;
     }
     .empty-state .empty-svg { margin-bottom: 1.25rem; }
     .empty-state .empty-title {
@@ -285,6 +338,60 @@
     .skeleton-cell.w-amount { width: 80px; }
     .skeleton-cell.w-status { width: 70px; }
 
+    /* ── Skeleton / Shimmer loading ───────────────────────────────────────────── */
+    @keyframes shimmer {
+      0%   { background-position: -800px 0; }
+      100% { background-position:  800px 0; }
+    }
+
+    .skeleton-row td {
+      padding: 1rem;
+      border-bottom: 1px solid #f9f9f9;
+    }
+
+    .skeleton-cell {
+      display: inline-block;
+      height: 0.85rem;
+      border-radius: 4px;
+      background: linear-gradient(90deg, #ebebeb 25%, #f5f5f5 50%, #ebebeb 75%);
+      background-size: 800px 100%;
+      animation: shimmer 1.4s ease-in-out infinite;
+    }
+
+    /* Dark-mode friendly: inherit shimmer colours from the system palette */
+    @media (prefers-color-scheme: dark) {
+      .skeleton-cell {
+        background: linear-gradient(90deg, #2e2e3e 25%, #3a3a4e 50%, #2e2e3e 75%);
+        background-size: 800px 100%;
+      }
+    }
+
+    /* Column-specific widths to mirror real data widths */
+    .sk-date       { width: 9rem; }
+    .sk-order      { width: 7rem; }
+    .sk-merchant   { width: 5rem; }
+    .sk-amount     { width: 6rem; }
+    .sk-status     { width: 5.5rem; height: 1.3rem; border-radius: 4px; }
+
+    /* Mobile: skeleton cards */
+    @media (max-width: 767px) {
+      .skeleton-row {
+        display: block;
+        border: 1px solid #eee;
+        border-radius: 8px;
+        margin-bottom: 0.75rem;
+        padding: 0.75rem;
+        background: #fff;
+      }
+      .skeleton-row td {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.35rem 0;
+        border-bottom: none;
+      }
+    }
+
     /* ── Accessibility ────────────────────────────────────────────────────────── */
     .sr-only {
       position: absolute;
@@ -312,10 +419,62 @@
     .verified-badge {
       display: inline-flex;
       align-items: center;
-      gap: 0.25rem;
-      font-size: 0.7rem;
+      gap: 0.2rem;
+      font-size: 0.65rem;
       color: #1a9e5c;
       font-weight: 600;
+      cursor: help;
+      position: relative;
+      vertical-align: middle;
+      margin-left: 0.3rem;
+    }
+
+    .verified-badge .verified-tooltip {
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%) translateY(-4px);
+      background: #1a1a2e;
+      color: #fff;
+      font-size: 0.72rem;
+      font-weight: 400;
+      padding: 0.4rem 0.6rem;
+      border-radius: 6px;
+      white-space: normal;
+      width: max-content;
+      max-width: 240px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.15s ease;
+      z-index: 10;
+    }
+
+    .verified-badge:hover .verified-tooltip,
+    .verified-badge:focus .verified-tooltip {
+      opacity: 1;
+    }
+
+    .verified-badge .verified-tooltip::after {
+      content: '';
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      border: 5px solid transparent;
+      border-top-color: #1a1a2e;
+    }
+
+    [data-theme="dark"] .verified-badge {
+      color: #34d48a;
+    }
+
+    [data-theme="dark"] .verified-badge .verified-tooltip {
+      background: #e8e8f0;
+      color: #1a1a2e;
+    }
+
+    [data-theme="dark"] .verified-badge .verified-tooltip::after {
+      border-top-color: #e8e8f0;
     }
 
     /* ── Skip link ───────────────────────────────────────────────────────── */
@@ -340,6 +499,7 @@
 <nav class="lf-nav" aria-label="LumenFlow navigation">
   <span class="lf-nav__brand">⚡ LumenFlow</span>
   <div id="wallet-status-container"></div>
+  <div id="lf-lang-nav"></div>
 </nav>
 
 <main id="history-main">
@@ -469,6 +629,30 @@
 </div>
 
 <script type="module" src="history.js"></script>
+<script type="module">
+  import { initDarkMode } from './dark-mode.js';
+  initDarkMode();
+</script>
+<script type="module">
+  import { i18n } from './i18n.js';
+  i18n.init().then(() => {
+    i18n.renderSwitcher(document.getElementById('lf-lang-nav'));
+  });
+</script>
+
+<!-- CSP violation reporter: logs policy violations to the console in development -->
+<script>
+  document.addEventListener('securitypolicyviolation', function(e) {
+    console.error('[CSP Violation]', {
+      blockedURI: e.blockedURI,
+      violatedDirective: e.violatedDirective,
+      effectiveDirective: e.effectiveDirective,
+      originalPolicy: e.originalPolicy,
+      sourceFile: e.sourceFile,
+      lineNumber: e.lineNumber,
+    });
+  });
+</script>
 
 </main>
 </body>

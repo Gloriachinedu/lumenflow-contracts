@@ -1,3 +1,5 @@
+> Decision criteria and governance process for this backlog are documented in [ADR-008](adr/ADR-008-supported-asset-expansion.md).
+
 # Prioritized Backlog for Supported Asset Expansion
 
 **Issue:** [#907](https://github.com/Gloriachinedu/lumenflow-contracts/issues/907)
@@ -50,6 +52,9 @@ Ranks are reviewed monthly; new candidates enter the table scored, not appended.
 ---
 
 ## Rollout Checklist (per asset)
+
+For the operator-facing steps and CLI commands behind items 3–4 below, see
+[add-supported-token.md](add-supported-token.md).
 
 1. Score against criteria; record in this table with a dated entry.
 2. Issuer due diligence: reserves, audits, freeze/clawback terms, redemption.

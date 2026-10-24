@@ -8,6 +8,12 @@ This guide explains how to receive real-time notifications of LumenFlow contract
 
 LumenFlow emits Soroban contract events for every significant action (payments, refunds, disputes, etc.). Your backend can subscribe to these events via the Horizon HTTP event stream and trigger webhooks or internal workflows.
 
+The Node.js example in this guide is an outbound Horizon event consumer: it
+forwards events to `WEBHOOK_URL`. This repository does not currently contain an
+inbound webhook receiver at `webhook/webhook-server.js` or a receiver package
+and test suite. Issue #1099's request-body limit needs an owning receiver
+implementation before it can be applied and tested safely.
+
 ---
 
 ## 1. Listening to the Horizon Event Stream
@@ -37,6 +43,16 @@ https://horizon-testnet.stellar.org/contracts/{CONTRACT_ID}/events?cursor=now&to
 ---
 
 ## 2. Verifying Event Authenticity
+
+For webhook deliveries signed by an integration secret, verify the raw request body before parsing it. The SDK expects the `X-LumenFlow-Signature` value in the form `sha256=<64 lowercase or uppercase hex characters>`:
+
+```typescript
+import { verifyWebhookSignature } from "@lumenflow/sdk";
+
+const valid = verifyWebhookSignature(rawBody, request.headers["x-lumenflow-signature"], process.env.WEBHOOK_SECRET);
+```
+
+`rawBody` must be the original request bytes. The helper uses HMAC-SHA256 and a timing-safe comparison for equal-length digests, returns `false` for a bad secret, payload, or digest length, and throws for an empty secret or malformed signature.
 
 Events delivered via Horizon are signed by the Stellar network validators. To verify an event is genuine:
 
@@ -293,6 +309,79 @@ async function handleEvent(event) {
 ### Order IDs as natural idempotency keys
 
 For `payment_processed` events, the `order_id` in the event data is unique per payment. You can use it as a secondary idempotency key in your payments table.
+
+---
+
+## 4b. Verifying Webhook Signatures with the SDK
+
+When LumenFlow delivers a webhook event to your backend, it includes an
+`x-lumenflow-signature` header containing a hex-encoded HMAC-SHA256 digest of
+the raw request body. The digest is computed using a shared secret you configure
+on both sides.
+
+The `@lumenflow/sdk` package provides a `verifyWebhookSignature` helper that
+performs a **constant-time** HMAC-SHA256 comparison to prevent timing attacks.
+
+### Usage
+
+```typescript
+import { verifyWebhookSignature } from '@lumenflow/sdk';
+import express from 'express';
+
+const app = express();
+
+// IMPORTANT: capture the raw body before JSON parsing
+app.use('/webhooks/lumenflow', express.raw({ type: 'application/json' }), (req, res) => {
+  const rawBody = req.body as Buffer;
+  const signature = req.headers['x-lumenflow-signature'] as string;
+  const secret = process.env.LUMENFLOW_WEBHOOK_SECRET!;
+
+  try {
+    const valid = verifyWebhookSignature(rawBody, signature, secret);
+    if (!valid) {
+      return res.status(401).json({ error: 'Invalid signature' });
+    }
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+
+  // Signature is valid — safe to parse and process the event
+  const event = JSON.parse(rawBody.toString());
+  console.log(`Received event: ${event.topic[1]}`);
+  // ... apply business logic with idempotency checks ...
+  res.status(200).json({ received: true });
+});
+```
+
+### API
+
+```typescript
+verifyWebhookSignature(
+  payload: Buffer | string,
+  signature: string,
+  secret: string,
+): boolean
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `payload` | `Buffer \| string` | Raw webhook request body |
+| `signature` | `string` | Hex-encoded HMAC-SHA256 digest from `x-lumenflow-signature` header |
+| `secret` | `string` | Shared secret configured on both sides |
+
+**Returns:** `true` if the signature is valid, `false` otherwise.
+
+**Throws** when:
+- `payload` is `null` or `undefined`
+- `signature` is empty or whitespace-only
+- `secret` is empty or whitespace-only
+
+### Security notes
+
+- The helper uses `crypto.timingSafeEqual` to compare the expected and received
+  digests in constant time, preventing timing side-channel attacks.
+- Always verify the signature on the **raw** request body, before any JSON
+  parsing, to ensure the digest matches the exact bytes that were sent.
 
 ---
 
