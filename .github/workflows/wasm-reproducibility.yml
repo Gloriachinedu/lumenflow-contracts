@@ -162,7 +162,7 @@ jobs:
 
       - name: Open GitHub issue on mismatch
         if: steps.compare.outputs.match == 'false'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const hashA = process.env.HASH_A;
