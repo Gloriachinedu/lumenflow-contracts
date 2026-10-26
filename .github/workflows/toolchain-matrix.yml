@@ -208,7 +208,7 @@ jobs:
 
       # Install the Terraform CLI for the current matrix cell.
       - name: Set up Terraform ${{ matrix.terraform-version }}
-        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269ef065  # v3.1.2
+        uses: hashicorp/setup-terraform@b75000b53e9ce4de2b4712237bbdb711bdc92aba  # v3.1.2
         with:
           terraform_version: ${{ matrix.terraform-version }}
 
