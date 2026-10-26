@@ -104,7 +104,7 @@ jobs:
           sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
 
       - name: Upload artifact (7-day retention)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lumenflow-cli-nightly-${{ matrix.target }}
           path: |
@@ -218,7 +218,7 @@ jobs:
 
       - name: Upload integration test log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cli-integration-test-results-${{ github.run_id }}
           path: integration-test-results/
