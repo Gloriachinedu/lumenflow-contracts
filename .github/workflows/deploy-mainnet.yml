@@ -278,7 +278,7 @@ jobs:
 
       - name: Notify Slack — auto-rollback triggered
         if: steps.auto_rollback.conclusion != 'skipped'
-        uses: slackapi/slack-github-action@v1.26.0
+        uses: slackapi/slack-github-action@v4.0.0
         with:
           payload: |
             {
@@ -299,7 +299,7 @@ jobs:
 
       - name: Notify Slack — mainnet deploy succeeded
         if: success()
-        uses: slackapi/slack-github-action@v1.26.0
+        uses: slackapi/slack-github-action@v4.0.0
         with:
           payload: |
             {
@@ -320,7 +320,7 @@ jobs:
 
       - name: Notify Slack — mainnet deploy FAILED
         if: failure()
-        uses: slackapi/slack-github-action@v1.26.0
+        uses: slackapi/slack-github-action@v4.0.0
         with:
           payload: |
             {

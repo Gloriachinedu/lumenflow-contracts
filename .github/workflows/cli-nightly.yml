@@ -241,7 +241,7 @@ jobs:
     if: failure()
     steps:
       - name: Post to #ci-alerts Slack channel
-        uses: slackapi/slack-github-action@v1.26.0
+        uses: slackapi/slack-github-action@v4.0.0
         with:
           payload: |
             {

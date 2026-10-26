@@ -181,7 +181,7 @@ jobs:
 
       - name: Notify Slack — rollback verification passed
         if: success() && steps.verify.outputs.result == 'passed'
-        uses: slackapi/slack-github-action@v1.26.0
+        uses: slackapi/slack-github-action@v4.0.0
         continue-on-error: true
         with:
           payload: |
@@ -203,7 +203,7 @@ jobs:
 
       - name: Notify Slack — rollback verification FAILED
         if: failure()
-        uses: slackapi/slack-github-action@v1.26.0
+        uses: slackapi/slack-github-action@v4.0.0
         continue-on-error: true
         with:
           payload: |
