@@ -151,7 +151,7 @@ jobs:
 
       - name: Commit updated wasm-size-history.json
         if: steps.compare.outputs.match == 'true'
-        uses: stefanzweifel/git-auto-commit-action@v5
+        uses: stefanzweifel/git-auto-commit-action@v7
         with:
           commit_message: 'chore(ci): update wasm-size-history.json [nightly reproducibility]'
           file_pattern: 'wasm-size-history.json'
