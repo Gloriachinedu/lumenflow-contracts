@@ -67,7 +67,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Post preview URL as PR comment
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -157,7 +157,7 @@ jobs:
           fi
 
       - name: Update PR comment to reflect cleanup
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
