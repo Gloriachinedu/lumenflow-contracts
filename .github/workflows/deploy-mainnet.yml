@@ -212,7 +212,7 @@ jobs:
 
       - name: Upload smoke test results
         if: always() && inputs.skip_smoke == 'false'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mainnet-smoke-results-${{ github.run_id }}
           path: smoke-results/
@@ -270,7 +270,7 @@ jobs:
 
       - name: Upload rollback log
         if: always() && steps.auto_rollback.conclusion != 'skipped'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mainnet-rollback-results-${{ github.run_id }}
           path: smoke-results/rollback-mainnet.log
