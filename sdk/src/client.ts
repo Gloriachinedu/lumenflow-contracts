@@ -147,6 +147,25 @@ import {
 } from "./types";
 import { LumenFlowError, PaymentErrorCode } from "./errors";
 import { withIdempotency, IdempotentResult } from "./idempotency";
+import { pollContractEvents } from "./eventPoller";
+import { parseLumenFlowEvent, TypedEventPayload } from "./events";
+
+/**
+ * Options for {@link LumenFlowClient.subscribe}.
+ */
+export interface SubscribeOptions {
+  /**
+   * Polling interval in milliseconds.
+   * Defaults to `5000` (5 seconds).
+   */
+  intervalMs?: number;
+}
+
+/**
+ * A function returned by {@link LumenFlowClient.subscribe} that stops polling
+ * and clears the underlying interval.
+ */
+export type Unsubscribe = () => void;
 
 /**
  * A function that signs a Stellar transaction.
@@ -1431,7 +1450,10 @@ export class LumenFlowClient {
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
-  private async call(method: string, args: any[] = []): Promise<any> {
+  private async call<T = unknown>(
+    method: string,
+    args: xdr.ScVal[] = []
+  ): Promise<T> {
     const tx = new TransactionBuilder(
       new SorobanRpc.Account("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", "0"),
       {
@@ -1439,7 +1461,7 @@ export class LumenFlowClient {
         networkPassphrase: this.networkPassphrase,
       }
     )
-      .addOperation(this.contract.call(method, ...args.map(a => nativeToScVal(a))))
+      .addOperation(this.contract.call(method, ...args))
       .setTimeout(TimeoutInfinite)
       .build();
 
@@ -1449,26 +1471,25 @@ export class LumenFlowClient {
     }
 
     if (simulation.result) {
-      return scValToNative(simulation.result.retval);
+      return scValToNative(simulation.result.retval) as T;
     }
-    return null;
+    return null as T;
   }
 
-  private async invoke(method: string, args: any[] = []): Promise<any> {
+  private async invoke<T = unknown>(
+    method: string,
+    args: xdr.ScVal[] = []
+  ): Promise<T> {
     if (!this.signer) {
       throw new Error("A signer is required for state-changing operations.");
     }
-
-    const sourceAccount = await this.server.getAccount("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"); // Dummy for simulation if needed, but we need real one for execution
-    // Actually, we should probably get the account from the signer or pass it in.
-    // For now, let's assume we can use a dummy for simulation to get the footprint.
 
     const dummyAccount = new SorobanRpc.Account("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", "0");
     let tx = new TransactionBuilder(dummyAccount, {
       fee: "100",
       networkPassphrase: this.networkPassphrase,
     })
-      .addOperation(this.contract.call(method, ...args.map(a => nativeToScVal(a))))
+      .addOperation(this.contract.call(method, ...args))
       .setTimeout(TimeoutInfinite)
       .build();
 
@@ -1476,19 +1497,6 @@ export class LumenFlowClient {
     if (SorobanRpc.Api.isSimulationError(simulation)) {
       throw this.wrapError(simulation);
     }
-
-    // Prepare for real execution
-    // We need the actual source account to build the real transaction
-    // Let's assume the first arg is often the "caller/admin/payer/merchant" address if it's an Address.
-    let realSourceAddress = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
-    if (args.length > 0 && args[0] instanceof Address) {
-      // This is a heuristic, but often the first param is the one requiring auth
-      // In Soroban, any account can pay for fees, but the contract usually checks require_auth() on params.
-    }
-
-    // For simplicity in this SDK, we might need a way to specify the fee payer.
-    // Let's just use the simulation's results and let the signer handle the final steps if it's a wallet.
-    // But standard way is to assemble it here.
 
     tx = SorobanRpc.assembleTransaction(tx, simulation).build();
     const signedTx = await this.signer(tx);
@@ -1500,7 +1508,7 @@ export class LumenFlowClient {
 
     // Poll for status
     let statusResponse = await this.server.getTransaction(response.hash);
-    while (statusResponse.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND || 
+    while (statusResponse.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND ||
            statusResponse.status === SorobanRpc.Api.GetTransactionStatus.PROCESSING) {
       await new Promise(resolve => setTimeout(resolve, 1000));
       statusResponse = await this.server.getTransaction(response.hash);
@@ -1511,10 +1519,10 @@ export class LumenFlowClient {
         // Parse result from meta if needed
         const result = statusResponse.returnValue;
         if (result) {
-          return scValToNative(result);
+          return scValToNative(result) as T;
         }
       }
-      return null;
+      return null as T;
     } else {
       throw new Error(`Transaction failed with status ${statusResponse.status}: ${JSON.stringify(statusResponse)}`);
     }
@@ -1532,5 +1540,95 @@ export class LumenFlowClient {
       }
     }
     return new Error(`Simulation failed: ${errorMsg}`);
+  }
+
+  // ── Event subscription ────────────────────────────────────────────────────
+
+  /**
+   * Subscribe to on-chain contract events of a given type.
+   *
+   * This is a high-level wrapper around the low-level event poller. It polls
+   * the Soroban RPC endpoint at a configurable interval, decodes each raw
+   * contract event into a typed {@link TypedEventPayload}, and invokes
+   * `handler` for every matching event.
+   *
+   * Handler errors are caught and logged so that a single faulty handler
+   * cannot crash the poller or prevent subsequent events from being delivered.
+   *
+   * @param eventType - The contract event type to listen for (e.g. `"payment_completed"`).
+   * @param handler - Callback invoked with the decoded, typed event payload.
+   * @param options - Optional configuration; `intervalMs` defaults to `5000` (5 s).
+   * @returns An {@link Unsubscribe} function that stops polling and clears the interval.
+   *
+   * @example
+   * const unsubscribe = client.subscribe("payment_completed", (event) => {
+   *   console.log("Payment completed:", event);
+   * });
+   *
+   * // Later, when no longer interested:
+   * unsubscribe();
+   */
+  subscribe(
+    eventType: string,
+    handler: (payload: TypedEventPayload) => void,
+    options: SubscribeOptions = {}
+  ): Unsubscribe {
+    const intervalMs = options.intervalMs ?? 5000;
+    let stopped = false;
+    let inFlight = false;
+
+    const tick = async (): Promise<void> => {
+      if (stopped || inFlight) {
+        return;
+      }
+      inFlight = true;
+      try {
+        const rawEvents = await pollContractEvents({
+          server: this.server,
+          contractId: this.contract.contractId(),
+          eventType,
+        });
+
+        for (const raw of rawEvents) {
+          if (stopped) {
+            break;
+          }
+          let payload: TypedEventPayload;
+          try {
+            payload = parseLumenFlowEvent(raw);
+          } catch (decodeErr) {
+            console.warn(
+              "[LumenFlowSDK] Failed to decode contract event:",
+              decodeErr
+            );
+            continue;
+          }
+          try {
+            handler(payload);
+          } catch (handlerErr) {
+            console.error(
+              "[LumenFlowSDK] Event handler threw an error:",
+              handlerErr
+            );
+          }
+        }
+      } catch (pollErr) {
+        console.warn("[LumenFlowSDK] Event polling failed:", pollErr);
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const intervalId = setInterval(() => {
+      void tick();
+    }, intervalMs);
+
+    return () => {
+      if (stopped) {
+        return;
+      }
+      stopped = true;
+      clearInterval(intervalId);
+    };
   }
 }
