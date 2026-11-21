@@ -421,6 +421,27 @@ last_scrape_timestamp = Gauge(
     LABELS,
 )
 
+# ─── Database connection pool metrics ─────────────────────────────────────────
+# Populated by the off-chain persistence layer (see docs/deployment-environments.md
+# for pool sizing guidance: min 2, max 20 connections, 5s query timeout).
+db_pool_active_connections = Gauge(
+    "lumenflow_db_pool_active_connections",
+    "Number of database connections currently checked out of the pool",
+    LABELS,
+)
+
+db_pool_idle_connections = Gauge(
+    "lumenflow_db_pool_idle_connections",
+    "Number of idle database connections available in the pool",
+    LABELS,
+)
+
+db_pool_wait_time_seconds = Gauge(
+    "lumenflow_db_pool_wait_time_seconds",
+    "Time spent waiting for a database connection from the pool, in seconds",
+    LABELS,
+)
+
 # Static "build_info" gauge (always set to 1) whose label set publishes the
 # deployed version and commit SHA to runtime diagnostics — the standard
 # Prometheus pattern for exposing build metadata.

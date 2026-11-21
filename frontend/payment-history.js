@@ -98,7 +98,7 @@
     tbody.setAttribute('aria-busy', 'false');
     cardsList.setAttribute('aria-busy', 'false');
     if (page.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" class="empty">No payments found.</td></tr>';
+      tbody.innerHTML = '';
     } else {
       tbody.innerHTML = page.map(p => `
         <tr>
@@ -112,7 +112,7 @@
 
     // Cards
     if (page.length === 0) {
-      cardsList.innerHTML = '<div class="empty">No payments found.</div>';
+      cardsList.innerHTML = '';
     } else {
       cardsList.innerHTML = page.map(p => `
         <div class="payment-card">
@@ -135,11 +135,28 @@
         </div>`).join('');
     }
 
+    // Empty state
+    toggleEmptyState(sorted.length === 0);
+
     // Pagination controls
     document.getElementById('page-info').textContent =
       sorted.length === 0 ? 'No results' : `Page ${currentPage} of ${totalPages} (${sorted.length} records)`;
     document.getElementById('prev-btn').disabled = currentPage <= 1;
     document.getElementById('next-btn').disabled = currentPage >= totalPages;
+  }
+
+  // ── Empty state ────────────────────────────────────────────────────────────
+  function toggleEmptyState(isEmpty) {
+    const emptyState = document.getElementById('empty-state');
+    const tableWrapper = document.getElementById('table-wrapper');
+    const cardsList = document.getElementById('cards-list');
+    const pagination = document.getElementById('pagination');
+    if (!emptyState) return;
+
+    emptyState.hidden = !isEmpty;
+    if (tableWrapper) tableWrapper.hidden = isEmpty;
+    if (cardsList) cardsList.hidden = isEmpty;
+    if (pagination) pagination.hidden = isEmpty;
   }
 
   // ── Pagination ─────────────────────────────────────────────────────────────

@@ -120,3 +120,53 @@ test('duration_ms is coerced to a non-negative integer', () => {
   A.track('onboarding_completed', { duration_ms: 1234.7, is_demo: true });
   assert.equal(ev.props.duration_ms, 1235);
 });
+
+test('stepViewed records a timestamp for the current step', () => {
+  const A = freshModule();
+  A.configure(() => {});
+  A.start();
+  A.stepViewed(2, 'wallet');
+  const state = A.stepTimingState();
+  assert.ok(state);
+  assert.equal(state.step, 2);
+  assert.equal(state.stage, 'wallet');
+  assert.ok(Number.isFinite(state.viewedAt) && state.viewedAt > 0);
+});
+
+test('step change emits onboarding_step_duration with correct step/stage', () => {
+  const A = freshModule();
+  const seen = [];
+  A.configure((e) => seen.push(e));
+  A.start();
+  A.stepViewed(1, 'business');
+  A.stepViewed(2, 'wallet');
+
+  const durations = seen.filter((e) => e.event === 'onboarding_step_duration');
+  assert.equal(durations.length, 1);
+  const ev = durations[0];
+  assert.equal(ev.props.step, 1);
+  assert.equal(ev.props.stage, 'business');
+  assert.ok(Number.isInteger(ev.props.duration_ms));
+  assert.ok(ev.props.duration_ms >= 0);
+});
+
+test('invalid step durations are rejected', () => {
+  const A = freshModule();
+  let ev = null;
+  A.configure((e) => { ev = e; });
+  A.track('onboarding_step_duration', { step: 1, stage: 'wallet', duration_ms: -1 });
+  assert.ok(ev);
+  assert.equal('duration_ms' in ev.props, false);
+  ev = null;
+  A.track('onboarding_step_duration', { step: 1, stage: 'wallet', duration_ms: NaN });
+  assert.ok(ev);
+  assert.equal('duration_ms' in ev.props, false);
+});
+
+test('step duration event is dropped when unconfigured', () => {
+  const A = freshModule();
+  A.stepViewed(1, 'business');
+  A.stepViewed(2, 'wallet');
+  // No sink configured: nothing dispatched, nothing counted as dropped.
+  assert.equal(A.droppedCount(), 0);
+});

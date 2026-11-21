@@ -273,6 +273,19 @@
       font-size: 0.85rem;
     }
 
+    .empty-illustration {
+      display: block;
+      width: 160px;
+      height: 160px;
+      margin: 0 auto 1rem;
+    }
+
+    .empty-cta {
+      display: inline-block;
+      margin-top: 1.25rem;
+      text-decoration: none;
+    }
+
     /* ── Error state ───────────────────────────────────────────────────── */
     #error-state {
       display: none;
@@ -414,6 +427,22 @@
   <div class="skeleton-card" aria-hidden="true"></div>
   <div class="skeleton-card" aria-hidden="true"></div>
 </div>
+
+<!-- Empty state -->
+<section id="empty-state" aria-labelledby="empty-state-title" hidden>
+  <svg class="empty-illustration" role="img" aria-labelledby="empty-state-svg-title" viewBox="0 0 160 160" xmlns="http://www.w3.org/2000/svg" focusable="false">
+    <title id="empty-state-svg-title">Illustration of an empty payment history with a receipt and a magnifying glass</title>
+    <rect x="34" y="24" width="76" height="96" rx="8" fill="#f0ecff" stroke="#6c47ff" stroke-width="3" />
+    <line x1="48" y1="48" x2="96" y2="48" stroke="#b9a8ff" stroke-width="4" stroke-linecap="round" />
+    <line x1="48" y1="64" x2="96" y2="64" stroke="#b9a8ff" stroke-width="4" stroke-linecap="round" />
+    <line x1="48" y1="80" x2="80" y2="80" stroke="#b9a8ff" stroke-width="4" stroke-linecap="round" />
+    <circle cx="108" cy="104" r="22" fill="#fff" stroke="#6c47ff" stroke-width="3" />
+    <line x1="124" y1="120" x2="138" y2="134" stroke="#6c47ff" stroke-width="5" stroke-linecap="round" />
+  </svg>
+  <h2 class="empty-title" id="empty-state-title" data-i18n="paymentHistory.empty.title">No payments yet</h2>
+  <p class="empty-desc" data-i18n="paymentHistory.empty.description">Once you receive your first payment, it will appear here.</p>
+  <a class="btn btn-primary empty-cta" href="docs/payment-link-guide.md" data-i18n="paymentHistory.empty.cta">Create your first payment link</a>
+</section>
 
 <!-- Pagination -->
 <nav class="pagination" aria-label="Payment history pagination">
