@@ -755,6 +755,70 @@ if (themeToggleBtn) {
   themeToggleBtn.textContent = initialTheme === 'dark' ? '☀️ Light' : '🌙 Dark';
 }
 
+// ── Health badge ──────────────────────────────────────────────────────────────
+/**
+ * Polls the backend `/health` endpoint and reflects dependency status in the
+ * dashboard badge. The badge shows green when all dependencies are healthy,
+ * amber/red when any are degraded, and grey when the status is unknown.
+ */
+const HEALTH_ENDPOINT = '/health';
+const HEALTH_POLL_INTERVAL_MS = 15_000;
+
+function renderHealthBadge(health) {
+  const badge = document.getElementById('healthBadge');
+  if (!badge) return;
+
+  const deps = [
+    ['rpc', health && health.rpc],
+    ['redis', health && health.redis],
+    ['webhookRelay', health && health.webhookRelay],
+  ];
+
+  const known = deps.filter(([, dep]) => dep && typeof dep.ok === 'boolean');
+  const allOk = known.length === deps.length && known.every(([, dep]) => dep.ok);
+
+  let label = 'Unknown';
+  let color = '#6c757d';
+  if (known.length) {
+    if (allOk) {
+      label = 'Healthy';
+      color = '#1a7f37';
+    } else {
+      label = 'Degraded';
+      color = '#b02a37';
+    }
+  }
+
+  badge.textContent = `● ${label}`;
+  badge.style.color = color;
+  badge.dataset.status = allOk ? 'healthy' : (known.length ? 'degraded' : 'unknown');
+
+  const lines = deps.map(([name, dep]) => {
+    if (!dep) return `${name}: unknown`;
+    const parts = [`ok=${dep.ok}`];
+    if (typeof dep.latency_ms === 'number') parts.push(`${dep.latency_ms}ms`);
+    return `${name}: ${parts.join(' ')}`;
+  });
+  badge.title = lines.join('\n');
+}
+
+async function refreshHealth() {
+  try {
+    const resp = await fetch(HEALTH_ENDPOINT, {
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    });
+    let body = null;
+    try { body = await resp.json(); } catch { /* non-JSON response */ }
+    renderHealthBadge(body);
+  } catch {
+    renderHealthBadge(null);
+  }
+}
+
+refreshHealth();
+setInterval(refreshHealth, HEALTH_POLL_INTERVAL_MS);
+
 // ── Demo / live mode banner ───────────────────────────────────────────────────
 (function renderModeBanner() {
   const banner = document.createElement('div');

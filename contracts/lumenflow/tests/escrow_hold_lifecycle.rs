@@ -467,6 +467,87 @@ fn test_escrow_cancel_by_non_payer_fails() {
     assert_eq!(merchant_cancel, Err(Ok(PaymentError::EscrowUnauthorised)));
 }
 
+// ── 9. Minimum lock period ────────────────────────────────────────────────────
+
+/// Creating an escrow with a lock period exactly at the minimum succeeds,
+/// while one second under the minimum fails with LockPeriodTooShort.
+#[test]
+fn test_escrow_min_lock_period_enforced() {
+    let w = setup();
+    let now = w.env.ledger().timestamp();
+
+    // Exactly at the minimum lock period — must succeed.
+    let at_min = now + lumenflow::MIN_LOCK_SECS as u64;
+    w.client.escrow_hold(
+        &w.payer,
+        &str(&w.env, "HOLD_MIN_OK"),
+        &w.merchant,
+        &w.token,
+        &1_000i128,
+        &condition_hash(&w.env),
+        &w.arbiter,
+        &at_min,
+    );
+
+    // One second under the minimum — must fail.
+    let under_min = now + lumenflow::MIN_LOCK_SECS as u64 - 1;
+    let result = w.client.try_escrow_hold(
+        &w.payer,
+        &str(&w.env, "HOLD_MIN_FAIL"),
+        &w.merchant,
+        &w.token,
+        &1_000i128,
+        &condition_hash(&w.env),
+        &w.arbiter,
+        &under_min,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::LockPeriodTooShort)));
+}
+
+// ── 10. Expiry warning event ──────────────────────────────────────────────────
+
+/// Querying an escrow whose unlock_at falls within the warning lead time
+/// emits the EscrowExpiryWarningEvent.
+#[test]
+fn test_escrow_expiry_warning_emitted_within_lead_time() {
+    let w = setup();
+    let now = w.env.ledger().timestamp();
+
+    // Create an escrow that unlocks inside the default warning window.
+    let unlock_at = now + lumenflow::MIN_LOCK_SECS as u64 + 60;
+    w.client.escrow_hold(
+        &w.payer,
+        &str(&w.env, "HOLD_WARN"),
+        &w.merchant,
+        &w.token,
+        &1_000i128,
+        &condition_hash(&w.env),
+        &w.arbiter,
+        &unlock_at,
+    );
+
+    // Advance to just inside the warning lead time.
+    let lead = lumenflow::WARNING_LEAD_TIME as u64;
+    advance_time(&w.env, unlock_at - now - lead);
+
+    // Querying the escrow should surface the warning event.
+    let _ = w.client.get_escrow_hold(&str(&w.env, "HOLD_WARN"));
+
+    let all_events = w.env.events().all();
+    let warning_event = all_events.iter().any(|(contract_id, topics, _data)| {
+        let _ = contract_id;
+        if topics.len() < 2 {
+            return false;
+        }
+        let t0: Result<soroban_sdk::Symbol, _> = topics.get(0).unwrap().try_into_val(&w.env);
+        let t1: Result<soroban_sdk::Symbol, _> = topics.get(1).unwrap().try_into_val(&w.env);
+        matches!((t0, t1), (Ok(a), Ok(b))
+            if a == soroban_sdk::Symbol::new(&w.env, "lumenflow")
+            && b == soroban_sdk::Symbol::new(&w.env, "escrow_expiry_warning"))
+    });
+    assert!(warning_event, "lumenflow/escrow_expiry_warning event was not emitted");
+}
+
 // ── 8. Cancel after timeout ───────────────────────────────────────────────────
 
 /// The payer cannot cancel after timeout_at has passed — they must use

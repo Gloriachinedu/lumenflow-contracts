@@ -1,5 +1,5 @@
 import { LumenFlowClient } from "./client";
-import { PaymentStatus, PaymentSummary } from "./types";
+import { PaymentStatus, PaymentSummary, PayerPaymentSummary } from "./types";
 
 describe("LumenFlowClient.getPaymentSummary", () => {
   it("queries the public summary without a signer", async () => {
@@ -20,5 +20,27 @@ describe("LumenFlowClient.getPaymentSummary", () => {
 
     await expect(client.getPaymentSummary("ORDER-001")).resolves.toEqual(summary);
     expect(call).toHaveBeenCalledWith("get_payment_summary", ["ORDER-001"]);
+  });
+});
+
+describe("LumenFlowClient.getPayerPaymentSummary", () => {
+  it("queries the public payer summary without a signer", async () => {
+    const client = new LumenFlowClient({
+      contractId: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+      rpcUrl: "https://soroban-testnet.stellar.org",
+      networkPassphrase: "Test SDF Network ; September 2015",
+    });
+    const payer =
+      "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN";
+    const summary: PayerPaymentSummary = {
+      totalPaid: 1_500n,
+      totalRefunded: 250n,
+      totalPending: 300n,
+      paymentCount: 3,
+    };
+    const call = jest.spyOn(client as any, "call").mockResolvedValue(summary);
+
+    await expect(client.getPayerPaymentSummary(payer)).resolves.toEqual(summary);
+    expect(call).toHaveBeenCalledWith("get_payer_payment_summary", [payer]);
   });
 });

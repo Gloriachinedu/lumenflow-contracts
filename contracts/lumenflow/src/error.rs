@@ -163,6 +163,10 @@ pub enum PaymentError {
     EscrowUnauthorised = 104,
     /// The escrow unlock time has already passed; it can no longer be cancelled. Remediation: Call release_escrow instead.
     EscrowLockExpired = 105,
+    /// The escrow lock period is shorter than the effective minimum. `unlock_at - created_at` must be
+    /// at least the minimum lock period (default 3600 seconds, overridable per merchant by an admin
+    /// via `set_escrow_min_lock`). Remediation: Set `unlock_at` further in the future.
+    LockPeriodTooShort = 106,
 
     // Disputes
     /// The requested dispute was not found. Remediation: Verify the dispute ID.

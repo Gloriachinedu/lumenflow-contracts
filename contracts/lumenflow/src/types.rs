@@ -354,6 +354,44 @@ pub struct EscrowCancelledEvent {
     pub amount: i128,
 }
 
+/// Data payload for `lumenflow/escrow_expiry_warning`.
+///
+/// Emitted when an escrow is within `lead_time` seconds of its `unlock_at`
+/// timestamp, giving the merchant a chance to release funds before the
+/// escrow auto-cancels.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowExpiryWarningEvent {
+    pub escrow_id: String,
+    pub payer: Address,
+    pub merchant: Address,
+    pub unlock_at: u64,
+    pub lead_time: u64,
+}
+
+/// Default lead time (in seconds) before `unlock_at` at which an
+/// `EscrowExpiryWarningEvent` is emitted. Defaults to 24 hours.
+pub const DEFAULT_WARNING_LEAD_TIME: u64 = 86_400;
+
+/// Minimum lock period (in seconds) between escrow creation and release.
+/// Defaults to 1 hour.
+pub const MIN_LOCK_SECS: u64 = 3600;
+
+/// Aggregated payer-facing payment history returned by
+/// `get_payer_payment_summary`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayerPaymentSummary {
+    /// Total amount paid across all of the payer's orders.
+    pub total_paid: i128,
+    /// Total amount refunded to the payer.
+    pub total_refunded: i128,
+    /// Total amount still pending (paid but not yet refunded).
+    pub total_pending: i128,
+    /// Number of payments made by the payer.
+    pub payment_count: u32,
+}
+
 // ── Dispute ───────────────────────────────────────────────────────────────────
 
 /// Full lifecycle state machine for a dispute.
