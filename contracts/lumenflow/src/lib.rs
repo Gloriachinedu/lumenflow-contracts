@@ -41,6 +41,31 @@ const EARLY_UNPAUSE_THRESHOLD: u32 = 3;
 const MAX_BATCH_SIZE: u32 = 10;
 const MAX_SERIALIZED_PAYLOAD_BYTES: u32 = 4096;
 
+/// Default maximum number of merchants that may be registered (issue #1510).
+const DEFAULT_MAX_MERCHANTS: u32 = 10_000;
+
+/// Storage key for the configurable merchant registration cap (issue #1510).
+#[soroban_sdk::contracttype]
+enum MerchantCapKey {
+    MaxMerchants,
+}
+
+/// Return the current merchant registration cap, defaulting to
+/// [`DEFAULT_MAX_MERCHANTS`] when unset.
+fn get_max_merchants(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&MerchantCapKey::MaxMerchants)
+        .unwrap_or(DEFAULT_MAX_MERCHANTS)
+}
+
+/// Persist a new merchant registration cap.
+fn set_max_merchants(env: &Env, cap: u32) {
+    env.storage()
+        .instance()
+        .set(&MerchantCapKey::MaxMerchants, &cap);
+}
+
 #[contract]
 pub struct PaymentProcessingContract;
 
@@ -524,6 +549,40 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Set the maximum number of merchants that may be registered (issue #1510).
+    ///
+    /// Caps the total merchant index size to prevent storage-exhaustion DoS
+    /// attacks. Once the cap is reached, `register_merchant` and
+    /// `reveal_merchant_registration` reject new registrations with
+    /// [`PaymentError::MerchantLimitExceeded`].
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator address.
+    /// * `cap` - New maximum merchant count. Must be > 0.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    /// * [`PaymentError::InvalidInput`] — `cap` is zero.
+    pub fn set_merchant_cap(env: Env, admin: Address, cap: u32) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        if cap == 0 {
+            return Err(PaymentError::InvalidInput);
+        }
+        set_max_merchants(&env, cap);
+        Self::append_audit(
+            &env,
+            AdminActionType::SetMerchantCap,
+            &admin,
+            String::from_str(&env, "set_merchant_cap"),
+        );
+        env.events()
+            .publish(("lumenflow", "merchant_cap_set"), cap);
+        Ok(())
+    }
+
     // ── Token and issuer allowlist management ─────────────────────────────────
 
     /// Add a Stellar token address to the contract allowlist (admin only).
@@ -837,6 +896,11 @@ impl PaymentProcessingContract {
             return Err(PaymentError::MerchantAlreadyRegistered);
         }
 
+        // Enforce the configurable merchant registration cap (issue #1510).
+        if storage::get_merchant_count(&env) >= get_max_merchants(&env) {
+            return Err(PaymentError::MerchantLimitExceeded);
+        }
+
         let commitment = storage::get_merchant_commitment(&env, &merchant_address)
             .ok_or(PaymentError::CommitmentNotFound)?;
 
@@ -927,6 +991,11 @@ impl PaymentProcessingContract {
 
         if storage::get_merchant(&env, &merchant_address).is_some() {
             return Err(PaymentError::MerchantAlreadyRegistered);
+        }
+
+        // Enforce the configurable merchant registration cap (issue #1510).
+        if storage::get_merchant_count(&env) >= get_max_merchants(&env) {
+            return Err(PaymentError::MerchantLimitExceeded);
         }
 
         // Validate referral_id before any writes so we never commit a partial state.
