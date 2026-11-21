@@ -34,6 +34,8 @@ pub const MIN_REFUND_WINDOW_SECS: u64 = 3600;
 pub const DEFAULT_CLEANUP_PERIOD_SECS: u64 = 30 * 24 * 3600;
 /// Default large-payment threshold in stroops (10 XLM equivalent).
 pub const DEFAULT_LARGE_PAYMENT_THRESHOLD: i128 = 10_000_000;
+/// Default maximum number of registered merchants (storage DoS guard).
+pub const DEFAULT_MAX_MERCHANTS: u32 = 10_000;
 
 // Approximate ledger-count equivalents (5-second ledgers):
 //   1 year  ≈ 6_307_200 ledgers
@@ -159,6 +161,8 @@ pub enum DataKey {
     AdminAuditMaxEntries,
     /// Configurable maximum signers per multisig payment (issue #1269). Short code `MSL`.
     MSL,
+    /// Configurable maximum number of registered merchants (issue #1510).
+    MaxMerchants,
 }
 
 /// The schema version this binary was compiled against.
@@ -344,6 +348,28 @@ pub fn add_to_merchant_list(env: &Env, address: &Address) {
     let mut list = get_merchant_list(env);
     list.push_back(address.clone());
     env.storage().instance().set(&DataKey::ML, &list);
+}
+
+/// Current number of registered merchants.
+pub fn get_merchant_count(env: &Env) -> u32 {
+    get_merchant_list(env).len()
+}
+
+// ── Merchant registration cap (issue #1510) ───────────────────────────────────
+
+/// Returns the configured maximum number of registered merchants.
+/// Defaults to [`DEFAULT_MAX_MERCHANTS`] when not explicitly set by the admin.
+pub fn get_max_merchants(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MaxMerchants)
+        .unwrap_or(DEFAULT_MAX_MERCHANTS)
+}
+
+/// Persist a new maximum number of registered merchants.
+/// Admin only — caller is responsible for authorization before invoking.
+pub fn set_max_merchants(env: &Env, cap: u32) {
+    env.storage().instance().set(&DataKey::MaxMerchants, &cap);
 }
 
 // ── Payment ───────────────────────────────────────────────────────────────────

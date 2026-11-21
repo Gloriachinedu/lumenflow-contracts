@@ -9964,3 +9964,114 @@ fn test_set_max_signers_zero_rejected() {
     let result = client.try_set_max_signers(&admin, &0u32);
     assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
 }
+
+// ── Merchant registration cap tests (issue #1510) ─────────────────────────────
+
+/// Registering merchants up to the configured cap succeeds.
+#[test]
+fn test_register_merchant_up_to_cap_succeeds() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.set_merchant_cap(&admin, &2u32);
+
+    for i in 0..2u32 {
+        let merchant = Address::generate(&env);
+        let result = client.try_register_merchant(
+            &merchant,
+            &str(&env, &format!("Store {i}")),
+            &str(&env, ""),
+            &str(&env, ""),
+            &MerchantCategory::Retail,
+            &None,
+        );
+        assert!(result.is_ok(), "registration at cap should succeed");
+    }
+}
+
+/// The registration immediately after the cap is reached is rejected.
+#[test]
+fn test_register_merchant_one_over_cap_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.set_merchant_cap(&admin, &2u32);
+
+    for i in 0..2u32 {
+        let merchant = Address::generate(&env);
+        client.register_merchant(
+            &merchant,
+            &str(&env, &format!("Store {i}")),
+            &str(&env, ""),
+            &str(&env, ""),
+            &MerchantCategory::Retail,
+            &None,
+        );
+    }
+
+    let extra = Address::generate(&env);
+    let result = client.try_register_merchant(
+        &extra,
+        &str(&env, "Store Over"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+        &None,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MerchantLimitExceeded)));
+}
+
+/// Admin can update the cap and the new limit is enforced.
+#[test]
+fn test_set_merchant_cap_updates_limit() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.set_merchant_cap(&admin, &1u32);
+
+    let first = Address::generate(&env);
+    client.register_merchant(
+        &first,
+        &str(&env, "Store 1"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+        &None,
+    );
+
+    // Cap of 1 is now reached.
+    let second = Address::generate(&env);
+    let result = client.try_register_merchant(
+        &second,
+        &str(&env, "Store 2"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+        &None,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::MerchantLimitExceeded)));
+
+    // Raise the cap; the previously rejected registration now succeeds.
+    client.set_merchant_cap(&admin, &3u32);
+    let result2 = client.try_register_merchant(
+        &second,
+        &str(&env, "Store 2"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+        &None,
+    );
+    assert!(result2.is_ok(), "registration should succeed after raising cap");
+}
+
+/// A non-admin caller of set_merchant_cap is rejected with Unauthorized.
+#[test]
+fn test_set_merchant_cap_unauthorized_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_set_merchant_cap(&non_admin, &5u32);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
