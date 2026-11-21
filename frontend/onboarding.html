@@ -30,6 +30,8 @@
       margin-bottom: 2rem;
       max-width: 600px;
       width: 100%;
+      list-style: none;
+      padding: 0;
     }
     .step-node {
       display: flex;
@@ -253,28 +255,28 @@
 </nav>
 
 <!-- Step indicator -->
-<div class="wizard-steps" id="stepIndicator" role="list" aria-label="Onboarding steps">
-  <div class="step-node active" id="step-node-1" role="listitem">
+<ol class="stepper wizard-steps" id="stepIndicator" aria-label="Onboarding steps">
+  <li class="step-node active" id="step-node-1">
     <div class="step-circle" id="step-circle-1" aria-label="Step 1: Welcome">1</div>
     <div class="step-label">Welcome</div>
-  </div>
-  <div class="step-node" id="step-node-2" role="listitem">
+  </li>
+  <li class="step-node" id="step-node-2">
     <div class="step-circle" id="step-circle-2" aria-label="Step 2: Wallet">2</div>
     <div class="step-label">Wallet</div>
-  </div>
-  <div class="step-node" id="step-node-3" role="listitem">
+  </li>
+  <li class="step-node" id="step-node-3">
     <div class="step-circle" id="step-circle-3" aria-label="Step 3: Details">3</div>
     <div class="step-label">Details</div>
-  </div>
-  <div class="step-node" id="step-node-4" role="listitem">
+  </li>
+  <li class="step-node" id="step-node-4">
     <div class="step-circle" id="step-circle-4" aria-label="Step 4: Review">4</div>
     <div class="step-label">Review</div>
-  </div>
-  <div class="step-node" id="step-node-5" role="listitem">
+  </li>
+  <li class="step-node" id="step-node-5">
     <div class="step-circle" id="step-circle-5" aria-label="Step 5: Done">5</div>
     <div class="step-label">Done</div>
-  </div>
-</div>
+  </li>
+</ol>
 
 <!-- Accessible progress bar -->
 <div class="wizard-progress-wrap">
@@ -469,6 +471,97 @@
 
   const TOTAL_STEPS = 5;
   const SESSION_KEY = 'lf_onboarding_step';
+  const AUTOSAVE_KEY = 'lf_onboarding_form_state';
+
+  // Fields that may be persisted. Anything matching a sensitive pattern is
+  // never serialized, regardless of allow-listing.
+  const AUTOSAVE_FIELDS = ['biz-name', 'biz-desc', 'biz-email', 'biz-category'];
+  const SENSITIVE_PATTERN = /private|seed|secret|mnemonic|passphrase/i;
+
+  function isSensitiveField(el) {
+    const haystack = [el.id, el.name, el.getAttribute('autocomplete') || ''].join(' ');
+    return SENSITIVE_PATTERN.test(haystack);
+  }
+
+  function saveFormState() {
+    try {
+      const state = { walletAddress: form.walletAddress || '' };
+      AUTOSAVE_FIELDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el || isSensitiveField(el)) return;
+        state[id] = el.value;
+      });
+      sessionStorage.setItem(AUTOSAVE_KEY, JSON.stringify(state));
+    } catch (e) { /* storage unavailable — ignore */ }
+  }
+
+  function clearFormState() {
+    try { sessionStorage.removeItem(AUTOSAVE_KEY); } catch (e) {}
+  }
+
+  function restoreFormState() {
+    let state;
+    try {
+      state = JSON.parse(sessionStorage.getItem(AUTOSAVE_KEY) || 'null');
+    } catch (e) { state = null; }
+    if (!state) return;
+
+    if (state.walletAddress) {
+      form.walletAddress = state.walletAddress;
+      const addrEl = document.getElementById('wallet-address');
+      if (addrEl) addrEl.textContent = state.walletAddress;
+    }
+    AUTOSAVE_FIELDS.forEach(id => {
+      const el = document.getElementById(id);
+      if (!el || isSensitiveField(el)) return;
+      if (typeof state[id] === 'string') el.value = state[id];
+    });
+  }
+
+  function promptRestoreSession() {
+    let state;
+    try {
+      state = JSON.parse(sessionStorage.getItem(AUTOSAVE_KEY) || 'null');
+    } catch (e) { state = null; }
+    if (!state) return;
+
+    const hasData = Object.keys(state).some(k => k !== 'walletAddress' && state[k]);
+    if (!hasData && !state.walletAddress) return;
+
+    const banner = document.createElement('div');
+    banner.className = 'alert alert-info';
+    banner.setAttribute('role', 'alert');
+    banner.style.cssText = 'display:flex;align-items:center;gap:0.75rem;justify-content:space-between;flex-wrap:wrap;margin-bottom:1rem';
+    banner.innerHTML = '<span>Restore previous session?</span>';
+
+    const actions = document.createElement('span');
+    actions.style.cssText = 'display:flex;gap:0.5rem';
+
+    const yes = document.createElement('button');
+    yes.type = 'button';
+    yes.className = 'btn btn-primary';
+    yes.textContent = 'Restore';
+    yes.addEventListener('click', () => {
+      restoreFormState();
+      banner.remove();
+    });
+
+    const no = document.createElement('button');
+    no.type = 'button';
+    no.className = 'btn btn-outline';
+    no.textContent = 'Discard';
+    no.addEventListener('click', () => {
+      clearFormState();
+      banner.remove();
+    });
+
+    actions.appendChild(yes);
+    actions.appendChild(no);
+    banner.appendChild(actions);
+
+    const card = document.querySelector('.wizard-card');
+    if (card) card.insertBefore(banner, card.firstChild);
+  }
 
   // Restore step from sessionStorage (default to 1)
   let currentStep = parseInt(sessionStorage.getItem(SESSION_KEY) || '1', 10);
@@ -498,6 +591,7 @@
 
       node.classList.remove('active', 'completed');
       node.removeAttribute('aria-current');
+      node.setAttribute('aria-label', `Step ${i} of ${TOTAL_STEPS}: ${STEP_LABELS[i]}`);
 
       if (i < step) {
         // Completed step — show checkmark
@@ -529,7 +623,15 @@
     updateProgressBar(n);
 
     // Persist to sessionStorage so refresh survives
-    sessionStorage.setItem(SESSION_KEY, String(n));
+    try { sessionStorage.setItem(SESSION_KEY, String(n)); } catch (e) {}
+    // Push a history entry so browser back navigation restores the step.
+    try {
+      if (history.state && history.state.onboardingStep === n) {
+        // no-op
+      } else {
+        history.pushState({ onboardingStep: n }, '', location.href);
+      }
+    } catch (e) {}
 
     // Funnel signals: forward navigation completes the previous stage; a lower
     // step number is a "back" navigation.
@@ -546,8 +648,10 @@
         duration_ms: analytics.elapsedMs(),
         is_demo: form.isDemo,
       });
-      // Clear persisted step on completion so a new session starts fresh
-      sessionStorage.removeItem(SESSION_KEY);
+      // Clear persisted step and autosaved form on completion so a new
+      // session starts fresh.
+      try { sessionStorage.removeItem(SESSION_KEY); } catch (e) {}
+      clearFormState();
     }
 
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -579,6 +683,27 @@
       document.getElementById('done-address').textContent =
         form.walletAddress || 'G…(demo address)';
     }
+
+    // Seed the history entry for the current step so back navigation works.
+    try { history.replaceState({ onboardingStep: currentStep }, '', location.href); } catch (e) {}
+
+    // Restore step on browser back/forward navigation.
+    window.addEventListener('popstate', (ev) => {
+      const target = ev.state && ev.state.onboardingStep;
+      if (typeof target === 'number' && target >= 1 && target <= TOTAL_STEPS && target !== currentStep) {
+        goToStep(target);
+      }
+    });
+
+    // ── Auto-save (issue #1622) ────────────────────────────────────────────
+    document.querySelectorAll('#business-form input, #business-form textarea, #business-form select')
+      .forEach(el => {
+        if (isSensitiveField(el)) return;
+        el.addEventListener('input', saveFormState);
+        el.addEventListener('change', saveFormState);
+      });
+
+    promptRestoreSession();
   })();
 
   // ── Wallet connect ─────────────────────────────────────────────────────────

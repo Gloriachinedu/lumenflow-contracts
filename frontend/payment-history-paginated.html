@@ -79,6 +79,48 @@
       font-size: 0.9rem;
     }
 
+    /* ── Empty state ───────────────────────────────────────────────────── */
+    .empty-state {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 2px 16px rgba(0,0,0,0.07);
+      padding: 3rem 1.5rem;
+      text-align: center;
+      margin-bottom: 1rem;
+    }
+    .empty-state[hidden] { display: none; }
+    .empty-state-illustration {
+      width: 160px;
+      height: 160px;
+      margin: 0 auto 1.25rem;
+      display: block;
+    }
+    .empty-state-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #1a1a2e;
+      margin-bottom: 0.5rem;
+    }
+    .empty-state-text {
+      color: #666;
+      font-size: 0.875rem;
+      margin-bottom: 1.5rem;
+    }
+    .empty-state-cta {
+      display: inline-block;
+      padding: 0.6rem 1.25rem;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      text-decoration: none;
+      background: #6c47ff;
+      color: #fff;
+      transition: background 0.15s;
+    }
+    .empty-state-cta:hover { background: #5636d6; }
+    .empty-state-cta:focus-visible { outline: 2px solid #1a1a2e; outline-offset: 2px; }
+=======
+
     /* ── Pagination bar ────────────────────────────────────────────────── */
     .pagination-bar {
       display: flex;
@@ -173,8 +215,24 @@
 <h1>Payment History</h1>
 <p class="subtitle">Browse paginated payment records.</p>
 
-<div class="table-wrap">
+<div class="empty-state" id="empty-state" hidden>
+  <svg class="empty-state-illustration" role="img" aria-labelledby="empty-state-illustration-title" viewBox="0 0 160 160" xmlns="http://www.w3.org/2000/svg">
+    <title id="empty-state-illustration-title">Illustration of an empty payment history</title>
+    <rect x="20" y="30" width="120" height="100" rx="10" fill="#f0ecff" stroke="#6c47ff" stroke-width="2"/>
+    <rect x="36" y="52" width="88" height="8" rx="4" fill="#d9d0ff"/>
+    <rect x="36" y="72" width="64" height="8" rx="4" fill="#d9d0ff"/>
+    <rect x="36" y="92" width="76" height="8" rx="4" fill="#d9d0ff"/>
+    <circle cx="120" cy="120" r="22" fill="#fff" stroke="#6c47ff" stroke-width="2"/>
+    <path d="M120 110v20M110 120h20" stroke="#6c47ff" stroke-width="3" stroke-linecap="round"/>
+  </svg>
+  <p class="empty-state-title" id="empty-state-title">No payments yet</p>
+  <p class="empty-state-text" id="empty-state-text">Create a payment link to start accepting payments.</p>
+  <a class="empty-state-cta" id="empty-state-cta" href="docs/payment-link-guide.md">Create your first payment link</a>
+</div>
+
+<div class="table-wrap" id="table-wrap">
   <table id="history-table">
+=======
     <thead>
       <tr>
         <th>Order ID</th>
@@ -357,9 +415,19 @@
       return true;
     });
 
+    const emptyState = document.getElementById('empty-state');
+    const tableWrap  = document.getElementById('table-wrap');
+    const paginationBar = document.getElementById('pagination-bar');
+
     if (newPayments.length === 0 && loadedOrderIds.size === 0) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No payments found.</td></tr>';
+      tbody.innerHTML = '';
+      emptyState.hidden = false;
+      tableWrap.hidden = true;
+      paginationBar.hidden = true;
     } else {
+      emptyState.hidden = true;
+      tableWrap.hidden = false;
+      paginationBar.hidden = false;
       tbody.innerHTML = payments.map(p => `
         <tr>
           <td><span class="order-id">${p.order_id}</span></td>
