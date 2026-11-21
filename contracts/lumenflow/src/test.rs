@@ -1021,7 +1021,84 @@ fn test_batch_payment_size_exceeded() {
         });
     }
     let result = client.try_batch_payment(&merchant, &payments);
-    assert_eq!(result, Err(Ok(PaymentError::BatchSizeExceeded)));
+    assert_eq!(result, Err(Ok(PaymentError::BatchTooLarge)));
+}
+
+// ── MAX_BATCH_SIZE boundary tests (#1583) ────────────────────────────────────
+
+/// A batch of exactly MAX_BATCH_SIZE (10) items must succeed.
+#[test]
+fn test_batch_payment_exactly_max_batch_size_succeeds() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let mut payments = Vec::new(&env);
+    for i in 0..10u32 {
+        let id = format!("MAXBS_{i}");
+        payments.push_back(BatchPaymentItem {
+            order_id: str(&env, &id),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 10,
+            memo: str(&env, ""),
+            tags: None,
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        });
+    }
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Ok(Ok(())));
+
+    // All 10 payments must be recorded.
+    let history = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(history.total_matching, 10);
+}
+
+/// A batch of MAX_BATCH_SIZE + 1 (11) items must be rejected with BatchTooLarge.
+#[test]
+fn test_batch_payment_one_over_max_batch_size_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let mut payments = Vec::new(&env);
+    for i in 0..11u32 {
+        let id = format!("MAXBO_{i}");
+        payments.push_back(BatchPaymentItem {
+            order_id: str(&env, &id),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 10,
+            memo: str(&env, ""),
+            tags: None,
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        });
+    }
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::BatchTooLarge)));
+
+    // Nothing from the rejected batch may be recorded.
+    let history = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(history.total_matching, 0);
+}
+
+/// An empty batch must be rejected with EmptyBatch.
+#[test]
+fn test_batch_payment_empty_batch_fails() {
+    let (env, client, _admin, _merchant, payer, _token) = setup_payment_env();
+    let payments: Vec<BatchPaymentItem> = Vec::new(&env);
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::EmptyBatch)));
 }
 
 #[test]
@@ -9369,7 +9446,7 @@ fn test_batch_one_over_max_size_fails() {
         });
     }
     let result = client.try_batch_payment(&payer, &payments);
-    assert_eq!(result, Err(Ok(PaymentError::BatchSizeExceeded)));
+    assert_eq!(result, Err(Ok(PaymentError::BatchTooLarge)));
 }
 
 /// Pagination limit of 1 returns exactly one item and sets next_cursor.

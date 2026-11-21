@@ -347,3 +347,49 @@ Three alert rules are embedded in the dashboard JSON:
 To enable alerts, configure a **Contact point** (Slack, PagerDuty, email, etc.)
 in Grafana under **Alerting → Contact points**, then link it to a
 **Notification policy**.
+
+
+---
+
+## Multi-Region Failover Drill Results
+
+Failover capability is validated automatically by the
+`.github/workflows/multi-region-failover.yml` workflow. The drill detects
+configuration drift in secondary regions before an actual incident occurs.
+
+### Schedule
+
+The workflow runs **weekly** (every Monday at 06:00 UTC) via a `schedule`
+trigger, and can also be started manually with `workflow_dispatch`.
+
+### What the drill does
+
+1. Simulates primary region unavailability (traffic is blocked to the primary
+   region endpoint).
+2. Verifies the secondary region continues to serve traffic and that contract
+   reads/writes succeed.
+3. Measures **recovery time** — the interval from primary failure to the first
+   successful request served by the secondary region.
+
+### Pass / fail criteria
+
+| Criterion | Requirement |
+|-----------|-------------|
+| Secondary region serves traffic | All probe requests succeed |
+| Recovery time | **< 60 seconds** |
+| Data consistency | Secondary state matches expected checkpoint |
+
+If any criterion fails, the workflow fails and **pages the on-call team via
+PagerDuty** (the `PAGERDUTY_ROUTING_KEY` secret is used to trigger the
+incident). A passing run does not page.
+
+### Monthly results log
+
+Append the outcome of each drill to the table below at the end of every month
+so failover history is auditable. Record the run date, measured recovery time,
+result, and any notes (e.g. drift found, incident link).
+
+| Date | Recovery time (s) | Result | Notes |
+|------|-------------------|--------|-------|
+| _YYYY-MM-DD_ | _e.g. 12.4_ | _Pass / Fail_ | _Drift found in eu-west secondary; PagerDuty incident #123_ |
+=======
