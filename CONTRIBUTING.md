@@ -306,7 +306,32 @@ We aim to make LumenFlow accessible to a global audience, particularly the Latin
 
 When adding a new translation, please follow the naming convention `README.[lang].md` and add a link in the language selector at the top of the main `README.md`.
 
+#### Frontend UI Locales
+
+The frontend UI supports exactly three locales:
+
+| Locale | File |
+|--------|------|
+| English (base) | `frontend/locales/en.json` |
+| Spanish | `frontend/locales/es.json` |
+| Portuguese | `frontend/locales/pt.json` |
+
+**Every new translation key must be added to all three locale files in the same pull request.** English (`en.json`) is the base locale: any key present there must also exist in `es.json` and `pt.json`. Missing translations silently fall back to the English key string, which breaks the non-English UIs.
+
+Key parity is enforced by:
+
+```bash
+node scripts/check-i18n-locales.mjs
+```
+
+The script reports every key that is missing per locale, and CI fails if any locale is missing keys present in the base English locale. Run it locally before opening a PR:
+
+```bash
+node scripts/check-i18n-locales.mjs
+```
+
 ### Code Style
+=======
 
 - Follow standard Rust idioms (`rustfmt` enforced in CI).
 - No `unwrap()` in contract code — use `?` with typed errors.
