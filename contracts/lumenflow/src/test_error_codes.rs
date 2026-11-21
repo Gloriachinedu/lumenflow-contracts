@@ -84,6 +84,53 @@ fn test_error_refund_below_minimum_is_triggered() {
 }
 
 #[test]
+fn test_error_batch_too_large_is_triggered() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let merchant = Address::generate(&env);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Demo"),
+        &str(&env, "Demo"),
+        &str(&env, "demo@example.com"),
+        &crate::types::MerchantCategory::Retail,
+    );
+    let mut payments = alloc::vec::Vec::new(&env);
+    for i in 0..11u32 {
+        payments.push_back(crate::types::PaymentRequest {
+            payment_id: str(&env, "batch-payment"),
+            merchant_id: merchant.clone(),
+            amount: 1_000,
+            currency: str(&env, "USD"),
+            description: str(&env, "batch"),
+            metadata: Bytes::new(&env),
+            idempotency_key: i,
+        });
+    }
+    let result = client.try_process_payments_batch(&merchant, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::BatchTooLarge)));
+}
+
+#[test]
+fn test_error_empty_batch_is_triggered() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    let merchant = Address::generate(&env);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Demo"),
+        &str(&env, "Demo"),
+        &str(&env, "demo@example.com"),
+        &crate::types::MerchantCategory::Retail,
+    );
+    let payments = alloc::vec::Vec::new(&env);
+    let result = client.try_process_payments_batch(&merchant, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::EmptyBatch)));
+}
+
+#[test]
 fn test_error_subscription_interval_not_elapsed_is_triggered() {
     let (env, client) = setup();
     let admin = Address::generate(&env);

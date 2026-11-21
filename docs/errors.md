@@ -31,6 +31,8 @@ This document lists all the error codes returned by the LumenFlow contract, alon
 | `InsufficientBalance` | 25 | The payer does not have enough tokens to complete the payment. | Ensure the payer has sufficient funds in the specified token. |
 | `TokenNotAllowed` | 26 | The specified token is not accepted. | Use a supported token. |
 | `InvalidTtl` | 27 | The `ttl` parameter is zero, would overflow the ledger timestamp type, or would produce an expiry timestamp in the past. | Provide a positive `ttl` value (seconds) that does not cause `current_ledger_timestamp + ttl` to overflow `u64`. Typical valid values range from `1` (1 second) to `31536000` (1 year). |
+| `BatchTooLarge` | 28 | The batch contains more items than the maximum allowed (`MAX_BATCH_SIZE`, 10). | Reduce the batch to at most 10 items. |
+| `EmptyBatch` | 29 | The batch contains no items. | Supply at least one item in the batch. |
 
 ## Refund Errors
 
