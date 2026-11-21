@@ -336,6 +336,67 @@ button, input, textarea, select { min-height: 44px; min-width: 44px; }
   box-shadow: 0 0 0 3px rgba(90, 63, 214, 0.25);
 }
 
+/* ── Pagination controls ────────────────────────────────────────────────────── */
+.pagination-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border-light);
+}
+
+.page-meta {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+.page-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Pagination buttons: 44px touch targets, clear disabled and hover states */
+.pagination-bar .btn {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0.5rem 1rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1.5px solid var(--color-primary);
+  background: var(--color-surface);
+  color: var(--color-primary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.12s;
+}
+
+.pagination-bar .btn:hover:not(:disabled) {
+  background: var(--color-hover-primary);
+  opacity: 1;
+}
+
+.pagination-bar .btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  border-color: var(--color-border);
+  color: var(--color-text-subtle);
+  background: var(--color-surface-2);
+}
+
+/* High-contrast, 2px+ focus ring with offset for keyboard users (WCAG 2.4.7 / 1.4.11) */
+.pagination-bar .btn:focus-visible {
+  outline: 3px solid var(--color-primary);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+=======
+
 /* ── Badges ─────────────────────────────────────────────────────────────────── */
 .badge {
   display: inline-flex;

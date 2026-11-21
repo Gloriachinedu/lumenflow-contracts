@@ -192,13 +192,18 @@
 
 <!-- Pagination controls and infinite-scroll status -->
 <div class="pagination-bar" id="pagination-bar">
-  <div class="page-meta" id="page-meta" aria-live="polite" aria-atomic="true"></div>
-
-  <div class="page-controls">
-    <button class="btn load-more-btn" id="load-more-btn" type="button" onclick="loadNextPage()">
+  <nav class="page-controls" id="pagination-controls" role="navigation" aria-label="Payment history pagination">
+    <button class="btn" id="prev-btn" type="button" aria-label="Go to previous page of payment history" onclick="prevPage()">
+      <span aria-hidden="true">←</span> Prev
+    </button>
+    <div class="page-meta" id="page-meta" aria-live="polite" aria-atomic="true"></div>
+    <button class="btn" id="next-btn" type="button" aria-label="Go to next page of payment history" onclick="nextPage()">
+      Next <span aria-hidden="true">→</span>
+    </button>
+    <button class="btn load-more-btn" id="load-more-btn" type="button" aria-label="Load more payments" onclick="loadNextPage()">
       Load more
     </button>
-  </div>
+  </nav>
 
   <div class="page-size-wrap">
     <label for="page-size">Per page:</label>
