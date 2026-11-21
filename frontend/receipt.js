@@ -215,7 +215,44 @@ async function fetchPayment(orderId) {
       ? { name: payment.merchant_address, verified: false }
       : scValToNative(mResult.result.retval);
 
-    return { payment, merchant, refunds: [] };
+    // Payer-facing summary (issue #1629).  The payer address is used only
+    // transiently as a contract argument and is never rendered.
+    const payerSummary = await fetchPayerSummary(server, contract, rawPayment.payer);
+
+    return { payment, merchant, refunds: [], payerSummary };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch the payer's aggregated payment stats via `get_payer_payment_summary`.
+ * Public read — no auth required.  Returns null if unavailable.
+ *
+ * @param {object} server   - SorobanRpc.Server instance
+ * @param {object} contract - Contract instance
+ * @param {string} payer    - payer address
+ * @returns {Promise<{ total_paid, total_refunded, total_pending, payment_count }|null>}
+ */
+async function fetchPayerSummary(server, contract, payer) {
+  if (!payer) return null;
+  try {
+    const { SorobanRpc, nativeToScVal, scValToNative } =
+      await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
+
+    const payerArg = nativeToScVal(payer, { type: 'address' });
+    const result = await server.simulateTransaction(
+      contract.call('get_payer_payment_summary', payerArg)
+    );
+    if (SorobanRpc.Api.isSimulationError(result)) return null;
+
+    const raw = scValToNative(result.result.retval);
+    return {
+      total_paid:     raw.total_paid,
+      total_refunded: raw.total_refunded,
+      total_pending:  raw.total_pending,
+      payment_count:  raw.payment_count,
+    };
   } catch {
     return null;
   }
@@ -236,6 +273,12 @@ function getDemoData(orderId) {
       paid_at:          BigInt(Math.floor(Date.now() / 1000) - 3600),
     },
     merchant: { name: 'Demo Store', verified: true },
+    payerSummary: {
+      total_paid:     50000000n,
+      total_refunded: 5000000n,
+      total_pending:  10000000n,
+      payment_count:  1,
+    },
     refunds: [
       {
         refund_id:   'REFUND_001',
@@ -266,7 +309,23 @@ function getDemoData(orderId) {
 
 // ── Render ────────────────────────────────────────────────────────────────────
 
-function renderReceipt({ payment, merchant, refunds }) {
+function renderPayerSummary(summary) {
+  const section = document.getElementById('payer-summary-section');
+  if (!section) return;
+  if (!summary) {
+    section.style.display = 'none';
+    return;
+  }
+
+  document.getElementById('payer-total-paid').textContent     = formatAmount(summary.total_paid) + ' XLM';
+  document.getElementById('payer-total-refunded').textContent = formatAmount(summary.total_refunded) + ' XLM';
+  document.getElementById('payer-total-pending').textContent  = formatAmount(summary.total_pending) + ' XLM';
+  document.getElementById('payer-payment-count').textContent  = String(summary.payment_count ?? 0);
+
+  section.style.display = 'block';
+}
+
+function renderReceipt({ payment, merchant, refunds, payerSummary }) {
   document.getElementById('field-order-id').textContent      = payment.order_id;
   document.getElementById('field-merchant-name').textContent = merchant.name || payment.merchant_address;
   document.getElementById('field-amount').textContent        = formatAmount(payment.amount) + ' XLM';
@@ -303,6 +362,8 @@ function renderReceipt({ payment, merchant, refunds }) {
     });
     document.getElementById('refunds-section').style.display = 'block';
   }
+
+  renderPayerSummary(payerSummary);
 
   document.getElementById('receipt-content').style.display = 'block';
 }

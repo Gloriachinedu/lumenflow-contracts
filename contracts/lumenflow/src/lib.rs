@@ -31,6 +31,7 @@ use types::{
     RefundRecord, RefundStatus, SignatureEntry, SortField, SortOrder, StatusFilter, Subscription,
     SubscriptionPlan, SubscriptionStatus, SuspiciousActivityReason,
     AdminActionType, AdminAuditEntry, EscrowHold, EscrowHoldStatus,
+    EscrowExpiryWarningEvent, PayerPaymentSummary,
 };
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -40,6 +41,11 @@ const PAUSE_TIMELOCK_SECS: u64 = 7 * 24 * 3600;
 const EARLY_UNPAUSE_THRESHOLD: u32 = 3;
 const MAX_BATCH_SIZE: u32 = 10;
 const MAX_SERIALIZED_PAYLOAD_BYTES: u32 = 4096;
+
+/// Default minimum lock period (seconds) between escrow creation and release (issue #1624).
+pub const MIN_LOCK_SECS: u64 = 3600;
+/// Default lead time (seconds) before `unlock_at` at which an expiry warning is emitted (issue #1623).
+pub const DEFAULT_WARNING_LEAD_TIME: u64 = 24 * 3600;
 
 #[contract]
 pub struct PaymentProcessingContract;
@@ -719,6 +725,47 @@ impl PaymentProcessingContract {
                 env.ledger().timestamp(),
             ),
         );
+        Ok(())
+    }
+
+    /// Set the per-merchant minimum escrow lock period in seconds (issue #1624). Admin only.
+    ///
+    /// Overrides [`MIN_LOCK_SECS`] for escrows created by `merchant`. A value of
+    /// `0` clears the override so the global default applies again.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    pub fn set_escrow_min_lock(
+        env: Env,
+        admin: Address,
+        merchant: Address,
+        secs: u64,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_escrow_min_lock(&env, &merchant, secs);
+        env.events().publish(
+            ("lumenflow", "escrow_min_lock_set"),
+            (merchant, secs),
+        );
+        Ok(())
+    }
+
+    /// Set the escrow expiry warning lead time in seconds (issue #1623). Admin only.
+    ///
+    /// Escrow queries emit an `escrow_expiry_warning` event once an escrow is
+    /// within `secs` of its `unlock_at`. Defaults to [`DEFAULT_WARNING_LEAD_TIME`].
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    pub fn set_escrow_warning_lead_time(
+        env: Env,
+        admin: Address,
+        secs: u64,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_escrow_warning_lead_time(&env, secs);
+        env.events()
+            .publish(("lumenflow", "escrow_warning_lead_time_set"), secs);
         Ok(())
     }
 
@@ -4087,6 +4134,15 @@ impl PaymentProcessingContract {
             return Err(PaymentError::InvalidInput);
         }
 
+        // Enforce the minimum lock period (issue #1624). A per-merchant override
+        // takes precedence over the global default.
+        let effective_min_lock = storage::get_escrow_min_lock(&env, &merchant)
+            .filter(|secs| *secs > 0)
+            .unwrap_or(MIN_LOCK_SECS);
+        if unlock_at.saturating_sub(now) < effective_min_lock {
+            return Err(PaymentError::LockPeriodTooShort);
+        }
+
         if !storage::is_token_allowed(&env, &token) {
             return Err(PaymentError::TokenNotAllowed);
         }
@@ -4236,7 +4292,60 @@ impl PaymentProcessingContract {
     /// # Errors
     /// * [`PaymentError::EscrowNotFound`] — no escrow exists with `order_id`.
     pub fn get_escrow(env: Env, order_id: String) -> Result<EscrowRecord, PaymentError> {
-        storage::get_escrow(&env, &order_id).ok_or(PaymentError::EscrowNotFound)
+        let escrow =
+            storage::get_escrow(&env, &order_id).ok_or(PaymentError::EscrowNotFound)?;
+        Self::maybe_emit_escrow_expiry_warning(&env, &escrow);
+        Ok(escrow)
+    }
+
+    /// Emit an `escrow_expiry_warning` event once an escrow enters the warning window
+    /// (issue #1623). The warning is emitted at most once per escrow.
+    fn maybe_emit_escrow_expiry_warning(env: &Env, escrow: &EscrowRecord) {
+        if !matches!(escrow.status, EscrowStatus::Locked) {
+            return;
+        }
+        if storage::is_escrow_warning_emitted(env, &escrow.order_id) {
+            return;
+        }
+
+        let now = env.ledger().timestamp();
+        if escrow.unlock_at <= now {
+            return;
+        }
+
+        let lead_time = storage::get_escrow_warning_lead_time(env)
+            .unwrap_or(DEFAULT_WARNING_LEAD_TIME);
+
+        if escrow.unlock_at - now <= lead_time {
+            storage::set_escrow_warning_emitted(env, &escrow.order_id);
+            let event = EscrowExpiryWarningEvent {
+                order_id: escrow.order_id.clone(),
+                payer: escrow.payer.clone(),
+                merchant: escrow.merchant.clone(),
+                amount: escrow.amount,
+                unlock_at: escrow.unlock_at,
+                warning_lead_time: lead_time,
+                timestamp: now,
+            };
+            env.events()
+                .publish(("lumenflow", "escrow_expiry_warning"), event);
+        }
+    }
+
+    // ── Payer payment summary (Issue #1629) ───────────────────────────────────
+
+    /// Return an aggregated summary of all payments made by `payer`.
+    ///
+    /// Public read — no authorisation required. Computed from live storage on
+    /// every call (never cached).
+    ///
+    /// # Arguments
+    /// * `payer` - The address whose payment history should be summarised.
+    ///
+    /// # Returns
+    /// A [`PayerPaymentSummary`] with total paid, refunded, pending and payment count.
+    pub fn get_payer_payment_summary(env: Env, payer: Address) -> PayerPaymentSummary {
+        storage::get_payer_payment_summary(&env, &payer)
     }
 
     // ── Conditional Escrow (Issue #1111) ──────────────────────────────────────

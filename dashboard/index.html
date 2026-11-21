@@ -71,12 +71,44 @@
       font-size: 0.9rem;
     }
     .dashboard-nav a:hover { text-decoration: underline; }
+
+    .health-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      border: 1px solid var(--color-border);
+      border-radius: 999px;
+      padding: 0.3rem 0.75rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: default;
+      background: var(--color-surface);
+      color: var(--color-text-muted);
+    }
+
+    .health-badge .health-dot {
+      width: 0.6rem;
+      height: 0.6rem;
+      border-radius: 50%;
+      background: var(--color-text-muted);
+      flex-shrink: 0;
+    }
+
+    .health-badge[data-status="healthy"] .health-dot { background: #22c55e; }
+    .health-badge[data-status="degraded"] .health-dot { background: #ef4444; }
+    .health-badge[data-status="unknown"] .health-dot { background: #9ca3af; }
   </style>
 </head>
 <body>
   <header>
     <h1>LumenFlow</h1>
-    <button id="theme-toggle">Toggle Dark Mode</button>
+    <div style="display: flex; align-items: center; gap: 1rem;">
+      <span id="health-badge" class="health-badge" data-status="unknown" title="Checking dependencies…">
+        <span class="health-dot"></span>
+        <span id="health-label">Checking…</span>
+      </span>
+      <button id="theme-toggle">Toggle Dark Mode</button>
+    </div>
   </header>
   <main>
     <div class="card">
@@ -105,6 +137,55 @@
       // Use shared key so preference syncs with merchant-dashboard and fraud-analytics
       localStorage.setItem('lumenflow_theme', next);
     });
+
+    // Health badge: polls the webhook server's /health endpoint and reflects
+    // dependency status in real time. Green when HTTP 200, red when 503.
+    (function () {
+      const badge = document.getElementById('health-badge');
+      const label = document.getElementById('health-label');
+      const HEALTH_URL = '/health';
+      const POLL_INTERVAL_MS = 15000;
+
+      function describeDependency(name, dep) {
+        if (!dep) return name + ': unknown';
+        if (dep.ok) {
+          return name + ': ok' + (typeof dep.latency_ms === 'number' ? ' (' + dep.latency_ms + 'ms)' : '');
+        }
+        return name + ': degraded';
+      }
+
+      function render(status, data) {
+        const healthy = status === 200 && data && data.status === 'ok';
+        badge.setAttribute('data-status', healthy ? 'healthy' : 'degraded');
+        label.textContent = healthy ? 'Healthy' : 'Degraded';
+
+        const lines = [];
+        if (data) {
+          lines.push(describeDependency('RPC', data.rpc));
+          lines.push(describeDependency('Redis', data.redis));
+          lines.push(describeDependency('Webhook Relay', data.webhookRelay));
+        } else {
+          lines.push('Unable to reach /health');
+        }
+        badge.title = lines.join('\n');
+      }
+
+      async function checkHealth() {
+        try {
+          const res = await fetch(HEALTH_URL, { cache: 'no-store' });
+          let data = null;
+          try { data = await res.json(); } catch (e) { data = null; }
+          render(res.status, data);
+        } catch (err) {
+          badge.setAttribute('data-status', 'degraded');
+          label.textContent = 'Degraded';
+          badge.title = 'Unable to reach /health: ' + err.message;
+        }
+      }
+
+      checkHealth();
+      setInterval(checkHealth, POLL_INTERVAL_MS);
+    })();
   </script>
 </body>
 </html>

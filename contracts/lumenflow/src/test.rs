@@ -9822,6 +9822,219 @@ fn test_set_min_refund_amount_zero_fails() {
     assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
 }
 
+// ── Escrow lock period tests (issue #1624) ────────────────────────────────────
+
+/// `create_escrow` succeeds when `unlock_at - created_at == MIN_LOCK_SECS`.
+#[test]
+fn test_create_escrow_exactly_min_lock_passes() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let now = env.ledger().timestamp();
+    let unlock_at = now + crate::MIN_LOCK_SECS;
+
+    let result = client.try_create_escrow(
+        &payer,
+        &str(&env, "ESC_MIN_OK"),
+        &merchant,
+        &token,
+        &1_000,
+        &unlock_at,
+        &None,
+    );
+    assert!(result.is_ok(), "escrow at exactly MIN_LOCK_SECS must pass");
+}
+
+/// `create_escrow` fails with `LockPeriodTooShort` one second under the minimum.
+#[test]
+fn test_create_escrow_one_second_under_min_lock_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let now = env.ledger().timestamp();
+    let unlock_at = now + crate::MIN_LOCK_SECS - 1;
+
+    let result = client.try_create_escrow(
+        &payer,
+        &str(&env, "ESC_MIN_FAIL"),
+        &merchant,
+        &token,
+        &1_000,
+        &unlock_at,
+        &None,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::LockPeriodTooShort)));
+}
+
+/// Per-merchant override via `set_escrow_min_lock` shifts the boundary.
+#[test]
+fn test_set_escrow_min_lock_overrides_boundary() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    // Raise the merchant's minimum lock to 2 hours.
+    client.set_escrow_min_lock(&admin, &merchant, &7_200u64);
+
+    let now = env.ledger().timestamp();
+
+    // Exactly 2 hours passes.
+    let ok = client.try_create_escrow(
+        &payer,
+        &str(&env, "ESC_OVR_OK"),
+        &merchant,
+        &token,
+        &1_000,
+        &(now + 7_200),
+        &None,
+    );
+    assert!(ok.is_ok(), "escrow at overridden minimum must pass");
+
+    // One second under the overridden minimum fails.
+    let fail = client.try_create_escrow(
+        &payer,
+        &str(&env, "ESC_OVR_FAIL"),
+        &merchant,
+        &token,
+        &1_000,
+        &(now + 7_199),
+        &None,
+    );
+    assert_eq!(fail, Err(Ok(PaymentError::LockPeriodTooShort)));
+}
+
+// ── Escrow expiry warning tests (issue #1623) ────────────────────────────────
+
+fn count_escrow_warning_events(env: &Env) -> usize {
+    let events = env.events().all();
+    let mut count = 0usize;
+    for event in events.events().iter() {
+        let topics = &event.1;
+        if let Some(topic) = topics.get(0) {
+            if topic == soroban_sdk::Symbol::new(env, "escrow_expiry_warning").into() {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// `get_escrow` emits `escrow_expiry_warning` only once the unlock time is
+/// within the configured lead time.
+#[test]
+fn test_get_escrow_emits_expiry_warning_within_lead_time() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let now = env.ledger().timestamp();
+    let unlock_at = now + crate::MIN_LOCK_SECS + 10_000;
+
+    client.create_escrow(
+        &payer,
+        &str(&env, "ESC_WARN_001"),
+        &merchant,
+        &token,
+        &1_000,
+        &unlock_at,
+        &None,
+    );
+
+    // Far from expiry: no warning.
+    let before = count_escrow_warning_events(&env);
+    let _ = client.get_escrow(&str(&env, "ESC_WARN_001"));
+    assert_eq!(
+        count_escrow_warning_events(&env),
+        before,
+        "no warning before the lead time"
+    );
+
+    // Advance to within the default 24h lead time.
+    env.ledger()
+        .with_mut(|l| l.timestamp = unlock_at - crate::DEFAULT_WARNING_LEAD_TIME + 1);
+    let _ = client.get_escrow(&str(&env, "ESC_WARN_001"));
+    assert_eq!(
+        count_escrow_warning_events(&env),
+        before + 1,
+        "warning must be emitted within the lead time"
+    );
+}
+
+/// An updated lead time via `set_escrow_warning_lead_time` is respected.
+#[test]
+fn test_get_escrow_respects_updated_warning_lead_time() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let now = env.ledger().timestamp();
+    let unlock_at = now + crate::MIN_LOCK_SECS + 10_000;
+
+    client.create_escrow(
+        &payer,
+        &str(&env, "ESC_WARN_002"),
+        &merchant,
+        &token,
+        &1_000,
+        &unlock_at,
+        &None,
+    );
+
+    // Shrink the lead time to 1 hour.
+    client.set_escrow_warning_lead_time(&admin, &3_600u64);
+
+    // 2 hours before expiry: outside the new 1h lead time → no warning.
+    env.ledger().with_mut(|l| l.timestamp = unlock_at - 7_200);
+    let before = count_escrow_warning_events(&env);
+    let _ = client.get_escrow(&str(&env, "ESC_WARN_002"));
+    assert_eq!(count_escrow_warning_events(&env), before);
+
+    // 30 minutes before expiry: inside the new lead time → warning.
+    env.ledger().with_mut(|l| l.timestamp = unlock_at - 1_800);
+    let _ = client.get_escrow(&str(&env, "ESC_WARN_002"));
+    assert_eq!(count_escrow_warning_events(&env), before + 1);
+}
+
+// ── Payer payment summary tests (issue #1629) ────────────────────────────────
+
+/// Summary aggregates completed, partially refunded and pending payments.
+#[test]
+fn test_get_payer_payment_summary_totals() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Completed payment.
+    make_payment(&env, &client, &merchant, &payer, &token, "SUM_001", 1_000);
+
+    // Partially refunded payment.
+    make_payment(&env, &client, &merchant, &payer, &token, "SUM_002", 2_000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "SUM_RF_002"),
+        &str(&env, "SUM_002"),
+        &500,
+        &str(&env, "partial"),
+    );
+    client.approve_refund(&merchant, &str(&env, "SUM_RF_002"));
+    client.execute_refund(&str(&env, "SUM_RF_002"));
+
+    // Pending payment (refund initiated but not executed).
+    make_payment(&env, &client, &merchant, &payer, &token, "SUM_003", 3_000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "SUM_RF_003"),
+        &str(&env, "SUM_003"),
+        &1_000,
+        &str(&env, "pending"),
+    );
+
+    let summary = client.get_payer_payment_summary(&payer);
+    assert_eq!(summary.payment_count, 3);
+    assert_eq!(summary.total_paid, 6_000);
+    assert_eq!(summary.total_refunded, 500);
+    assert_eq!(summary.total_pending, 1_000);
+}
+
+/// Unknown payer returns an all-zero summary.
+#[test]
+fn test_get_payer_payment_summary_unknown_payer_is_zero() {
+    let (env, client, _admin, _merchant, _payer, _token) = setup_payment_env();
+    let stranger = Address::generate(&env);
+
+    let summary = client.get_payer_payment_summary(&stranger);
+    assert_eq!(summary.payment_count, 0);
+    assert_eq!(summary.total_paid, 0);
+    assert_eq!(summary.total_refunded, 0);
+    assert_eq!(summary.total_pending, 0);
+}
+
 // ── Max signers limit tests (issue #1269) ─────────────────────────────────────
 
 /// Helper: build a Vec<Address> of `n` freshly generated addresses.

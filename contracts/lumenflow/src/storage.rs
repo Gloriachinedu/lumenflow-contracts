@@ -3,8 +3,8 @@ use soroban_sdk::{contracttype, Address, Env, String, Vec};
 use crate::error::PaymentError;
 use crate::types::{
     AdminAuditEntry, DisputeRecord, EscrowRecord, GlobalStats, Merchant, MerchantStats,
-    MultisigPayment, MerchantCommitment, PaymentOrder, PaymentRequest, RefundRecord, Subscription,
-    SubscriptionPlan, EscrowHold,
+    MultisigPayment, MerchantCommitment, PaymentOrder, PaymentRequest, PayerPaymentSummary,
+    RefundRecord, Subscription, SubscriptionPlan, EscrowHold,
 };
 
 // ── TTL / limit constants ─────────────────────────────────────────────────────
@@ -159,6 +159,12 @@ pub enum DataKey {
     AdminAuditMaxEntries,
     /// Configurable maximum signers per multisig payment (issue #1269). Short code `MSL`.
     MSL,
+    /// Global escrow expiry warning lead time in seconds (issue #1623). Short code `EWL`.
+    EWL,
+    /// Per-merchant minimum escrow lock period override in seconds (issue #1624).
+    EML(Address),
+    /// Whether the expiry warning has already been emitted for an escrow (issue #1623).
+    EWE(String),
 }
 
 /// The schema version this binary was compiled against.
@@ -812,6 +818,96 @@ pub fn set_escrow(env: &Env, escrow: &EscrowRecord) {
     env.storage()
         .persistent()
         .extend_ttl(&key, ESCROW_TTL_LEDGERS, ESCROW_TTL_LEDGERS);
+}
+
+// ── Escrow expiry warning (issue #1623) ───────────────────────────────────────
+
+/// Default escrow expiry warning lead time: 24 hours in seconds.
+pub const DEFAULT_WARNING_LEAD_TIME: u64 = 24 * 3600;
+
+/// Return the configured escrow expiry warning lead time in seconds.
+/// Defaults to [`DEFAULT_WARNING_LEAD_TIME`] (24 hours).
+pub fn get_warning_lead_time(env: &Env) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::EWL)
+        .unwrap_or(DEFAULT_WARNING_LEAD_TIME)
+}
+
+/// Persist the escrow expiry warning lead time in seconds.
+/// Admin only — caller is responsible for authorization before invoking.
+pub fn set_warning_lead_time(env: &Env, lead_time_secs: u64) {
+    env.storage().instance().set(&DataKey::EWL, &lead_time_secs);
+}
+
+/// Returns `true` if the expiry warning has already been emitted for `order_id`.
+pub fn get_escrow_warning_emitted(env: &Env, order_id: &String) -> bool {
+    env.storage()
+        .persistent()
+        .get(&DataKey::EWE(order_id.clone()))
+        .unwrap_or(false)
+}
+
+/// Marks the expiry warning as emitted for `order_id` so it is only sent once.
+pub fn set_escrow_warning_emitted(env: &Env, order_id: &String) {
+    let key = DataKey::EWE(order_id.clone());
+    env.storage().persistent().set(&key, &true);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, ESCROW_TTL_LEDGERS, ESCROW_TTL_LEDGERS);
+}
+
+// ── Minimum escrow lock period (issue #1624) ──────────────────────────────────
+
+/// Default minimum escrow lock period: 1 hour in seconds.
+pub const MIN_LOCK_SECS: u64 = 3600;
+
+/// Return the minimum escrow lock period in seconds for `merchant`.
+/// Falls back to [`MIN_LOCK_SECS`] when no per-merchant override is configured.
+pub fn get_escrow_min_lock(env: &Env, merchant: &Address) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::EML(merchant.clone()))
+        .unwrap_or(MIN_LOCK_SECS)
+}
+
+/// Persist a per-merchant minimum escrow lock period override in seconds.
+/// Admin only — caller is responsible for authorization before invoking.
+pub fn set_escrow_min_lock(env: &Env, merchant: &Address, secs: u64) {
+    env.storage()
+        .instance()
+        .set(&DataKey::EML(merchant.clone()), &secs);
+}
+
+// ── Payer payment summary (issue #1629) ───────────────────────────────────────
+
+/// Aggregate a payer's payment history into a [`PayerPaymentSummary`].
+///
+/// Reads every order ID from the payer index and loads each payment from live
+/// storage (no caching).  Payments that can no longer be found are skipped.
+pub fn get_payer_payment_summary(env: &Env, payer: &Address) -> PayerPaymentSummary {
+    let ids = get_payer_payment_ids(env, payer);
+    let mut summary = PayerPaymentSummary {
+        total_paid: 0,
+        total_refunded: 0,
+        total_pending: 0,
+        payment_count: 0,
+    };
+
+    for order_id in ids.iter() {
+        if let Some(payment) = get_payment(env, &order_id) {
+            summary.payment_count = summary.payment_count.saturating_add(1);
+            summary.total_paid = summary.total_paid.saturating_add(payment.amount);
+            summary.total_refunded = summary
+                .total_refunded
+                .saturating_add(payment.refunded_amount);
+            if !payment.released && !payment.refunded {
+                summary.total_pending = summary.total_pending.saturating_add(payment.amount);
+            }
+        }
+    }
+
+    summary
 }
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────

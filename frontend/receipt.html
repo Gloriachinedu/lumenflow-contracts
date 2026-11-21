@@ -493,6 +493,31 @@
 
     <hr class="divider" />
 
+    <!-- Payer payment summary (issue #1629) -->
+    <div id="payer-summary-section" class="payer-summary-section" style="display:none">
+      <h2>Your Payment Summary</h2>
+      <p style="font-size:0.82rem;color:#666;margin-bottom:0.75rem;">
+        Aggregated totals across all payments made from your payer address.
+      </p>
+      <div class="field">
+        <label>Total Paid</label>
+        <div class="value" id="payer-summary-total-paid"></div>
+      </div>
+      <div class="field">
+        <label>Total Refunded</label>
+        <div class="value" id="payer-summary-total-refunded"></div>
+      </div>
+      <div class="field">
+        <label>Total Pending</label>
+        <div class="value" id="payer-summary-total-pending"></div>
+      </div>
+      <div class="field">
+        <label>Payments</label>
+        <div class="value" id="payer-summary-payment-count"></div>
+      </div>
+      <hr class="divider" />
+    </div>
+
     <!-- Refund history -->
     <div id="refunds-section" class="refunds-section" style="display:none">
       <h2>Refund History</h2>

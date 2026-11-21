@@ -37,6 +37,7 @@ const EventSource = require('eventsource');
 const fetch = require('node-fetch');
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
 const { MemoryIdempotencyStore } = require('./idempotency-store');
 
 // ---------------------------------------------------------------------------
@@ -48,6 +49,10 @@ const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const HORIZON_URL = process.env.HORIZON_URL || 'https://horizon-testnet.stellar.org';
 const MAX_RETRIES = parseInt(process.env.MAX_RETRIES || '5', 10);
 const RETRY_BASE_MS = parseInt(process.env.RETRY_BASE_MS || '500', 10);
+const HEALTH_PORT = parseInt(process.env.HEALTH_PORT || '8080', 10);
+const HEALTH_TIMEOUT_MS = parseInt(process.env.HEALTH_TIMEOUT_MS || '150', 10);
+const REDIS_URL = process.env.REDIS_URL || null;
+const WEBHOOK_RELAY_URL = process.env.WEBHOOK_RELAY_URL || WEBHOOK_URL;
 
 if (!CONTRACT_ID) throw new Error('CONTRACT_ID environment variable is required.');
 if (!WEBHOOK_URL) throw new Error('WEBHOOK_URL environment variable is required.');
@@ -207,6 +212,172 @@ function sleep(ms) {
 }
 
 // ---------------------------------------------------------------------------
+// Health checks
+//
+// Each dependency check is wrapped in a per-dependency timeout so the whole
+// /health response is computed well within 500 ms.  Checks run concurrently
+// via Promise.allSettled so a slow dependency never blocks the others.
+// ---------------------------------------------------------------------------
+
+/**
+ * Races a promise against a timeout.  Rejects with a descriptive error if the
+ * timeout elapses first.
+ *
+ * @param {Promise<any>} promise
+ * @param {number} ms
+ * @param {string} label
+ * @returns {Promise<any>}
+ */
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Checks the Horizon RPC node by issuing a lightweight request and measuring
+ * round-trip latency.
+ *
+ * @returns {Promise<{ ok: boolean, latency_ms: number }>}
+ */
+async function checkRpc() {
+  const started = Date.now();
+  try {
+    const response = await withTimeout(
+      fetch(`${HORIZON_URL}/`, { method: 'GET' }),
+      HEALTH_TIMEOUT_MS,
+      'rpc',
+    );
+    return { ok: response.ok, latency_ms: Date.now() - started };
+  } catch {
+    return { ok: false, latency_ms: Date.now() - started };
+  }
+}
+
+/**
+ * Checks Redis connectivity.  When no REDIS_URL is configured the check is
+ * reported as healthy (the in-memory idempotency store is in use).
+ *
+ * @returns {Promise<{ ok: boolean }>}
+ */
+async function checkRedis() {
+  if (!REDIS_URL) {
+    return { ok: true };
+  }
+  try {
+    const net = require('net');
+    const url = new URL(REDIS_URL);
+    const port = parseInt(url.port || '6379', 10);
+    await withTimeout(
+      new Promise((resolve, reject) => {
+        const socket = net.createConnection({ host: url.hostname, port }, () => {
+          socket.end();
+          resolve();
+        });
+        socket.on('error', reject);
+        socket.setTimeout(HEALTH_TIMEOUT_MS, () => {
+          socket.destroy();
+          reject(new Error('redis socket timeout'));
+        });
+      }),
+      HEALTH_TIMEOUT_MS,
+      'redis',
+    );
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/**
+ * Checks the downstream webhook relay by issuing a HEAD request.
+ *
+ * @returns {Promise<{ ok: boolean }>}
+ */
+async function checkWebhookRelay() {
+  try {
+    const response = await withTimeout(
+      fetch(WEBHOOK_RELAY_URL, { method: 'HEAD' }),
+      HEALTH_TIMEOUT_MS,
+      'webhookRelay',
+    );
+    // Any HTTP response (even 4xx/5xx) proves the relay is reachable; only
+    // network-level failures mark it unhealthy.
+    return { ok: response.status < 500 };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/**
+ * Computes the aggregated health status of all dependencies.
+ *
+ * @returns {Promise<object>} Structured health payload.
+ */
+async function computeHealth() {
+  const [rpc, redis, webhookRelay] = await Promise.allSettled([
+    checkRpc(),
+    checkRedis(),
+    checkWebhookRelay(),
+  ]);
+
+  const rpcResult = rpc.status === 'fulfilled' ? rpc.value : { ok: false, latency_ms: 0 };
+  const redisResult = redis.status === 'fulfilled' ? redis.value : { ok: false };
+  const relayResult = webhookRelay.status === 'fulfilled' ? webhookRelay.value : { ok: false };
+
+  const allHealthy = rpcResult.ok && redisResult.ok && relayResult.ok;
+
+  return {
+    status: allHealthy ? 'ok' : 'degraded',
+    rpc: rpcResult,
+    redis: redisResult,
+    webhookRelay: relayResult,
+  };
+}
+
+/**
+ * Starts the HTTP server exposing the structured /health endpoint used by
+ * Kubernetes liveness and readiness probes.
+ *
+ * @returns {http.Server}
+ */
+function startHealthServer() {
+  const server = http.createServer(async (req, res) => {
+    if (req.method !== 'GET' || !req.url || !req.url.startsWith('/health')) {
+      const headers = applySecurityHeaders({ 'Content-Type': 'application/json' });
+      res.writeHead(404, headers);
+      res.end(JSON.stringify({ error: 'not_found' }));
+      return;
+    }
+
+    let payload;
+    try {
+      payload = await computeHealth();
+    } catch (err) {
+      payload = {
+        status: 'degraded',
+        rpc: { ok: false, latency_ms: 0 },
+        redis: { ok: false },
+        webhookRelay: { ok: false },
+      };
+    }
+
+    const statusCode = payload.status === 'ok' ? 200 : 503;
+    const headers = applySecurityHeaders({ 'Content-Type': 'application/json' });
+    res.writeHead(statusCode, headers);
+    res.end(JSON.stringify(payload));
+  });
+
+  server.listen(HEALTH_PORT, () => {
+    console.log(`[health] Listening on port ${HEALTH_PORT} (GET /health)`);
+  });
+
+  return server;
+}
+
+// ---------------------------------------------------------------------------
 // Main SSE loop
 // ---------------------------------------------------------------------------
 
@@ -257,6 +428,12 @@ async function handleMessage(msg) {
   const eventName = Array.isArray(event.topic) ? event.topic[1] : String(event.topic);
   const data = event.value;
 
+  // Escrow expiry warnings are surfaced to the downstream webhook exactly like
+  // any other event so off-chain pollers can trigger merchant notifications.
+  if (eventName === 'escrow_expiry_warning') {
+    console.log(`[warning] Escrow expiry warning received (token=${pagingToken})`);
+  }
+
   await deliverWithRetry(eventName, data, event.ledger, pagingToken);
 
   // Persist cursor after successful processing so restarts resume here.
@@ -305,4 +482,5 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 // Start
 // ---------------------------------------------------------------------------
 
+startHealthServer();
 connect();

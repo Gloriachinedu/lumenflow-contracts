@@ -209,3 +209,42 @@ export interface Subscription {
   status: SubscriptionStatus;
   createdAt: bigint;
 }
+
+/**
+ * Aggregated payer-facing payment history, returned by the contract's
+ * `get_payer_payment_summary` entrypoint.  All values are computed from live
+ * storage at query time.
+ */
+export interface PayerPaymentSummary {
+  /** Sum of all amounts paid by the payer. */
+  totalPaid: bigint;
+  /** Sum of all amounts refunded to the payer. */
+  totalRefunded: bigint;
+  /** Sum of amounts still held in escrow / awaiting settlement. */
+  totalPending: bigint;
+  /** Number of payment orders associated with the payer. */
+  paymentCount: number;
+}
+
+/**
+ * Payload of the `EscrowExpiryWarningEvent` emitted by the contract when an
+ * escrow's `unlock_at` is within the configured warning lead time.
+ */
+export interface EscrowExpiryWarningEvent {
+  /** Identifier of the escrow record approaching expiry. */
+  escrowId: string;
+  /** Merchant that owns the escrow. */
+  merchant: string;
+  /** Payer that funded the escrow. */
+  payer: string;
+  /** Token held in escrow. */
+  token: string;
+  /** Amount held in escrow. */
+  amount: bigint;
+  /** Ledger timestamp at which the escrow auto-cancels. */
+  unlockAt: bigint;
+  /** Ledger timestamp at which the warning was emitted. */
+  currentTime: bigint;
+  /** Configured lead time (in seconds) that triggered the warning. */
+  warningLeadTime: bigint;
+}
