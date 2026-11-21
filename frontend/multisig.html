@@ -91,6 +91,7 @@
     }
     .signer-status-list li:last-child { border-bottom: none; }
     .sig-icon { font-size: 1rem; flex-shrink: 0; }
+    .sig-icon[aria-hidden="true"] { /* decorative icons are hidden from AT */ }
     .sig-addr { flex: 1; word-break: break-all; color: #333; min-width: 0; display: inline-flex; align-items: center; gap: 0.25rem; }
     .lf-copy-btn:hover { background: #f0ecff !important; color: #6c47ff !important; border-color: #6c47ff !important; }
     .sig-status { font-size: 0.75rem; font-weight: 600; flex-shrink: 0; }
@@ -110,6 +111,13 @@
     }
     .sign-btn:hover { background: #f0ecff; }
     .sign-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .sign-btn:focus-visible,
+    .btn-icon:focus-visible,
+    .btn-link:focus-visible,
+    #connect-wallet-btn:focus-visible {
+      outline: 3px solid #6c47ff;
+      outline-offset: 2px;
+    }
 
     .execute-section { margin-top: 1.25rem; }
 
@@ -353,9 +361,10 @@
   <div class="progress-bar-wrap">
     <div class="progress-bar" id="progress-bar" style="width:0%"
          role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"
+         aria-valuetext="0 of 1 signatures collected"
          aria-label="Signature progress"></div>
   </div>
-  <div class="progress-label" id="progress-label"></div>
+  <div class="progress-label" id="progress-label" role="status" aria-live="polite"></div>
 
   <ul class="signer-status-list" id="signer-status-list"></ul>
 
@@ -969,8 +978,12 @@ feat/sdk-rpc-retry-integration
     }
     idDisplay.innerHTML = `Payment ID: <code>${paymentId}</code>${copyButtonHtml(paymentId, 'Copy payment ID')}`;
 
-    document.getElementById('progress-bar').style.width = pct + '%';
-    document.getElementById('progress-bar').setAttribute('aria-valuenow', String(pct));
+    const progressBar = document.getElementById('progress-bar');
+    progressBar.style.width = pct + '%';
+    progressBar.setAttribute('aria-valuenow', String(pct));
+    progressBar.setAttribute('aria-valuemin', '0');
+    progressBar.setAttribute('aria-valuemax', '100');
+    progressBar.setAttribute('aria-valuetext', `${signed} of ${signers.length} signatures collected`);
     document.getElementById('progress-fraction').textContent = `${signed} / ${signers.length} signed`;
     document.getElementById('progress-label').textContent =
       signed >= required
@@ -983,13 +996,18 @@ feat/sdk-rpc-retry-integration
       const isSigned = signatures.has(addr);
       const li = document.createElement('li');
       const truncated = addr.length > 12 ? addr.slice(0, 8) + '…' + addr.slice(-4) : addr;
+      const statusText = isSigned ? 'Signed' : 'Pending';
       li.innerHTML = `
-        <span class="sig-icon">${isSigned ? '✅' : '⬜'}</span>
+        <span class="sig-icon" aria-hidden="true">${isSigned ? '✅' : '⬜'}</span>
         <span class="sig-addr"><code title="${addr}">${addr.slice(0,8)}…</code>${copyButtonHtml(addr, 'Copy signer address')}</span>
-        <span class="sig-status ${isSigned ? 'signed' : 'pending'}">${isSigned ? 'Signed' : 'Pending'}</span>
-        <button class="sign-btn" onclick="signPayment('${addr}')" ${isSigned ? 'disabled' : ''}>
+        <span class="sig-status ${isSigned ? 'signed' : 'pending'}">${statusText}</span>
+        <button type="button" class="sign-btn" data-signer="${addr}" aria-label="${isSigned ? `Signer ${truncated} has signed` : `Sign payment as ${truncated}`}" ${isSigned ? 'disabled' : ''}>
           ${isSigned ? 'Signed' : 'Sign'}
         </button>`;
+      const signBtn = li.querySelector('.sign-btn');
+      if (!isSigned) {
+        signBtn.addEventListener('click', () => signPayment(addr));
+      }
       list.appendChild(li);
     });
 
@@ -1002,7 +1020,7 @@ feat/sdk-rpc-retry-integration
   async function signPayment(signerAddress) {
     // Prevent re-entrant signing while wallet dialog is open
     const btn = [...document.querySelectorAll('.sign-btn')]
-      .find(b => b.onclick && b.onclick.toString().includes(signerAddress));
+      .find(b => b.dataset.signer === signerAddress);
     if (btn) { btn.disabled = true; btn.textContent = 'Signing…'; }
 
     showLoadingOverlay('Waiting for transaction confirmation…');
@@ -1070,6 +1088,17 @@ feat/sdk-rpc-retry-integration
   window.connectWallet   = connectWallet;
   window.stopPolling     = stopPolling;
 
+  // Keyboard activation for custom clickable elements (Enter/Space).
+  // Native <button> elements already handle this; this guard covers any
+  // element that receives role="button" without native semantics.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const target = e.target.closest('[role="button"]:not(button)');
+    if (!target) return;
+    e.preventDefault();
+    target.click();
+  });
+
   document.getElementById('required-sigs').addEventListener('input', () => {
     validateThreshold();
     updateSubmitState();
@@ -1093,6 +1122,14 @@ feat/sdk-rpc-retry-integration
   initCopyButtons(document.body);
   updateThresholdLabel();
   initWalletStatus(document.getElementById('wallet-status-container'));
+
+  // Ensure icon-only copy buttons rendered by copyButtonHtml() have an
+  // accessible name even if the helper only supplied a title attribute.
+  document.querySelectorAll('.lf-copy-btn').forEach(btn => {
+    if (!btn.getAttribute('aria-label') && !btn.textContent.trim()) {
+      btn.setAttribute('aria-label', btn.getAttribute('title') || 'Copy to clipboard');
+    }
+  });
 </script>
 
 <script>
