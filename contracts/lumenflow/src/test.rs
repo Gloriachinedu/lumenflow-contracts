@@ -9822,6 +9822,115 @@ fn test_set_min_refund_amount_zero_fails() {
     assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
 }
 
+// ── Active escrow listing tests (issue #1625) ────────────────────────────────
+
+/// Helper: create a locked escrow via the public API.
+fn make_escrow(
+    env: &Env,
+    client: &PaymentProcessingContractClient,
+    payer: &Address,
+    merchant: &Address,
+    token: &Address,
+    escrow_id: &str,
+    amount: i128,
+    unlock_at: u64,
+) {
+    client.create_escrow(
+        payer,
+        &str(env, escrow_id),
+        merchant,
+        token,
+        &amount,
+        &unlock_at,
+    );
+}
+
+#[test]
+fn test_list_active_escrows_requires_admin() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_escrow(&env, &client, &payer, &merchant, &token, "ESC_AUTH_1", 100, 1_000);
+
+    let non_admin = Address::generate(&env);
+    let result = client.try_list_active_escrows(&non_admin, &0, &10);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+#[test]
+fn test_list_active_escrows_empty() {
+    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
+    let page = client.list_active_escrows(&admin, &0, &10);
+    assert_eq!(page.len(), 0);
+}
+
+#[test]
+fn test_list_active_escrows_only_locked_returned() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    make_escrow(&env, &client, &payer, &merchant, &token, "ESC_LOCKED_1", 100, 1_000);
+    make_escrow(&env, &client, &payer, &merchant, &token, "ESC_LOCKED_2", 200, 2_000);
+    make_escrow(&env, &client, &payer, &merchant, &token, "ESC_RELEASED", 300, 3_000);
+    make_escrow(&env, &client, &payer, &merchant, &token, "ESC_CANCELLED", 400, 4_000);
+
+    // Move two escrows out of the Locked state.
+    client.release_escrow(&admin, &str(&env, "ESC_RELEASED"));
+    client.cancel_escrow(&payer, &str(&env, "ESC_CANCELLED"));
+
+    let page = client.list_active_escrows(&admin, &0, &10);
+    assert_eq!(page.len(), 2);
+    for record in page.iter() {
+        assert_eq!(record.status, crate::types::EscrowStatus::Locked);
+    }
+    assert_eq!(page.get(0).unwrap().escrow_id, str(&env, "ESC_LOCKED_1"));
+    assert_eq!(page.get(1).unwrap().escrow_id, str(&env, "ESC_LOCKED_2"));
+}
+
+#[test]
+fn test_list_active_escrows_sorted_by_unlock_at() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    // Insert out of order; expect ascending unlock_at ordering.
+    make_escrow(&env, &client, &payer, &merchant, &token, "ESC_SORT_C", 100, 3_000);
+    make_escrow(&env, &client, &payer, &merchant, &token, "ESC_SORT_A", 100, 1_000);
+    make_escrow(&env, &client, &payer, &merchant, &token, "ESC_SORT_B", 100, 2_000);
+
+    let page = client.list_active_escrows(&admin, &0, &10);
+    assert_eq!(page.len(), 3);
+    assert_eq!(page.get(0).unwrap().escrow_id, str(&env, "ESC_SORT_A"));
+    assert_eq!(page.get(1).unwrap().escrow_id, str(&env, "ESC_SORT_B"));
+    assert_eq!(page.get(2).unwrap().escrow_id, str(&env, "ESC_SORT_C"));
+    assert!(page.get(0).unwrap().unlock_at <= page.get(1).unwrap().unlock_at);
+    assert!(page.get(1).unwrap().unlock_at <= page.get(2).unwrap().unlock_at);
+}
+
+#[test]
+fn test_list_active_escrows_pagination() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    make_escrow(&env, &client, &payer, &merchant, &token, "ESC_PG_1", 100, 1_000);
+    make_escrow(&env, &client, &payer, &merchant, &token, "ESC_PG_2", 100, 2_000);
+    make_escrow(&env, &client, &payer, &merchant, &token, "ESC_PG_3", 100, 3_000);
+    make_escrow(&env, &client, &payer, &merchant, &token, "ESC_PG_4", 100, 4_000);
+    make_escrow(&env, &client, &payer, &merchant, &token, "ESC_PG_5", 100, 5_000);
+
+    let page0 = client.list_active_escrows(&admin, &0, &2);
+    assert_eq!(page0.len(), 2);
+    assert_eq!(page0.get(0).unwrap().escrow_id, str(&env, "ESC_PG_1"));
+    assert_eq!(page0.get(1).unwrap().escrow_id, str(&env, "ESC_PG_2"));
+
+    let page1 = client.list_active_escrows(&admin, &1, &2);
+    assert_eq!(page1.len(), 2);
+    assert_eq!(page1.get(0).unwrap().escrow_id, str(&env, "ESC_PG_3"));
+    assert_eq!(page1.get(1).unwrap().escrow_id, str(&env, "ESC_PG_4"));
+
+    let page2 = client.list_active_escrows(&admin, &2, &2);
+    assert_eq!(page2.len(), 1);
+    assert_eq!(page2.get(0).unwrap().escrow_id, str(&env, "ESC_PG_5"));
+
+    // Page past the end returns an empty list.
+    let page3 = client.list_active_escrows(&admin, &3, &2);
+    assert_eq!(page3.len(), 0);
+}
+
 // ── Max signers limit tests (issue #1269) ─────────────────────────────────────
 
 /// Helper: build a Vec<Address> of `n` freshly generated addresses.

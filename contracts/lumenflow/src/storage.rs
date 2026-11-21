@@ -814,6 +814,42 @@ pub fn set_escrow(env: &Env, escrow: &EscrowRecord) {
         .extend_ttl(&key, ESCROW_TTL_LEDGERS, ESCROW_TTL_LEDGERS);
 }
 
+/// Maximum number of escrow records scanned by a single `list_active_escrows`
+/// call.  Bounds the ledger-entry read footprint of the admin query.
+pub const MAX_ESCROW_SCAN: u32 = 1_000;
+
+/// Enumerate all stored `EscrowRecord`s from persistent storage.
+///
+/// Escrow records are keyed by `DataKey::Escrow(order_id)` and there is no
+/// global index, so this walks the order IDs supplied by the caller (typically
+/// the merchant/payer payment indexes) and returns the escrow record for each
+/// ID that has one.  At most `MAX_ESCROW_SCAN` IDs are inspected.
+///
+/// TTL handling matches [`set_escrow`]: each record found is re-extended to
+/// `ESCROW_TTL_LEDGERS` so enumeration never lets an active escrow lapse.
+pub fn list_escrows(env: &Env, order_ids: &Vec<String>) -> Vec<EscrowRecord> {
+    let mut records = Vec::new(env);
+    let scan_len = if order_ids.len() > MAX_ESCROW_SCAN {
+        MAX_ESCROW_SCAN
+    } else {
+        order_ids.len()
+    };
+
+    for i in 0..scan_len {
+        if let Some(order_id) = order_ids.get(i) {
+            if let Some(escrow) = get_escrow(env, &order_id) {
+                let key = DataKey::Escrow(order_id.clone());
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&key, ESCROW_TTL_LEDGERS, ESCROW_TTL_LEDGERS);
+                records.push_back(escrow);
+            }
+        }
+    }
+
+    records
+}
+
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 
 /// Default max payments per merchant per rate-limit window (300 ledgers).

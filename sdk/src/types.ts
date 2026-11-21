@@ -209,3 +209,27 @@ export interface Subscription {
   status: SubscriptionStatus;
   createdAt: bigint;
 }
+
+export enum EscrowStatus {
+  Locked = "Locked",
+  Released = "Released",
+  Refunded = "Refunded",
+}
+
+export interface EscrowRecord {
+  escrowId: string;
+  payer: string;
+  merchant: string;
+  token: string;
+  amount: bigint;
+  status: EscrowStatus;
+  unlockAt: bigint;
+  createdAt: bigint;
+}
+
+export interface ActiveEscrowPage {
+  escrows: EscrowRecord[];
+  page: number;
+  limit: number;
+  total: number;
+}

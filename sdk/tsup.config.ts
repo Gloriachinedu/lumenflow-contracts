@@ -35,21 +35,35 @@ export default defineConfig({
   dts: {
     resolve: true,
   },
-  /**
-   * Split output into separate directories per format.
-   */
-  esbuildOptions(options, context) {
-    if (context.format === 'esm') {
-      options.outdir = 'dist/esm';
-    } else {
-      options.outdir = 'dist/cjs';
-    }
-  },
+
   /**
    * Do not bundle dependencies — consumers install them via package.json.
    * This keeps the output lean and avoids duplicate copies of stellar-sdk.
    */
   external: ['@stellar/stellar-sdk', 'tweetnacl'],
+  /**
+   * Issue #1619: Enable code splitting so dynamically imported modules
+   * (e.g. the lazy-loaded contract wrapper) are emitted as separate chunks
+   * instead of being inlined into the entry bundle. This keeps the initial
+   * SDK payload small; the contract wrapper chunk is fetched on first use.
+   *
+   * Code splitting is only supported for the ESM output; the CJS build
+   * inlines dynamic imports (Node.js require() consumers are unaffected).
+   */
+  splitting: true,
+  /**
+   * Preserve dynamic import() calls in the output so bundlers/consumers can
+   * defer loading the contract wrapper chunk until the first RPC call.
+   */
+  esbuildOptions(options, context) {
+    if (context.format === 'esm') {
+      options.outdir = 'dist/esm';
+      options.splitting = true;
+    } else {
+      options.outdir = 'dist/cjs';
+      options.splitting = false;
+    }
+  },
   /**
    * Minification is disabled for debuggability. Bundler-level minification
    * is expected from the consumer's build tool (Webpack, Rollup, Vite, etc.)
