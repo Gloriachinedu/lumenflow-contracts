@@ -1,4 +1,4 @@
-import { LumenFlowError, PaymentErrorCode } from './errors';
+import { LumenFlowError, NetworkError, PaymentErrorCode, RateLimitError } from './errors';
 import { EventCompatError, parseLumenFlowEvent } from './eventCatalog';
 
 export interface ContractEvent {
@@ -51,8 +51,49 @@ function validateEvent(event: unknown): ContractEvent {
   };
 }
 
-function buildRpcPayload(options: EventPollerOptions) {
-  const filters: any[] = [
+export interface RpcFilter {
+  type: 'contract';
+  contractIds: string[];
+  topics?: string[][];
+}
+
+interface RpcRequestPayload {
+  jsonrpc: '2.0';
+  id: number;
+  method: 'getEvents';
+  params: {
+    startLedger: number;
+    filters: RpcFilter[];
+  };
+}
+
+interface RpcErrorObject {
+  code?: number;
+  message?: string;
+}
+
+interface RpcSuccessResponse {
+  jsonrpc: '2.0';
+  id: number;
+  result?: {
+    events?: unknown[];
+  };
+}
+
+interface RpcErrorResponse {
+  jsonrpc: '2.0';
+  id: number;
+  error: RpcErrorObject;
+}
+
+type RpcResponse = RpcSuccessResponse | RpcErrorResponse;
+
+function isRpcErrorResponse(data: RpcResponse): data is RpcErrorResponse {
+  return typeof (data as RpcErrorResponse).error === 'object' && (data as RpcErrorResponse).error !== null;
+}
+
+function buildRpcPayload(options: EventPollerOptions): RpcRequestPayload {
+  const filters: RpcFilter[] = [
     {
       type: 'contract',
       contractIds: [options.contractId],
@@ -83,18 +124,25 @@ export async function fetchContractEvents(options: EventPollerOptions): Promise<
       body: JSON.stringify(buildRpcPayload(options)),
     });
   } catch (err) {
-    throw new LumenFlowError(PaymentErrorCode.InvalidInput, String(err));
+    throw new NetworkError(String(err));
   }
 
-  let data: any;
+  if (response.status === 429) {
+    throw new RateLimitError('RPC rate limit exceeded');
+  }
+
+  let data: RpcResponse;
   try {
-    data = await response.json();
+    data = (await response.json()) as RpcResponse;
   } catch (err) {
     throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'Invalid JSON response from RPC');
   }
 
-  if (data.error) {
-    throw new LumenFlowError(PaymentErrorCode.InvalidInput, data.error.message ?? JSON.stringify(data.error));
+  if (isRpcErrorResponse(data)) {
+    throw new LumenFlowError(
+      PaymentErrorCode.InvalidInput,
+      data.error.message ?? JSON.stringify(data.error),
+    );
   }
 
   const events = data.result?.events ?? [];
@@ -118,7 +166,9 @@ export function pollContractEvents(
   const timer = setInterval(() => {
     fetchContractEvents(options)
       .then(callback)
-      .catch(() => {});
+      .catch((error: unknown) => {
+        console.warn('[LumenFlow] Event polling failed', error);
+      });
   }, intervalMs);
 
   return () => clearInterval(timer);

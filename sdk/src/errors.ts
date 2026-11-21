@@ -85,14 +85,16 @@ export const ERROR_MESSAGES: Record<PaymentErrorCode, string> = {
 };
 
 export class LumenFlowError extends Error {
-  public readonly code: PaymentErrorCode;
+  public readonly code: number;
+  public readonly retryable: boolean;
   public readonly details?: unknown;
 
-  constructor(code: PaymentErrorCode, details?: unknown) {
-    const message = ERROR_MESSAGES[code] || `An unknown error occurred (code: ${code})`;
+  constructor(code: number, details?: unknown, retryable: boolean = false) {
+    const message = ERROR_MESSAGES[code as PaymentErrorCode] || `An unknown error occurred (code: ${code})`;
     super(message);
     this.name = "LumenFlowError";
     this.code = code;
+    this.retryable = retryable;
     this.details = details;
   }
 
@@ -101,7 +103,7 @@ export class LumenFlowError extends Error {
    * `"Unknown"` when the code is not a known {@link PaymentErrorCode}.
    */
   get codeName(): string {
-    return PaymentErrorCode[this.code] ?? "Unknown";
+    return PaymentErrorCode[this.code as PaymentErrorCode] ?? "Unknown";
   }
 
   /**
@@ -118,18 +120,20 @@ export class LumenFlowError extends Error {
    */
   toJSON(): {
     name: string;
-    code: PaymentErrorCode;
+    code: number;
     codeName: string;
     message: string;
     messageKey: string;
+    retryable: boolean;
     details?: unknown;
   } {
     const json: {
       name: string;
-      code: PaymentErrorCode;
+      code: number;
       codeName: string;
       message: string;
       messageKey: string;
+      retryable: boolean;
       details?: unknown;
     } = {
       name: this.name,
@@ -137,20 +141,59 @@ export class LumenFlowError extends Error {
       codeName: this.codeName,
       message: this.message,
       messageKey: this.messageKey,
+      retryable: this.retryable,
     };
     if (this.details !== undefined) {
       json.details = this.details;
     }
     return json;
   }
-
-  toJSON() {
-    return { name: this.name, code: this.code, message: this.message, ...(this.details === undefined ? {} : { details: this.details }) };
-  }
 }
 
 abstract class ContractError extends LumenFlowError {
   protected constructor(code: PaymentErrorCode, details?: unknown) { super(code, details); }
+}
+
+/**
+ * Error raised when the SDK or contract enforces a rate limit.
+ * Retryable: the same request may succeed after a backoff.
+ */
+export class RateLimitError extends LumenFlowError {
+  constructor(details?: unknown, code: number = PaymentErrorCode.PaginationLimitExceeded) {
+    super(code, details, true);
+    this.name = "RateLimitError";
+  }
+}
+
+/**
+ * Error raised when a signature fails verification.
+ */
+export class SignatureError extends LumenFlowError {
+  constructor(details?: unknown, code: number = PaymentErrorCode.InvalidSignature) {
+    super(code, details, false);
+    this.name = "SignatureError";
+  }
+}
+
+/**
+ * Error raised when a requested resource cannot be found.
+ */
+export class NotFoundError extends LumenFlowError {
+  constructor(details?: unknown, code: number = PaymentErrorCode.PaymentNotFound) {
+    super(code, details, false);
+    this.name = "NotFoundError";
+  }
+}
+
+/**
+ * Error raised for transport / connectivity failures.
+ * Retryable: transient network failures may succeed on retry.
+ */
+export class NetworkError extends LumenFlowError {
+  constructor(details?: unknown, code: number = PaymentErrorCode.InvalidInput) {
+    super(code, details, true);
+    this.name = "NetworkError";
+  }
 }
 
 export class UnauthorizedError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.Unauthorized, details); } }
@@ -193,7 +236,29 @@ export const ERROR_TYPES: Record<PaymentErrorCode, new (details?: unknown) => Lu
   [PaymentErrorCode.InvalidInput]: InvalidInputError, [PaymentErrorCode.PaginationLimitExceeded]: PaginationLimitExceededError, [PaymentErrorCode.BatchSizeExceeded]: BatchSizeExceededError, [PaymentErrorCode.InvalidTags]: InvalidTagsError,
 };
 
+/**
+ * Maps a contract error code to the appropriate SDK error class.
+ * Signature codes map to {@link SignatureError}, not-found codes to
+ * {@link NotFoundError}, and pagination/rate-limit codes to
+ * {@link RateLimitError}. Unknown codes fall back to {@link LumenFlowError}.
+ */
 export function errorFromCode(code: number, details?: unknown): LumenFlowError {
+  switch (code) {
+    case PaymentErrorCode.InvalidSignature:
+      return new SignatureError(details, code);
+    case PaymentErrorCode.MerchantNotFound:
+    case PaymentErrorCode.PaymentNotFound:
+    case PaymentErrorCode.RefundNotFound:
+    case PaymentErrorCode.DisputeNotFound:
+    case PaymentErrorCode.MultisigNotFound:
+    case PaymentErrorCode.SubscriptionPlanNotFound:
+    case PaymentErrorCode.SubscriptionNotFound:
+      return new NotFoundError(details, code);
+    case PaymentErrorCode.PaginationLimitExceeded:
+      return new RateLimitError(details, code);
+    default:
+      break;
+  }
   const ErrorType = ERROR_TYPES[code as PaymentErrorCode];
-  return ErrorType ? new ErrorType(details) : new LumenFlowError(code as PaymentErrorCode, details);
+  return ErrorType ? new ErrorType(details) : new LumenFlowError(code, details);
 }
