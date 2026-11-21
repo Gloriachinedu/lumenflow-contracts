@@ -219,6 +219,45 @@ fn benchmark_batch_payment(c: &mut Criterion) {
     });
 }
 
+// ── batch_payment instruction budget (issue #1516) ───────────────────────────
+
+/// Instruction-budget benchmark for the `batch_payment` timestamp hoisting
+/// optimisation (issue #1516).
+///
+/// Run with `SOROBAN_TEST_BUDGET=1` to have the Soroban host enforce and report
+/// the instruction budget consumed by a single `batch_payment` call with the
+/// maximum of 10 items.  Compare the reported instruction count before and
+/// after hoisting `env.ledger().timestamp()` out of the per-item loop to
+/// quantify the saving documented in `docs/gas-optimization.md`.
+///
+/// ```bash
+/// SOROBAN_TEST_BUDGET=1 cargo bench --manifest-path contracts/lumenflow/Cargo.toml \
+///     -- batch_payment_instruction_budget
+/// ```
+fn benchmark_batch_payment_instruction_budget(c: &mut Criterion) {
+    c.bench_function("batch_payment_instruction_budget", |b| {
+        b.iter(|| {
+            let (env, client, _admin, payer, merchant, token_addr) = setup_env(100_000_000);
+
+            let mut items: Vec<lumenflow::BatchPaymentItem> = Vec::new(&env);
+            for i in 0..10u32 {
+                items.push_back(lumenflow::BatchPaymentItem {
+                    order_id: String::from_str(&env, &alloc::format!("budget-order-{i}")),
+                    merchant_address: merchant.clone(),
+                    token_address: token_addr.clone(),
+                    amount: 500_i128,
+                    memo: String::from_str(&env, "budget item"),
+                    tags: Option::<Vec<String>>::None,
+                    signature: Bytes::from_slice(&env, &[0; 64]),
+                    merchant_public_key: Bytes::from_slice(&env, &[0; 32]),
+                });
+            }
+
+            client.batch_payment(&payer, &items);
+        });
+    });
+}
+
 // ── create_escrow ─────────────────────────────────────────────────────────────
 
 /// Measures escrow creation: merchant load → token transfer → escrow storage write.
@@ -282,6 +321,7 @@ criterion_group!(
     benchmark_query_history,
     benchmark_cleanup,
     benchmark_batch_payment,
+    benchmark_batch_payment_instruction_budget,
     benchmark_create_escrow,
     benchmark_release_escrow,
 );

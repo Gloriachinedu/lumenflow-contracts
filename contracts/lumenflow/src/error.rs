@@ -177,4 +177,8 @@ pub enum PaymentError {
     DisputeNotOpen = 114,
     /// The dispute has already been escalated and cannot be escalated again.
     DisputeAlreadyEscalated = 115,
+    /// The requested dispute state transition is not permitted from the dispute's current state.
+    /// Remediation: Check the dispute's current state and only perform transitions allowed by the
+    /// dispute state machine (Open -> UnderReview -> Escalated -> Resolved).
+    InvalidDisputeState = 116,
 }

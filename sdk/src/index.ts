@@ -1,4 +1,3 @@
-feat/stellar-address-validation
 // Error handling
 export { LumenFlowError, PaymentErrorCode } from './errors';
 
@@ -24,3 +23,15 @@ export * from "./eventCatalog";
 export * from "./security";
 export * from "./lazyRoute";
 export * from "./refundRecovery";
+
+// Fee module (configurable recipient and basis points)
+export type { FeeConfig, SetFeeConfigParams } from './types';
+export { setFeeConfig, getFeeConfig } from './client';
+
+// Cross-asset payment support (Stellar DEX path conversion)
+export type {
+  CrossAssetPaymentParams,
+  CrossAssetPaymentEvent,
+  PathPaymentPayload,
+} from './types';
+export { processPaymentCrossAsset, buildPathPaymentPayload } from './client';

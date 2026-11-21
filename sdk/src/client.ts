@@ -144,6 +144,7 @@ import {
   GlobalStats,
   SubscriptionPlan,
   Subscription,
+  FeeConfig,
 } from "./types";
 import { LumenFlowError, PaymentErrorCode } from "./errors";
 import { withIdempotency, IdempotentResult } from "./idempotency";
@@ -439,6 +440,52 @@ export class LumenFlowClient {
       new Address(admin),
       max,
     ]);
+  }
+
+  /**
+   * Configures the optional protocol fee module.
+   *
+   * The fee is deducted from each payment before the merchant receives funds.
+   * Setting `bps` to `0` disables the fee module entirely (no extra token
+   * transfer is performed during payment processing).
+   *
+   * @param admin - Stellar address of the administrator (must sign).
+   * @param recipient - Stellar address that receives the protocol fee.
+   * @param bps - Fee in basis points (1 bps = 0.01%). Must be ≤ 10,000.
+   * @returns A Promise that resolves when the fee configuration is saved.
+   * @throws {@link LumenFlowError} if the caller is not the admin or `bps` is out of range.
+   *
+   * @example
+   * // Charge a 1% protocol fee
+   * await client.setFeeConfig("GADMIN...", "GFEE_RECIPIENT...", 100);
+   */
+  async setFeeConfig(
+    admin: string,
+    recipient: string,
+    bps: number
+  ): Promise<void> {
+    await this.invoke("set_fee_config", [
+      new Address(admin),
+      new Address(recipient),
+      bps,
+    ]);
+  }
+
+  /**
+   * Fetches the current protocol fee configuration.
+   *
+   * When the fee module is disabled (`bps === 0`), `recipient` may be `null`.
+   *
+   * @returns A Promise resolving to the current {@link FeeConfig}.
+   *
+   * @example
+   * const fee = await client.getFeeConfig();
+   * if (fee.bps > 0) {
+   *   console.log(`Fee: ${fee.bps / 100}% → ${fee.recipient}`);
+   * }
+   */
+  async getFeeConfig(): Promise<FeeConfig> {
+    return await this.call("get_fee_config", []);
   }
 
   // ── Merchant management ───────────────────────────────────────────────────

@@ -209,3 +209,51 @@ export interface Subscription {
   status: SubscriptionStatus;
   createdAt: bigint;
 }
+
+/**
+ * Protocol fee configuration.
+ *
+ * `bps` is expressed in basis points (1 bps = 0.01%).  A value of `0`
+ * disables the fee module entirely, meaning no extra token transfer occurs.
+ */
+export interface FeeConfig {
+  /** Address that receives the deducted protocol fee. */
+  recipient: string;
+  /** Fee in basis points (0–10000). `0` disables the fee module. */
+  bps: number;
+}
+
+/**
+ * Parameters for a cross-asset payment.
+ *
+ * The payer sends `sendAsset` (up to `sendMax`) and the merchant receives
+ * `destAsset` via a Stellar DEX path payment.  `path` lists intermediate
+ * assets used for conversion; pass an empty array for a direct conversion.
+ */
+export interface CrossAssetPaymentParams {
+  /** Asset the payer sends (e.g. "native" or "CODE:ISSUER"). */
+  sendAsset: string;
+  /** Maximum amount of `sendAsset` the payer is willing to spend. */
+  sendMax: bigint;
+  /** Asset the merchant receives. */
+  destAsset: string;
+  /** Intermediate assets used for the conversion path. */
+  path: string[];
+  /** Minimum amount of `destAsset` the merchant must receive (slippage guard). */
+  minReceive: bigint;
+}
+
+/** Event emitted after a successful cross-asset payment conversion. */
+export interface CrossAssetPaymentEvent {
+  orderId: string;
+  merchantAddress: string;
+  payer: string;
+  sendAsset: string;
+  sendAmount: bigint;
+  destAsset: string;
+  destAmount: bigint;
+  /** Exchange rate used, expressed as destAmount / sendAmount. */
+  exchangeRate: number;
+  path: string[];
+  timestamp: bigint;
+}
