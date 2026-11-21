@@ -6,6 +6,20 @@ feat/sdk-rpc-retry-integration
 
 import { LumenFlowError } from './errors';
 import { withRetry, RetryConfig, DEFAULT_RETRY_CONFIG } from './retry';
+import { WebhookStatusTracker } from './webhookStatus';
+
+/**
+ * Delivery status of a webhook event, as returned by
+ * {@link Client.getWebhookDeliveryStatus}.
+ */
+export interface WebhookDeliveryStatus {
+  /** `true` only when the event has been successfully delivered. */
+  delivered: boolean;
+  /** Total number of delivery attempts made so far. */
+  attempts: number;
+  /** ISO timestamp of the most recent attempt, or `""` if never attempted. */
+  lastAttemptAt: string;
+}
 
 export interface ClientConfig {
   /** Soroban RPC server URL */
@@ -14,17 +28,22 @@ export interface ClientConfig {
   contractId: string;
   /** Optional retry configuration */
   retryConfig?: Partial<RetryConfig>;
+  /** Optional webhook status tracker used by {@link Client.getWebhookDeliveryStatus}. */
+  webhookStatusTracker?: WebhookStatusTracker;
 }
 
 export class Client {
   private rpcUrl: string;
   private contractId: string;
   private retryConfig: RetryConfig;
+  private webhookStatusTracker: WebhookStatusTracker;
 
   constructor(config: ClientConfig) {
     this.rpcUrl = config.rpcUrl;
     this.contractId = config.contractId;
     this.retryConfig = { ...DEFAULT_RETRY_CONFIG, ...config.retryConfig };
+    this.webhookStatusTracker =
+      config.webhookStatusTracker ?? new WebhookStatusTracker();
   }
 
   /**
@@ -76,6 +95,30 @@ export class Client {
    */
   getRetryConfig(): RetryConfig {
     return { ...this.retryConfig };
+  }
+
+  /**
+   * Look up the delivery status of a webhook event.
+   *
+   * Delegates to the configured {@link WebhookStatusTracker} so merchants can
+   * programmatically confirm event delivery without checking the dashboard.
+   *
+   * @param eventId - The unique webhook event identifier.
+   * @returns A {@link WebhookDeliveryStatus} for the event, or `null` if the
+   *   event ID is unknown.
+   */
+  getWebhookDeliveryStatus(eventId: string): WebhookDeliveryStatus | null {
+    const status = this.webhookStatusTracker.getStatus(eventId);
+    if (!status) {
+      return null;
+    }
+    return {
+      delivered: status.state === 'delivered',
+      attempts: status.totalAttempts,
+      lastAttemptAt: status.lastAttemptAt
+        ? new Date(status.lastAttemptAt).toISOString()
+        : '',
+    };
   }
 }
 

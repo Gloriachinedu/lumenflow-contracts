@@ -1035,8 +1035,141 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Subscription'
+  /admin/merchant-keys:
+    post:
+      summary: Generate a new API key for a merchant.
+      description: |
+        Creates a per-merchant API key scoped to a single merchant address.
+        The plaintext key is returned only once, at creation time; store it
+        securely. The key must be sent as `Authorization: Bearer <key>` when
+        calling the merchant dashboard API.
+      operationId: createMerchantKey
+      tags:
+        - MerchantKeys
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMerchantKeyRequest'
+      responses:
+        '201':
+          description: API key created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MerchantKey'
+        '400':
+          description: Invalid request payload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  /admin/merchant-keys/{id}:
+    delete:
+      summary: Revoke a merchant API key.
+      description: |
+        Revokes the API key with the given identifier. Once revoked, requests
+        made with the key are rejected with `401 Unauthorized`.
+      operationId: revokeMerchantKey
+      tags:
+        - MerchantKeys
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Identifier of the API key to revoke.
+          schema:
+            type: string
+      responses:
+        '204':
+          description: API key revoked.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: API key not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        Per-merchant API key issued via `POST /admin/merchant-keys`. The key is
+        scoped to a single merchant address and is rate limited to 100 requests
+        per minute per key.
+  responses:
+    Unauthorized:
+      description: Missing, invalid, or revoked API key.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    TooManyRequests:
+      description: Rate limit exceeded (100 requests per minute per API key).
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying.
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
   schemas:
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+    CreateMerchantKeyRequest:
+      type: object
+      required:
+        - merchant_address
+      properties:
+        merchant_address:
+          type: string
+          description: Merchant address the key is scoped to.
+        label:
+          type: string
+          description: Optional human-readable label for the key.
+    MerchantKey:
+      type: object
+      required:
+        - id
+        - merchant_address
+        - key
+        - created_at
+      properties:
+        id:
+          type: string
+        merchant_address:
+          type: string
+        key:
+          type: string
+          description: Plaintext API key. Returned only at creation time.
+        label:
+          type: string
+        created_at:
+          type: integer
+          format: int64
+        revoked_at:
+          type: integer
+          format: int64
+          nullable: true
     EmptyResponse:
       type: object
       nullable: true

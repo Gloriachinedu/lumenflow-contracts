@@ -15,14 +15,15 @@ Each entry includes the function signature, a description, a parameter table, re
 
 1. [Versioning](#versioning)
 2. [Admin](#admin)
-3. [Merchant Management](#merchant-management)
-4. [Payment Processing](#payment-processing)
-5. [Payment History Queries](#payment-history-queries)
-6. [Refunds](#refunds)
-7. [Multi-Signature Payments](#multi-signature-payments)
-8. [Subscriptions](#subscriptions)
-9. [Payment Requests](#payment-requests)
-10. [Data Types](#data-types)
+3. [Merchant API Keys](#merchant-api-keys)
+4. [Merchant Management](#merchant-management)
+5. [Payment Processing](#payment-processing)
+6. [Payment History Queries](#payment-history-queries)
+7. [Refunds](#refunds)
+8. [Multi-Signature Payments](#multi-signature-payments)
+9. [Subscriptions](#subscriptions)
+10. [Payment Requests](#payment-requests)
+11. [Data Types](#data-types)
 
 ---
 
@@ -420,6 +421,99 @@ stellar contract invoke \
   --to_ledger 4294967295 \
   --limit 20
 ```
+
+---
+
+## Merchant API Keys
+
+> **Issue #1627** — Per-merchant API key authentication for the dashboard API.
+
+The merchant dashboard API is protected by per-merchant API keys. Every dashboard request must present a key scoped to the merchant whose data is being accessed; a key issued for one merchant cannot read another merchant's data.
+
+### Authentication
+
+Pass the key in the `Authorization` header using the `Bearer` scheme:
+
+```http
+GET /dashboard/payments HTTP/1.1
+Authorization: Bearer lf_live_9f2c4a7b8e1d3f5061728394a5b6c7d8
+```
+
+Requests with a missing, malformed, unknown, or revoked key are rejected with `401 Unauthorized`. Requests whose key is valid but scoped to a different merchant are rejected with `403 Forbidden`.
+
+### Rate limiting
+
+Each API key is independently rate limited to **100 requests per minute**. The limit is applied per key, not per merchant address, so rotating keys does not share a budget. When the limit is exceeded the API responds with `429 Too Many Requests` and a `Retry-After` header indicating how many seconds to wait before retrying.
+
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 12
+```
+
+| Status | Condition |
+|--------|-----------|
+| `401 Unauthorized` | Key missing, malformed, unknown, or revoked. |
+| `403 Forbidden` | Key is valid but not scoped to the requested merchant. |
+| `429 Too Many Requests` | More than 100 requests in the current one-minute window for this key. |
+
+### `POST /admin/merchant-keys`
+
+Generate a new API key scoped to a single merchant address. Admin only.
+
+**Request body:**
+
+| Field      | Type      | Required | Description |
+|------------|-----------|----------|-------------|
+| `merchant` | `Address` | Yes      | Merchant address the key is scoped to. |
+
+```json
+{
+  "merchant": "GMERCHANT…"
+}
+```
+
+**Response:** `201 Created`
+
+| Field      | Type      | Description |
+|------------|-----------|-------------|
+| `id`       | `String`  | Key identifier, used for revocation. |
+| `key`      | `String`  | The plaintext API key. **Returned only once** — store it securely. |
+| `merchant` | `Address` | Merchant address the key is scoped to. |
+| `created_at` | `u64`   | Unix timestamp of creation. |
+
+```json
+{
+  "id": "key_01HZX…",
+  "key": "lf_live_9f2c4a7b8e1d3f5061728394a5b6c7d8",
+  "merchant": "GMERCHANT…",
+  "created_at": 1710000000
+}
+```
+
+**Errors:**
+
+| Status | Condition |
+|--------|-----------|
+| `400 Bad Request` | `merchant` is missing or not a valid address. |
+| `401 Unauthorized` | Caller is not authenticated as admin. |
+| `404 Not Found` | No merchant profile exists for `merchant`. |
+
+### `DELETE /admin/merchant-keys/:id`
+
+Revoke an API key. Revocation is immediate: subsequent requests using the key fail with `401 Unauthorized`. Admin only.
+
+| Parameter | Type     | Required | Description |
+|-----------|----------|----------|-------------|
+| `id`      | `String` | Yes      | Key identifier returned by `POST /admin/merchant-keys`. |
+
+**Response:** `204 No Content`
+
+**Errors:**
+
+| Status | Condition |
+|--------|-----------|
+| `401 Unauthorized` | Caller is not authenticated as admin. |
+| `404 Not Found` | No key exists with `id` (including already-revoked keys). |
 
 ---
 

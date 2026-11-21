@@ -26,7 +26,138 @@ const state = {
   refunds: [],        // RefundRecord[]
   wallet: null,  // { type: 'freighter', account: string }
   client: null,  // LumenFlowClient | null
+  apiKey: null,  // string | null — per-merchant dashboard API key
 };
+
+// ── API key authentication ────────────────────────────────────────────────────
+
+/** localStorage key used to persist the merchant dashboard API key. */
+const API_KEY_STORAGE = 'lumenflow_merchant_api_key';
+
+/** Per-key rate limit: 100 requests per 60 s window. */
+const RATE_LIMIT_MAX    = 100;
+const RATE_LIMIT_WINDOW = 60_000;
+
+/** In-memory rate-limit buckets keyed by API key. */
+const rateLimitBuckets = new Map();
+
+/**
+ * Returns the stored API key, if any.
+ * @returns {string|null}
+ */
+function getApiKey() {
+  if (state.apiKey) return state.apiKey;
+  try {
+    state.apiKey = localStorage.getItem(API_KEY_STORAGE) || null;
+  } catch {
+    state.apiKey = null;
+  }
+  return state.apiKey;
+}
+
+/**
+ * Persists (or clears) the merchant dashboard API key.
+ * @param {string|null} key
+ */
+function setApiKey(key) {
+  state.apiKey = key || null;
+  try {
+    if (key) localStorage.setItem(API_KEY_STORAGE, key);
+    else localStorage.removeItem(API_KEY_STORAGE);
+  } catch { /* ignore storage errors */ }
+}
+
+/**
+ * Builds request headers including the `Authorization: Bearer <key>` header
+ * when an API key is configured.
+ * @param {Record<string,string>} [extra]
+ * @returns {Record<string,string>}
+ */
+function authHeaders(extra = {}) {
+  const headers = { ...extra };
+  const key = getApiKey();
+  if (key) headers['Authorization'] = `Bearer ${key}`;
+  return headers;
+}
+
+/**
+ * Client-side mirror of the server's per-key rate limiter. Throws a 429-style
+ * error when the key exceeds 100 requests per minute.
+ * @param {string} key
+ */
+function enforceRateLimit(key) {
+  const now = Date.now();
+  let bucket = rateLimitBuckets.get(key);
+  if (!bucket || now - bucket.start >= RATE_LIMIT_WINDOW) {
+    bucket = { start: now, count: 0 };
+    rateLimitBuckets.set(key, bucket);
+  }
+  bucket.count += 1;
+  if (bucket.count > RATE_LIMIT_MAX) {
+    const err = new Error('Rate limit exceeded: 100 requests per minute per API key.');
+    err.status = 429;
+    throw err;
+  }
+}
+
+/**
+ * Authenticated fetch wrapper. Attaches the Bearer header, applies per-key
+ * rate limiting, and surfaces 401 (invalid/revoked key) and 429 responses.
+ *
+ * @param {string} url
+ * @param {RequestInit} [options]
+ * @returns {Promise<Response>}
+ */
+async function apiFetch(url, options = {}) {
+  const key = getApiKey();
+  if (key) enforceRateLimit(key);
+
+  const res = await fetch(url, {
+    ...options,
+    headers: authHeaders(options.headers || {}),
+  });
+
+  if (res.status === 401) {
+    showError('API key is invalid or has been revoked. Please re-authenticate.');
+    throw Object.assign(new Error('Unauthorized'), { status: 401 });
+  }
+  if (res.status === 429) {
+    showError('Rate limit exceeded (100 requests/min per API key). Please slow down.');
+    throw Object.assign(new Error('Too Many Requests'), { status: 429 });
+  }
+  return res;
+}
+
+/**
+ * Generates a new API key scoped to a merchant address.
+ * Calls `POST /admin/merchant-keys`.
+ *
+ * @param {string} merchant - Merchant Stellar address the key is scoped to.
+ * @returns {Promise<{id:string, key:string, merchant:string}>}
+ */
+async function createMerchantKey(merchant) {
+  const res = await apiFetch('/admin/merchant-keys', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ merchant }),
+  });
+  if (!res.ok) throw new Error(`Failed to create API key (${res.status})`);
+  return res.json();
+}
+
+/**
+ * Revokes an API key by id.
+ * Calls `DELETE /admin/merchant-keys/:id`.
+ *
+ * @param {string} id
+ * @returns {Promise<void>}
+ */
+async function revokeMerchantKey(id) {
+  const res = await apiFetch(`/admin/merchant-keys/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error(`Failed to revoke API key (${res.status})`);
+}
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 
@@ -472,7 +603,8 @@ document.querySelectorAll('.tabs .tab').forEach(btn =>
   const caller = state.wallet.account;
 
 // Mock fetch — in real app call backend API or use streaming (EventSource)
-async function fetchRefunds() {
+async function fetchMockRefunds() {
+  const now = Date.now();
   state.refunds = [
     {
       id: 'r1',
@@ -577,23 +709,33 @@ async function fetchRefunds() {
 
   const merchant = state.wallet.account;
 
+  // Require an API key scoped to this merchant before querying the dashboard API.
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    showError('No merchant API key configured. Generate one via POST /admin/merchant-keys.');
+    render();
+    return;
+  }
+
   try {
-    // 1. Fetch recent orders for this merchant
-    const page = await state.client.getMerchantPaymentHistory(
-      merchant,
-      null,   // cursor — start from beginning
-      50,     // limit
-      null,   // filter — all statuses
-      'Date',
-      'Descending'
-    );
+    // 1. Fetch recent orders for this merchant (authenticated via Bearer key)
+    const page = await apiFetch(
+      `/dashboard/merchants/${encodeURIComponent(merchant)}/payments?limit=50`
+    ).then(res => {
+      if (!res.ok) throw new Error(`Failed to load payments (${res.status})`);
+      return res.json();
+    });
 
     const orders = page.payments || [];
 
     // 2. For each order, fetch its associated refunds
     const refundLists = await Promise.all(
       orders.map(order =>
-        state.client.getRefundsForOrder(merchant, order.orderId).catch(() => [])
+        apiFetch(
+          `/dashboard/merchants/${encodeURIComponent(merchant)}/orders/${encodeURIComponent(order.orderId)}/refunds`
+        )
+          .then(res => (res.ok ? res.json() : []))
+          .catch(() => [])
       )
     );
 
@@ -612,6 +754,7 @@ async function fetchRefunds() {
     state.refunds = all;
     render();
   } catch (err) {
+    if (err && (err.status === 401 || err.status === 429)) return; // already surfaced
     showError(friendlyError(err));
   }
 }
@@ -796,3 +939,54 @@ if (savedWallet) {
 // Initial fetch + poll every 30 s
 fetchRefunds();
 setInterval(fetchRefunds, 30_000);
+
+// ── API key management UI ─────────────────────────────────────────────────────
+(function initApiKeyUi() {
+  const form = document.getElementById('apiKeyForm');
+  if (!form) return;
+
+  const input   = document.getElementById('apiKeyMerchant');
+  const statusEl = document.getElementById('apiKeyStatus');
+
+  // Pre-fill merchant address from the connected wallet
+  if (state.wallet && state.wallet.account && input && !input.value) {
+    input.value = state.wallet.account;
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const merchant = (input && input.value.trim()) || (state.wallet && state.wallet.account);
+    if (!merchant) {
+      showError('A merchant address is required to generate an API key.');
+      return;
+    }
+    try {
+      const created = await createMerchantKey(merchant);
+      setApiKey(created.key);
+      if (statusEl) {
+        statusEl.textContent = `✔ API key ${created.id} created for ${shorten(created.merchant || merchant)}.`;
+      }
+      fetchRefunds();
+    } catch (err) {
+      showError(err.message || 'Failed to generate API key.');
+    }
+  });
+
+  const revokeBtn = document.getElementById('apiKeyRevoke');
+  if (revokeBtn) {
+    revokeBtn.addEventListener('click', async () => {
+      const id = (document.getElementById('apiKeyId') || {}).value;
+      if (!id) {
+        showError('Enter the API key id to revoke.');
+        return;
+      }
+      try {
+        await revokeMerchantKey(id.trim());
+        setApiKey(null);
+        if (statusEl) statusEl.textContent = `✔ API key ${id} revoked.`;
+      } catch (err) {
+        showError(err.message || 'Failed to revoke API key.');
+      }
+    });
+  }
+})();

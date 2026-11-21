@@ -1,5 +1,9 @@
 import { LumenFlowError, PaymentErrorCode } from './errors';
 
+// Type-only imports are erased at compile time and never pull Stellar SDK XDR
+// types into the initial bundle.
+import type { ContractCallOptions as LazyContractCallOptions } from './contractWrapper';
+
 export interface ContractCallOptions {
   rpcUrl: string;
   network?: string;
@@ -30,6 +34,31 @@ export function normalizeContractError(error: unknown): LumenFlowError {
   }
 
   return new LumenFlowError(PaymentErrorCode.InvalidInput, String(error));
+}
+
+export interface ContractWrapperModule {
+  callContract: <T = unknown>(options: LazyContractCallOptions) => Promise<ContractCallResponse<T>>;
+  normalizeContractError: (error: unknown) => LumenFlowError;
+}
+
+let contractWrapperPromise: Promise<ContractWrapperModule> | null = null;
+
+/**
+ * Lazily loads the contract wrapper module on first use and caches the
+ * resulting promise so subsequent calls reuse the same module instance.
+ *
+ * The dynamic `import()` keeps Stellar SDK XDR types (and any other heavy
+ * dependencies of the wrapper) out of the initial bundle for browser
+ * consumers.
+ */
+export function getContractWrapper(): Promise<ContractWrapperModule> {
+  if (!contractWrapperPromise) {
+    contractWrapperPromise = import('./contractWrapper').then((mod) => ({
+      callContract: mod.callContract as ContractWrapperModule['callContract'],
+      normalizeContractError: mod.normalizeContractError,
+    }));
+  }
+  return contractWrapperPromise;
 }
 
 export async function callContract<T = unknown>(options: ContractCallOptions): Promise<ContractCallResponse<T>> {

@@ -935,6 +935,39 @@ Returns `true` for valid signatures, `false` for invalid.
 
 ---
 
+### Utility: `client.getWebhookDeliveryStatus`
+
+Check whether a webhook event has been delivered, without opening the dashboard.
+Useful for reconciliation jobs and for confirming delivery after a payment.
+
+```typescript
+const status = await client.getWebhookDeliveryStatus('evt_01HXYZ...');
+
+if (status === null) {
+  console.log('Unknown event ID');
+} else if (status.delivered) {
+  console.log(`Delivered after ${status.attempts} attempt(s) at ${status.lastAttemptAt}`);
+} else {
+  console.log(`Not yet delivered — ${status.attempts} attempt(s), last at ${status.lastAttemptAt}`);
+}
+```
+
+**Returns:** `WebhookDeliveryStatus | null` — `null` when the event ID is unknown.
+
+```typescript
+interface WebhookDeliveryStatus {
+  delivered: boolean;     // true once the endpoint acknowledged the event
+  attempts: number;       // number of delivery attempts made so far
+  lastAttemptAt: string;  // ISO-8601 timestamp of the most recent attempt
+}
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `eventId` | `string` | Webhook event ID (as sent in the `x-lumenflow-event-id` header) |
+
+---
+
 ## Types
 
 ### `Merchant`
@@ -1409,6 +1442,26 @@ await withRetry(async () => {
 ---
 
 ## Browser and Environment Compatibility
+
+### Lazy-loaded contract wrapper
+
+The contract wrapper (which pulls in the Stellar SDK XDR types) is **not** loaded
+at import time. It is fetched dynamically via `import()` on the first RPC call
+made through `LumenFlowClient`, which keeps the initial bundle small for browser
+consumers. No configuration is required — the first call simply resolves the
+wrapper before proceeding.
+
+```typescript
+import { LumenFlowClient } from '@lumenflow/sdk'; // no XDR code loaded yet
+
+const client = new LumenFlowClient({ contractId, rpcUrl, networkPassphrase });
+
+// The contract wrapper is loaded here, on the first RPC call:
+const merchant = await client.getMerchant(address);
+```
+
+If you need to warm the wrapper ahead of time (e.g. to avoid a delay on the first
+user interaction), make any read call during app initialisation.
 
 ### Supported Browsers
 
