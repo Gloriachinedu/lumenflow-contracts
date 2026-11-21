@@ -9964,3 +9964,338 @@ fn test_set_max_signers_zero_rejected() {
     let result = client.try_set_max_signers(&admin, &0u32);
     assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
 }
+
+// ── Dispute state machine matrix tests (#1514) ────────────────────────────────
+
+/// The four dispute states, in a fixed order used by the 4x4 transition matrix.
+fn dispute_states() -> [DisputeState; 4] {
+    [
+        DisputeState::Open,
+        DisputeState::UnderReview,
+        DisputeState::Escalated,
+        DisputeState::Resolved,
+    ]
+}
+
+/// Returns true when `from -> to` is a legal dispute transition.
+fn is_valid_dispute_transition(from: &DisputeState, to: &DisputeState) -> bool {
+    matches!(
+        (from, to),
+        (DisputeState::Open, DisputeState::UnderReview)
+            | (DisputeState::UnderReview, DisputeState::Escalated)
+            | (DisputeState::UnderReview, DisputeState::Resolved)
+            | (DisputeState::Escalated, DisputeState::Resolved)
+    )
+}
+
+/// Drives a freshly opened dispute into `target` using only legal transitions.
+fn drive_dispute_to(
+    env: &Env,
+    client: &PaymentProcessingContractClient,
+    admin: &Address,
+    merchant: &Address,
+    payer: &Address,
+    token: &Address,
+    order_id: &str,
+    target: &DisputeState,
+) {
+    let dispute_id = str(env, &format!("DSP_{order_id}"));
+    make_payment(env, client, merchant, payer, token, order_id, 1_000);
+    client.open_dispute(payer, &dispute_id, &str(env, order_id), &str(env, "reason"));
+
+    match target {
+        DisputeState::Open => {}
+        DisputeState::UnderReview => {
+            client.review_dispute(admin, &dispute_id);
+        }
+        DisputeState::Escalated => {
+            client.review_dispute(admin, &dispute_id);
+            client.escalate_dispute(admin, &dispute_id);
+        }
+        DisputeState::Resolved => {
+            client.review_dispute(admin, &dispute_id);
+            client.resolve_dispute(admin, &dispute_id);
+        }
+    }
+}
+
+/// 4x4 matrix: every one of the 16 source→target pairs is exercised.
+/// Legal transitions must succeed; every illegal transition (including
+/// Resolved → Escalated) must return `PaymentError::InvalidDisputeState`.
+#[test]
+fn test_dispute_transition_matrix_all_16_pairs() {
+    let states = dispute_states();
+    let mut pair_index = 0u32;
+
+    for from in states.iter() {
+        for to in states.iter() {
+            let (env, client, admin, merchant, payer, token) = setup_payment_env();
+            let order_id = alloc_str(pair_index);
+            pair_index += 1;
+
+            drive_dispute_to(
+                &env, &client, &admin, &merchant, &payer, &token, order_id, from,
+            );
+            let dispute_id = str(&env, &format!("DSP_{order_id}"));
+
+            let result = client.try_transition_dispute(&admin, &dispute_id, to);
+
+            if is_valid_dispute_transition(from, to) {
+                assert!(
+                    result.is_ok(),
+                    "expected {:?} -> {:?} to succeed, got {:?}",
+                    from,
+                    to,
+                    result
+                );
+                let dispute = client.get_dispute(&payer, &dispute_id);
+                assert_eq!(dispute.state, *to);
+            } else {
+                assert_eq!(
+                    result,
+                    Err(Ok(PaymentError::InvalidDisputeState)),
+                    "expected {:?} -> {:?} to be rejected",
+                    from,
+                    to
+                );
+                // The stored state must be unchanged after a rejected transition.
+                let dispute = client.get_dispute(&payer, &dispute_id);
+                assert_eq!(dispute.state, *from);
+            }
+        }
+    }
+
+    assert_eq!(pair_index, 16, "matrix must cover all 16 pairs");
+}
+
+/// Explicit regression guard for the Resolved → Escalated edge.
+#[test]
+fn test_dispute_resolved_to_escalated_rejected() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    drive_dispute_to(
+        &env,
+        &client,
+        &admin,
+        &merchant,
+        &payer,
+        &token,
+        "DSP_RES_ESC",
+        &DisputeState::Resolved,
+    );
+
+    let result = client.try_transition_dispute(
+        &admin,
+        &str(&env, "DSP_DSP_RES_ESC"),
+        &DisputeState::Escalated,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::InvalidDisputeState)));
+}
+
+/// Resolved is terminal: no transition out of it is permitted.
+#[test]
+fn test_dispute_resolved_is_terminal() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    drive_dispute_to(
+        &env,
+        &client,
+        &admin,
+        &merchant,
+        &payer,
+        &token,
+        "DSP_TERM",
+        &DisputeState::Resolved,
+    );
+    let dispute_id = str(&env, "DSP_DSP_TERM");
+
+    for target in dispute_states().iter() {
+        let result = client.try_transition_dispute(&admin, &dispute_id, target);
+        assert_eq!(
+            result,
+            Err(Ok(PaymentError::InvalidDisputeState)),
+            "Resolved -> {:?} must be rejected",
+            target
+        );
+    }
+}
+
+// ── Fee module tests (#1518) ──────────────────────────────────────────────────
+
+/// Fee is deducted from the payment and the merchant receives the net amount.
+#[test]
+fn test_fee_deducted_and_merchant_receives_net() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let fee_recipient = Address::generate(&env);
+
+    // 250 bps = 2.5%
+    client.set_fee_config(&admin, &fee_recipient, &250u32);
+
+    let config = client.get_fee_config();
+    assert_eq!(config.recipient, fee_recipient);
+    assert_eq!(config.bps, 250);
+
+    let merchant_before = TokenClient::new(&env, &token).balance(&merchant);
+    let recipient_before = TokenClient::new(&env, &token).balance(&fee_recipient);
+
+    make_payment(&env, &client, &merchant, &payer, &token, "FEE_001", 1_000);
+
+    let merchant_after = TokenClient::new(&env, &token).balance(&merchant);
+    let recipient_after = TokenClient::new(&env, &token).balance(&fee_recipient);
+
+    // 2.5% of 1000 = 25 fee, 975 net to merchant.
+    assert_eq!(recipient_after - recipient_before, 25);
+    assert_eq!(merchant_after - merchant_before, 975);
+}
+
+/// batch_payment applies the fee atomically to every item.
+#[test]
+fn test_fee_applied_to_batch_payment() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let fee_recipient = Address::generate(&env);
+    client.set_fee_config(&admin, &fee_recipient, &100u32); // 1%
+
+    let merchant_before = TokenClient::new(&env, &token).balance(&merchant);
+    let recipient_before = TokenClient::new(&env, &token).balance(&fee_recipient);
+
+    let mut payments = Vec::new(&env);
+    for i in 0u32..2 {
+        payments.push_back(BatchPaymentItem {
+            order_id: str(&env, &format!("FEE_BATCH_{i}")),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 1_000,
+            memo: str(&env, ""),
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        });
+    }
+    client.batch_payment(&payer, &payments);
+
+    let merchant_after = TokenClient::new(&env, &token).balance(&merchant);
+    let recipient_after = TokenClient::new(&env, &token).balance(&fee_recipient);
+
+    // 1% of 2000 = 20 fee, 1980 net.
+    assert_eq!(recipient_after - recipient_before, 20);
+    assert_eq!(merchant_after - merchant_before, 1_980);
+}
+
+/// A fee of 0 bps disables the module entirely: no transfer to the recipient.
+#[test]
+fn test_zero_bps_disables_fee_transfer() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    let fee_recipient = Address::generate(&env);
+    client.set_fee_config(&admin, &fee_recipient, &0u32);
+
+    let merchant_before = TokenClient::new(&env, &token).balance(&merchant);
+    let recipient_before = TokenClient::new(&env, &token).balance(&fee_recipient);
+
+    make_payment(&env, &client, &merchant, &payer, &token, "FEE_ZERO", 1_000);
+
+    let merchant_after = TokenClient::new(&env, &token).balance(&merchant);
+    let recipient_after = TokenClient::new(&env, &token).balance(&fee_recipient);
+
+    assert_eq!(recipient_after, recipient_before, "no fee transfer expected");
+    assert_eq!(merchant_after - merchant_before, 1_000, "merchant gets full amount");
+}
+
+/// Only the admin may configure the fee module.
+#[test]
+fn test_set_fee_config_requires_admin() {
+    let (env, client, _admin, _merchant, payer, _token) = setup_payment_env();
+    let fee_recipient = Address::generate(&env);
+    let result = client.try_set_fee_config(&payer, &fee_recipient, &100u32);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+/// Fee basis points above 10_000 (100%) are rejected.
+#[test]
+fn test_set_fee_config_bps_out_of_range_rejected() {
+    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
+    let fee_recipient = Address::generate(&env);
+    let result = client.try_set_fee_config(&admin, &fee_recipient, &10_001u32);
+    assert_eq!(result, Err(Ok(PaymentError::InvalidFeeConfig)));
+}
+
+// ── Cross-asset payment tests (#1519) ─────────────────────────────────────────
+
+/// A cross-asset payment converts the send asset and credits the merchant.
+#[test]
+fn test_cross_asset_payment_success() {
+    let (env, client, admin, merchant, payer, dest_token) = setup_payment_env();
+    let send_token = create_token(&env, &admin);
+    mint(&env, &send_token, &admin, &payer, 10_000);
+
+    let mut path = Vec::new(&env);
+
+    client.process_payment_cross_asset(
+        &payer,
+        &str(&env, "XA_001"),
+        &merchant,
+        &send_token,
+        &1_000,
+        &dest_token,
+        &900,
+        &path,
+    );
+
+    let payment = client.get_payment_by_id(&payer, &str(&env, "XA_001"));
+    assert_eq!(payment.token_address, dest_token);
+    assert!(payment.amount >= 900);
+}
+
+/// Slippage protection: receiving less than min_receive is rejected.
+#[test]
+fn test_cross_asset_payment_slippage_rejected() {
+    let (env, client, admin, merchant, payer, dest_token) = setup_payment_env();
+    let send_token = create_token(&env, &admin);
+    mint(&env, &send_token, &admin, &payer, 10_000);
+
+    let mut path = Vec::new(&env);
+
+    // Demand more than the conversion can deliver.
+    let result = client.try_process_payment_cross_asset(
+        &payer,
+        &str(&env, "XA_SLIP"),
+        &merchant,
+        &send_token,
+        &1_000,
+        &dest_token,
+        &5_000,
+        &path,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::SlippageExceeded)));
+}
+
+/// A successful cross-asset payment emits CrossAssetPaymentEvent with the rate.
+#[test]
+fn test_cross_asset_payment_emits_event_with_rate() {
+    let (env, client, admin, merchant, payer, dest_token) = setup_payment_env();
+    let send_token = create_token(&env, &admin);
+    mint(&env, &send_token, &admin, &payer, 10_000);
+
+    let mut path = Vec::new(&env);
+
+    client.process_payment_cross_asset(
+        &payer,
+        &str(&env, "XA_EVT"),
+        &merchant,
+        &send_token,
+        &1_000,
+        &dest_token,
+        &900,
+        &path,
+    );
+
+    let events = env.events().all();
+    let found = events.iter().any(|(_, topics, data)| {
+        let is_cross_asset = topics
+            .iter()
+            .any(|t| t == &Symbol::new(&env, "cross_asset_payment"));
+        if !is_cross_asset {
+            return false;
+        }
+        // The event payload must carry a non-zero exchange rate.
+        let rate: u128 = data.try_into().unwrap_or(0);
+        rate > 0
+    });
+    assert!(found, "CrossAssetPaymentEvent with exchange rate must be emitted");
+}
