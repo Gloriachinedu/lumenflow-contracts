@@ -447,6 +447,27 @@ Add unit tests in `src/test.rs` that verify:
 - The TTL is extended correctly (for persistent/temporary keys).
 - The key is not accessible under a wrong type (type safety from `#[contracttype]`).
 
+### Step 7 — Update the storage snapshot tests
+
+The contract keeps committed storage-layout snapshots under [`contracts/lumenflow/test_snapshots/`](../contracts/lumenflow/test_snapshots/). These tests serialize the full storage layout after key operations and compare it against the committed snapshot files, so any unintended change to the storage schema (a renamed key, a changed value type, a new or removed entry) fails CI with a diff of the affected snapshot.
+
+The snapshots currently cover:
+
+| Operation | Snapshot covers |
+|---|---|
+| `process_payment` | The `Payment(order_id)` record, the `MP`/`PP` index entries, `GlobalStats`, `MS(Address)`, and the payer/merchant nonces |
+| `refund_payment` | The `Refund(refund_id)` record, the `OR(order_id)` index, and the updated `Payment(order_id)` status |
+| `create_escrow` | The `Escrow(order_id)` record and its TTL-bearing persistent entry |
+
+If your change intentionally alters the storage layout, regenerate the snapshots and commit the updated files alongside the code change:
+
+```bash
+cd contracts/lumenflow
+cargo test -- --update-snapshots
+```
+
+Review the resulting diff in `test_snapshots/` carefully before committing — it is the record of the schema change. If the diff is unexpected, the change has introduced an unintended breaking storage change and should be fixed rather than snapshotted. Never update snapshots just to make CI pass without understanding the diff.
+
 ---
 
 ## Schema Migration

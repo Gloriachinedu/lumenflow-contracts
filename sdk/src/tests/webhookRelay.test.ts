@@ -263,6 +263,110 @@ describe('WebhookRelay — boundary conditions', () => {
   });
 });
 
+describe('WebhookRelay — sustained throughput (issue #1578)', () => {
+  // 1000 events/min for 5 minutes == 5000 events. We compress the wall clock
+  // (the relay's sleeps are stubbed) but keep the event count and the
+  // per-event latency budget identical to the load-test scenario so this
+  // suite catches relay-level regressions before the full load test runs.
+  const EVENTS_PER_MINUTE = 1000;
+  const DURATION_MINUTES = 5;
+  const TOTAL_EVENTS = EVENTS_PER_MINUTE * DURATION_MINUTES;
+  const P99_BUDGET_MS = 2000;
+
+  function percentile(samples: number[], p: number): number {
+    if (samples.length === 0) return 0;
+    const sorted = [...samples].sort((a, b) => a - b);
+    const idx = Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1);
+    return sorted[Math.max(0, idx)];
+  }
+
+  it('delivers every event with P99 latency under budget and zero drops', async () => {
+    const store = new MemoryDedupeStore();
+    const latencies: number[] = [];
+    let delivered = 0;
+
+    const deliver = jest.fn(async () => {
+      // Simulate a downstream webhook with a small, bounded service time.
+      await Promise.resolve();
+      return { status: 200 };
+    });
+    const relay = new WebhookRelay({ deliver, store, sleep: noSleep });
+
+    const startedAt = Date.now();
+    for (let i = 0; i < TOTAL_EVENTS; i++) {
+      const t0 = Date.now();
+      const outcome = await relay.relay(
+        event({ pagingToken: `load-${i}`, id: `load-${i}` }),
+      );
+      latencies.push(Date.now() - t0);
+      if (outcome.status === 'delivered') delivered++;
+    }
+    const elapsedMs = Date.now() - startedAt;
+
+    // Zero events dropped at target throughput.
+    expect(delivered).toBe(TOTAL_EVENTS);
+    expect(deliver).toHaveBeenCalledTimes(TOTAL_EVENTS);
+    expect(store.size).toBe(TOTAL_EVENTS);
+
+    // P99 delivery latency stays within the 2s performance budget.
+    const p99 = percentile(latencies, 99);
+    expect(p99).toBeLessThan(P99_BUDGET_MS);
+
+    // Sanity: the compressed run should comfortably beat the real-time budget.
+    expect(elapsedMs).toBeLessThan(P99_BUDGET_MS);
+  });
+
+  it('keeps P99 within budget when the downstream intermittently fails', async () => {
+    const store = new MemoryDedupeStore();
+    const latencies: number[] = [];
+    let delivered = 0;
+    let call = 0;
+
+    const deliver = jest.fn(async () => {
+      call++;
+      // Every 100th call is a transient failure that the relay retries.
+      return { status: call % 100 === 0 ? 503 : 200 };
+    });
+    const relay = new WebhookRelay({ deliver, store, sleep: noSleep });
+
+    for (let i = 0; i < TOTAL_EVENTS; i++) {
+      const t0 = Date.now();
+      const outcome = await relay.relay(
+        event({ pagingToken: `flaky-${i}`, id: `flaky-${i}` }),
+      );
+      latencies.push(Date.now() - t0);
+      if (outcome.status === 'delivered') delivered++;
+    }
+
+    expect(delivered).toBe(TOTAL_EVENTS);
+    expect(store.size).toBe(TOTAL_EVENTS);
+    expect(percentile(latencies, 99)).toBeLessThan(P99_BUDGET_MS);
+  });
+
+  it('does not double-deliver under concurrent duplicate bursts', async () => {
+    const store = new MemoryDedupeStore();
+    const deliver = jest.fn(async () => ({ status: 200 }));
+    const relay = new WebhookRelay({ deliver, store, sleep: noSleep });
+
+    // A burst of replays for the same 100 events, interleaved.
+    const burst: Promise<unknown>[] = [];
+    for (let round = 0; round < 10; round++) {
+      for (let i = 0; i < 100; i++) {
+        burst.push(relay.relay(event({ pagingToken: `burst-${i}`, id: `burst-${i}` })));
+      }
+    }
+    const outcomes = (await Promise.all(burst)) as Array<{ status: string }>;
+
+    const deliveredCount = outcomes.filter((o) => o.status === 'delivered').length;
+    const duplicateCount = outcomes.filter((o) => o.status === 'duplicate').length;
+
+    expect(deliveredCount).toBe(100);
+    expect(duplicateCount).toBe(900);
+    expect(deliver).toHaveBeenCalledTimes(100);
+    expect(store.size).toBe(100);
+  });
+});
+
 describe('WebhookRelay — ordered batch delivery', () => {
   it('delivers a batch in order and returns per-event outcomes', async () => {
     const { fn, calls } = scriptedWebhook([], 200);

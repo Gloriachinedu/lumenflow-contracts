@@ -1133,6 +1133,82 @@ export class LumenFlowClient {
     ]);
   }
 
+  /**
+   * Assigns a third-party arbiter to a disputed refund (decentralized dispute
+   * resolution v1).
+   *
+   * Only the contract admin may call this entrypoint. The assignment is
+   * recorded in the admin audit log together with the dispute ID and the
+   * arbiter address. Any previously assigned arbiter for the dispute is
+   * replaced; the removal of the previous arbiter is also audit-logged.
+   *
+   * Once assigned, the arbiter is the only address permitted to call
+   * {@link arbiterVote} for this dispute — no further admin involvement is
+   * required to settle it.
+   *
+   * @param admin - Stellar address of the administrator (must sign).
+   * @param disputeId - ID of the disputed refund to assign the arbiter to.
+   * @param arbiter - Stellar address of the third-party arbiter.
+   * @returns A Promise that resolves when the assignment is recorded on-chain.
+   * @throws {@link LumenFlowError} if the caller is not the admin.
+   * @throws {@link LumenFlowError} if the refund is not in `Disputed` status.
+   *
+   * @example
+   * await client.assignArbiter("GADMIN...", "refund-001", "GARBITER...");
+   */
+  async assignArbiter(
+    admin: string,
+    disputeId: string,
+    arbiter: string
+  ): Promise<void> {
+    await this.invoke("assign_arbiter", [
+      new Address(admin),
+      disputeId,
+      new Address(arbiter),
+    ]);
+  }
+
+  /**
+   * Casts the assigned arbiter's binding vote on a disputed refund.
+   *
+   * Callable **only** by the arbiter previously assigned via
+   * {@link assignArbiter}; the contract enforces this with `require_auth` on
+   * the arbiter address. The vote is final and resolves the dispute
+   * immediately:
+   *
+   * - `DisputeOutcome.RefundGranted` — the refund is executed right away and
+   *   the funds are released back to the payer.
+   * - `DisputeOutcome.RefundDenied` — the refund is permanently rejected and
+   *   the funds remain with the merchant.
+   *
+   * @param arbiter - Stellar address of the assigned arbiter (must sign).
+   * @param disputeId - ID of the disputed refund being voted on.
+   * @param outcome - {@link DisputeOutcome} — either `DisputeOutcome.RefundGranted`
+   *   or `DisputeOutcome.RefundDenied`.
+   * @returns A Promise that resolves when the vote is recorded and the
+   *   resulting release or refund has been settled on-chain.
+   * @throws {@link LumenFlowError} if the caller is not the assigned arbiter.
+   * @throws {@link LumenFlowError} if the refund is not in `Disputed` status.
+   *
+   * @example
+   * await client.arbiterVote(
+   *   "GARBITER...",
+   *   "refund-001",
+   *   DisputeOutcome.RefundGranted,
+   * );
+   */
+  async arbiterVote(
+    arbiter: string,
+    disputeId: string,
+    outcome: DisputeOutcome
+  ): Promise<void> {
+    await this.invoke("arbiter_vote", [
+      new Address(arbiter),
+      disputeId,
+      outcome,
+    ]);
+  }
+
   // ── Multi-signature payments ──────────────────────────────────────────────
 
   /**

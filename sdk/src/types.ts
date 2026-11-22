@@ -209,3 +209,64 @@ export interface Subscription {
   status: SubscriptionStatus;
   createdAt: bigint;
 }
+
+/**
+ * Options for building a shareable payment link.
+ *
+ * `merchant` is required; `amount` and `memo` are optional.  The resulting URL
+ * follows the `/pay?merchant=X&amount=Y&memo=Z` schema and pre-fills the
+ * payment form in `index.html` without requiring SDK integration.
+ */
+export interface PaymentLinkOptions {
+  /** Merchant address (or identifier) the payment is directed to. */
+  merchant: string;
+  /** Optional payment amount, as a decimal string (e.g. "12.5"). */
+  amount?: string;
+  /** Optional memo attached to the payment. */
+  memo?: string;
+  /** Optional base URL override (defaults to the current origin / `/pay`). */
+  baseUrl?: string;
+}
+
+/** Result returned by `generatePaymentLink`. */
+export interface PaymentLinkResult {
+  /** The fully-qualified shareable payment URL. */
+  url: string;
+  /** The parsed/validated options encoded in the URL. */
+  options: PaymentLinkOptions;
+}
+
+/** Error raised when payment link options are invalid. */
+export class PaymentLinkError extends Error {
+  /** The option field that failed validation, if applicable. */
+  readonly field?: keyof PaymentLinkOptions;
+
+  constructor(message: string, field?: keyof PaymentLinkOptions) {
+    super(message);
+    this.name = "PaymentLinkError";
+    this.field = field;
+  }
+}
+
+/** Assignment of a third-party arbiter to a dispute. */
+export interface ArbiterAssignment {
+  refundId: string;
+  arbiter: string;
+  assignedAt: bigint;
+  /** Address of the admin who performed the assignment. */
+  assignedBy: string;
+}
+
+/** A binding vote cast by the assigned arbiter. */
+export interface ArbiterVote {
+  refundId: string;
+  arbiter: string;
+  outcome: ArbiterVoteOutcome;
+  votedAt: bigint;
+}
+
+/** Outcome of an arbiter vote; determines fund release or refund. */
+export enum ArbiterVoteOutcome {
+  FavorPayer = "FavorPayer",
+  FavorMerchant = "FavorMerchant",
+}

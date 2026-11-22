@@ -408,6 +408,53 @@ pub struct DisputeRecord {
     pub created_at: u64,
 }
 
+// ── Decentralized dispute resolution (arbiter model, issue #1575) ─────────────
+
+/// Records the arbiter assigned to a dispute by an admin.
+///
+/// V1 uses a *designated* arbiter model: an admin explicitly assigns a single
+/// third-party arbiter to a dispute. The arbiter then casts one binding vote
+/// via `arbiter_vote` which resolves the dispute without further admin
+/// involvement.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ArbiterAssignment {
+    /// The dispute this assignment applies to.
+    pub dispute_id: String,
+    /// The arbiter address that may cast the binding vote.
+    pub arbiter: Address,
+    /// The admin that assigned the arbiter.
+    pub assigned_by: Address,
+    /// Unix timestamp at which the assignment was made.
+    pub assigned_at: u64,
+}
+
+/// The binding outcome of an arbiter vote.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ArbiterVoteOutcome {
+    /// Resolve in the merchant's favour; no forced refund is issued.
+    MerchantFavor,
+    /// Resolve in the payer's favour; a forced refund is executed.
+    PayerFavor,
+}
+
+/// A binding arbiter vote recorded on-chain.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ArbiterVote {
+    /// The dispute this vote resolves.
+    pub dispute_id: String,
+    /// The arbiter that cast the vote.
+    pub arbiter: Address,
+    /// The binding outcome of the vote.
+    pub outcome: ArbiterVoteOutcome,
+    /// Optional human-readable rationale; maximum 256 characters.
+    pub rationale: Option<String>,
+    /// Unix timestamp at which the vote was cast.
+    pub voted_at: u64,
+}
+
 // ── Suspicious Activity ───────────────────────────────────────────────────────
 
 #[contracttype]
@@ -582,6 +629,10 @@ pub enum AdminActionType {
     SetPauseGuardians,
     UpgradeContract,
     ConfirmMerchantDataDeletion,
+    /// An arbiter was assigned to a dispute via `assign_arbiter`.
+    AssignArbiter,
+    /// An arbiter assignment was removed via `remove_arbiter`.
+    RemoveArbiter,
     Other,
 }
 

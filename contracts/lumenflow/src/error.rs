@@ -177,4 +177,16 @@ pub enum PaymentError {
     DisputeNotOpen = 114,
     /// The dispute has already been escalated and cannot be escalated again.
     DisputeAlreadyEscalated = 115,
+    /// No arbiter has been assigned to this dispute yet. Remediation: An admin must call
+    /// `assign_arbiter` before an arbiter vote can be cast.
+    ArbiterNotAssigned = 116,
+    /// An arbiter has already been assigned to this dispute. Remediation: Remove the existing
+    /// arbiter via the admin entrypoint before assigning a new one.
+    ArbiterAlreadyAssigned = 117,
+    /// The caller is not the arbiter assigned to this dispute. Remediation: Only the address
+    /// assigned via `assign_arbiter` may cast the binding vote.
+    NotAssignedArbiter = 118,
+    /// The assigned arbiter has already cast a binding vote on this dispute. Remediation: No
+    /// further action needed; the dispute has been resolved by the arbiter's vote.
+    ArbiterVoteAlreadyCast = 119,
 }

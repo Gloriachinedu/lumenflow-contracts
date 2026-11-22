@@ -9822,6 +9822,285 @@ fn test_set_min_refund_amount_zero_fails() {
     assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
 }
 
+// ── Decentralized dispute resolution tests (#1575) ────────────────────────────
+
+/// `assign_arbiter` is admin-only: a non-admin caller is rejected.
+#[test]
+fn test_assign_arbiter_unauthorized() {
+    let (env, client, _admin, _merchant, _payer, _token) = setup_payment_env();
+    let non_admin = Address::generate(&env);
+    let arbiter = Address::generate(&env);
+
+    let result = client.try_assign_arbiter(&non_admin, &str(&env, "DSP_UNAUTH"), &arbiter);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+/// `assign_arbiter` by the admin succeeds and records an audit log entry.
+#[test]
+fn test_assign_arbiter_logs_audit_entry() {
+    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
+    let arbiter = Address::generate(&env);
+
+    client.assign_arbiter(&admin, &str(&env, "DSP_ASSIGN"), &arbiter);
+
+    // The assigned arbiter must be retrievable.
+    let assigned = client.get_arbiter(&str(&env, "DSP_ASSIGN"));
+    assert_eq!(assigned, Some(arbiter.clone()));
+
+    // An audit log entry must have been written for the assignment.
+    let log = client.get_admin_audit_log(&admin, &None, &10);
+    let mut found = false;
+    for entry in log.entries.iter() {
+        if entry.action == str(&env, "assign_arbiter") {
+            found = true;
+        }
+    }
+    assert!(found, "assign_arbiter must be recorded in the admin audit log");
+}
+
+/// Removing an arbiter (assigning the zero/None sentinel via `remove_arbiter`)
+/// is logged in the admin audit log.
+#[test]
+fn test_remove_arbiter_logs_audit_entry() {
+    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
+    let arbiter = Address::generate(&env);
+
+    client.assign_arbiter(&admin, &str(&env, "DSP_REMOVE"), &arbiter);
+    client.remove_arbiter(&admin, &str(&env, "DSP_REMOVE"));
+
+    // Arbiter must no longer be assigned.
+    let assigned = client.get_arbiter(&str(&env, "DSP_REMOVE"));
+    assert!(assigned.is_none());
+
+    // A removal entry must appear in the audit log.
+    let log = client.get_admin_audit_log(&admin, &None, &10);
+    let mut found = false;
+    for entry in log.entries.iter() {
+        if entry.action == str(&env, "remove_arbiter") {
+            found = true;
+        }
+    }
+    assert!(found, "remove_arbiter must be recorded in the admin audit log");
+}
+
+/// `remove_arbiter` is admin-only.
+#[test]
+fn test_remove_arbiter_unauthorized() {
+    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
+    let arbiter = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+
+    client.assign_arbiter(&admin, &str(&env, "DSP_REMOVE_UNAUTH"), &arbiter);
+
+    let result = client.try_remove_arbiter(&non_admin, &str(&env, "DSP_REMOVE_UNAUTH"));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+/// Only the assigned arbiter may call `arbiter_vote`.
+#[test]
+fn test_arbiter_vote_only_assigned_arbiter() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "DSP_VOTE_AUTH", 500);
+
+    let arbiter = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    client.assign_arbiter(&admin, &str(&env, "DSP_VOTE_AUTH"), &arbiter);
+
+    let result = client.try_arbiter_vote(
+        &stranger,
+        &str(&env, "DSP_VOTE_AUTH"),
+        &crate::types::ArbiterVerdict::ReleaseToMerchant,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+/// A vote of `ReleaseToMerchant` immediately releases funds to the merchant.
+#[test]
+fn test_arbiter_vote_release_triggers_immediate_release() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "DSP_VOTE_REL", 500);
+
+    let arbiter = Address::generate(&env);
+    client.assign_arbiter(&admin, &str(&env, "DSP_VOTE_REL"), &arbiter);
+
+    let merchant_before = TokenClient::new(&env, &token).balance(&merchant);
+    client.arbiter_vote(
+        &arbiter,
+        &str(&env, "DSP_VOTE_REL"),
+        &crate::types::ArbiterVerdict::ReleaseToMerchant,
+    );
+
+    // Funds must have moved to the merchant immediately.
+    let merchant_after = TokenClient::new(&env, &token).balance(&merchant);
+    assert!(merchant_after > merchant_before);
+
+    let p = client.get_payment_by_id(&payer, &str(&env, "DSP_VOTE_REL"));
+    assert!(matches!(
+        p.status,
+        crate::types::PaymentStatus::Completed
+    ));
+}
+
+/// A vote of `RefundPayer` immediately refunds the payer.
+#[test]
+fn test_arbiter_vote_refund_triggers_immediate_refund() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "DSP_VOTE_REF", 500);
+
+    let arbiter = Address::generate(&env);
+    client.assign_arbiter(&admin, &str(&env, "DSP_VOTE_REF"), &arbiter);
+
+    let payer_before = TokenClient::new(&env, &token).balance(&payer);
+    client.arbiter_vote(
+        &arbiter,
+        &str(&env, "DSP_VOTE_REF"),
+        &crate::types::ArbiterVerdict::RefundPayer,
+    );
+
+    let payer_after = TokenClient::new(&env, &token).balance(&payer);
+    assert!(payer_after > payer_before);
+
+    let p = client.get_payment_by_id(&payer, &str(&env, "DSP_VOTE_REF"));
+    assert!(matches!(
+        p.status,
+        crate::types::PaymentStatus::FullyRefunded
+    ));
+}
+
+/// A second vote on the same dispute is rejected.
+#[test]
+fn test_arbiter_vote_double_vote_rejected() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "DSP_VOTE_DBL", 500);
+
+    let arbiter = Address::generate(&env);
+    client.assign_arbiter(&admin, &str(&env, "DSP_VOTE_DBL"), &arbiter);
+
+    client.arbiter_vote(
+        &arbiter,
+        &str(&env, "DSP_VOTE_DBL"),
+        &crate::types::ArbiterVerdict::ReleaseToMerchant,
+    );
+
+    let result = client.try_arbiter_vote(
+        &arbiter,
+        &str(&env, "DSP_VOTE_DBL"),
+        &crate::types::ArbiterVerdict::RefundPayer,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::DisputeAlreadyResolved)));
+}
+
+// ── Storage snapshot tests (#1579) ────────────────────────────────────────────
+//
+// These tests serialize the full contract storage layout after key operations
+// and compare it against committed snapshot files under `test_snapshots/`.
+// On mismatch a readable diff is printed so CI output shows exactly what
+// changed. To intentionally update snapshots run:
+//     cargo test -- --update-snapshots
+
+/// Serialize the contract's storage into a stable, human-readable string.
+fn serialize_storage(env: &Env, contract_id: &Address) -> alloc::string::String {
+    use alloc::string::ToString;
+    let mut out = alloc::string::String::new();
+    env.as_contract(contract_id, || {
+        for (key, value) in storage::iter_all(env) {
+            out.push_str(&format!("{:?} => {:?}\n", key, value));
+        }
+    });
+    out
+}
+
+/// Compare `actual` against the committed snapshot file `name`, printing a
+/// readable diff on mismatch. Honors the `--update-snapshots` flag.
+fn assert_snapshot(env: &Env, name: &str, actual: &str) {
+    let path = format!("test_snapshots/{}.snap", name);
+    let update = std::env::args().any(|a| a == "--update-snapshots");
+
+    if update {
+        std::fs::create_dir_all("test_snapshots").unwrap();
+        std::fs::write(&path, actual).unwrap();
+        return;
+    }
+
+    let expected = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => {
+            // First run: write the snapshot so it can be committed.
+            std::fs::create_dir_all("test_snapshots").unwrap();
+            std::fs::write(&path, actual).unwrap();
+            return;
+        }
+    };
+
+    if expected != actual {
+        let mut diff = alloc::string::String::new();
+        diff.push_str(&format!("\nSnapshot mismatch: {}\n", path));
+        for (i, (e, a)) in expected.lines().zip(actual.lines()).enumerate() {
+            if e != a {
+                diff.push_str(&format!("  line {}:\n    - {}\n    + {}\n", i + 1, e, a));
+            }
+        }
+        if expected.lines().count() != actual.lines().count() {
+            diff.push_str(&format!(
+                "  line count differs: expected {}, actual {}\n",
+                expected.lines().count(),
+                actual.lines().count()
+            ));
+        }
+        diff.push_str("Run `cargo test -- --update-snapshots` to accept the change.\n");
+        panic!("{}", diff);
+    }
+    let _ = env;
+}
+
+/// Snapshot: storage layout after `process_payment`.
+#[test]
+fn test_snapshot_after_process_payment() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "SNAP_PAY", 250);
+
+    let snapshot = serialize_storage(&env, &client.address);
+    assert_snapshot(&env, "after_process_payment", &snapshot);
+}
+
+/// Snapshot: storage layout after `refund_payment`.
+#[test]
+fn test_snapshot_after_refund_payment() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "SNAP_REF", 400);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "SNAP_REF_RF"),
+        &str(&env, "SNAP_REF"),
+        &400,
+        &str(&env, "snapshot refund"),
+    );
+    client.approve_refund(&merchant, &str(&env, "SNAP_REF_RF"));
+    client.execute_refund(&str(&env, "SNAP_REF_RF"));
+
+    let snapshot = serialize_storage(&env, &client.address);
+    assert_snapshot(&env, "after_refund_payment", &snapshot);
+}
+
+/// Snapshot: storage layout after `create_escrow`.
+#[test]
+fn test_snapshot_after_create_escrow() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    client.create_escrow(
+        &payer,
+        &str(&env, "SNAP_ESCROW"),
+        &merchant,
+        &token,
+        &1_000,
+        &None,
+    );
+
+    let snapshot = serialize_storage(&env, &client.address);
+    assert_snapshot(&env, "after_create_escrow", &snapshot);
+}
+
 // ── Max signers limit tests (issue #1269) ─────────────────────────────────────
 
 /// Helper: build a Vec<Address> of `n` freshly generated addresses.

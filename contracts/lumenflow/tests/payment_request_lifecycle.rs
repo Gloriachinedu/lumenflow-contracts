@@ -4,6 +4,12 @@
 ///   1. create → pay → verify merchant receives funds → verify request is gone (Paid)
 ///   2. create → cancel → verify request is removed (Cancelled)
 ///   3. create → TTL expires → pay attempt fails with PaymentExpired
+///
+/// Also contains storage-layout snapshot tests (issue #1579) that serialize the
+/// full contract storage after key operations and compare it against committed
+/// snapshot files under `contracts/lumenflow/test_snapshots/`. To intentionally
+/// update the snapshots run `cargo test -- --update-snapshots` (or set
+/// `UPDATE_SNAPSHOTS=1`).
 extern crate alloc;
 
 use soroban_sdk::{
@@ -16,6 +22,86 @@ use lumenflow::{
     error::PaymentError, MerchantCategory, PaymentProcessingContract,
     PaymentProcessingContractClient,
 };
+
+// ── Storage snapshot helpers (issue #1579) ───────────────────────────────────
+
+/// Directory (relative to the crate root) holding committed snapshot files.
+const SNAPSHOT_DIR: &str = "test_snapshots";
+
+/// Serialize the entire contract storage into a stable, human-readable string.
+///
+/// Every ledger entry belonging to the contract is rendered as
+/// `key => value` on its own line, sorted by key so the output is deterministic.
+fn serialize_storage(env: &Env, contract_id: &Address) -> alloc::string::String {
+    use alloc::format;
+    use alloc::string::String as RustString;
+    use alloc::vec::Vec;
+
+    let mut lines: Vec<RustString> = Vec::new();
+    for entry in env.storage().get_contract_data(contract_id) {
+        let (key, value) = entry;
+        lines.push(format!("{key:?} => {value:?}"));
+    }
+    lines.sort();
+    lines.join("\n")
+}
+
+/// Compare `actual` against the committed snapshot for `name`, printing a
+/// readable diff on mismatch. When `UPDATE_SNAPSHOTS` is set (or tests are run
+/// with `--update-snapshots`) the snapshot file is rewritten instead.
+fn assert_snapshot(name: &str, actual: &str) {
+    use alloc::format;
+    use alloc::string::String as RustString;
+    use std::fs;
+    use std::path::PathBuf;
+
+    let update = std::env::var("UPDATE_SNAPSHOTS").is_ok()
+        || std::env::args().any(|a| a == "--update-snapshots");
+
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.push(SNAPSHOT_DIR);
+    path.push(format!("{name}.snap"));
+
+    if update {
+        fs::create_dir_all(path.parent().unwrap()).expect("create snapshot dir");
+        fs::write(&path, actual).expect("write snapshot");
+        return;
+    }
+
+    let expected = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(_) => panic!(
+            "missing snapshot file {}\nrun `cargo test -- --update-snapshots` to create it",
+            path.display()
+        ),
+    };
+
+    if expected == actual {
+        return;
+    }
+
+    // Build a readable line-by-line diff for CI output.
+    let expected_lines: Vec<&str> = expected.lines().collect();
+    let actual_lines: Vec<&str> = actual.lines().collect();
+    let mut diff = RustString::new();
+    let max = expected_lines.len().max(actual_lines.len());
+    for i in 0..max {
+        let exp = expected_lines.get(i).copied();
+        let act = actual_lines.get(i).copied();
+        if exp != act {
+            diff.push_str(&format!("  line {}:\n", i + 1));
+            diff.push_str(&format!("    - expected: {}\n", exp.unwrap_or("<missing>")));
+            diff.push_str(&format!("    + actual:   {}\n", act.unwrap_or("<missing>")));
+        }
+    }
+
+    panic!(
+        "storage snapshot mismatch for `{name}` ({}):\n{diff}\n\
+         If this change is intentional, update snapshots with \
+         `cargo test -- --update-snapshots` and commit the updated files.",
+        path.display()
+    );
+}
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
@@ -375,4 +461,29 @@ fn test_create_payment_request_minimum_valid_ttl_succeeds() {
         result.is_ok(),
         "ttl = 1 (minimum valid) must succeed, got {result:?}"
     );
+}
+
+// ── Storage layout snapshot tests (issue #1579) ──────────────────────────────
+
+/// Snapshot the full storage layout after a payment request is created and paid
+/// via `process_payment`. Catches unintended storage schema changes.
+#[test]
+fn snapshot_payment_record_after_process_payment() {
+    let (env, client, _admin, merchant, payer, token) = setup();
+
+    let request_id = String::from_str(&env, "REQ_SNAPSHOT_PAY");
+    client.create_payment_request(
+        &merchant,
+        &request_id,
+        &token,
+        &1_500_i128,
+        &String::from_str(&env, "Snapshot invoice"),
+        &86_400,
+    );
+
+    client.pay_payment_request(&payer, &request_id);
+
+    let contract_id = client.address.clone();
+    let storage = serialize_storage(&env, &contract_id);
+    assert_snapshot("payment_record_after_process_payment", &storage);
 }
