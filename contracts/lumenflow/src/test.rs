@@ -9964,3 +9964,209 @@ fn test_set_max_signers_zero_rejected() {
     let result = client.try_set_max_signers(&admin, &0u32);
     assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
 }
+
+// ── Merchant tier tests (#1572) ──────────────────────────────────────────────
+
+const TIER_WINDOW: u64 = 30 * 24 * 3600;
+
+/// A freshly registered merchant with no volume is Standard.
+#[test]
+fn test_merchant_tier_defaults_to_standard() {
+    let (env, client, _admin, merchant, _payer, _token) = setup_payment_env();
+
+    let info = client.get_merchant_tier(&merchant);
+    assert_eq!(info.tier, MerchantTier::Standard);
+    assert_eq!(info.volume_30d, 0);
+    assert_eq!(info.fee_reduction_bps, 0);
+    assert!(info.next_threshold.is_some());
+}
+
+/// Volume crossing the Silver threshold promotes the merchant.
+#[test]
+fn test_merchant_tier_promotes_to_silver() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.set_tier_thresholds(&admin, &1_000, &5_000, &10_000);
+
+    make_payment(&env, &client, &merchant, &payer, &token, "TIER_S1", 1_200);
+
+    let info = client.get_merchant_tier(&merchant);
+    assert_eq!(info.tier, MerchantTier::Silver);
+    assert_eq!(info.volume_30d, 1_200);
+    assert_eq!(info.next_threshold, Some(5_000));
+}
+
+/// Volume crossing the Gold threshold promotes the merchant and applies the
+/// default 50% fee reduction.
+#[test]
+fn test_merchant_tier_promotes_to_gold_with_default_reduction() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.set_tier_thresholds(&admin, &1_000, &5_000, &10_000);
+
+    make_payment(&env, &client, &merchant, &payer, &token, "TIER_G1", 6_000);
+
+    let info = client.get_merchant_tier(&merchant);
+    assert_eq!(info.tier, MerchantTier::Gold);
+    assert_eq!(info.fee_reduction_bps, 5_000);
+    assert_eq!(info.next_threshold, Some(10_000));
+}
+
+/// Volume crossing the Platinum threshold promotes the merchant and applies the
+/// default 100% fee reduction.
+#[test]
+fn test_merchant_tier_promotes_to_platinum_with_default_reduction() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.set_tier_thresholds(&admin, &1_000, &5_000, &10_000);
+
+    make_payment(&env, &client, &merchant, &payer, &token, "TIER_P1", 12_000);
+
+    let info = client.get_merchant_tier(&merchant);
+    assert_eq!(info.tier, MerchantTier::Platinum);
+    assert_eq!(info.fee_reduction_bps, 10_000);
+    assert!(info.next_threshold.is_none());
+}
+
+/// Volume that ages out of the 30-day window demotes the merchant.
+#[test]
+fn test_merchant_tier_demotes_when_volume_ages_out() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.set_tier_thresholds(&admin, &1_000, &5_000, &10_000);
+
+    make_payment(&env, &client, &merchant, &payer, &token, "TIER_D1", 6_000);
+    assert_eq!(client.get_merchant_tier(&merchant).tier, MerchantTier::Gold);
+
+    // Advance past the rolling window so the volume no longer counts.
+    env.ledger()
+        .with_mut(|l| l.timestamp += TIER_WINDOW + 1);
+
+    let info = client.get_merchant_tier(&merchant);
+    assert_eq!(info.tier, MerchantTier::Standard);
+    assert_eq!(info.volume_30d, 0);
+}
+
+/// Admin can configure thresholds and fee reductions.
+#[test]
+fn test_admin_configures_tier_thresholds_and_reductions() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+
+    client.set_tier_thresholds(&admin, &500, &2_000, &4_000);
+    client.set_tier_fee_reduction(&admin, &MerchantTier::Silver, &1_000);
+    client.set_tier_fee_reduction(&admin, &MerchantTier::Gold, &2_500);
+    client.set_tier_fee_reduction(&admin, &MerchantTier::Platinum, &7_500);
+
+    make_payment(&env, &client, &merchant, &payer, &token, "TIER_C1", 2_500);
+
+    let info = client.get_merchant_tier(&merchant);
+    assert_eq!(info.tier, MerchantTier::Gold);
+    assert_eq!(info.fee_reduction_bps, 2_500);
+    assert_eq!(info.next_threshold, Some(4_000));
+}
+
+/// Non-admin callers cannot change tier configuration.
+#[test]
+fn test_tier_configuration_requires_admin() {
+    let (env, client, _admin, _merchant, _payer, _token) = setup_payment_env();
+    let stranger = Address::generate(&env);
+
+    let result = client.try_set_tier_thresholds(&stranger, &1, &2, &3);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+
+    let result = client.try_set_tier_fee_reduction(&stranger, &MerchantTier::Gold, &100);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+}
+
+/// Fee reduction is applied to payments at each tier.
+#[test]
+fn test_fee_reduction_applied_per_tier() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.set_platform_fee(&admin, &1_000, &admin); // 10%
+    client.set_tier_thresholds(&admin, &1_000, &5_000, &10_000);
+
+    // Standard: full fee.
+    make_payment(&env, &client, &merchant, &payer, &token, "TIER_F1", 1_000);
+    let p = client.get_payment_by_id(&payer, &str(&env, "TIER_F1"));
+    assert_eq!(p.platform_fee, 100);
+
+    // Gold: 50% reduction → 5%.
+    make_payment(&env, &client, &merchant, &payer, &token, "TIER_F2", 5_000);
+    let p = client.get_payment_by_id(&payer, &str(&env, "TIER_F2"));
+    assert_eq!(p.platform_fee, 250);
+
+    // Platinum: 100% reduction → no fee.
+    make_payment(&env, &client, &merchant, &payer, &token, "TIER_F3", 5_000);
+    let p = client.get_payment_by_id(&payer, &str(&env, "TIER_F3"));
+    assert_eq!(p.platform_fee, 0);
+}
+
+/// A tier change emits the `merchant_tier_changed` event.
+#[test]
+fn test_merchant_tier_changed_event_emitted() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.set_tier_thresholds(&admin, &1_000, &5_000, &10_000);
+
+    make_payment(&env, &client, &merchant, &payer, &token, "TIER_E1", 1_500);
+
+    let events = env.events().all();
+    assert!(!events.events().is_empty());
+    assert_eq!(client.get_merchant_tier(&merchant).tier, MerchantTier::Silver);
+}
+
+// ── Settlement report data path tests (#1573) ────────────────────────────────
+
+/// Totals from `get_merchant_stats` match the itemised payment list used by
+/// the dashboard settlement report.
+#[test]
+fn test_settlement_report_totals_match_itemised_payments() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    make_payment(&env, &client, &merchant, &payer, &token, "SETTLE_001", 1_000);
+    make_payment(&env, &client, &merchant, &payer, &token, "SETTLE_002", 2_500);
+    make_payment(&env, &client, &merchant, &payer, &token, "SETTLE_003", 500);
+
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &100,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+
+    let mut itemised_volume: i128 = 0;
+    let mut itemised_fees: i128 = 0;
+    for payment in page.payments.iter() {
+        itemised_volume += payment.amount;
+        itemised_fees += payment.platform_fee;
+    }
+
+    let stats = client.get_merchant_stats(&merchant);
+    assert_eq!(stats.total_payments, page.payments.len());
+    assert_eq!(stats.total_volume, itemised_volume);
+    assert_eq!(stats.total_volume, 4_000);
+    assert_eq!(itemised_fees, stats.total_fees);
+}
+
+/// Settlement report for a date range only includes payments in that window.
+#[test]
+fn test_settlement_report_date_range_filter() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    make_payment(&env, &client, &merchant, &payer, &token, "SETTLE_R1", 100);
+    env.ledger().with_mut(|l| l.timestamp += 1_000);
+    make_payment(&env, &client, &merchant, &payer, &token, "SETTLE_R2", 200);
+
+    let filter = PaymentFilter {
+        start_time: Some(1_000),
+        end_time: Some(2_000),
+        ..Default::default()
+    };
+    let page = client.get_merchant_payment_history(
+        &merchant,
+        &None,
+        &100,
+        &Some(filter),
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(page.payments.len(), 1);
+    assert_eq!(page.payments.get(0).unwrap().order_id, str(&env, "SETTLE_R2"));
+}

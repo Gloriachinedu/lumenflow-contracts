@@ -196,7 +196,153 @@ COVERAGE=1 ./scripts/test.sh
 
 ---
 
-## 7. Open Your First PR (~5 min)
+## 7. Soroban Contract Contributor Guide (~20 min)
+
+This section is for contributors working on the Soroban smart contracts in `contracts/lumenflow/`. It covers the Stellar CLI, local node setup, fuzz testing, reading test snapshots, and a guided first contribution.
+
+### 7.1 Soroban prerequisites
+
+| Tool | Install | Verify |
+|---|---|---|
+| Rust 1.87.0 | `rustup toolchain install 1.87.0` (pinned in `rust-toolchain.toml`) | `rustc --version` |
+| WASM target | `rustup target add wasm32-unknown-unknown` | `rustup target list --installed` |
+| Stellar CLI | See 7.2 below | `stellar --version` |
+| cargo-fuzz | `cargo install cargo-fuzz` | `cargo fuzz --version` |
+
+The `soroban-sdk` version in `contracts/lumenflow/Cargo.toml` must match the toolchain channel in `rust-toolchain.toml`; a mismatch is the most common cause of cryptic test failures.
+
+### 7.2 Installing the Stellar CLI
+
+Pick one of:
+
+```bash
+# Any platform (compiles from source, slowest but always current)
+cargo install --locked stellar-cli
+
+# macOS
+brew install stellar-cli
+
+# Windows
+winget install --id Stellar.StellarCLI
+```
+
+Confirm with `stellar --version`, then add the WASM target if you have not already:
+
+```bash
+rustup target add wasm32-unknown-unknown
+```
+
+### 7.3 Local node setup
+
+The repo ships a helper that starts a standalone Stellar node with Soroban RPC via Docker and deploys the contract:
+
+```bash
+SOURCE_ACCOUNT=<your-secret-key> ./scripts/local_up.sh
+```
+
+The script prints a `CONTRACT_ID`. Point the CLI at the local node for every subsequent invocation:
+
+```bash
+stellar contract invoke \
+  --id <CONTRACT_ID> \
+  --source-account <admin-secret-key> \
+  --rpc-url http://localhost:8000/soroban/rpc \
+  --network-passphrase "Standalone Network ; February 2017" \
+  -- set_admin --admin <admin-address>
+```
+
+Tear the node down with `docker compose down` when you are finished.
+
+### 7.4 Running the test suite
+
+```bash
+# All unit tests, all features
+cargo test --all-features
+
+# A single test by name
+cargo test test_successful_refund_flow
+
+# Full lint + test pipeline (matches CI)
+./scripts/test.sh
+```
+
+Contract tests live in `contracts/lumenflow/src/test.rs` and use `soroban-sdk` testutils.
+
+### 7.5 Running fuzz targets
+
+Fuzz targets live under `contracts/lumenflow/fuzz/`. Install `cargo-fuzz` once, then run a target:
+
+```bash
+cargo install cargo-fuzz
+
+# Run a target for a fixed number of iterations
+cargo fuzz run fuzz_auth \
+  --manifest-path contracts/lumenflow/fuzz/Cargo.toml -- -runs=10000
+
+cargo fuzz run fuzz_verify_signature \
+  --manifest-path contracts/lumenflow/fuzz/Cargo.toml -- -runs=10000
+
+cargo fuzz run fuzz_batch_payment_deserialize \
+  --manifest-path contracts/lumenflow/fuzz/Cargo.toml -- -runs=10000
+```
+
+A crash writes a reproducer to `contracts/lumenflow/fuzz/artifacts/<target>/`; commit the reproducer alongside the fix so the regression is captured.
+
+### 7.6 Reading test snapshots
+
+Soroban tests assert on observable contract state rather than internal variables. Two patterns matter:
+
+- **Auth:** call `env.mock_all_auths()` at the start of a test so `require_auth()` calls succeed without real signatures. To assert that an entrypoint *does* require auth, use `env.mock_auths(&[])` and expect a failure.
+- **Events:** after invoking an entrypoint, inspect `env.events().all()` and assert on the emitted topics and data. For example:
+
+```rust
+let events = env.events().all();
+assert_eq!(events.len(), 1);
+let (_, topics, data) = &events[0];
+// topics[0] is the event name symbol, data is the payload
+```
+
+When a test fails, the panic message usually points at the exact assertion; re-run with `cargo test <name> -- --nocapture` to see the full event stream.
+
+### 7.7 First-contribution exercise: add an entrypoint
+
+This exercise adds a read-only `version` entrypoint and a matching test. It touches two files and is a good warm-up for the `#[contractimpl]` pattern.
+
+1. **Add the entrypoint.** In `contracts/lumenflow/src/lib.rs`, inside the existing `#[contractimpl]` block, add:
+
+   ```rust
+   /// Returns the contract version string.
+   pub fn version(env: Env) -> Symbol {
+       Symbol::new(&env, "1_0_0")
+   }
+   ```
+
+   Note the pattern: `#[contractimpl]` generates the exported WASM functions from these `pub fn` methods, and the first argument is always `Env`.
+
+2. **Write the test.** In `contracts/lumenflow/src/test.rs`, add:
+
+   ```rust
+   #[test]
+   fn test_version() {
+       let env = Env::default();
+       let contract_id = env.register_contract(None, LumenFlowContract);
+       let client = LumenFlowContractClient::new(&env, &contract_id);
+       assert_eq!(client.version(), Symbol::new(&env, "1_0_0"));
+   }
+   ```
+
+3. **Run it:** `cargo test test_version --all-features`.
+
+4. **Run the full pipeline:** `./scripts/test.sh` to confirm lint and all tests still pass.
+
+5. **Open a PR** following section 8 below, linking the issue with `Closes #N`.
+
+> **Validating this guide:** if you are the first contributor to follow this section from scratch, please note any step that was unclear or out of date in your PR description so we can keep the guide accurate.
+
+---
+
+## 8. Open Your First PR (~5 min)
+=======
 
 1. Create a feature branch:
    ```bash

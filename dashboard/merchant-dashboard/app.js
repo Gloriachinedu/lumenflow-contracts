@@ -270,6 +270,381 @@ function showError(msg) {
   banner._timer = setTimeout(() => { banner.style.display = 'none'; }, 8000);
 }
 
+// ── Merchant tier + settlement reporting ─────────────────────────────────────
+
+/** Human-readable messages for known contract / SDK error codes. */
+const ERROR_MESSAGES = {
+  WALLET_NOT_CONNECTED: 'Please connect a wallet first.',
+  MERCHANT_NOT_FOUND: 'No merchant record found for this account.',
+  INVALID_DATE_RANGE: 'The selected date range is invalid. Start must be before end.',
+  RPC_ERROR: 'Could not reach the Stellar RPC. Please try again shortly.',
+  NETWORK_ERROR: 'Network error while contacting the contract. Check your connection.',
+  DEFAULT: 'Something went wrong. Please try again.',
+};
+
+/**
+ * Maps an arbitrary error (SDK error object, string, or Error) to a
+ * human-readable message using ERROR_MESSAGES.
+ *
+ * @param {*} err
+ * @returns {string}
+ */
+function friendlyError(err) {
+  if (!err) return ERROR_MESSAGES.DEFAULT;
+  const code = (err.code || err.errorCode || err.name || '').toString().toUpperCase();
+  if (code && ERROR_MESSAGES[code]) return ERROR_MESSAGES[code];
+  const msg = (err.message || String(err)).toString();
+  for (const key of Object.keys(ERROR_MESSAGES)) {
+    if (key !== 'DEFAULT' && msg.toUpperCase().includes(key)) return ERROR_MESSAGES[key];
+  }
+  return msg || ERROR_MESSAGES.DEFAULT;
+}
+
+/** Tier metadata: display label and the default fee-reduction percentage. */
+const TIER_META = {
+  Standard: { label: 'Standard', reductionPct: 0 },
+  Silver:   { label: 'Silver',   reductionPct: 25 },
+  Gold:     { label: 'Gold',     reductionPct: 50 },
+  Platinum: { label: 'Platinum', reductionPct: 100 },
+};
+
+/** Ordered tier list used to determine the "next" tier. */
+const TIER_ORDER = ['Standard', 'Silver', 'Gold', 'Platinum'];
+
+/**
+ * Fetches the merchant tier from the contract via get_merchant_tier and
+ * renders the current tier plus the next tier threshold in the dashboard.
+ *
+ * @param {string} merchant - Merchant Stellar address.
+ */
+async function loadMerchantTier(merchant) {
+  const tierEl     = document.getElementById('tierCurrent');
+  const nextEl     = document.getElementById('tierNext');
+  const progressEl = document.getElementById('tierProgress');
+  if (!tierEl) return;
+
+  if (DEMO_MODE || !state.client) {
+    renderMerchantTier(buildMockTier());
+    return;
+  }
+
+  if (!merchant) {
+    tierEl.textContent = '—';
+    if (nextEl) nextEl.textContent = 'Connect a wallet to view your tier.';
+    return;
+  }
+
+  try {
+    const tier = await state.client.getMerchantTier(merchant);
+    renderMerchantTier(tier);
+  } catch (err) {
+    showError(friendlyError(err));
+    tierEl.textContent = '—';
+    if (nextEl) nextEl.textContent = 'Tier unavailable.';
+  }
+}
+
+/**
+ * Renders tier information returned by get_merchant_tier.
+ *
+ * @param {{tier:string, volume30d:string|number, nextTier?:string,
+ *          nextThreshold?:string|number, feeReductionBps?:number}} info
+ */
+function renderMerchantTier(info) {
+  const tierEl     = document.getElementById('tierCurrent');
+  const nextEl     = document.getElementById('tierNext');
+  const progressEl = document.getElementById('tierProgress');
+  if (!tierEl) return;
+
+  const tierName = info.tier || 'Standard';
+  const meta     = TIER_META[tierName] || TIER_META.Standard;
+  const reduction = info.feeReductionBps != null
+    ? Number(info.feeReductionBps) / 100
+    : meta.reductionPct;
+
+  tierEl.textContent = `${meta.label} (${reduction}% fee reduction)`;
+
+  const idx = TIER_ORDER.indexOf(tierName);
+  const nextTier = info.nextTier || TIER_ORDER[idx + 1] || null;
+
+  if (nextEl) {
+    if (nextTier && info.nextThreshold != null) {
+      const remaining = Math.max(0, Number(info.nextThreshold) - Number(info.volume30d || 0));
+      nextEl.textContent =
+        `Next tier: ${nextTier} at ${formatAmount(info.nextThreshold, 'native')} ` +
+        `30-day volume (${formatAmount(remaining, 'native')} to go).`;
+    } else {
+      nextEl.textContent = 'You are on the highest tier. 🎉';
+    }
+  }
+
+  if (progressEl) {
+    if (nextTier && info.nextThreshold != null && Number(info.nextThreshold) > 0) {
+      const pct = Math.min(100, (Number(info.volume30d || 0) / Number(info.nextThreshold)) * 100);
+      progressEl.style.width = `${pct.toFixed(1)}%`;
+    } else {
+      progressEl.style.width = '100%';
+    }
+  }
+}
+
+/** Mock tier payload for demo mode. */
+function buildMockTier() {
+  return {
+    tier: 'Silver',
+    volume30d: 150_0000000,
+    nextTier: 'Gold',
+    nextThreshold: 500_0000000,
+    feeReductionBps: 2500,
+  };
+}
+
+/**
+ * Builds a structured settlement report for a merchant over a date range.
+ *
+ * Paginates get_merchant_payment_history, fetches refunds for each order,
+ * aggregates summary totals (matching get_merchant_stats semantics) and
+ * returns the itemised rows plus totals.
+ *
+ * @param {string} merchant
+ * @param {Date|string|number} dateStart
+ * @param {Date|string|number} dateEnd
+ * @returns {Promise<{merchant:string, dateStart:string, dateEnd:string,
+ *                    items:Array, totals:Object}>}
+ */
+async function generateSettlementReport(merchant, dateStart, dateEnd) {
+  const startMs = toMs(dateStart);
+  const endMs   = toMs(dateEnd);
+  if (isNaN(startMs) || isNaN(endMs) || startMs > endMs) {
+    throw Object.assign(new Error(ERROR_MESSAGES.INVALID_DATE_RANGE), { code: 'INVALID_DATE_RANGE' });
+  }
+
+  if (DEMO_MODE || !state.client) {
+    return buildMockSettlementReport(merchant, startMs, endMs);
+  }
+
+  if (!merchant) {
+    throw Object.assign(new Error(ERROR_MESSAGES.WALLET_NOT_CONNECTED), { code: 'WALLET_NOT_CONNECTED' });
+  }
+
+  const items = [];
+  let cursor = null;
+  let guard  = 0;
+
+  // Paginate through the merchant's payment history.
+  do {
+    const page = await state.client.getMerchantPaymentHistory(
+      merchant,
+      cursor,
+      50,
+      null,
+      'Date',
+      'Ascending'
+    );
+    const payments = page.payments || [];
+    for (const p of payments) {
+      const ts = toMs(p.timestamp || p.createdAt);
+      if (ts < startMs || ts > endMs) continue;
+      items.push({
+        orderId:   p.orderId,
+        amount:    Number(p.amount || 0),
+        fee:       Number(p.fee != null ? p.fee : (p.platformFee || 0)),
+        net:       Number(p.net != null ? p.net : Number(p.amount || 0) - Number(p.fee || p.platformFee || 0)),
+        token:     p.token || 'native',
+        timestamp: ts,
+        refunded:  0,
+      });
+    }
+    cursor = page.cursor || page.nextCursor || null;
+    guard += 1;
+  } while (cursor && guard < 100);
+
+  // Attach refund totals per order.
+  await Promise.all(items.map(async (item) => {
+    try {
+      const refunds = await state.client.getRefundsForOrder(merchant, item.orderId);
+      item.refunded = (refunds || []).reduce((sum, r) => sum + Number(r.amount || 0), 0);
+    } catch {
+      item.refunded = 0;
+    }
+  }));
+
+  const totals = aggregateTotals(items);
+  return {
+    merchant,
+    dateStart: new Date(startMs).toISOString(),
+    dateEnd:   new Date(endMs).toISOString(),
+    items,
+    totals,
+  };
+}
+
+/** Normalises a Date | ISO string | epoch (s or ms) into milliseconds. */
+function toMs(value) {
+  if (value == null) return NaN;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'number') return value < 1e12 ? value * 1000 : value;
+  const parsed = Date.parse(value);
+  return isNaN(parsed) ? Number(value) : parsed;
+}
+
+/** Aggregates itemised rows into summary totals. */
+function aggregateTotals(items) {
+  const totals = {
+    paymentCount: items.length,
+    grossVolume:  0,
+    totalFees:    0,
+    netVolume:    0,
+    refundedVolume: 0,
+  };
+  for (const it of items) {
+    totals.grossVolume    += it.amount;
+    totals.totalFees      += it.fee;
+    totals.netVolume      += it.net;
+    totals.refundedVolume += it.refunded || 0;
+  }
+  return totals;
+}
+
+/** Mock settlement report for demo mode. */
+function buildMockSettlementReport(merchant, startMs, endMs) {
+  const base = [
+    { orderId: 'ORDER_001', amount: 10_0000000, fee: 25_00000,  token: 'native', offset: 2 },
+    { orderId: 'ORDER_002', amount: 5_0000000,  fee: 12_50000,  token: 'native', offset: 1 },
+    { orderId: 'ORDER_003', amount: 20_0000000, fee: 50_00000,  token: 'USDC',   offset: 5 },
+    { orderId: 'ORDER_004', amount: 3_0000000,  fee: 7_50000,   token: 'native', offset: 3 },
+  ];
+  const items = base
+    .map(b => ({
+      orderId:   b.orderId,
+      amount:    b.amount,
+      fee:       b.fee,
+      net:       b.amount - b.fee,
+      token:     b.token,
+      timestamp: Date.now() - b.offset * 86_400_000,
+      refunded:  b.orderId === 'ORDER_003' ? 5_0000000 : 0,
+    }))
+    .filter(it => it.timestamp >= startMs && it.timestamp <= endMs);
+
+  return {
+    merchant: merchant || 'demo-merchant',
+    dateStart: new Date(startMs).toISOString(),
+    dateEnd:   new Date(endMs).toISOString(),
+    items,
+    totals: aggregateTotals(items),
+  };
+}
+
+/** Renders the settlement summary + itemised table for a report. */
+function renderSettlementReport(report) {
+  const summaryEl = document.getElementById('settlementSummary');
+  const bodyEl    = document.querySelector('#settlementTable tbody');
+  const emptyEl2  = document.getElementById('settlementEmpty');
+  if (!summaryEl || !bodyEl) return;
+
+  const t = report.totals;
+  summaryEl.innerHTML = `
+    <div class="summary-card"><span>Payments</span><strong>${t.paymentCount}</strong></div>
+    <div class="summary-card"><span>Gross volume</span><strong>${formatAmount(t.grossVolume, 'native')}</strong></div>
+    <div class="summary-card"><span>Fees</span><strong>${formatAmount(t.totalFees, 'native')}</strong></div>
+    <div class="summary-card"><span>Net</span><strong>${formatAmount(t.netVolume, 'native')}</strong></div>
+    <div class="summary-card"><span>Refunded</span><strong>${formatAmount(t.refundedVolume, 'native')}</strong></div>
+  `;
+
+  bodyEl.innerHTML = '';
+  if (!report.items.length) {
+    if (emptyEl2) emptyEl2.style.display = 'block';
+    return;
+  }
+  if (emptyEl2) emptyEl2.style.display = 'none';
+
+  report.items.forEach(it => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${it.orderId}</td>
+      <td>${formatAmount(it.amount, it.token)}</td>
+      <td>${formatAmount(it.fee, it.token)}</td>
+      <td>${formatAmount(it.net, it.token)}</td>
+      <td>${new Date(it.timestamp).toLocaleString()}</td>
+    `;
+    bodyEl.appendChild(tr);
+  });
+}
+
+/** Currently displayed settlement report (used by exports). */
+let currentReport = null;
+
+/** Loads and renders a settlement report for the selected date range. */
+async function refreshSettlementReport() {
+  const startEl = document.getElementById('settlementStart');
+  const endEl   = document.getElementById('settlementEnd');
+  if (!startEl || !endEl) return;
+
+  const merchant = state.wallet ? state.wallet.account : null;
+  try {
+    const report = await generateSettlementReport(merchant, startEl.value, endEl.value);
+    currentReport = report;
+    renderSettlementReport(report);
+  } catch (err) {
+    showError(friendlyError(err));
+  }
+}
+
+/** Triggers a browser download for the given text content. */
+function downloadFile(filename, content, mime) {
+  const blob = new Blob([content], { type: mime });
+  const url  = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href  = url;
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+/** Exports the current settlement report as CSV. */
+function exportSettlementCsv() {
+  if (!currentReport) { showError('No settlement report loaded yet.'); return; }
+  const header = ['order_id', 'amount', 'fee', 'net', 'token', 'timestamp'];
+  const lines  = [header.join(',')];
+  currentReport.items.forEach(it => {
+    lines.push([
+      csvEscape(it.orderId),
+      csvEscape(it.amount),
+      csvEscape(it.fee),
+      csvEscape(it.net),
+      csvEscape(it.token),
+      csvEscape(new Date(it.timestamp).toISOString()),
+    ].join(','));
+  });
+  const from = currentReport.dateStart.slice(0, 10);
+  const to   = currentReport.dateEnd.slice(0, 10);
+  downloadFile(`lumenflow-settlement-${from}-${to}.csv`, lines.join('\r\n'), 'text/csv;charset=utf-8;');
+}
+
+/** Exports the current settlement report as JSON. */
+function exportSettlementJson() {
+  if (!currentReport) { showError('No settlement report loaded yet.'); return; }
+  const from = currentReport.dateStart.slice(0, 10);
+  const to   = currentReport.dateEnd.slice(0, 10);
+  downloadFile(
+    `lumenflow-settlement-${from}-${to}.json`,
+    JSON.stringify(currentReport, null, 2),
+    'application/json;charset=utf-8;'
+  );
+}
+
+// Wire settlement report controls (guarded — elements may be absent).
+(function wireSettlementControls() {
+  const refreshBtn = document.getElementById('settlementRefresh');
+  const csvBtn     = document.getElementById('settlementExportCsv');
+  const jsonBtn    = document.getElementById('settlementExportJson');
+  if (refreshBtn) refreshBtn.addEventListener('click', refreshSettlementReport);
+  if (csvBtn)     csvBtn.addEventListener('click', exportSettlementCsv);
+  if (jsonBtn)    jsonBtn.addEventListener('click', exportSettlementJson);
+})();
+
 // ── Formatting ────────────────────────────────────────────────────────────────
 function formatAmount(amount, token) {
   // Use 7 decimals for XLM / native; 6 for USDC; 7 as default
@@ -635,6 +1010,8 @@ function applyWallet(info) {
 
   // Refresh data for the newly connected wallet
   fetchRefunds();
+  loadMerchantTier(info.account);
+  refreshSettlementReport();
 }
 
 document.getElementById('connectWallet').addEventListener('click', () =>
@@ -796,3 +1173,9 @@ if (savedWallet) {
 // Initial fetch + poll every 30 s
 fetchRefunds();
 setInterval(fetchRefunds, 30_000);
+
+// Initialise tier + settlement report for the restored wallet (if any).
+if (state.wallet && state.wallet.account) {
+  loadMerchantTier(state.wallet.account);
+}
+refreshSettlementReport();

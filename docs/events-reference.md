@@ -108,6 +108,62 @@ Emitted when a new merchant profile is created.
 
 ---
 
+### `merchant_verified`
+Emitted when a merchant profile is marked as verified by an admin.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful call to `verify_merchant`. |
+| **Topics** | `["lumenflow", "merchant_verified"]` |
+| **Data** | `merchant_address: Address` |
+
+**Data Details:**
+- `merchant_address`: The `Address` of the merchant that was verified.
+
+---
+
+### `merchant_unverified`
+Emitted when a merchant's verified status is revoked by an admin.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful call to `unverify_merchant`. |
+| **Topics** | `["lumenflow", "merchant_unverified"]` |
+| **Data** | `merchant_address: Address` |
+
+**Data Details:**
+- `merchant_address`: The `Address` of the merchant whose verification was revoked.
+
+---
+
+### `merchant_deactivated`
+Emitted when a merchant profile is deactivated (e.g. by the merchant or an admin).
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful call to `deactivate_merchant`. |
+| **Topics** | `["lumenflow", "merchant_deactivated"]` |
+| **Data** | `merchant_address: Address` |
+
+**Data Details:**
+- `merchant_address`: The `Address` of the deactivated merchant.
+
+---
+
+### `merchant_reactivated`
+Emitted when a previously deactivated merchant profile is reactivated.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful call to `reactivate_merchant`. |
+| **Topics** | `["lumenflow", "merchant_reactivated"]` |
+| **Data** | `merchant_address: Address` |
+
+**Data Details:**
+- `merchant_address`: The `Address` of the reactivated merchant.
+
+---
+
 ### `payment_processed`
 Emitted when a payment is successfully completed (via signature or batch).
 
@@ -332,6 +388,193 @@ Emitted when an admin changes a configurable contract parameter via `set_platfor
 
 ---
 
+### `admin_action`
+Emitted for administrative actions that are not covered by a more specific
+event (e.g. audit-trail entries for privileged operations). The acting admin is
+emitted as **`topic[2]`** so audit consumers can filter by administrator.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful execution of an audited admin operation. |
+| **Topics** | `["lumenflow", "admin_action", admin: Address]` |
+| **Data** | `(action: String, target: Address, timestamp: u64)` |
+
+**Topic Details:**
+- `topic[2]`: `admin` — the administrator who performed the action. **Filterable.**
+
+**Data Details:**
+- `action`: A short string identifying the action performed.
+- `target`: The `Address` the action was applied to.
+- `timestamp`: The ledger timestamp when the action was recorded.
+
+---
+
+### `fee_collected`
+Emitted when the platform fee is collected from a payment.
+
+| Field | Description |
+|---|---|
+| **Trigger** | A payment that incurs a non-zero platform fee. |
+| **Topics** | `["lumenflow", "fee_collected", merchant_address: Address]` |
+| **Data** | `(order_id: String, fee: i128)` |
+
+**Topic Details:**
+- `topic[2]`: `merchant_address` — merchant associated with the payment. **Filterable.**
+
+**Data Details:**
+- `order_id`: The order identifier the fee was collected for.
+- `fee`: The fee amount (in the token's smallest unit).
+
+---
+
+### `payment_failed`
+Emitted when a payment attempt fails after being recorded (e.g. authorization
+failure or insufficient funds).
+
+| Field | Description |
+|---|---|
+| **Trigger** | A payment attempt that fails and is recorded as failed. |
+| **Topics** | `["lumenflow", "payment_failed", merchant_address: Address]` |
+| **Data** | `(order_id: String, payer: Address, reason: String)` |
+
+**Topic Details:**
+- `topic[2]`: `merchant_address` — merchant associated with the payment. **Filterable.**
+
+**Data Details:**
+- `order_id`: The order identifier for the failed payment.
+- `payer`: The `Address` of the account that attempted the payment.
+- `reason`: A short string describing the failure reason.
+
+---
+
+### `refund_completed`
+Emitted when a refund transfer is fully settled (distinct from
+`refund_executed`, which marks execution start).
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful settlement of an executed refund. |
+| **Topics** | `["lumenflow", "refund_completed", merchant_address: Address]` |
+| **Data** | `(refund_id: String, order_id: String, amount: i128)` |
+
+**Topic Details:**
+- `topic[2]`: `merchant_address` — merchant associated with the payment. **Filterable.**
+
+**Data Details:**
+- `refund_id`: The unique refund identifier.
+- `order_id`: The associated payment order identifier.
+- `amount`: The refunded amount (in the token's smallest unit).
+
+---
+
+### `multisig_approved`
+Emitted when a signer approves a pending multi-signature payment.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful call to `approve_multisig_payment`. |
+| **Topics** | `["lumenflow", "multisig_approved"]` |
+| **Data** | `(payment_id: String, signer: Address)` |
+
+**Data Details:**
+- `payment_id`: The multi-signature payment identifier.
+- `signer`: The `Address` of the signer who approved.
+
+---
+
+### `multisig_cancelled`
+Emitted when a pending multi-signature payment is cancelled.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful call to `cancel_multisig_payment`. |
+| **Topics** | `["lumenflow", "multisig_cancelled"]` |
+| **Data** | `payment_id: String` |
+
+---
+
+### `payment_request_created`
+Emitted when a merchant creates a pre-generated payment request.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful call to `create_payment_request`. |
+| **Topics** | `["lumenflow", "payment_request_created", merchant_address: Address]` |
+| **Data** | `(request_id: String, amount: i128, expires_at: u64)` |
+
+**Topic Details:**
+- `topic[2]`: `merchant_address` — merchant that created the request. **Filterable.**
+
+**Data Details:**
+- `request_id`: The unique payment request identifier.
+- `amount`: The requested amount (in the token's smallest unit).
+- `expires_at`: The ledger timestamp after which the request expires.
+
+---
+
+### `payment_request_expired`
+Emitted when a payment request expires without being paid.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Expiry processing of an unpaid payment request. |
+| **Topics** | `["lumenflow", "payment_request_expired"]` |
+| **Data** | `request_id: String` |
+
+---
+
+### `guardian_added`
+Emitted when a guardian is added to the early-unpause guardian set.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful call to `add_guardian`. |
+| **Topics** | `["lumenflow", "guardian_added"]` |
+| **Data** | `guardian: Address` |
+
+---
+
+### `guardian_removed`
+Emitted when a guardian is removed from the early-unpause guardian set.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful call to `remove_guardian`. |
+| **Topics** | `["lumenflow", "guardian_removed"]` |
+| **Data** | `guardian: Address` |
+
+---
+
+### `early_unpause_approved`
+Emitted when a guardian approves an early unpause.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful call to `approve_early_unpause` (before the threshold is reached). |
+| **Topics** | `["lumenflow", "early_unpause_approved"]` |
+| **Data** | `(guardian: Address, approvals: u32)` |
+
+**Data Details:**
+- `guardian`: The `Address` of the approving guardian.
+- `approvals`: The number of approvals recorded so far.
+
+---
+
+### `contract_upgraded`
+Emitted when the contract WASM is upgraded by an admin.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful call to `upgrade`. |
+| **Topics** | `["lumenflow", "contract_upgraded"]` |
+| **Data** | `(new_wasm_hash: BytesN<32>, admin: Address)` |
+
+**Data Details:**
+- `new_wasm_hash`: The hash of the newly installed WASM.
+- `admin`: The `Address` of the administrator who performed the upgrade.
+
+---
+
 ## Subscribing to Events
 
 You can subscribe to LumenFlow events using any Stellar SDK or by querying Horizon/RPC directly.
@@ -417,4 +660,12 @@ silently mis-decoded.
 The catalog is kept in lock-step with the contract by
 `sdk/src/tests/contractEventCompat.test.ts`, which diffs it against the actual
 `env.events().publish(...)` calls in `contracts/lumenflow/src` on every run.
-**If you add or change a contract event, update `EVENT_CATALOG` and this table.**
+A companion script (`scripts/check-events-reference.sh`) performs the same diff
+against this document and runs in CI, so the reference can never drift from the
+contract. **If you add or change a contract event, update `EVENT_CATALOG`, this
+table, and re-run the check script.**
+
+Every event documented above must appear in `EVENT_CATALOG` with a matching
+`topics` layout and `data` field schema. Events that carry a merchant address
+expose it as `topic[2]`; the catalog records this via the `merchantTopic: true`
+flag so `parseLumenFlowEvent` can extract it into the `merchant` field.

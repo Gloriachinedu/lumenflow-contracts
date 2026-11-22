@@ -43,6 +43,61 @@ pub struct ReferralStats {
     pub reward_bps: u32,
 }
 
+// ── Merchant tiers ────────────────────────────────────────────────────────────
+
+/// Volume-based merchant tier. Assigned automatically from the merchant's
+/// rolling 30-day payment volume against the configured thresholds.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MerchantTier {
+    Standard,
+    Silver,
+    Gold,
+    Platinum,
+}
+
+/// Admin-configurable tier thresholds and fee reductions.
+///
+/// Each threshold is the minimum rolling 30-day volume (in stroops) required
+/// to reach that tier. `*_reduction_bps` is the percentage of the platform fee
+/// waived for merchants in that tier (e.g. 5000 = 50 % reduction).
+/// Defaults: Standard = full fee, Silver = 25 % reduction,
+/// Gold = 50 % reduction, Platinum = 100 % reduction (no fee).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantTierConfig {
+    pub silver_threshold: i128,
+    pub gold_threshold: i128,
+    pub platinum_threshold: i128,
+    pub silver_reduction_bps: u32,
+    pub gold_reduction_bps: u32,
+    pub platinum_reduction_bps: u32,
+}
+
+/// Snapshot returned by `get_merchant_tier`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantTierInfo {
+    /// The merchant's current tier.
+    pub tier: MerchantTier,
+    /// Rolling 30-day payment volume used to determine the tier.
+    pub rolling_volume: i128,
+    /// Effective platform fee in basis points after the tier reduction.
+    pub fee_bps: u32,
+    /// Volume required to reach the next tier, or `None` if already Platinum.
+    pub next_tier_threshold: Option<i128>,
+}
+
+/// Data payload for `lumenflow/merchant_tier_changed`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantTierChangedEvent {
+    pub merchant: Address,
+    pub previous_tier: MerchantTier,
+    pub new_tier: MerchantTier,
+    pub rolling_volume: i128,
+}
+
 // ── Payment ───────────────────────────────────────────────────────────────────
 
 #[contracttype]

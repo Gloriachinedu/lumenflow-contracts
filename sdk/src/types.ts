@@ -209,3 +209,77 @@ export interface Subscription {
   status: SubscriptionStatus;
   createdAt: bigint;
 }
+
+/**
+ * Merchant volume tier.
+ *
+ * Tiers are assigned based on the merchant's 30-day rolling payment volume
+ * and grant progressively larger fee reductions.
+ */
+export enum MerchantTier {
+  Standard = "Standard",
+  Silver = "Silver",
+  Gold = "Gold",
+  Platinum = "Platinum",
+}
+
+/**
+ * Fee reduction configuration for a single tier.
+ *
+ * `feeReductionBps` is expressed in basis points (0–10000), where 0 means the
+ * full fee is charged and 10000 means the fee is waived entirely.
+ */
+export interface MerchantTierFeeConfig {
+  tier: MerchantTier;
+  /** Minimum 30-day rolling volume (in base token units) required for this tier. */
+  minVolume: bigint;
+  /** Fee reduction in basis points (0–10000). */
+  feeReductionBps: number;
+}
+
+/** Full tier configuration, as managed by the admin. */
+export interface MerchantTierConfig {
+  tiers: MerchantTierFeeConfig[];
+}
+
+/**
+ * Read-only tier information for a merchant.
+ *
+ * `nextTier` and `nextTierThreshold` are `undefined` when the merchant is
+ * already at the highest tier.
+ */
+export interface MerchantTierInfo {
+  merchant: string;
+  tier: MerchantTier;
+  /** 30-day rolling payment volume used for the tier calculation. */
+  rollingVolume: bigint;
+  /** Fee reduction in basis points currently applied to this merchant. */
+  feeReductionBps: number;
+  nextTier?: MerchantTier;
+  /** Volume required to reach `nextTier`. */
+  nextTierThreshold?: bigint;
+}
+
+/** A single itemised payment row in a settlement report. */
+export interface SettlementLineItem {
+  orderId: string;
+  payer: string;
+  token: string;
+  amount: bigint;
+  fee: bigint;
+  net: bigint;
+  paidAt: bigint;
+  status: PaymentStatus;
+}
+
+/** Aggregated settlement report for a merchant over a date range. */
+export interface SettlementSummary {
+  merchant: string;
+  dateStart: bigint;
+  dateEnd: bigint;
+  lineItems: SettlementLineItem[];
+  totalAmount: bigint;
+  totalFee: bigint;
+  totalNet: bigint;
+  paymentCount: number;
+}

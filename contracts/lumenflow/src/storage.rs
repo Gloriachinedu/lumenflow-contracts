@@ -159,6 +159,10 @@ pub enum DataKey {
     AdminAuditMaxEntries,
     /// Configurable maximum signers per multisig payment (issue #1269). Short code `MSL`.
     MSL,
+    /// Merchant tier configuration (thresholds + fee reductions). Short code `MTC`.
+    MTC,
+    /// Rolling 30-day payment volume record for a merchant. Short code `MTV`.
+    MTV(Address),
 }
 
 /// The schema version this binary was compiled against.
@@ -1268,6 +1272,194 @@ pub fn set_escrow_hold(env: &Env, hold: &EscrowHold) {
     env.storage()
         .persistent()
         .extend_ttl(&key, ESCROW_HOLD_TTL_LEDGERS, ESCROW_HOLD_TTL_LEDGERS);
+}
+
+// ── Merchant tiers (Issue #1572) ──────────────────────────────────────────────
+//
+// Merchants are assigned a tier based on their rolling 30-day payment volume.
+// Each tier carries a configurable fee reduction (in basis points) that is
+// subtracted from the platform fee.  Thresholds and reductions are stored in a
+// single instance-storage struct so an admin can update them atomically.
+
+/// Number of seconds in the rolling volume window (30 days).
+pub const MERCHANT_TIER_WINDOW_SECS: u64 = 30 * 24 * 3600;
+
+/// Maximum number of volume buckets retained per merchant.  Buckets are
+/// coalesced into fixed-size time slots so this bounds storage growth.
+pub const MAX_MERCHANT_VOLUME_BUCKETS: u32 = 64;
+
+/// Width of a single volume bucket in seconds (30 days / 64 ≈ 11.25 hours).
+pub const MERCHANT_VOLUME_BUCKET_SECS: u64 = MERCHANT_TIER_WINDOW_SECS / MAX_MERCHANT_VOLUME_BUCKETS as u64;
+
+/// TTL for rolling volume records — 2 years, matching merchant profiles.
+pub const MERCHANT_VOLUME_TTL_LEDGERS: u32 = MERCHANT_TTL_LEDGERS;
+
+/// Default Silver tier threshold: 1 000 XLM equivalent in stroops.
+pub const DEFAULT_SILVER_TIER_THRESHOLD: i128 = 1_000_000_000;
+/// Default Gold tier threshold: 10 000 XLM equivalent in stroops.
+pub const DEFAULT_GOLD_TIER_THRESHOLD: i128 = 10_000_000_000;
+/// Default Platinum tier threshold: 100 000 XLM equivalent in stroops.
+pub const DEFAULT_PLATINUM_TIER_THRESHOLD: i128 = 100_000_000_000;
+
+/// Default fee reduction for the Silver tier (25 % of the platform fee).
+pub const DEFAULT_SILVER_FEE_REDUCTION_BPS: u32 = 2_500;
+/// Default fee reduction for the Gold tier (50 % of the platform fee).
+pub const DEFAULT_GOLD_FEE_REDUCTION_BPS: u32 = 5_000;
+/// Default fee reduction for the Platinum tier (100 % — no fee).
+pub const DEFAULT_PLATINUM_FEE_REDUCTION_BPS: u32 = 10_000;
+
+/// Admin-configurable tier thresholds and fee reductions.
+///
+/// `*_threshold` values are cumulative 30-day volume floors in stroops.
+/// `*_fee_reduction_bps` values are reductions applied to the platform fee,
+/// expressed in basis points of the fee (10 000 = full waiver).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantTierConfig {
+    pub silver_threshold: i128,
+    pub gold_threshold: i128,
+    pub platinum_threshold: i128,
+    pub silver_fee_reduction_bps: u32,
+    pub gold_fee_reduction_bps: u32,
+    pub platinum_fee_reduction_bps: u32,
+}
+
+impl MerchantTierConfig {
+    /// Sensible defaults used when the admin has not configured tiers yet.
+    pub fn default_config() -> Self {
+        Self {
+            silver_threshold: DEFAULT_SILVER_TIER_THRESHOLD,
+            gold_threshold: DEFAULT_GOLD_TIER_THRESHOLD,
+            platinum_threshold: DEFAULT_PLATINUM_TIER_THRESHOLD,
+            silver_fee_reduction_bps: DEFAULT_SILVER_FEE_REDUCTION_BPS,
+            gold_fee_reduction_bps: DEFAULT_GOLD_FEE_REDUCTION_BPS,
+            platinum_fee_reduction_bps: DEFAULT_PLATINUM_FEE_REDUCTION_BPS,
+        }
+    }
+}
+
+/// A single rolling-volume bucket: `(bucket_start_secs, amount)`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VolumeBucket {
+    pub start: u64,
+    pub amount: i128,
+}
+
+/// Rolling 30-day payment volume record for a merchant.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantVolumeRecord {
+    pub buckets: Vec<VolumeBucket>,
+}
+
+/// Return the configured merchant tier configuration (or defaults).
+pub fn get_merchant_tier_config(env: &Env) -> MerchantTierConfig {
+    env.storage()
+        .instance()
+        .get(&DataKey::MTC)
+        .unwrap_or_else(MerchantTierConfig::default_config)
+}
+
+/// Persist a new merchant tier configuration.  Admin-only; caller is
+/// responsible for authorization.
+pub fn set_merchant_tier_config(env: &Env, config: &MerchantTierConfig) {
+    env.storage().instance().set(&DataKey::MTC, config);
+}
+
+/// Read the raw rolling volume record for `merchant`, if any.
+pub fn get_merchant_volume_record(env: &Env, merchant: &Address) -> Option<MerchantVolumeRecord> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::MTV(merchant.clone()))
+}
+
+/// Persist the rolling volume record for `merchant`, extending its TTL.
+pub fn set_merchant_volume_record(env: &Env, merchant: &Address, record: &MerchantVolumeRecord) {
+    let key = DataKey::MTV(merchant.clone());
+    env.storage().persistent().set(&key, record);
+    env.storage().persistent().extend_ttl(
+        &key,
+        MERCHANT_VOLUME_TTL_LEDGERS,
+        MERCHANT_VOLUME_TTL_LEDGERS,
+    );
+}
+
+/// Record `amount` of payment volume for `merchant` at timestamp `now`.
+///
+/// Volume is coalesced into fixed-width buckets of
+/// [`MERCHANT_VOLUME_BUCKET_SECS`] seconds.  Buckets older than the 30-day
+/// window are pruned, and the bucket list is capped at
+/// [`MAX_MERCHANT_VOLUME_BUCKETS`] entries (oldest evicted first).
+pub fn record_merchant_volume(env: &Env, merchant: &Address, amount: i128, now: u64) {
+    if amount <= 0 {
+        return;
+    }
+    let window_start = now.saturating_sub(MERCHANT_TIER_WINDOW_SECS);
+    let bucket_start = now - (now % MERCHANT_VOLUME_BUCKET_SECS);
+
+    let existing = get_merchant_volume_record(env, merchant);
+    let mut buckets: Vec<VolumeBucket> = Vec::new(env);
+
+    if let Some(record) = existing {
+        for bucket in record.buckets.iter() {
+            // Drop buckets that have fallen out of the rolling window.
+            if bucket.start >= window_start {
+                buckets.push_back(bucket);
+            }
+        }
+    }
+
+    // Merge into the current bucket if it already exists, else append.
+    let mut merged = false;
+    let mut rebuilt: Vec<VolumeBucket> = Vec::new(env);
+    for bucket in buckets.iter() {
+        if bucket.start == bucket_start {
+            rebuilt.push_back(VolumeBucket {
+                start: bucket.start,
+                amount: bucket.amount.saturating_add(amount),
+            });
+            merged = true;
+        } else {
+            rebuilt.push_back(bucket);
+        }
+    }
+    if !merged {
+        rebuilt.push_back(VolumeBucket {
+            start: bucket_start,
+            amount,
+        });
+    }
+
+    // Enforce the bucket cap by evicting the oldest entries.
+    let len = rebuilt.len();
+    let mut capped: Vec<VolumeBucket> = Vec::new(env);
+    let skip = len.saturating_sub(MAX_MERCHANT_VOLUME_BUCKETS);
+    for (i, bucket) in rebuilt.iter().enumerate() {
+        if (i as u32) >= skip {
+            capped.push_back(bucket);
+        }
+    }
+
+    set_merchant_volume_record(
+        env,
+        merchant,
+        &MerchantVolumeRecord { buckets: capped },
+    );
+}
+
+/// Sum the merchant's rolling 30-day volume as of timestamp `now`.
+pub fn get_merchant_rolling_volume(env: &Env, merchant: &Address, now: u64) -> i128 {
+    let window_start = now.saturating_sub(MERCHANT_TIER_WINDOW_SECS);
+    let mut total: i128 = 0;
+    if let Some(record) = get_merchant_volume_record(env, merchant) {
+        for bucket in record.buckets.iter() {
+            if bucket.start >= window_start {
+                total = total.saturating_add(bucket.amount);
+            }
+        }
+    }
+    total
 }
 
 // ── Admin Audit Log (Issue #1115) ─────────────────────────────────────────────
