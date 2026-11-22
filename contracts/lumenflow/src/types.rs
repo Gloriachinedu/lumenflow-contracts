@@ -70,15 +70,19 @@ pub struct PaymentOrder {
     pub platform_fee: i128,
 }
 
+/// Public, unauthenticated read-only summary of a payment.
+///
+/// Returned by `get_payment_summary`, which is callable without payer or
+/// merchant auth so third-party explorers and dashboards can query it.
+/// Deliberately excludes sensitive fields such as the payer address.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PaymentSummary {
     pub order_id: String,
-    pub merchant_address: Address,
+    pub merchant: Address,
     pub amount: i128,
-    pub token: Address,
     pub status: PaymentStatus,
-    pub paid_at: u64,
+    pub created_at: u64,
 }
 
 #[contracttype]
