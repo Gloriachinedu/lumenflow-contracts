@@ -9964,3 +9964,204 @@ fn test_set_max_signers_zero_rejected() {
     let result = client.try_set_max_signers(&admin, &0u32);
     assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
 }
+
+// ── Merchant payment limit tests (issue #1592) ────────────────────────────────
+
+/// set_merchant_payment_limit requires admin auth and stores the value.
+#[test]
+fn test_set_merchant_payment_limit_requires_admin_and_stores() {
+    let (env, client, admin, merchant, _payer, _token) = setup_payment_env();
+
+    // Non-admin cannot set the limit.
+    let stranger = Address::generate(&env);
+    let result = client.try_set_merchant_payment_limit(&stranger, &merchant, &Some(1_000));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+
+    // Admin can set the limit and it is persisted.
+    client.set_merchant_payment_limit(&admin, &merchant, &Some(1_000));
+    let profile = client.get_merchant(&merchant);
+    assert_eq!(profile.max_payment_amount, Some(1_000));
+
+    // Admin can clear the limit.
+    client.set_merchant_payment_limit(&admin, &merchant, &None);
+    let profile = client.get_merchant(&merchant);
+    assert_eq!(profile.max_payment_amount, None);
+}
+
+/// process_payment succeeds when the amount is within the configured limit.
+#[test]
+fn test_process_payment_within_merchant_limit_succeeds() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.set_merchant_payment_limit(&admin, &merchant, &Some(1_000));
+
+    make_payment(&env, &client, &merchant, &payer, &token, "LIMIT_OK", 1_000);
+    let p = client.get_payment_by_id(&payer, &str(&env, "LIMIT_OK"));
+    assert_eq!(p.amount, 1_000);
+}
+
+/// process_payment returns ExceedsMerchantLimit when the amount is over the
+/// limit and no payment state is written.
+#[test]
+fn test_process_payment_over_merchant_limit_fails_without_state() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.set_merchant_payment_limit(&admin, &merchant, &Some(500));
+
+    let before = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+
+    let result = client.try_process_payment(
+        &payer,
+        &str(&env, "LIMIT_OVER"),
+        &merchant,
+        &token,
+        &501,
+        &str(&env, ""),
+        &None,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::ExceedsMerchantLimit)));
+
+    // No payment record must exist and history must be unchanged.
+    let lookup = client.try_get_payment_by_id(&payer, &str(&env, "LIMIT_OVER"));
+    assert_eq!(lookup, Err(Ok(PaymentError::PaymentNotFound)));
+    let after = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(after.total, before.total);
+}
+
+/// A merchant with no configured limit (None) accepts any amount.
+#[test]
+fn test_process_payment_no_merchant_limit_allows_any_amount() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Default profile has no limit.
+    let profile = client.get_merchant(&merchant);
+    assert_eq!(profile.max_payment_amount, None);
+
+    make_payment(&env, &client, &merchant, &payer, &token, "LIMIT_NONE", 1_000_000);
+    let p = client.get_payment_by_id(&payer, &str(&env, "LIMIT_NONE"));
+    assert_eq!(p.amount, 1_000_000);
+}
+
+// ── State-before-transfer ordering tests (issue #1507) ────────────────────────
+//
+// These regression tests assert that when the external token transfer fails,
+// the contract does not leave partially written payment / refund state behind
+// (checks-effects-interactions ordering).
+
+/// A payment whose token transfer fails (insufficient payer balance) must not
+/// leave a payment record or mutate the payer's history.
+#[test]
+fn test_payment_transfer_failure_leaves_no_state() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Drain the payer so the transfer must fail.
+    let balance = TokenClient::new(&env, &token).balance(&payer);
+    let token_admin = Address::generate(&env);
+    let asset = StellarAssetClient::new(&env, &token);
+    asset.burn(&payer, &balance);
+    let _ = token_admin;
+
+    let before = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+
+    let result = client.try_process_payment(
+        &payer,
+        &str(&env, "XFER_FAIL"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &None,
+    );
+    assert!(result.is_err(), "payment must fail when transfer fails");
+
+    let lookup = client.try_get_payment_by_id(&payer, &str(&env, "XFER_FAIL"));
+    assert_eq!(lookup, Err(Ok(PaymentError::PaymentNotFound)));
+    let after = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(after.total, before.total);
+}
+
+/// A refund whose token transfer fails must not mark the payment as refunded.
+#[test]
+fn test_refund_transfer_failure_leaves_payment_status_consistent() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "XFER_REF", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "XFER_REF_R1"),
+        &str(&env, "XFER_REF"),
+        &400,
+        &str(&env, "partial"),
+    );
+    client.approve_refund(&merchant, &str(&env, "XFER_REF_R1"));
+
+    // Drain the merchant so the refund transfer must fail.
+    let merchant_balance = TokenClient::new(&env, &token).balance(&merchant);
+    StellarAssetClient::new(&env, &token).burn(&merchant, &merchant_balance);
+
+    let result = client.try_execute_refund(&str(&env, "XFER_REF_R1"));
+    assert!(result.is_err(), "refund must fail when transfer fails");
+
+    // Payment must remain un-refunded and status unchanged.
+    let p = client.get_payment_by_id(&payer, &str(&env, "XFER_REF"));
+    assert_eq!(p.refunded_amount, 0);
+    assert!(matches!(p.status, PaymentStatus::Completed));
+}
+
+// ── USDC clawback refund tests (issue #1576) ─────────────────────────────────
+
+/// A refund to a clawback-frozen address must return an error rather than
+/// silently succeeding or corrupting payment state.
+#[test]
+fn test_refund_to_clawback_frozen_address_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "USDC_CB", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "USDC_CB_R1"),
+        &str(&env, "USDC_CB"),
+        &500,
+        &str(&env, "clawback"),
+    );
+    client.approve_refund(&merchant, &str(&env, "USDC_CB_R1"));
+
+    // Freeze the payer's balance via the SAC clawback mechanism.
+    let asset = StellarAssetClient::new(&env, &token);
+    let payer_balance = TokenClient::new(&env, &token).balance(&payer);
+    asset.clawback(&payer, &payer_balance);
+
+    let result = client.try_execute_refund(&str(&env, "USDC_CB_R1"));
+    assert!(result.is_err(), "refund to clawback-frozen address must fail");
+
+    // Payment state must remain consistent (no partial refund recorded).
+    let p = client.get_payment_by_id(&payer, &str(&env, "USDC_CB"));
+    assert_eq!(p.refunded_amount, 0);
+    assert!(matches!(p.status, PaymentStatus::Completed));
+}

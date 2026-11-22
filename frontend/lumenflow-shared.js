@@ -1,12 +1,9 @@
 /**
-feat/stellar-address-validation
  * LumenFlow Shared Utilities
  * Common validation and helper functions for LumenFlow frontend applications
  */
 
 /**
-}
-
  * Validates a Stellar public key (G-address)
  * Stellar public keys are 56 characters long, start with 'G',
  * and use base32 encoding with a checksum.
@@ -166,6 +163,33 @@ export function formatNumber(value, options = {}) {
 // ── Token metadata ────────────────────────────────────────────────────────────
 
 /**
+ * USDC (Stellar) SAC contract addresses, verified per network (issue #1576).
+ * USDC is the first supported non-native token in LumenFlow.
+ *
+ * - mainnet: Circle-issued USDC Stellar Asset Contract on the public network.
+ * - testnet: Circle-issued USDC Stellar Asset Contract on the test network.
+ *
+ * Both assets use 6 decimal places (1 USDC = 1,000,000 base units).
+ */
+export const USDC_ADDRESSES = {
+  mainnet: 'CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75',
+  testnet: 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
+};
+
+/** Decimal precision for USDC on Stellar (6). */
+export const USDC_DECIMALS = 6;
+
+/**
+ * Returns the USDC SAC address for the given network.
+ * Falls back to the testnet address for unrecognised networks.
+ * @param {string} [network=NETWORK] - 'mainnet' or 'testnet'.
+ * @returns {string}
+ */
+export function getUsdcAddress(network = NETWORK) {
+  return USDC_ADDRESSES[network] || USDC_ADDRESSES.testnet;
+}
+
+/**
  * Registry of known token contract IDs mapped to display metadata.
  * Keys are Stellar contract/asset IDs; the 'native' key covers XLM.
  * Add entries here as new tokens are supported by LumenFlow.
@@ -173,10 +197,10 @@ export function formatNumber(value, options = {}) {
 export const TOKEN_METADATA = {
   // Native XLM (stroop-based, 7 decimal places)
   native: { symbol: 'XLM', decimals: 7, name: 'Stellar Lumens' },
-  // USDC on Stellar testnet (Circle)
-  CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC: { symbol: 'USDC', decimals: 6, name: 'USD Coin' },
-  // USDC on Stellar mainnet (Circle)
-  CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75: { symbol: 'USDC', decimals: 6, name: 'USD Coin' },
+  // USDC on Stellar testnet (Circle) — 6 decimal places
+  [USDC_ADDRESSES.testnet]: { symbol: 'USDC', decimals: USDC_DECIMALS, name: 'USD Coin' },
+  // USDC on Stellar mainnet (Circle) — 6 decimal places
+  [USDC_ADDRESSES.mainnet]: { symbol: 'USDC', decimals: USDC_DECIMALS, name: 'USD Coin' },
   // Generic fallback is handled in getTokenMetadata()
 };
 
@@ -211,6 +235,25 @@ export function formatTokenAmount(amount, tokenId) {
     maximumFractionDigits: decimals,
   });
   return `${formatted} ${symbol}`;
+}
+
+/**
+ * Returns true when the given token ID is USDC (mainnet or testnet SAC).
+ * @param {string} tokenId - Contract/asset ID or 'native'.
+ * @returns {boolean}
+ */
+export function isUsdc(tokenId) {
+  return tokenId === USDC_ADDRESSES.mainnet || tokenId === USDC_ADDRESSES.testnet;
+}
+
+/**
+ * Formats a raw USDC amount (6 decimals) with the 'USDC' symbol.
+ * Convenience wrapper used by the dashboard and UI (issue #1576).
+ * @param {bigint|number|string} amount - Raw integer amount in USDC base units.
+ * @returns {string} e.g. '5.000000 USDC'
+ */
+export function formatUsdcAmount(amount) {
+  return formatTokenAmount(amount, getUsdcAddress());
 }
 
 /**

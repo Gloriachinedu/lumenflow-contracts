@@ -263,6 +263,54 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Set (or clear) the optional maximum payment amount for a merchant (Issue #1592).
+    ///
+    /// When set, `process_payment`, `process_payment_with_signature` and
+    /// `process_payment_with_nonce` reject any payment whose `amount` exceeds
+    /// `limit` with [`PaymentError::ExceedsMerchantLimit`]. Passing `None`
+    /// removes the limit entirely.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator address.
+    /// * `merchant` - Registered merchant whose limit is being configured.
+    /// * `limit` - `Some(max_amount)` with `max_amount >= 0`, or `None` for no limit.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    /// * [`PaymentError::MerchantNotFound`] — no merchant is registered at `merchant`.
+    /// * [`PaymentError::InvalidAmount`] — `limit` is negative.
+    pub fn set_merchant_payment_limit(
+        env: Env,
+        admin: Address,
+        merchant: Address,
+        limit: Option<i128>,
+    ) -> Result<(), PaymentError> {
+        require_admin_rate_limited(&env, &admin)?;
+        if storage::get_merchant(&env, &merchant).is_none() {
+            return Err(PaymentError::MerchantNotFound);
+        }
+        if let Some(max_amount) = limit {
+            if max_amount < 0 {
+                return Err(PaymentError::InvalidAmount);
+            }
+        }
+        storage::set_merchant_payment_limit(&env, &merchant, &limit);
+        Self::append_audit(
+            &env,
+            AdminActionType::SetMerchantPaymentLimit,
+            &admin,
+            String::from_str(&env, "set_merchant_payment_limit"),
+        );
+        env.events().publish(
+            ("lumenflow", "merchant_payment_limit_set"),
+            (merchant, limit),
+        );
+        Ok(())
+    }
+
     /// Set the refund window in seconds (default 30 days). Admin only.
     pub fn set_refund_window(
         env: Env,
@@ -1266,6 +1314,14 @@ impl PaymentProcessingContract {
         payload.append(&Bytes::from_slice(&env, &timestamp.to_be_bytes()));
         verify_signature(&env, &merchant_public_key, &payload, &signature)?;
 
+        // Issue #1592: enforce the optional per-merchant maximum payment amount.
+        // This check happens before any state write or token transfer.
+        if let Some(max_amount) = storage::get_merchant_payment_limit(&env, &merchant_address) {
+            if amount > max_amount {
+                return Err(PaymentError::ExceedsMerchantLimit);
+            }
+        }
+
         // Advance merchant nonce before any external calls (checks-effects-interactions)
         storage::increment_merchant_nonce(&env, &merchant_address);
 
@@ -1278,8 +1334,7 @@ impl PaymentProcessingContract {
         }
         storage::increment_rate_limit_counter(&env, &merchant_address, window_start);
 
-        // Transfer tokens from payer to merchant (minus platform fee)
-        let token_client = token::Client::new(&env, &token_address);
+        // Compute fee split before any state write.
         let fee_bps = storage::get_platform_fee_bps(&env);
         let platform_fee: i128 = if fee_bps > 0 {
             amount * (fee_bps as i128) / 10_000
@@ -1287,17 +1342,13 @@ impl PaymentProcessingContract {
             0
         };
         let merchant_amount = amount - platform_fee;
-        token_client.transfer(&payer, &merchant_address, &merchant_amount);
-        if platform_fee > 0 {
-            if let Some(recipient) = storage::get_fee_recipient(&env) {
-                token_client.transfer(&payer, &recipient, &platform_fee);
-            }
-        }
+
+        // ── Effects: commit all state before the external token transfer ──
         let payment = PaymentOrder {
             order_id: order_id.clone(),
             merchant_address: merchant_address.clone(),
             payer: payer.clone(),
-            token: token_address,
+            token: token_address.clone(),
             amount,
             version: 0,
             status: PaymentStatus::Completed,
@@ -1328,6 +1379,16 @@ impl PaymentProcessingContract {
         stats.total_payments += 1;
         stats.total_volume = stats.total_volume.saturating_add(amount);
         storage::set_global_stats(&env, &stats);
+
+        // ── Interactions: transfer tokens from payer to merchant (minus platform fee) ──
+        // Issue #1507: state finalized before external token transfer (CEI)
+        let token_client = token::Client::new(&env, &token_address);
+        token_client.transfer(&payer, &merchant_address, &merchant_amount);
+        if platform_fee > 0 {
+            if let Some(recipient) = storage::get_fee_recipient(&env) {
+                token_client.transfer(&payer, &recipient, &platform_fee);
+            }
+        }
 
         // Check for suspicious activity (Issue #96)
         let threshold = storage::get_large_payment_threshold(&env);
@@ -1415,11 +1476,18 @@ impl PaymentProcessingContract {
             return Err(PaymentError::MerchantInactive);
         }
 
+        // Issue #1592: enforce the optional per-merchant maximum payment amount.
+        // This check happens before any state write or token transfer.
+        if let Some(max_amount) = storage::get_merchant_payment_limit(&env, &merchant_address) {
+            if amount > max_amount {
+                return Err(PaymentError::ExceedsMerchantLimit);
+            }
+        }
+
         // Advance nonce before any external calls
         storage::increment_nonce(&env, &payer);
 
-        // Transfer tokens from payer to merchant (minus platform fee)
-        let token_client = token::Client::new(&env, &token_address);
+        // Compute fee split before any state write.
         let fee_bps = storage::get_platform_fee_bps(&env);
         let platform_fee: i128 = if fee_bps > 0 {
             amount * (fee_bps as i128) / 10_000
@@ -1427,19 +1495,14 @@ impl PaymentProcessingContract {
             0
         };
         let merchant_amount = amount - platform_fee;
-        token_client.transfer(&payer, &merchant_address, &merchant_amount);
-        if platform_fee > 0 {
-            if let Some(recipient) = storage::get_fee_recipient(&env) {
-                token_client.transfer(&payer, &recipient, &platform_fee);
-            }
-        }
 
+        // ── Effects: commit all state before the external token transfer ──
         let now = env.ledger().timestamp();
         let payment = PaymentOrder {
             order_id: order_id.clone(),
             merchant_address: merchant_address.clone(),
             payer: payer.clone(),
-            token: token_address,
+            token: token_address.clone(),
             amount,
             version: 0,
             status: PaymentStatus::Completed,
@@ -1470,6 +1533,16 @@ impl PaymentProcessingContract {
         stats.total_payments += 1;
         stats.total_volume = stats.total_volume.saturating_add(amount);
         storage::set_global_stats(&env, &stats);
+
+        // ── Interactions: transfer tokens from payer to merchant (minus platform fee) ──
+        // Issue #1507: state finalized before external token transfer (CEI)
+        let token_client = token::Client::new(&env, &token_address);
+        token_client.transfer(&payer, &merchant_address, &merchant_amount);
+        if platform_fee > 0 {
+            if let Some(recipient) = storage::get_fee_recipient(&env) {
+                token_client.transfer(&payer, &recipient, &platform_fee);
+            }
+        }
 
         // Check for suspicious activity
         let threshold = storage::get_large_payment_threshold(&env);
@@ -1658,13 +1731,7 @@ impl PaymentProcessingContract {
             groups = updated_groups;
         }
 
-        // ── Phase 3: Execute one token.transfer per unique (token, merchant) group ──
-        for (tok, merch, grouped_total) in groups.iter() {
-            let token_client = token::Client::new(&env, &tok);
-            token_client.transfer(&payer, &merch, &grouped_total);
-        }
-
-        // ── Phase 4: Store payment records and update stats for all items ──
+        // ── Phase 3: Store payment records and update stats for all items ──
         let now = env.ledger().timestamp();
         let mut global_stats = storage::get_global_stats(&env);
 
@@ -1707,6 +1774,13 @@ impl PaymentProcessingContract {
 
         // Write the accumulated global stats once
         storage::set_global_stats(&env, &global_stats);
+
+        // ── Phase 4: Execute one token.transfer per unique (token, merchant) group ──
+        // Issue #1507: state finalized before external token transfer (CEI)
+        for (tok, merch, grouped_total) in groups.iter() {
+            let token_client = token::Client::new(&env, &tok);
+            token_client.transfer(&payer, &merch, &grouped_total);
+        }
 
         // ── Phase 5: Emit per-item payment_processed events ──
         for item in payments.iter() {
@@ -4100,21 +4174,23 @@ impl PaymentProcessingContract {
             return Err(PaymentError::MerchantInactive);
         }
 
-        // Lock funds: transfer from payer into this contract
-        let token_client = token::Client::new(&env, &token);
-        token_client.transfer(&payer, &env.current_contract_address(), &amount);
-
+        // ── Effects: record the escrow as Locked before moving any funds ──
         let escrow = EscrowRecord {
             order_id: order_id.clone(),
-            payer,
+            payer: payer.clone(),
             merchant,
-            token,
+            token: token.clone(),
             amount,
             unlock_at,
             status: EscrowStatus::Locked,
             created_at: now,
         };
         storage::set_escrow(&env, &escrow);
+
+        // ── Interactions: lock funds by transferring from payer into this contract ──
+        // Issue #1507: state finalized before external token transfer (CEI)
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&payer, &env.current_contract_address(), &amount);
 
         env.events()
             .publish(("lumenflow", "escrow_created"), (order_id, amount));
@@ -4312,15 +4388,12 @@ impl PaymentProcessingContract {
             return Err(PaymentError::MerchantInactive);
         }
 
-        // Lock funds: transfer from payer into this contract.
-        let token_client = token::Client::new(&env, &token);
-        token_client.transfer(&payer, &env.current_contract_address(), &amount);
-
+        // ── Effects: record the hold as Held before moving any funds ──
         let hold = EscrowHold {
             escrow_id: escrow_id.clone(),
             payer: payer.clone(),
             merchant: merchant.clone(),
-            token,
+            token: token.clone(),
             amount,
             condition_hash: condition_hash.clone(),
             arbiter,
@@ -4329,6 +4402,11 @@ impl PaymentProcessingContract {
             created_at: now,
         };
         storage::set_escrow_hold(&env, &hold);
+
+        // ── Interactions: lock funds by transferring from payer into this contract ──
+        // Issue #1507: state finalized before external token transfer (CEI)
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&payer, &env.current_contract_address(), &amount);
 
         env.events().publish(
             ("lumenflow", "escrow_held"),

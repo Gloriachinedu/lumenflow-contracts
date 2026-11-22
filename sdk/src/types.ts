@@ -44,6 +44,20 @@ export interface Merchant {
   verified: boolean;
   registeredAt: bigint;
   totalReceived: bigint;
+  /**
+   * Optional maximum payment amount enforced during `process_payment`.
+   * Maps the Rust `Option<i128>`; `null`/`undefined` means no limit.
+   */
+  maxPaymentAmount?: bigint | null;
+}
+
+/**
+ * Arguments for the `set_merchant_payment_limit` admin entrypoint.
+ * `limit` of `null` clears the limit (no maximum).
+ */
+export interface SetMerchantPaymentLimitArgs {
+  merchant: string;
+  limit: bigint | null;
 }
 
 export enum PaymentStatus {

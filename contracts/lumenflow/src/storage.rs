@@ -159,13 +159,20 @@ pub enum DataKey {
     AdminAuditMaxEntries,
     /// Configurable maximum signers per multisig payment (issue #1269). Short code `MSL`.
     MSL,
+    /// Per-merchant maximum payment amount (issue #1592). `None` = no limit.
+    /// Short code `MPL`.
+    MPL(Address),
 }
 
 /// The schema version this binary was compiled against.
 /// Bump this constant whenever a `#[contracttype]` struct or enum is changed in
 /// a way that is not backwards-compatible (field added without `Option`, variant
 /// reordered, type changed, etc.).
-pub const CURRENT_STORAGE_VERSION: u32 = 1;
+///
+/// v2 (issue #1592): added `DataKey::MPL(Address)` for the per-merchant maximum
+/// payment amount.  This is a purely additive variant, so existing entries are
+/// unaffected and no data migration is required.
+pub const CURRENT_STORAGE_VERSION: u32 = 2;
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
 
@@ -344,6 +351,35 @@ pub fn add_to_merchant_list(env: &Env, address: &Address) {
     let mut list = get_merchant_list(env);
     list.push_back(address.clone());
     env.storage().instance().set(&DataKey::ML, &list);
+}
+
+// ── Merchant payment limit (issue #1592) ──────────────────────────────────────
+
+/// Return the configured maximum payment amount for `merchant`, or `None` if
+/// no limit is set (any amount is allowed).
+pub fn get_merchant_payment_limit(env: &Env, merchant: &Address) -> Option<i128> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::MPL(merchant.clone()))
+}
+
+/// Set (or clear) the maximum payment amount for `merchant`.
+///
+/// Passing `None` removes any existing limit.  Admin only — the caller is
+/// responsible for authorization before invoking this function.
+pub fn set_merchant_payment_limit(env: &Env, merchant: &Address, limit: Option<i128>) {
+    let key = DataKey::MPL(merchant.clone());
+    match limit {
+        Some(amount) => {
+            env.storage().persistent().set(&key, &amount);
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, MERCHANT_TTL_LEDGERS, MERCHANT_TTL_LEDGERS);
+        }
+        None => {
+            env.storage().persistent().remove(&key);
+        }
+    }
 }
 
 // ── Payment ───────────────────────────────────────────────────────────────────

@@ -39,6 +39,7 @@ export enum PaymentErrorCode {
   SubscriptionNotActive = 64,
   SubscriptionMaxCyclesReached = 65,
   SubscriptionIntervalNotElapsed = 66,
+  ExceedsMerchantLimit = 70,
 }
 
 export const ERROR_MESSAGES: Record<PaymentErrorCode, string> = {
@@ -82,6 +83,7 @@ export const ERROR_MESSAGES: Record<PaymentErrorCode, string> = {
   [PaymentErrorCode.SubscriptionNotActive]: "The subscription is not active.",
   [PaymentErrorCode.SubscriptionMaxCyclesReached]: "The subscription has reached its maximum charging cycles.",
   [PaymentErrorCode.SubscriptionIntervalNotElapsed]: "The required interval between charges has not elapsed.",
+  [PaymentErrorCode.ExceedsMerchantLimit]: "The payment amount exceeds the maximum payment amount configured for this merchant.",
 };
 
 export class LumenFlowError extends Error {

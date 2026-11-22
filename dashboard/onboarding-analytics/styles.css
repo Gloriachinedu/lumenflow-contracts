@@ -147,7 +147,7 @@ body {
 
 .funnel-step {
   display: grid;
-  grid-template-columns: 9rem 1fr 5rem 5rem;
+  grid-template-columns: 9rem 1fr 5rem 5rem 5rem;
   align-items: center;
   gap: 0.75rem;
   font-size: 0.875rem;
@@ -167,12 +167,47 @@ body {
   min-width: 2px;
 }
 .funnel-count { text-align: right; font-weight: 600; }
+.funnel-conversion {
+  text-align: right;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-success);
+}
+.funnel-conversion.no-conversion { color: var(--color-text-muted); font-weight: 400; }
 .funnel-dropoff {
   text-align: right;
   font-size: 0.8125rem;
   color: var(--color-danger);
 }
 .funnel-dropoff.no-drop { color: var(--color-text-muted); }
+
+/* ── CSV export button ─────────────────────────────────────────────── */
+.btn-export {
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+}
+.btn-export:hover { background: var(--color-surface); border-color: var(--color-accent); }
+.btn-export:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.btn-export:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Operator auth gate ────────────────────────────────────────────── */
+.auth-gate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 3rem 1.5rem;
+  text-align: center;
+}
+.auth-gate-title { font-size: 1.1rem; font-weight: 600; }
+.auth-gate-msg { font-size: 0.875rem; color: var(--color-text-muted); max-width: 28rem; }
+.auth-gate .btn { margin-top: 0.25rem; }
+
+/* Hidden until operator auth is confirmed */
+[hidden] { display: none !important; }
+=======
 
 /* ── Data table ────────────────────────────────────────────────────── */
 .data-table {
@@ -221,6 +256,7 @@ body {
   .header-inner { flex-direction: column; align-items: flex-start; }
   .header-controls { margin-left: 0; }
   .funnel-step { grid-template-columns: 7rem 1fr 4rem; }
+  .funnel-conversion { display: none; }
   .funnel-dropoff { display: none; }
   .kpi-value { font-size: 1.4rem; }
 }

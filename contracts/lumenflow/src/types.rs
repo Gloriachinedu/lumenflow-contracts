@@ -29,6 +29,9 @@ pub struct Merchant {
     pub total_received: i128,
     /// Number of merchants that registered using this merchant's referral address.
     pub referral_count: u32,
+    /// Optional maximum payment amount this merchant will accept. `None` means
+    /// no limit is enforced (issue #1592).
+    pub max_payment_amount: Option<i128>,
 }
 
 /// Summary entry returned by `get_referral_stats`. Contains the referring
@@ -573,6 +576,7 @@ pub enum AdminActionType {
     SetMultisigExpiryDuration,
     SetRefundWindow,
     SetMinRefundAmount,
+    SetMerchantPaymentLimit,
     DeactivateMerchant,
     ReactivateMerchant,
     VerifyMerchant,

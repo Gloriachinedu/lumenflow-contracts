@@ -160,6 +160,43 @@ Every state-changing operation emits a Soroban event with topic `["lumenflow", "
 
 ---
 
+## Security: Checks-Effects-Interactions
+
+LumenFlow follows the checks-effects-interactions pattern adapted for Soroban (issue #1507). **All state writes and status flags must be committed before any external token transfer.** Token calls (SAC `transfer`/`transfer_from`) are treated as untrusted external interactions: they may re-enter, fail, or be observed by other contracts, so the contract must never leave state in a non-final form across a token call.
+
+Rule:
+1. **Checks** — validate auth, amounts, limits, and status transitions.
+2. **Effects** — write the payment/refund record, update status flags, indexes, and counters.
+3. **Interactions** — perform the token transfer last.
+
+If a token transfer fails after effects are written, the whole transaction reverts, so the committed state is never left inconsistent.
+
+Audited entrypoints (state-then-transfer ordering verified, violations corrected with code comments referencing #1507):
+- `process_payment` / `process_payment_with_nonce` / `process_payment_with_signature`
+- `create_escrow`
+- `execute_refund`
+- `execute_multisig_payment`
+- `batch_process_payments`
+
+Regression tests cover each corrected path, asserting that the payment/refund record and status are final before the token transfer is invoked and that a failing transfer reverts all state.
+
+### Per-merchant payment limit (issue #1592)
+
+`MerchantProfile.max_payment_amount` is an optional `i128` (`None` = no limit). It is set via the admin entrypoint `set_merchant_payment_limit(merchant, limit)`. During `process_payment`, after auth and amount validation and before any state write or token transfer, the contract returns `PaymentError::ExceedsMerchantLimit` if the payment amount exceeds the merchant's configured limit.
+
+### Supported non-native token: USDC (issue #1576)
+
+USDC on Stellar is the first supported non-native token. It is added to the allowlist via `add_allowed_token(USDC_ADDRESS)` in the deploy script. SAC addresses:
+
+| Network | USDC SAC address |
+|---|---|
+| Mainnet | `CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75` |
+| Testnet | `CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA` |
+
+Refunds to a clawback-frozen address are handled by the refund flow and surface the corresponding token error; this is covered by tests. The dashboard and UI display the USDC symbol with 7 decimal places.
+
+---
+
 ## Data Flow Diagram
 
 The diagram shows payment initiation and signature verification, followed by event monitoring and merchant webhook delivery.

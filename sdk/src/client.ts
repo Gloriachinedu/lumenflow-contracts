@@ -441,6 +441,43 @@ export class LumenFlowClient {
     ]);
   }
 
+  /**
+   * Sets the optional maximum payment amount allowed for a merchant.
+   *
+   * Once configured, the contract enforces this limit during `process_payment`
+   * (and related payment flows): any payment whose amount exceeds the limit is
+   * rejected with {@link PaymentErrorCode.ExceedsMerchantLimit}.
+   *
+   * Pass `null` to remove the limit and allow payments of any amount.
+   *
+   * @param admin - Stellar address of the administrator (must sign).
+   * @param merchantAddress - Stellar address of the merchant whose limit is being set.
+   * @param limit - Maximum payment amount in the token's smallest unit (e.g. stroops
+   *   for XLM), or `null` to clear the limit and allow any amount.
+   * @returns A Promise that resolves when the limit has been updated.
+   * @throws {@link LumenFlowError} if the caller is not the admin.
+   * @throws {@link LumenFlowError} with `PaymentErrorCode.MerchantNotFound` if the merchant is not registered.
+   * @throws {@link LumenFlowError} with `PaymentErrorCode.ExceedsMerchantLimit` if the contract rejects the value.
+   *
+   * @example
+   * // Cap payments to this merchant at 100 XLM
+   * await client.setMerchantPaymentLimit("GADMIN...", "GMERCHANT...", 1_000_000_000n);
+   *
+   * // Remove the limit entirely
+   * await client.setMerchantPaymentLimit("GADMIN...", "GMERCHANT...", null);
+   */
+  async setMerchantPaymentLimit(
+    admin: string,
+    merchantAddress: string,
+    limit: bigint | null
+  ): Promise<void> {
+    await this.invoke("set_merchant_payment_limit", [
+      new Address(admin),
+      new Address(merchantAddress),
+      limit,
+    ]);
+  }
+
   // ── Merchant management ───────────────────────────────────────────────────
 
   /**

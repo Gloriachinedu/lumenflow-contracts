@@ -271,12 +271,40 @@ function showError(msg) {
 }
 
 // ── Formatting ────────────────────────────────────────────────────────────────
+// Token metadata (symbol + decimals) is resolved via the shared helpers in
+// frontend/lumenflow-shared.js so USDC renders as "USDC" with 6 decimals and
+// native XLM keeps its 7 decimals. See issue #1576.
+const sharedTokenHelpers = (typeof window !== 'undefined' && window.LumenFlowShared) || {};
+
+/**
+ * Resolve token metadata for a token identifier.
+ * Accepts a token address (SAC / contract id) or a symbol like 'XLM' / 'USDC'.
+ * Falls back to the native asset when the shared helper is unavailable.
+ *
+ * @param {string} token
+ * @returns {{symbol:string, decimals:number}}
+ */
+function resolveTokenMetadata(token) {
+  if (typeof sharedTokenHelpers.getTokenMetadata === 'function') {
+    try {
+      const meta = sharedTokenHelpers.getTokenMetadata(token);
+      if (meta && meta.symbol) return meta;
+    } catch { /* fall through to native defaults */ }
+  }
+  // Fallback: native XLM metadata
+  return { symbol: 'XLM', decimals: 7 };
+}
+
 function formatAmount(amount, token) {
-  // Use 7 decimals for XLM / native; 6 for USDC; 7 as default
-  const isUsdc = typeof token === 'string' && token.length > 10;
-  const decimals = isUsdc ? 6 : 7;
-  const symbol   = isUsdc ? 'USDC' : 'XLM';
-  const value    = Number(amount) / Math.pow(10, decimals);
+  const { symbol, decimals } = resolveTokenMetadata(token || 'native');
+
+  if (typeof sharedTokenHelpers.formatTokenAmount === 'function') {
+    try {
+      return sharedTokenHelpers.formatTokenAmount(amount, token || 'native');
+    } catch { /* fall through to local formatting */ }
+  }
+
+  const value = Number(amount) / Math.pow(10, decimals);
   return value.toLocaleString(undefined, {
     minimumFractionDigits: 2,
     maximumFractionDigits: decimals,
