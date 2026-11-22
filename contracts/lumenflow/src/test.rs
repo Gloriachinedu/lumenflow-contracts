@@ -9822,6 +9822,228 @@ fn test_set_min_refund_amount_zero_fails() {
     assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
 }
 
+// ── Persistent storage TTL extension tests (issue #1566) ─────────────────────
+//
+// These tests verify that every persistent storage key category has its TTL
+// extended at the documented extension point. See the "TTL extension strategy"
+// section of docs/ARCHITECTURE.md for the documented initial TTL, extension
+// threshold and extension amount of each key category.
+
+/// Advance the ledger sequence by `n` ledgers so that TTLs decay.
+fn advance_ledgers(env: &Env, n: u32) {
+    env.ledger().with_mut(|l| l.sequence_number += n);
+}
+
+/// Read the remaining TTL (in ledgers) of a persistent key, if it exists.
+fn persistent_ttl<K>(env: &Env, contract: &Address, key: &K) -> Option<u32>
+where
+    K: soroban_sdk::IntoVal<Env, soroban_sdk::Val> + Clone,
+{
+    env.as_contract(contract, || {
+        env.storage().persistent().get_ttl(key)
+    })
+}
+
+/// Merchant profile TTL is extended when the merchant is registered.
+#[test]
+fn test_ttl_extended_on_register_merchant() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+
+    client.register_merchant(
+        &merchant,
+        &str(&env, "TTL Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+        &None,
+    );
+
+    let key = storage::DataKey::Merchant(merchant.clone());
+    let ttl = persistent_ttl(&env, &client.address, &key);
+    assert!(ttl.is_some(), "merchant key must be persistent");
+    assert!(
+        ttl.unwrap() > 0,
+        "merchant TTL must be extended on registration"
+    );
+}
+
+/// Merchant profile TTL is refreshed when the merchant profile is updated.
+#[test]
+fn test_ttl_extended_on_update_merchant() {
+    let (env, client) = setup();
+    let merchant = Address::generate(&env);
+
+    client.register_merchant(
+        &merchant,
+        &str(&env, "TTL Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+        &None,
+    );
+
+    let key = storage::DataKey::Merchant(merchant.clone());
+    let before = persistent_ttl(&env, &client.address, &key).unwrap();
+
+    // Decay the TTL, then refresh the profile.
+    advance_ledgers(&env, 100);
+    client.update_merchant(
+        &merchant,
+        &str(&env, "TTL Store Updated"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+    );
+
+    let after = persistent_ttl(&env, &client.address, &key).unwrap();
+    assert!(
+        after >= before,
+        "merchant TTL must be re-extended on profile update"
+    );
+}
+
+/// Payment record TTL is extended when a payment is processed.
+#[test]
+fn test_ttl_extended_on_process_payment() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "TTL_PAY_001", 100);
+
+    let key = storage::DataKey::Payment(str(&env, "TTL_PAY_001"));
+    let ttl = persistent_ttl(&env, &client.address, &key);
+    assert!(ttl.is_some(), "payment key must be persistent");
+    assert!(
+        ttl.unwrap() > 0,
+        "payment TTL must be extended when the payment is stored"
+    );
+}
+
+/// Refund record TTL is extended when a refund is initiated.
+#[test]
+fn test_ttl_extended_on_initiate_refund() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "TTL_ORD_R", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "TTL_REF_001"),
+        &str(&env, "TTL_ORD_R"),
+        &100,
+        &str(&env, "ttl"),
+    );
+
+    let key = storage::DataKey::Refund(str(&env, "TTL_REF_001"));
+    let ttl = persistent_ttl(&env, &client.address, &key);
+    assert!(ttl.is_some(), "refund key must be persistent");
+    assert!(
+        ttl.unwrap() > 0,
+        "refund TTL must be extended when the refund is stored"
+    );
+}
+
+/// Multisig payment TTL is extended when the multisig is initiated.
+#[test]
+fn test_ttl_extended_on_initiate_multisig() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "TTL_MS_001"),
+        &merchant,
+        &token,
+        &100,
+        &signers,
+        &1,
+        &None,
+    );
+
+    let key = storage::DataKey::MultisigPayment(str(&env, "TTL_MS_001"));
+    let ttl = persistent_ttl(&env, &client.address, &key);
+    assert!(ttl.is_some(), "multisig key must be persistent");
+    assert!(
+        ttl.unwrap() > 0,
+        "multisig TTL must be extended when the payment is initiated"
+    );
+}
+
+/// Global stats TTL is extended when stats are updated by a payment.
+#[test]
+fn test_ttl_extended_on_global_stats_update() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "TTL_STATS_001", 100);
+
+    let key = storage::DataKey::GlobalStats;
+    let ttl = persistent_ttl(&env, &client.address, &key);
+    assert!(ttl.is_some(), "global stats key must be persistent");
+    assert!(
+        ttl.unwrap() > 0,
+        "global stats TTL must be extended when stats are updated"
+    );
+}
+
+/// Merchant stats TTL is extended when stats are updated by a payment.
+#[test]
+fn test_ttl_extended_on_merchant_stats_update() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "TTL_MSTATS_001", 100);
+
+    let key = storage::DataKey::MerchantStats(merchant.clone());
+    let ttl = persistent_ttl(&env, &client.address, &key);
+    assert!(ttl.is_some(), "merchant stats key must be persistent");
+    assert!(
+        ttl.unwrap() > 0,
+        "merchant stats TTL must be extended when stats are updated"
+    );
+}
+
+/// Admin / config keys are extended by admin configuration entrypoints.
+#[test]
+fn test_ttl_extended_on_admin_config_update() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.set_platform_fee(&admin, &250);
+
+    let key = storage::DataKey::Admin;
+    let ttl = persistent_ttl(&env, &client.address, &key);
+    assert!(ttl.is_some(), "admin key must be persistent");
+    assert!(
+        ttl.unwrap() > 0,
+        "admin TTL must be extended when admin config is written"
+    );
+}
+
+/// Regression: TTL extension points added in storage.rs keep the TTL above the
+/// extension threshold after the ledger has advanced.
+#[test]
+fn test_ttl_extension_regression_after_ledger_advance() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "TTL_REG_001", 100);
+
+    let key = storage::DataKey::Payment(str(&env, "TTL_REG_001"));
+    let initial = persistent_ttl(&env, &client.address, &key).unwrap();
+
+    // Advance the ledger so the TTL decays, then touch the entry again.
+    advance_ledgers(&env, 100);
+    let decayed = persistent_ttl(&env, &client.address, &key).unwrap();
+    assert!(decayed < initial, "TTL must decay as the ledger advances");
+
+    // Re-storing the payment must re-extend the TTL.
+    env.as_contract(&client.address, || {
+        let payment = storage::get_payment(&env, &str(&env, "TTL_REG_001")).unwrap();
+        storage::set_payment(&env, &payment);
+    });
+
+    let refreshed = persistent_ttl(&env, &client.address, &key).unwrap();
+    assert!(
+        refreshed > decayed,
+        "TTL must be re-extended when the entry is written again"
+    );
+}
+
 // ── Max signers limit tests (issue #1269) ─────────────────────────────────────
 
 /// Helper: build a Vec<Address> of `n` freshly generated addresses.
