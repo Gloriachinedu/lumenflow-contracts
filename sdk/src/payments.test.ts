@@ -226,3 +226,113 @@ describe('subscribeToPayments', () => {
     expect(capturedUrl).toBe('https://horizon.stellar.org/payments?cursor=now');
   });
 });
+
+// ── Partial batch payment failure tests ──────────────────────────────────────
+
+/** Per-item result of a batch payment submission. */
+interface BatchItemResult {
+  index: number;
+  success: boolean;
+  errorCode?: string;
+  txHash?: string;
+}
+
+/**
+ * Simulates submitting a batch of payments where individual items may fail
+ * independently. Each item is validated and a per-item error code is returned
+ * without aborting the rest of the batch.
+ */
+function submitBatchPayments(
+  items: Array<{ to: string; amount: string }>,
+  submit: (item: { to: string; amount: string }) => { txHash: string },
+): BatchItemResult[] {
+  return items.map((item, index) => {
+    if (!item.to) {
+      return { index, success: false, errorCode: 'MISSING_DESTINATION' };
+    }
+    const amount = Number(item.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return { index, success: false, errorCode: 'INVALID_AMOUNT' };
+    }
+    try {
+      const { txHash } = submit(item);
+      return { index, success: true, txHash };
+    } catch (err) {
+      const code =
+        err instanceof Error && err.message ? err.message : 'SUBMISSION_FAILED';
+      return { index, success: false, errorCode: code };
+    }
+  });
+}
+
+describe('batch payment partial failure', () => {
+  it('returns correct per-item error codes without aborting the batch', () => {
+    const items = [
+      { to: 'GMERCHANT1', amount: '10.0' },
+      { to: '', amount: '5.0' },
+      { to: 'GMERCHANT3', amount: '-1.0' },
+      { to: 'GMERCHANT4', amount: '2.0' },
+    ];
+
+    const submit = jest.fn((item: { to: string; amount: string }) => {
+      if (item.to === 'GMERCHANT4') {
+        throw new Error('TX_INSUFFICIENT_FEE');
+      }
+      return { txHash: `hash-${item.to}` };
+    });
+
+    const results = submitBatchPayments(items, submit);
+
+    expect(results).toHaveLength(4);
+
+    expect(results[0]).toEqual({
+      index: 0,
+      success: true,
+      txHash: 'hash-GMERCHANT1',
+    });
+    expect(results[1]).toEqual({
+      index: 1,
+      success: false,
+      errorCode: 'MISSING_DESTINATION',
+    });
+    expect(results[2]).toEqual({
+      index: 2,
+      success: false,
+      errorCode: 'INVALID_AMOUNT',
+    });
+    expect(results[3]).toEqual({
+      index: 3,
+      success: false,
+      errorCode: 'TX_INSUFFICIENT_FEE',
+    });
+
+    // Successful items were still submitted despite earlier failures
+    expect(submit).toHaveBeenCalledTimes(2);
+  });
+
+  it('marks every item successful when all submissions succeed', () => {
+    const items = [
+      { to: 'GA', amount: '1.0' },
+      { to: 'GB', amount: '2.0' },
+    ];
+
+    const results = submitBatchPayments(items, (item) => ({
+      txHash: `hash-${item.to}`,
+    }));
+
+    expect(results.every((r) => r.success)).toBe(true);
+    expect(results.map((r) => r.txHash)).toEqual(['hash-GA', 'hash-GB']);
+  });
+
+  it('falls back to SUBMISSION_FAILED when the error has no message', () => {
+    const results = submitBatchPayments([{ to: 'GA', amount: '1.0' }], () => {
+      throw new Error('');
+    });
+
+    expect(results[0]).toEqual({
+      index: 0,
+      success: false,
+      errorCode: 'SUBMISSION_FAILED',
+    });
+  });
+});

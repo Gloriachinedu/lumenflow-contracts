@@ -1,5 +1,12 @@
 # cargo-deny configuration
 # Docs: https://embarkstudios.github.io/cargo-deny/
+#
+# NOTE: cargo-deny does not lint GitHub Actions workflows. SHA pinning of
+# third-party actions (see issue #1553) is enforced separately by the CI
+# script `scripts/check-action-pinning.sh`, which fails the build if any
+# `.github/workflows/*.yml` file references an action by a mutable tag
+# (e.g. `actions/checkout@v4`) instead of a full 40-character commit SHA.
+# See CONTRIBUTING.md for the policy.
 
 [graph]
 # Run checks against all targets/features

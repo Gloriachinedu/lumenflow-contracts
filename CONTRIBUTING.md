@@ -131,10 +131,31 @@ All `uses:` entries in workflow files **must** reference a full commit SHA, not 
 
 This prevents supply-chain attacks where a tag is silently moved to malicious code.
 
+#### CI enforcement
+
+Every pull request runs a dedicated CI step that scans all files under
+`.github/workflows/` and fails if any `uses:` entry references a mutable tag,
+branch, or `@latest`. **PRs that introduce or leave a mutable action reference
+will fail CI and cannot be merged.** The check is implemented by the custom
+linter at `scripts/check_action_pins.sh`, which is also runnable locally:
+
+```bash
+./scripts/check_action_pins.sh
+```
+
+The linter exits non-zero and prints the offending file, line number, and
+reference for each violation. Run it before pushing to catch problems early.
+
+#### Updating a pinned action
+
 To update a pinned action:
 1. Find the new commit SHA for the desired release on the action's GitHub releases page.
-2. Replace the SHA in the workflow file and update the version comment.
-3. Dependabot is configured to open PRs for these updates automatically (weekly).
+2. Replace the SHA in the workflow file and update the version comment (e.g. `# v4.1.7`).
+3. Run `./scripts/check_action_pins.sh` to confirm the pin is valid.
+4. Dependabot is configured to open PRs for these updates automatically (weekly).
+
+> **Note:** Dependabot PRs also go through the SHA-pinning check, so a
+> Dependabot bump that reintroduces a tag reference will be blocked until fixed.
 
 ### Container Image Scanning
 

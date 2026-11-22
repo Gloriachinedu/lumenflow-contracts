@@ -16,6 +16,12 @@ export interface EventPollerOptions {
   eventTypes?: string[];
   fromLedger?: number;
   strict?: boolean;
+  /** Optional fetch implementation, primarily for chaos/testing injection. */
+  fetchImpl?: typeof fetch;
+  /** Optional callback invoked when a poll cycle fails (e.g. during an RPC outage). */
+  onError?: (error: unknown) => void;
+  /** Optional callback invoked when polling recovers after one or more failures. */
+  onRecover?: (events: ContractEvent[]) => void;
 }
 
 function validateEvent(event: unknown): ContractEvent {
@@ -75,9 +81,10 @@ export async function fetchContractEvents(options: EventPollerOptions): Promise<
   if (!options.rpcUrl) throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'rpcUrl is required');
   if (!options.contractId) throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'contractId is required');
 
+  const doFetch = options.fetchImpl ?? fetch;
   let response: Response;
   try {
-    response = await fetch(options.rpcUrl, {
+    response = await doFetch(options.rpcUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(buildRpcPayload(options)),
@@ -115,11 +122,36 @@ export function pollContractEvents(
   intervalMs: number,
   callback: (events: ContractEvent[]) => void,
 ): () => void {
-  const timer = setInterval(() => {
-    fetchContractEvents(options)
-      .then(callback)
-      .catch(() => {});
-  }, intervalMs);
+  let stopped = false;
+  let inFlight = false;
+  let failing = false;
 
-  return () => clearInterval(timer);
+  const tick = () => {
+    if (stopped || inFlight) return;
+    inFlight = true;
+    fetchContractEvents(options)
+      .then((events) => {
+        if (stopped) return;
+        if (failing) {
+          failing = false;
+          options.onRecover?.(events);
+        }
+        callback(events);
+      })
+      .catch((error) => {
+        if (stopped) return;
+        failing = true;
+        options.onError?.(error);
+      })
+      .finally(() => {
+        inFlight = false;
+      });
+  };
+
+  const timer = setInterval(tick, intervalMs);
+
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
 }

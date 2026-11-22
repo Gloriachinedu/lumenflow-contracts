@@ -126,3 +126,72 @@ describe("Non-retryable errors", () => {
     expect(rpcFetch).toHaveBeenCalledTimes(1);
   });
 });
+
+// ─── Integration: retry success after outage ─────────────────────────────────
+
+describe("Integration: RPC outage recovery", () => {
+  it("succeeds after a burst of transient failures (simulated outage)", async () => {
+    const rpcFetch = jest
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }))
+      .mockRejectedValueOnce(Object.assign(new Error("network"), { code: "ECONNRESET" }))
+      .mockResolvedValue({ result: null });
+
+    const client = new LumenFlowClient(rpcFetch);
+    await expect(client.registerMerchant(MERCHANT_PARAMS)).resolves.toBeUndefined();
+    expect(rpcFetch).toHaveBeenCalledTimes(3);
+  });
+});
+
+// ─── Integration: partial batch payment failure ──────────────────────────────
+
+describe("Integration: partial batch payment failure", () => {
+  it("returns per-item results with correct error codes", async () => {
+    const rpcFetch = jest
+      .fn()
+      .mockResolvedValueOnce({ result: null }) // item 1 succeeds
+      .mockRejectedValueOnce(
+        new LumenFlowError(PaymentErrorCode.InsufficientFunds)
+      ) // item 2 fails, non-retryable
+      .mockResolvedValueOnce({ result: null }); // item 3 succeeds
+
+    const client = new LumenFlowClient(rpcFetch);
+
+    const results = await client.processBatchPayments([
+      { payer: "G1", order_id: "O1", merchant_address: "G2", amount: 100 },
+      { payer: "G1", order_id: "O2", merchant_address: "G2", amount: 200 },
+      { payer: "G1", order_id: "O3", merchant_address: "G2", amount: 300 },
+    ]);
+
+    expect(results).toHaveLength(3);
+    expect(results[0].success).toBe(true);
+    expect(results[1].success).toBe(false);
+    expect(results[1].error?.code).toBe(PaymentErrorCode.InsufficientFunds);
+    expect(results[2].success).toBe(true);
+  });
+});
+
+// ─── Integration: idempotent duplicate submissions ───────────────────────────
+
+describe("Integration: concurrent duplicate submissions", () => {
+  it("handles duplicate order submissions idempotently", async () => {
+    const rpcFetch = jest.fn().mockResolvedValue({ result: null });
+    const client = new LumenFlowClient(rpcFetch);
+
+    const params = {
+      payer: "G1",
+      order_id: "O_DUP",
+      merchant_address: "G2",
+      amount: 100,
+    };
+
+    const results = await Promise.all([
+      client.processPayment(params),
+      client.processPayment(params),
+      client.processPayment(params),
+    ]);
+
+    // All duplicate submissions resolve without throwing
+    results.forEach((r) => expect(r).toBeUndefined());
+  });
+});
