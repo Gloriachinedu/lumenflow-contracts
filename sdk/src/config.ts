@@ -40,3 +40,14 @@ export function resolveNetworkConfig(config: ClientConfig): {
 
   return { rpcUrl, networkPassphrase };
 }
+
+/**
+ * Resolve the effective strict-mode flag from a ClientConfig.
+ *
+ * When `strict` is `true`, the client throws on SDK/contract version
+ * incompatibility during initialization. When `strict` is `false` or
+ * omitted (the default), an incompatible version only logs a warning.
+ */
+export function resolveStrictMode(config: ClientConfig): boolean {
+  return config.strict === true;
+}

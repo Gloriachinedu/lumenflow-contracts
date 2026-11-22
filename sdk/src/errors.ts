@@ -182,6 +182,35 @@ export class PaginationLimitExceededError extends ContractError { constructor(de
 export class BatchSizeExceededError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.BatchSizeExceeded, details); } }
 export class InvalidTagsError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.InvalidTags, details); } }
 
+/**
+ * Thrown when the deployed contract version is incompatible with the SDK
+ * version and the client was initialized with `strict: true`.
+ *
+ * Not tied to a contract error code, so it extends {@link LumenFlowError}
+ * directly and carries the compared versions in `details`.
+ */
+export class VersionMismatchError extends LumenFlowError {
+  public readonly sdkVersion: string;
+  public readonly contractVersion: string;
+
+  constructor(
+    sdkVersion: string,
+    contractVersion: string,
+    details?: { sdkVersion?: string; contractVersion?: string; reason?: string },
+  ) {
+    super(
+      PaymentErrorCode.InvalidInput,
+      details ?? { sdkVersion, contractVersion },
+    );
+    this.name = "VersionMismatchError";
+    this.sdkVersion = sdkVersion;
+    this.contractVersion = contractVersion;
+    this.message =
+      `SDK version ${sdkVersion} is incompatible with deployed contract version ${contractVersion}. ` +
+      `The SDK and contract minor versions must match.`;
+  }
+}
+
 export const ERROR_TYPES: Record<PaymentErrorCode, new (details?: unknown) => LumenFlowError> = {
   [PaymentErrorCode.Unauthorized]: UnauthorizedError, [PaymentErrorCode.AdminAlreadySet]: AdminAlreadySetError, [PaymentErrorCode.InvalidAdminAddress]: InvalidAdminAddressError,
   [PaymentErrorCode.MerchantNotFound]: MerchantNotFoundError, [PaymentErrorCode.MerchantAlreadyRegistered]: MerchantAlreadyRegisteredError, [PaymentErrorCode.MerchantInactive]: MerchantInactiveError,

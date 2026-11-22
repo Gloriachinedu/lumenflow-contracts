@@ -170,6 +170,110 @@ export type Signer = (tx: Transaction) => Promise<Transaction> | Transaction;
  */
 export const SDK_CONTRACT_MAJOR_VERSION = 0;
 
+/**
+ * The minor version of the contract API this SDK is built against.
+ * Version compatibility is defined as matching minor versions (semver).
+ */
+export const SDK_CONTRACT_MINOR_VERSION = 2;
+
+/**
+ * Parses a semantic version string (e.g. `"0.2.0"`) into its numeric parts.
+ *
+ * @param version - The version string to parse.
+ * @returns The parsed `{ major, minor, patch }` numbers, or `null` when the
+ *   string is not a valid semantic version.
+ */
+export function parseSemver(
+  version: string
+): { major: number; minor: number; patch: number } | null {
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version.trim());
+  if (!match) {
+    return null;
+  }
+  return {
+    major: parseInt(match[1], 10),
+    minor: parseInt(match[2], 10),
+    patch: parseInt(match[3], 10),
+  };
+}
+
+/**
+ * Result of a contract/SDK version compatibility check.
+ */
+export interface VersionCheckResult {
+  /** Whether the deployed contract version is compatible with this SDK. */
+  compatible: boolean;
+  /** The raw version string reported by the contract. */
+  contractVersion: string;
+  /** The SDK version string. */
+  sdkVersion: string;
+  /** Human-readable description of the incompatibility, when applicable. */
+  message?: string;
+}
+
+/**
+ * Compares the deployed contract version against the SDK version.
+ *
+ * Compatibility requires the major **and** minor versions to match.
+ *
+ * @param contractVersion - The version string reported by the contract.
+ * @param sdkVersion - The SDK version string (defaults to {@link VERSION}).
+ * @returns A {@link VersionCheckResult} describing the outcome.
+ */
+export function checkVersionCompatibility(
+  contractVersion: string,
+  sdkVersion: string = VERSION
+): VersionCheckResult {
+  const contract = parseSemver(contractVersion);
+  const sdk = parseSemver(sdkVersion);
+
+  if (!contract) {
+    return {
+      compatible: false,
+      contractVersion,
+      sdkVersion,
+      message:
+        `[LumenFlowSDK] Contract returned an unparseable version string: ` +
+        `"${contractVersion}".`,
+    };
+  }
+
+  if (!sdk) {
+    return {
+      compatible: false,
+      contractVersion,
+      sdkVersion,
+      message: `[LumenFlowSDK] SDK version string is unparseable: "${sdkVersion}".`,
+    };
+  }
+
+  if (contract.major !== sdk.major) {
+    return {
+      compatible: false,
+      contractVersion,
+      sdkVersion,
+      message:
+        `[LumenFlowSDK] Contract version mismatch: SDK expects major version ` +
+        `${sdk.major} but contract reports "${contractVersion}" ` +
+        `(major ${contract.major}). Silent serialisation failures may occur.`,
+    };
+  }
+
+  if (contract.minor !== sdk.minor) {
+    return {
+      compatible: false,
+      contractVersion,
+      sdkVersion,
+      message:
+        `[LumenFlowSDK] Contract version mismatch: SDK expects minor version ` +
+        `${sdk.major}.${sdk.minor} but contract reports "${contractVersion}" ` +
+        `(minor ${contract.major}.${contract.minor}). Silent serialisation failures may occur.`,
+    };
+  }
+
+  return { compatible: true, contractVersion, sdkVersion };
+}
+
 export interface ClientConfig {
   /** The Soroban contract ID (e.g. `"CAAAA..."`). */
   contractId: string;
@@ -199,11 +303,17 @@ export interface ClientConfig {
    */
   skipVersionCheck?: boolean;
   /**
-   * Throw an error instead of logging a warning when the contract major version
-   * does not match the SDK's expected major version.
+   * Throw an error instead of logging a warning when the contract version
+   * does not match the SDK's expected version.
    * Defaults to `false`.
    */
   strictVersionCheck?: boolean;
+  /**
+   * Alias for {@link strictVersionCheck}. When `true`, an incompatible
+   * contract version throws instead of logging a warning.
+   * Defaults to `false`.
+   */
+  strict?: boolean;
 }
 
 /**
@@ -258,21 +368,30 @@ export class LumenFlowClient {
     this.signer = config.signer;
     this.walletAddress = config.walletAddress;
     this.skipVersionCheck = config.skipVersionCheck ?? false;
-    this.strictVersionCheck = config.strictVersionCheck ?? false;
+    this.strictVersionCheck =
+      config.strictVersionCheck ?? config.strict ?? false;
   }
 
   /**
    * Check that the deployed contract version is compatible with this SDK.
    *
-   * Compatibility is defined as having the same major version (semver).
-   * Call this once after construction — it is invoked automatically by
-   * {@link init}.
+   * Compatibility is defined as having the same major **and** minor version
+   * (semver). Call this once after construction — it is invoked automatically
+   * by {@link init}.
    *
-   * @throws {Error} when `strictVersionCheck` is `true` and the major versions differ.
+   * @returns A Promise resolving to the {@link VersionCheckResult}.
+   * @throws {Error} when `strictVersionCheck` (or `strict`) is `true` and the
+   *   versions are incompatible.
    */
-  async checkContractVersion(): Promise<void> {
+  async checkContractVersion(): Promise<VersionCheckResult> {
+    const skipped: VersionCheckResult = {
+      compatible: true,
+      contractVersion: "unknown",
+      sdkVersion: VERSION,
+    };
+
     if (this.skipVersionCheck) {
-      return;
+      return skipped;
     }
 
     let rawVersion: string;
@@ -285,30 +404,21 @@ export class LumenFlowClient {
         "[LumenFlowSDK] Unable to fetch contract version for compatibility check:",
         err
       );
-      return;
+      return skipped;
     }
 
-    const contractMajor = parseInt(rawVersion.split(".")[0] ?? "0", 10);
-    if (isNaN(contractMajor)) {
-      console.warn(
-        `[LumenFlowSDK] Contract returned an unparseable version string: "${rawVersion}". ` +
-          "Skipping version check."
-      );
-      return;
-    }
+    const result = checkVersionCompatibility(rawVersion, VERSION);
 
-    if (contractMajor !== SDK_CONTRACT_MAJOR_VERSION) {
-      const message =
-        `[LumenFlowSDK] Contract version mismatch: SDK expects major version ` +
-        `${SDK_CONTRACT_MAJOR_VERSION} but contract reports "${rawVersion}" ` +
-        `(major ${contractMajor}). Silent serialisation failures may occur.`;
-
+    if (!result.compatible) {
+      const message = result.message ?? "[LumenFlowSDK] Version mismatch.";
       if (this.strictVersionCheck) {
         throw new Error(message);
       } else {
         console.warn(message);
       }
     }
+
+    return result;
   }
 
   /**
