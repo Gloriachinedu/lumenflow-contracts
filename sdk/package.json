@@ -26,6 +26,7 @@
     "build:esm": "tsup --format esm",
     "test": "jest",
     "test:cjs": "CJS_BUILD=1 jest",
+    "test:integration": "jest --config jest.integration.config.js",
     "prepublishOnly": "npm run build"
   },
   "keywords": ["stellar", "soroban", "lumenflow", "payments", "sdk"],

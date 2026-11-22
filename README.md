@@ -1123,6 +1123,27 @@ Merchants can receive real-time payment event notifications in their backend sys
 
 ---
 
+## Dependency Updates
+
+Dependencies are kept current automatically via [Dependabot](https://docs.github.com/en/code-security/dependabot), configured in [`.github/dependabot.yml`](.github/dependabot.yml).
+
+### Covered ecosystems
+
+| Ecosystem | Directory | Schedule |
+|-----------|-----------|----------|
+| `cargo` (Rust workspace, contracts, CLI) | `/` | Monthly |
+| `npm` (SDK) | `/sdk` | Weekly |
+| `npm` (frontend) | `/frontend` | Weekly |
+| `github-actions` (workflows) | `/` | Weekly |
+
+### Policy
+
+- **Schedule:** `npm` and `github-actions` dependencies are checked **weekly**; `cargo` dependencies are checked **monthly** to limit churn in the contract workspace.
+- **Target branch:** every Dependabot PR targets `main`.
+- **Labels:** all Dependabot PRs are automatically labelled `dependencies` so they can be filtered and triaged easily.
+- **Security updates:** Dependabot alerts for vulnerable dependencies create pull requests **immediately**, independent of the regular schedule. These should be reviewed and merged with priority.
+- **Review:** routine version bumps are merged once CI passes; major version bumps and security fixes require maintainer review.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). All contributions are welcome — bug fixes, features, documentation, and tests.

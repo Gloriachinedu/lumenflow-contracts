@@ -1,13 +1,25 @@
+# Dependabot configuration
+#
+# Dependency update policy (see README "Dependency Updates"):
+#   - cargo:          monthly version updates
+#   - npm:            weekly version updates
+#   - github-actions: weekly version updates
+#   - Security updates (Dependabot alerts) are created immediately and are
+#     not subject to the schedules below.
+#
+# All PRs target `main` and are auto-labelled `dependencies`.
 version: 2
 updates:
-  # ── Rust / Cargo ─────────────────────────────────────────────────────────
+  # ── Rust / Cargo (monthly) ───────────────────────────────────────────────
 
   # Cargo — workspace root (Cargo.toml + Cargo.lock)
   - package-ecosystem: "cargo"
     directory: "/"
+    target-branch: "main"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
+    labels:
+      - "dependencies"
     reviewers:
       - "maintainer-team"
     open-pull-requests-limit: 10
@@ -15,32 +27,40 @@ updates:
   # Cargo — main lumenflow contract
   - package-ecosystem: "cargo"
     directory: "/contracts/lumenflow"
+    target-branch: "main"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
+    labels:
+      - "dependencies"
     reviewers:
       - "maintainer-team"
     open-pull-requests-limit: 10
 
-  # ── GitHub Actions ────────────────────────────────────────────────────────
+  # ── GitHub Actions (weekly) ──────────────────────────────────────────────
 
   - package-ecosystem: "github-actions"
     directory: "/"
+    target-branch: "main"
     schedule:
       interval: "weekly"
       day: "monday"
+    labels:
+      - "dependencies"
     reviewers:
       - "maintainer-team"
     open-pull-requests-limit: 10
 
-  # ── npm ───────────────────────────────────────────────────────────────────
+  # ── npm (weekly) ─────────────────────────────────────────────────────────
 
   # npm — workspace root (Playwright e2e tests, tooling)
   - package-ecosystem: "npm"
     directory: "/"
+    target-branch: "main"
     schedule:
       interval: "weekly"
       day: "monday"
+    labels:
+      - "dependencies"
     reviewers:
       - "maintainer-team"
     open-pull-requests-limit: 10
@@ -48,9 +68,12 @@ updates:
   # npm — TypeScript SDK
   - package-ecosystem: "npm"
     directory: "/sdk"
+    target-branch: "main"
     schedule:
       interval: "weekly"
       day: "monday"
+    labels:
+      - "dependencies"
     reviewers:
       - "maintainer-team"
     open-pull-requests-limit: 10
@@ -58,9 +81,12 @@ updates:
   # npm — Frontend static pages
   - package-ecosystem: "npm"
     directory: "/frontend"
+    target-branch: "main"
     schedule:
       interval: "weekly"
       day: "monday"
+    labels:
+      - "dependencies"
     reviewers:
       - "maintainer-team"
     open-pull-requests-limit: 10
@@ -68,9 +94,12 @@ updates:
   # npm — Webhook server (webhook/package.json)
   - package-ecosystem: "npm"
     directory: "/webhook"
+    target-branch: "main"
     schedule:
       interval: "weekly"
       day: "monday"
+    labels:
+      - "dependencies"
     reviewers:
       - "maintainer-team"
     open-pull-requests-limit: 10
@@ -78,9 +107,12 @@ updates:
   # npm — Integration / contract tests (tests/package.json)
   - package-ecosystem: "npm"
     directory: "/tests"
+    target-branch: "main"
     schedule:
       interval: "weekly"
       day: "monday"
+    labels:
+      - "dependencies"
     reviewers:
       - "maintainer-team"
     open-pull-requests-limit: 10
