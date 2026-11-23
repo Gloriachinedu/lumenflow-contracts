@@ -1,5 +1,11 @@
 name: Deploy to Testnet
 
+# NOTE: Successful runs of this workflow are consumed by the mainnet approval
+# gate in deploy-mainnet.yml. The gate queries the GitHub Actions API for a
+# successful run of this workflow (file: deploy-testnet.yml, job: "Deploy +
+# Smoke Test") on `develop` within the last 24 hours. Keep the workflow file
+# name, job name, and success semantics stable so the gate can find it.
+
 on:
   push:
     branches: [develop]
