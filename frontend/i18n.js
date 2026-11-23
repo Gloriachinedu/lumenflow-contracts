@@ -35,6 +35,36 @@ const SUPPORTED_LOCALES = {
 const DEFAULT_LOCALE = 'en';
 const STORAGE_KEY    = 'lf-lang';
 
+/**
+ * Built-in fallback messages for keys that may not yet exist in the
+ * locale JSON files (e.g. newly added merchant category labels).
+ *
+ * These are merged underneath the loaded locale messages so that
+ * i18n.t() always resolves them, while still allowing the JSON locale
+ * files to override any of these values.
+ */
+const BUILTIN_MESSAGES = {
+  merchantCategories: {
+    gambling:      'Gambling',
+    digital_goods: 'Digital Goods',
+    retail:        'Retail',
+    travel:        'Travel',
+    food:          'Food & Dining',
+    entertainment: 'Entertainment',
+    crypto:        'Cryptocurrency',
+    adult:         'Adult',
+    other:         'Other',
+    unknown:       'Unknown',
+  },
+  fraudAnalytics: {
+    categoryFilterLabel: 'Merchant Category',
+    allCategories:       'All categories',
+    categoryDistribution: 'Fraud by Merchant Category',
+    categoryBreakdown:   'Category Breakdown',
+  },
+};
+=======
+
 /** Relative path from the frontend root to the locales directory. */
 const LOCALES_PATH = './locales';
 
@@ -42,6 +72,7 @@ const LOCALES_PATH = './locales';
 
 let _locale   = DEFAULT_LOCALE;  // current locale code
 let _messages = {};              // parsed JSON for the active locale
+let _rawMessages = {};           // raw parsed JSON (without built-in fallbacks)
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -55,6 +86,35 @@ let _messages = {};              // parsed JSON for the active locale
  */
 function resolvePath(obj, path) {
   return path.split('.').reduce((acc, key) => (acc && acc[key] !== undefined ? acc[key] : undefined), obj);
+}
+
+/**
+ * Deep-merge source objects into a new target object.
+ * Values from later sources override earlier ones; nested plain objects
+ * are merged recursively. Arrays and primitives are replaced wholesale.
+ *
+ * @param {...object} sources
+ * @returns {object}
+ */
+function deepMerge(...sources) {
+  const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+  const result = {};
+
+  for (const source of sources) {
+    if (!isPlainObject(source)) continue;
+    for (const key of Object.keys(source)) {
+      const value = source[key];
+      if (isPlainObject(value) && isPlainObject(result[key])) {
+        result[key] = deepMerge(result[key], value);
+      } else if (isPlainObject(value)) {
+        result[key] = deepMerge({}, value);
+      } else {
+        result[key] = value;
+      }
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -140,17 +200,22 @@ export const i18n = {
     }
 
     try {
-      _messages = await loadLocale(locale);
-      _locale   = locale;
+      _rawMessages = await loadLocale(locale);
+      _locale      = locale;
       localStorage.setItem(STORAGE_KEY, locale);
     } catch (err) {
       console.error(err);
       if (locale !== DEFAULT_LOCALE) {
         // Graceful degradation: load the default locale instead
-        _messages = await loadLocale(DEFAULT_LOCALE);
-        _locale   = DEFAULT_LOCALE;
+        _rawMessages = await loadLocale(DEFAULT_LOCALE);
+        _locale      = DEFAULT_LOCALE;
       }
     }
+
+    // Merge built-in fallbacks underneath the loaded locale messages so that
+    // keys missing from the JSON files (e.g. merchant category labels) still
+    // resolve through i18n.t(). Locale JSON values take precedence.
+    _messages = deepMerge(BUILTIN_MESSAGES, _rawMessages);
 
     // Update <html lang> attribute for accessibility
     document.documentElement.setAttribute('lang', _locale);
@@ -294,6 +359,33 @@ export const i18n = {
    */
   getSupportedLocales() {
     return Object.keys(SUPPORTED_LOCALES);
+  },
+
+  /**
+   * Returns a human-readable label for a merchant category.
+   *
+   * Looks up "merchantCategories.<category>" via t(), falling back to a
+   * title-cased version of the raw category value when no translation exists.
+   *
+   * @param {string} category  e.g. 'digital_goods'
+   * @returns {string}
+   */
+  merchantCategoryLabel(category) {
+    if (category === undefined || category === null || category === '') {
+      return this.t('merchantCategories.unknown');
+    }
+
+    const key   = `merchantCategories.${category}`;
+    const value = resolvePath(_messages, key);
+
+    if (value !== undefined && typeof value === 'string') return value;
+
+    // Fallback: turn 'digital_goods' into 'Digital Goods'
+    return String(category)
+      .split(/[_\s-]+/)
+      .filter(Boolean)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
   },
 };
 
