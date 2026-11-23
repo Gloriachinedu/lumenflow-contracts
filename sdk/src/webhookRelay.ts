@@ -67,7 +67,36 @@ export interface DeliveryResponse {
   status: number;
 }
 
-/** Performs the actual HTTP POST to the downstream webhook. */
+/**
+ * TLS material for mutual TLS (mTLS) between internal services.
+ *
+ * Every field accepts either the PEM contents directly or a filesystem path
+ * (the underlying HTTP client resolves paths). Certificates are issued by the
+ * internal CA and must have a validity of less than 90 days; rotation is
+ * automated by the deployment tooling.
+ */
+export interface MtlsOptions {
+  /** PEM contents or path to the internal CA bundle used to verify the peer. */
+  ca: string;
+  /** PEM contents or path to this service's client certificate. */
+  cert: string;
+  /** PEM contents or path to this service's private key. */
+  key: string;
+  /**
+   * Whether to verify the peer certificate. Defaults to `true`. Setting this
+   * to `false` is rejected when `requireMtls` is enabled.
+   */
+  rejectUnauthorized?: boolean;
+}
+
+/**
+ * Performs the actual HTTP POST to the downstream webhook.
+ *
+ * When mTLS is configured, the injected function MUST use an HTTP client /
+ * agent built from {@link WebhookRelayOptions.mtls} (e.g. an
+ * `https.Agent` with `ca`, `cert`, `key`). The relay never downgrades to
+ * plain HTTP for internal service calls.
+ */
 export type DeliveryFn = (event: RelayEvent) => Promise<DeliveryResponse>;
 
 export interface WebhookRelayOptions {
@@ -81,6 +110,61 @@ export interface WebhookRelayOptions {
   maxDelayMs?: number;
   /** Injectable sleep — override in tests to avoid real timers. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * mTLS material for internal service-to-service delivery. When provided the
+   * injected `deliver` function must use it to build its HTTP agent.
+   */
+  mtls?: MtlsOptions;
+  /**
+   * Require mTLS for delivery. When `true`, construction fails unless complete
+   * certificate material is supplied via {@link mtls}. Default: `false`.
+   */
+  requireMtls?: boolean;
+}
+
+/** Thrown when mTLS is required but the certificate material is incomplete. */
+export class MtlsConfigurationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MtlsConfigurationError';
+  }
+}
+
+/**
+ * Validate mTLS options. Returns the normalized options (with
+ * `rejectUnauthorized` defaulted to `true`) or `undefined` when no mTLS
+ * material was supplied.
+ *
+ * @throws {MtlsConfigurationError} when `requireMtls` is set but material is
+ *   missing, or when peer verification is disabled.
+ */
+export function validateMtlsOptions(
+  mtls: MtlsOptions | undefined,
+  requireMtls: boolean,
+): MtlsOptions | undefined {
+  if (!mtls) {
+    if (requireMtls) {
+      throw new MtlsConfigurationError(
+        'mTLS is required but no certificate material was provided (ca, cert, key)',
+      );
+    }
+    return undefined;
+  }
+
+  const missing = (['ca', 'cert', 'key'] as const).filter((field) => !mtls[field]);
+  if (missing.length > 0) {
+    throw new MtlsConfigurationError(
+      `incomplete mTLS configuration: missing ${missing.join(', ')}`,
+    );
+  }
+
+  if (mtls.rejectUnauthorized === false) {
+    throw new MtlsConfigurationError(
+      'mTLS peer verification cannot be disabled for internal service calls',
+    );
+  }
+
+  return { ...mtls, rejectUnauthorized: true };
 }
 
 export class WebhookDeliveryError extends Error {
@@ -120,6 +204,7 @@ export class WebhookRelay {
   private readonly baseDelayMs: number;
   private readonly maxDelayMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly mtls: MtlsOptions | undefined;
 
   constructor(options: WebhookRelayOptions) {
     this.deliver = options.deliver;
@@ -128,6 +213,15 @@ export class WebhookRelay {
     this.baseDelayMs = options.baseDelayMs ?? 200;
     this.maxDelayMs = options.maxDelayMs ?? 10_000;
     this.sleep = options.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.mtls = validateMtlsOptions(options.mtls, options.requireMtls ?? false);
+  }
+
+  /**
+   * The validated mTLS material the injected `deliver` function must use to
+   * build its HTTP agent. `undefined` when mTLS is not configured.
+   */
+  get mtlsOptions(): MtlsOptions | undefined {
+    return this.mtls;
   }
 
   /**

@@ -10,12 +10,91 @@ export interface ContractEvent {
   value: unknown;
 }
 
+export interface EventPollerTlsOptions {
+  /** PEM-encoded CA certificate(s) used to verify the internal RPC endpoint. */
+  ca?: string | Buffer | Array<string | Buffer>;
+  /** PEM-encoded client certificate presented for mutual TLS. */
+  cert?: string | Buffer;
+  /** PEM-encoded private key for the client certificate. */
+  key?: string | Buffer;
+  /** Reject unauthorized server certificates. Defaults to true. */
+  rejectUnauthorized?: boolean;
+}
+
 export interface EventPollerOptions {
   rpcUrl: string;
   contractId: string;
   eventTypes?: string[];
   fromLedger?: number;
   strict?: boolean;
+  /** mTLS configuration for internal service-to-service calls. */
+  tls?: EventPollerTlsOptions;
+}
+
+function isHttpsUrl(url: string): boolean {
+  try {
+    return new URL(url).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function validateTlsOptions(options: EventPollerOptions): void {
+  const tls = options.tls;
+  if (!tls) return;
+
+  if (!isHttpsUrl(options.rpcUrl)) {
+    throw new LumenFlowError(
+      PaymentErrorCode.InvalidInput,
+      'mTLS options require an https rpcUrl',
+    );
+  }
+  if (!tls.cert || !tls.key) {
+    throw new LumenFlowError(
+      PaymentErrorCode.InvalidInput,
+      'mTLS requires both client certificate (tls.cert) and private key (tls.key)',
+    );
+  }
+}
+
+async function buildDispatcher(options: EventPollerOptions): Promise<any> {
+  if (!options.tls) return undefined;
+
+  let undici: any;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    undici = require('undici');
+  } catch {
+    throw new LumenFlowError(
+      PaymentErrorCode.InvalidInput,
+      'mTLS requires the "undici" package to be installed',
+    );
+  }
+
+  const agent = new undici.Agent({
+    connect: {
+      ca: options.tls.ca,
+      cert: options.tls.cert,
+      key: options.tls.key,
+      rejectUnauthorized: options.tls.rejectUnauthorized ?? true,
+    },
+  });
+
+  return new undici.Dispatcher ? agent : agent;
+}
+
+function isTlsHandshakeError(err: unknown): boolean {
+  const code = (err as { code?: string } | undefined)?.code;
+  const message = String((err as { message?: string } | undefined)?.message ?? err);
+  return (
+    code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' ||
+    code === 'SELF_SIGNED_CERT_IN_CHAIN' ||
+    code === 'DEPTH_ZERO_SELF_SIGNED_CERT' ||
+    code === 'ERR_TLS_CERT_ALTNAME_INVALID' ||
+    code === 'CERT_HAS_EXPIRED' ||
+    code === 'ERR_SSL_TLSV1_ALERT_UNKNOWN_CA' ||
+    /certificate|tls|ssl/i.test(message)
+  );
 }
 
 function validateEvent(event: unknown): ContractEvent {
@@ -75,14 +154,26 @@ export async function fetchContractEvents(options: EventPollerOptions): Promise<
   if (!options.rpcUrl) throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'rpcUrl is required');
   if (!options.contractId) throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'contractId is required');
 
+  validateTlsOptions(options);
+  const dispatcher = await buildDispatcher(options);
+
   let response: Response;
   try {
     response = await fetch(options.rpcUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(buildRpcPayload(options)),
-    });
+      ...(dispatcher ? { dispatcher } : {}),
+    } as RequestInit);
   } catch (err) {
+    if (options.tls && isTlsHandshakeError(err)) {
+      throw new LumenFlowError(
+        PaymentErrorCode.InvalidInput,
+        `mTLS handshake with RPC endpoint failed: ${String(
+          (err as { message?: string } | undefined)?.message ?? err,
+        )}`,
+      );
+    }
     throw new LumenFlowError(PaymentErrorCode.InvalidInput, String(err));
   }
 
