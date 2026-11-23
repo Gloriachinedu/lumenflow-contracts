@@ -4,8 +4,52 @@ Command-line interface for the LumenFlow Soroban payment contract.
 
 ## Installation
 
+### From source
+
 ```bash
 cargo install --path cli/lumenflow-cli
+```
+
+### Pre-built binaries
+
+Pre-built binaries for Linux (x86_64, arm64), macOS (x86_64, arm64), and
+Windows (x86_64-pc-windows-msvc) are attached to every
+[GitHub Release](https://github.com/lumenflow/lumenflow/releases). This is the
+recommended path for Windows users, who otherwise need a full MSVC linker
+toolchain to build from source.
+
+Download the Windows archive and extract it with PowerShell:
+
+```powershell
+$version = "v0.1.0"  # replace with the release you want
+$url = "https://github.com/lumenflow/lumenflow/releases/download/$version/lumenflow-$version-x86_64-pc-windows-msvc.zip"
+Invoke-WebRequest -Uri $url -OutFile lumenflow.zip
+Expand-Archive -Path lumenflow.zip -DestinationPath "$env:LOCALAPPDATA\lumenflow" -Force
+```
+
+Then add the extracted directory to your `PATH` for the current session:
+
+```powershell
+$env:Path = "$env:LOCALAPPDATA\lumenflow;$env:Path"
+lumenflow --version
+```
+
+#### Verifying the download
+
+Each release publishes a `SHA256SUMS` file and the per-artifact hashes are
+also listed in [`docs/release-hashes.md`](../docs/release-hashes.md). Verify
+the archive before running it:
+
+```powershell
+$expected = "<sha256-from-release-hashes.md>"
+$actual = (Get-FileHash -Algorithm SHA256 -Path lumenflow.zip).Hash.ToLower()
+if ($actual -ne $expected.ToLower()) { throw "Checksum mismatch: $actual" }
+```
+
+On Linux and macOS the equivalent check is:
+
+```bash
+sha256sum -c SHA256SUMS --ignore-missing
 ```
 
 ## Configuration
