@@ -425,6 +425,13 @@
 </main>
 
 <script src="payment-history.js"></script>
+<script type="module">
+  import { initWalletStatus } from './wallet-status.js';
+
+  initWalletStatus({
+    container: document.getElementById('wallet-status-container'),
+  });
+</script>
 <script>
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {

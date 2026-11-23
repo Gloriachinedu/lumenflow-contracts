@@ -356,7 +356,7 @@
 
 <nav class="lf-nav" aria-label="LumenFlow navigation">
   <span class="lf-nav__brand">⚡ LumenFlow</span>
-  <div id="wallet-status-container"></div>
+  <div id="wallet-status-container" aria-live="polite" aria-atomic="true"></div>
   <div id="lf-lang-nav"></div>
 </nav>
 
@@ -611,6 +611,10 @@
 </main>
 
 <script src="./toast.js"></script>
+<script type="module">
+  import { initWalletStatus } from './wallet-status.js';
+  initWalletStatus(document.getElementById('wallet-status-container'));
+</script>
 <script type="module">
   import { i18n } from './i18n.js';
   i18n.init().then(() => {
@@ -1198,7 +1202,6 @@
   (async () => {
     renderModeBanner();
     initCopyButtons(document.body);
-    initWalletStatus(document.getElementById('wallet-status-container'));
 
     // Dark mode
     import('./dark-mode.js').then(m => m.initDarkMode());
