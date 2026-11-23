@@ -98,15 +98,34 @@ SOURCE_ACCOUNT=<secret-key> ./scripts/local_up.sh
 
 Every pull request is automatically labeled by the CI workflow (`.github/workflows/pr-size-label.yml`) based on the total number of lines changed (additions + deletions):
 
-| Label    | Lines changed | Description                              |
-|----------|---------------|------------------------------------------|
-| `size/XS` | < 50          | Extra-small — trivial fix or tiny change |
-| `size/S`  | 50 – 200      | Small — focused, easy to review          |
-| `size/M`  | 200 – 500     | Medium — moderate scope                  |
-| `size/L`  | 500 – 1000    | Large — consider splitting if possible   |
-| `size/XL` | > 1000        | Extra-large — please split into smaller PRs |
+| Label     | Lines changed | Description                                        |
+|-----------|---------------|----------------------------------------------------|
+| `size/XS` | < 50          | Extra-small — trivial fix or tiny change           |
+| `size/S`  | 50 – 200      | Small — focused, easy to review                    |
+| `size/M`  | 200 – 500     | Medium — moderate scope                            |
+| `size/L`  | 500 – 800     | Large — consider splitting if possible             |
+| `size/XL` | > 800         | Extra-large — split requested, may be blocked      |
 
 Aim for `size/XS` or `size/S` whenever possible. Large PRs are harder to review thoroughly and more likely to introduce bugs. If your PR is labeled `size/L` or `size/XL`, consider breaking it into smaller, independent PRs — one per logical concern.
+
+#### Size enforcement
+
+The size label is not just informational — it gates review:
+
+- **Over 800 changed lines** — the PR is labeled `size/XL` and a bot posts a comment asking you to split the change into smaller, independent PRs.
+- **Over 1500 changed lines** — the PR is **blocked** until it receives review approval from **two maintainers**. Splitting the PR is strongly preferred over requesting the extra review.
+
+#### Exclusions
+
+Auto-generated files are **not** counted toward the line total, so regenerating a lockfile will not inflate your PR's size label. Excluded files include:
+
+- `Cargo.lock`
+- `package-lock.json`
+- `yarn.lock`
+- `pnpm-lock.yaml`
+- Other lockfiles and generated artifacts (e.g. `*.lock`, `bun.lockb`)
+
+If you believe a generated file is being counted incorrectly, open an issue against the DevOps team.
 
 ---
 
