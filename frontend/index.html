@@ -12,6 +12,15 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="LumenFlow" />
     <link rel="apple-touch-icon" href="icons/icon.svg" />
+    <!--
+      SRI policy: every externally hosted <script> or <link rel="stylesheet"> MUST
+      carry `integrity` and `crossorigin="anonymous"` attributes. Same-origin
+      assets (e.g. styles.css) are covered by CSP 'self' and need no SRI.
+      When adding/upgrading a CDN dependency, regenerate its hash with:
+        curl -sSL <url> | openssl dgst -sha384 -binary | openssl base64 -A
+      then set integrity="sha384-<hash>" and crossorigin="anonymous".
+      CI enforces this via scripts/check-sri.mjs.
+    -->
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
