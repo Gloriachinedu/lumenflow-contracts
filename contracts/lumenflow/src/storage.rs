@@ -767,6 +767,24 @@ pub fn set_subscription(env: &Env, sub: &Subscription) {
         .extend_ttl(&key, SUBSCRIPTION_TTL_LEDGERS, SUBSCRIPTION_TTL_LEDGERS);
 }
 
+/// Atomically update the mutable billing fields of an existing subscription.
+///
+/// Persists `next_due_at` and `status` together in a single write so a charge
+/// can never leave the record half-updated (e.g. advanced due date but stale
+/// status). Returns the updated subscription, or `None` if it does not exist.
+pub fn update_subscription_billing(
+    env: &Env,
+    subscription_id: &String,
+    next_due_at: u64,
+    status: crate::types::SubscriptionStatus,
+) -> Option<Subscription> {
+    let mut sub = get_subscription(env, subscription_id)?;
+    sub.next_due_at = next_due_at;
+    sub.status = status;
+    set_subscription(env, &sub);
+    Some(sub)
+}
+
 /// Total amount still chargeable across `subscriber`'s active subscriptions in
 /// `token`; the token allowance granted to the contract must cover this sum.
 pub fn get_subscription_reserve(env: &Env, subscriber: &Address, token: &Address) -> i128 {
