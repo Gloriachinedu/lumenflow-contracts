@@ -241,7 +241,37 @@ The output includes: `refund_id`, `status`, `amount`, `reason`, `initiator`.
 
 ---
 
+### `payment status` — Check a payment's status
+
+```bash
+lumenflow payment status --order-id ORDER_001
+```
+
+Add `--watch` to poll the payment status every 3 seconds until it reaches a
+terminal state. Each update prints the current status and a timestamp.
+
+```bash
+lumenflow payment status --order-id ORDER_001 --watch --timeout 120
+```
+
+| Flag          | Required | Description                                                       |
+|---------------|----------|-------------------------------------------------------------------|
+| `--order-id`  | Yes      | Order ID of the payment to check                                  |
+| `--watch`     | No       | Poll every 3 seconds until a terminal state is reached            |
+| `--timeout`   | No       | Max seconds to wait in watch mode (default: 60)                   |
+
+**Exit codes (watch mode):**
+
+| Code | Meaning                                                       |
+|------|---------------------------------------------------------------|
+| `0`  | Payment reached `Completed`                                   |
+| `1`  | Payment reached `Failed`                                      |
+| `2`  | Timeout elapsed before a terminal state was reached           |
+
+---
+
 ### `history` — View payment history
+=======
 
 ```bash
 lumenflow history --merchant GBUYUAI75XXWDZEKLY66CFYKQPET5JR4EAPL7STQKQCRLKJ74SC65VU
