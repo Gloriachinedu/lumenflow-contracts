@@ -103,8 +103,21 @@ jobs:
             ${{ runner.os }}-cargo-test-
             ${{ runner.os }}-cargo-
 
-      - name: Run tests
-        run: cargo test --locked --all-features
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+
+      - name: Run tests with coverage
+        run: |
+          cargo llvm-cov --locked --all-features \
+            --lcov --output-path lcov.info
+
+      - name: Upload contract coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          flags: contracts
+          name: contracts-coverage
+          fail_ci_if_error: true
 
   auth-tests:
     name: Auth Tests
@@ -409,7 +422,7 @@ jobs:
           files: sdk/coverage/lcov.info
           flags: sdk
           name: sdk-coverage
-          fail_ci_if_error: false
+          fail_ci_if_error: true
 
       - name: Build SDK
         working-directory: sdk
