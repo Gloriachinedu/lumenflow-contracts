@@ -36,7 +36,31 @@ export interface RelayEvent {
   value?: unknown;
   /** Ledger sequence the event was emitted in. */
   ledger?: number;
+  /**
+   * Extra HTTP headers to send with the delivery POST. Populated by the relay
+   * with the configured CSRF header (see {@link WebhookRelayOptions.csrf}).
+   */
+  headers?: Record<string, string>;
 }
+
+/**
+ * CSRF configuration for outbound webhook deliveries.
+ *
+ * The relay is a server-to-server client: CSRF protection is only meaningful
+ * when the downstream endpoint is browser-facing (e.g. a dashboard API that
+ * also accepts cookie-authenticated requests). The authoritative enforcement
+ * lives in `webhook/webhook-server.js`; this option merely lets the relay
+ * attach a token so such endpoints accept the delivery.
+ */
+export interface RelayCsrfOptions {
+  /** CSRF token value to send with each delivery. */
+  token: string;
+  /** Header carrying the token. Default: `x-csrf-token`. */
+  headerName?: string;
+}
+
+/** Default header used to transmit the CSRF token. */
+export const DEFAULT_CSRF_HEADER = 'x-csrf-token';
 
 /** Persistent record of which event keys have been delivered. */
 export interface DedupeStore {
@@ -81,6 +105,12 @@ export interface WebhookRelayOptions {
   maxDelayMs?: number;
   /** Injectable sleep — override in tests to avoid real timers. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Optional CSRF token attached to every delivery POST. Only needed when the
+   * downstream endpoint is browser-facing; omit for pure server-to-server
+   * webhooks. When omitted, deliveries are unchanged.
+   */
+  csrf?: RelayCsrfOptions;
 }
 
 export class WebhookDeliveryError extends Error {
@@ -120,6 +150,7 @@ export class WebhookRelay {
   private readonly baseDelayMs: number;
   private readonly maxDelayMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly csrf?: RelayCsrfOptions;
 
   constructor(options: WebhookRelayOptions) {
     this.deliver = options.deliver;
@@ -128,6 +159,17 @@ export class WebhookRelay {
     this.baseDelayMs = options.baseDelayMs ?? 200;
     this.maxDelayMs = options.maxDelayMs ?? 10_000;
     this.sleep = options.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.csrf = options.csrf;
+  }
+
+  /** Attach the configured CSRF header to an event, if any. */
+  private withCsrf(event: RelayEvent): RelayEvent {
+    if (!this.csrf) return event;
+    const headerName = this.csrf.headerName ?? DEFAULT_CSRF_HEADER;
+    return {
+      ...event,
+      headers: { ...event.headers, [headerName]: this.csrf.token },
+    };
   }
 
   /**
@@ -151,7 +193,7 @@ export class WebhookRelay {
       let response: DeliveryResponse | undefined;
       let threw = false;
       try {
-        response = await this.deliver(event);
+        response = await this.deliver(this.withCsrf(event));
       } catch {
         threw = true;
       }

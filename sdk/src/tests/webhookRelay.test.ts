@@ -293,3 +293,86 @@ describe('WebhookRelay — ordered batch delivery', () => {
     expect(fn).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('WebhookRelay — optional CSRF token propagation', () => {
+  it('passes the CSRF token to the deliver callback when csrf is configured', async () => {
+    const seen: Array<{ event: RelayEvent; headers?: Record<string, string> }> = [];
+    const deliver = jest.fn(
+      async (e: RelayEvent, headers?: Record<string, string>) => {
+        seen.push({ event: e, headers });
+        return { status: 200 };
+      },
+    );
+    const relay = new WebhookRelay({
+      deliver,
+      sleep: noSleep,
+      csrf: { token: 'csrf-token-abc', headerName: 'x-csrf-token' },
+    });
+
+    const outcome = await relay.relay(event());
+
+    expect(outcome.status).toBe('delivered');
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(seen).toHaveLength(1);
+    expect(seen[0].headers).toBeDefined();
+    expect(seen[0].headers?.['x-csrf-token']).toBe('csrf-token-abc');
+  });
+
+  it('uses the default CSRF header name when none is supplied', async () => {
+    const seen: Array<Record<string, string> | undefined> = [];
+    const deliver = jest.fn(async (_e: RelayEvent, headers?: Record<string, string>) => {
+      seen.push(headers);
+      return { status: 200 };
+    });
+    const relay = new WebhookRelay({
+      deliver,
+      sleep: noSleep,
+      csrf: { token: 'csrf-token-xyz' },
+    });
+
+    await relay.relay(event());
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.['x-csrf-token']).toBe('csrf-token-xyz');
+  });
+
+  it('preserves existing behavior when csrf is omitted', async () => {
+    const seen: Array<Record<string, string> | undefined> = [];
+    const deliver = jest.fn(async (_e: RelayEvent, headers?: Record<string, string>) => {
+      seen.push(headers);
+      return { status: 200 };
+    });
+    const relay = new WebhookRelay({ deliver, sleep: noSleep });
+
+    const outcome = await relay.relay(event());
+
+    expect(outcome).toEqual({ status: 'delivered', key: 'token-1', attempts: 1 });
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(seen).toHaveLength(1);
+    // No CSRF header injected when the option is not configured.
+    expect(seen[0]?.['x-csrf-token']).toBeUndefined();
+  });
+
+  it('propagates the CSRF token on every attempt during a retry', async () => {
+    const headersPerCall: Array<Record<string, string> | undefined> = [];
+    let i = 0;
+    const deliver = jest.fn(async (_e: RelayEvent, headers?: Record<string, string>) => {
+      headersPerCall.push(headers);
+      const status = i++ < 2 ? 503 : 200;
+      return { status };
+    });
+    const relay = new WebhookRelay({
+      deliver,
+      sleep: noSleep,
+      csrf: { token: 'csrf-token-retry', headerName: 'x-csrf-token' },
+    });
+
+    const outcome = await relay.relay(event());
+
+    expect(outcome.attempts).toBe(3);
+    expect(headersPerCall).toHaveLength(3);
+    for (const headers of headersPerCall) {
+      expect(headers?.['x-csrf-token']).toBe('csrf-token-retry');
+    }
+  });
+});
