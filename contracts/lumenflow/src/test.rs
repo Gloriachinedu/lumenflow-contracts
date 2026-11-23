@@ -14,8 +14,8 @@ use crate::{
     error::PaymentError,
     storage,
     types::{
-        BatchPaymentItem, MerchantCategory, PaymentFilter, PaymentOrder, PaymentStatus, SortField,
-        SortOrder, StatusFilter, SubscriptionStatus,
+        BatchPaymentItem, MerchantCategory, MerchantSuspensionReason, PaymentFilter, PaymentOrder,
+        PaymentStatus, SortField, SortOrder, StatusFilter, SubscriptionStatus,
     },
     PaymentProcessingContract, PaymentProcessingContractClient,
 };
@@ -228,9 +228,50 @@ fn test_admin_key_rotation_dry_run() {
     // Verify new admin can perform all privileged operations
     client.pause_contract(&new_admin);
     client.unpause_contract(&new_admin);
-    client.deactivate_merchant(&new_admin, &merchant);
+    client.deactivate_merchant(&new_admin, &merchant, &MerchantSuspensionReason::AdminReview);
     let deactivated = client.get_merchant(&merchant);
     assert!(!deactivated.active);
+}
+
+// ── Merchant suspension event tests (#1591) ──────────────────────────────────
+
+#[test]
+fn test_deactivate_merchant_emits_suspension_event() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Suspended Store"),
+        &str(&env, "desc"),
+        &str(&env, "s@store.com"),
+        &MerchantCategory::Retail,
+        &None,
+    );
+
+    let timestamp = env.ledger().timestamp();
+    client.deactivate_merchant(&admin, &merchant, &MerchantSuspensionReason::FraudSuspicion);
+
+    // Merchant must be inactive after suspension.
+    let suspended = client.get_merchant(&merchant);
+    assert!(!suspended.active);
+
+    // Suspension history must contain exactly one record with the expected fields.
+    let history = client.get_merchant_suspension_history(&merchant);
+    assert_eq!(history.len(), 1);
+    let record = history.get(0).unwrap();
+    assert_eq!(record.merchant, merchant);
+    assert_eq!(record.reason, MerchantSuspensionReason::FraudSuspicion);
+    assert_eq!(record.admin, admin);
+    assert_eq!(record.timestamp, timestamp);
+
+    // The merchant_suspended event must be emitted.
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "merchant_suspended"),
+        "merchant_suspended event must be emitted on suspension"
+    );
 }
 
 // ── Merchant tests ────────────────────────────────────────────────────────────

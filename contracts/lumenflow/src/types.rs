@@ -555,6 +555,38 @@ pub struct PaymentStatusUpdatedEvent {
     pub original_amount: i128,
 }
 
+/// Reason code explaining why an admin suspended a merchant.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MerchantSuspensionReason {
+    /// Merchant is suspected of fraudulent activity.
+    FraudSuspicion,
+    /// Merchant is on hold pending a compliance review.
+    ComplianceHold,
+    /// Merchant is suspended pending manual admin review.
+    AdminReview,
+}
+
+/// Data payload for `lumenflow/merchant_suspended`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantSuspendedEvent {
+    pub merchant: Address,
+    pub reason: MerchantSuspensionReason,
+    pub timestamp: u64,
+    pub admin: Address,
+}
+
+/// A persisted entry in a merchant's suspension history.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantSuspensionRecord {
+    pub merchant: Address,
+    pub reason: MerchantSuspensionReason,
+    pub timestamp: u64,
+    pub admin: Address,
+}
+
 // ── Admin Audit Log ───────────────────────────────────────────────────────────
 
 /// The type of admin action recorded in the audit log.

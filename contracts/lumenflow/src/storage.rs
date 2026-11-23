@@ -3,8 +3,8 @@ use soroban_sdk::{contracttype, Address, Env, String, Vec};
 use crate::error::PaymentError;
 use crate::types::{
     AdminAuditEntry, DisputeRecord, EscrowRecord, GlobalStats, Merchant, MerchantStats,
-    MultisigPayment, MerchantCommitment, PaymentOrder, PaymentRequest, RefundRecord, Subscription,
-    SubscriptionPlan, EscrowHold,
+    MerchantSuspensionRecord, MultisigPayment, MerchantCommitment, PaymentOrder, PaymentRequest,
+    RefundRecord, Subscription, SubscriptionPlan, EscrowHold,
 };
 
 // ── TTL / limit constants ─────────────────────────────────────────────────────
@@ -159,6 +159,8 @@ pub enum DataKey {
     AdminAuditMaxEntries,
     /// Configurable maximum signers per multisig payment (issue #1269). Short code `MSL`.
     MSL,
+    /// Append-only suspension history for a merchant (issue #1591).
+    MerchantSuspensionHistory(Address),
 }
 
 /// The schema version this binary was compiled against.
@@ -1344,6 +1346,34 @@ pub fn append_admin_audit_entry(env: &Env, entry: &AdminAuditEntry) {
         .extend_ttl(&key, ADMIN_AUDIT_TTL_LEDGERS, ADMIN_AUDIT_TTL_LEDGERS);
 
     set_admin_audit_count(env, count + 1);
+}
+
+// ── Merchant suspension history (Issue #1591) ─────────────────────────────────
+
+/// Return the full suspension history for `merchant`, oldest entry first.
+pub fn get_merchant_suspension_history(
+    env: &Env,
+    merchant: &Address,
+) -> Vec<MerchantSuspensionRecord> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::MerchantSuspensionHistory(merchant.clone()))
+        .unwrap_or(Vec::new(env))
+}
+
+/// Append a suspension record to `merchant`'s history and extend its TTL.
+pub fn append_merchant_suspension(env: &Env, record: &MerchantSuspensionRecord) {
+    let key = DataKey::MerchantSuspensionHistory(record.merchant.clone());
+    let mut history: Vec<MerchantSuspensionRecord> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or(Vec::new(env));
+    history.push_back(record.clone());
+    env.storage().persistent().set(&key, &history);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, MERCHANT_TTL_LEDGERS, MERCHANT_TTL_LEDGERS);
 }
 
 // ── Signature expiry window (Issue #1350) ─────────────────────────────────────
