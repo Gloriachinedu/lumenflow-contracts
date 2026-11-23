@@ -41,6 +41,11 @@ const EARLY_UNPAUSE_THRESHOLD: u32 = 3;
 const MAX_BATCH_SIZE: u32 = 10;
 const MAX_SERIALIZED_PAYLOAD_BYTES: u32 = 4096;
 
+/// Number of ledgers persistent storage entries are extended to live for on
+/// every read. Defined once in `storage` and re-exported here so callers and
+/// tests can reference the single source of truth.
+pub use storage::LEDGERS_TO_LIVE;
+
 #[contract]
 pub struct PaymentProcessingContract;
 

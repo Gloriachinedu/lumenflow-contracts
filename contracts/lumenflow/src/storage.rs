@@ -38,11 +38,19 @@ pub const DEFAULT_LARGE_PAYMENT_THRESHOLD: i128 = 10_000_000;
 // Approximate ledger-count equivalents (5-second ledgers):
 //   1 year  ≈ 6_307_200 ledgers
 //   2 years ≈ 12_614_400 ledgers
-pub const MERCHANT_TTL_LEDGERS: u32 = 12_614_400; // 2 years
-pub const PAYMENT_TTL_LEDGERS: u32 = 12_614_400; // 2 years
+/// Canonical TTL (in ledgers) applied to every persistent storage entry on
+/// both write and read.  ≈ 2 years at 5-second ledgers.  This is the single
+/// source of truth for persistent-entry TTLs; all `get_*` helpers extend the
+/// entry's TTL by this amount after a successful read so that read-heavy
+/// paths (e.g. `get_payment` in read-only queries) never let an active record
+/// be archived.
+pub const LEDGERS_TO_LIVE: u32 = 12_614_400; // 2 years
+
+pub const MERCHANT_TTL_LEDGERS: u32 = LEDGERS_TO_LIVE; // 2 years
+pub const PAYMENT_TTL_LEDGERS: u32 = LEDGERS_TO_LIVE; // 2 years
 pub const REFUND_TTL_LEDGERS: u32 = 6_307_200; // 1 year
 pub const MULTISIG_TTL_LEDGERS: u32 = 6_307_200; // 1 year
-pub const SUBSCRIPTION_TTL_LEDGERS: u32 = 12_614_400; // 2 years
+pub const SUBSCRIPTION_TTL_LEDGERS: u32 = LEDGERS_TO_LIVE; // 2 years
 
 // ── Compile-time TTL bound assertions ─────────────────────────────────────────
 // Soroban Mainnet maximum persistent entry TTL (3,110,400 ledgers ≈ 6 months).
@@ -54,6 +62,10 @@ pub const SUBSCRIPTION_TTL_LEDGERS: u32 = 12_614_400; // 2 years
 pub const SOROBAN_MAX_ENTRY_TTL: u32 = 3_110_400;
 
 const _: () = {
+    assert!(
+        LEDGERS_TO_LIVE <= SOROBAN_MAX_ENTRY_TTL * 5,
+        "LEDGERS_TO_LIVE exceeds safe range (5 × max_entry_ttl)"
+    );
     assert!(
         MERCHANT_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
         "MERCHANT_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
@@ -318,9 +330,14 @@ pub fn set_merchant_stats(env: &Env, merchant: &Address, stats: &MerchantStats) 
 // ── Merchant ──────────────────────────────────────────────────────────────────
 
 pub fn get_merchant(env: &Env, address: &Address) -> Option<Merchant> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::Merchant(address.clone()))
+    let key = DataKey::Merchant(address.clone());
+    let value = env.storage().persistent().get(&key);
+    if value.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, LEDGERS_TO_LIVE, LEDGERS_TO_LIVE);
+    }
+    value
 }
 
 pub fn set_merchant(env: &Env, merchant: &Merchant) {
@@ -330,7 +347,7 @@ pub fn set_merchant(env: &Env, merchant: &Merchant) {
     // the last write. This prevents silent expiry of active merchant accounts.
     env.storage()
         .persistent()
-        .extend_ttl(&key, MERCHANT_TTL_LEDGERS, MERCHANT_TTL_LEDGERS);
+        .extend_ttl(&key, LEDGERS_TO_LIVE, LEDGERS_TO_LIVE);
 }
 
 pub fn get_merchant_list(env: &Env) -> Vec<Address> {
@@ -349,9 +366,14 @@ pub fn add_to_merchant_list(env: &Env, address: &Address) {
 // ── Payment ───────────────────────────────────────────────────────────────────
 
 pub fn get_payment(env: &Env, order_id: &String) -> Option<PaymentOrder> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::Payment(order_id.clone()))
+    let key = DataKey::Payment(order_id.clone());
+    let value = env.storage().persistent().get(&key);
+    if value.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, LEDGERS_TO_LIVE, LEDGERS_TO_LIVE);
+    }
+    value
 }
 
 pub fn set_payment(env: &Env, payment: &PaymentOrder) {
@@ -361,7 +383,7 @@ pub fn set_payment(env: &Env, payment: &PaymentOrder) {
     // refund windows (30 days), and dispute resolution periods.
     env.storage()
         .persistent()
-        .extend_ttl(&key, PAYMENT_TTL_LEDGERS, PAYMENT_TTL_LEDGERS);
+        .extend_ttl(&key, LEDGERS_TO_LIVE, LEDGERS_TO_LIVE);
 }
 
 pub fn remove_payment(env: &Env, order_id: &String) {
@@ -371,10 +393,14 @@ pub fn remove_payment(env: &Env, order_id: &String) {
 }
 
 pub fn get_merchant_payment_ids(env: &Env, merchant: &Address) -> Vec<String> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::MP(merchant.clone()))
-        .unwrap_or(Vec::new(env))
+    let key = DataKey::MP(merchant.clone());
+    let value = env.storage().persistent().get(&key);
+    if value.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, LEDGERS_TO_LIVE, LEDGERS_TO_LIVE);
+    }
+    value.unwrap_or(Vec::new(env))
 }
 
 /// Current number of payment IDs indexed for `merchant`.
@@ -410,10 +436,14 @@ pub fn add_merchant_payment_id(
 }
 
 pub fn get_payer_payment_ids(env: &Env, payer: &Address) -> Vec<String> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::PP(payer.clone()))
-        .unwrap_or(Vec::new(env))
+    let key = DataKey::PP(payer.clone());
+    let value = env.storage().persistent().get(&key);
+    if value.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, LEDGERS_TO_LIVE, LEDGERS_TO_LIVE);
+    }
+    value.unwrap_or(Vec::new(env))
 }
 
 /// Current number of payment IDs indexed for `payer`.
@@ -451,9 +481,14 @@ pub fn add_payer_payment_id(
 // ── Refund ────────────────────────────────────────────────────────────────────
 
 pub fn get_refund(env: &Env, refund_id: &String) -> Option<RefundRecord> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::Refund(refund_id.clone()))
+    let key = DataKey::Refund(refund_id.clone());
+    let value = env.storage().persistent().get(&key);
+    if value.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, LEDGERS_TO_LIVE, LEDGERS_TO_LIVE);
+    }
+    value
 }
 
 pub fn set_refund(env: &Env, refund: &RefundRecord) {
@@ -467,10 +502,14 @@ pub fn set_refund(env: &Env, refund: &RefundRecord) {
 }
 
 pub fn get_order_refund_ids(env: &Env, order_id: &String) -> Vec<String> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::OR(order_id.clone()))
-        .unwrap_or(Vec::new(env))
+    let key = DataKey::OR(order_id.clone());
+    let value = env.storage().persistent().get(&key);
+    if value.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, LEDGERS_TO_LIVE, LEDGERS_TO_LIVE);
+    }
+    value.unwrap_or(Vec::new(env))
 }
 
 pub fn add_order_refund_id(env: &Env, order_id: &String, refund_id: &String) {
@@ -490,9 +529,14 @@ pub fn remove_order_refund_index(env: &Env, order_id: &String) {
 // ── Dispute ───────────────────────────────────────────────────────────────────
 
 pub fn get_dispute(env: &Env, dispute_id: &String) -> Option<DisputeRecord> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::Dispute(dispute_id.clone()))
+    let key = DataKey::Dispute(dispute_id.clone());
+    let value = env.storage().persistent().get(&key);
+    if value.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, LEDGERS_TO_LIVE, LEDGERS_TO_LIVE);
+    }
+    value
 }
 
 pub fn set_dispute(env: &Env, dispute: &DisputeRecord) {
@@ -513,9 +557,14 @@ pub fn remove_refund(env: &Env, refund_id: &String) {
 // ── Multisig ──────────────────────────────────────────────────────────────────
 
 pub fn get_multisig(env: &Env, payment_id: &String) -> Option<MultisigPayment> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::Multisig(payment_id.clone()))
+    let key = DataKey::Multisig(payment_id.clone());
+    let value = env.storage().persistent().get(&key);
+    if value.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, LEDGERS_TO_LIVE, LEDGERS_TO_LIVE);
+    }
+    value
 }
 
 pub fn set_multisig(env: &Env, ms: &MultisigPayment) {
@@ -537,6 +586,7 @@ pub fn remove_multisig(env: &Env, payment_id: &String) {
 // ── Payment Request ───────────────────────────────────────────────────────────
 
 pub fn get_payment_request(env: &Env, request_id: &String) -> Option<PaymentRequest> {
+    // Temporary storage key — TTL is intentionally not extended on read.
     env.storage()
         .temporary()
         .get(&DataKey::PaymentRequest(request_id.clone()))
@@ -577,6 +627,7 @@ pub fn remove_payment_request(env: &Env, request_id: &String) {
 
 /// Return the IDs of all outstanding (unpaid) payment requests.
 pub fn get_payment_request_ids(env: &Env) -> Vec<String> {
+    // Temporary storage key — TTL is intentionally not extended on read.
     env.storage()
         .temporary()
         .get(&DataKey::PaymentRequestIndex)
@@ -587,10 +638,14 @@ pub fn get_payment_request_ids(env: &Env) -> Vec<String> {
 
 /// Return the current (next expected) nonce for `payer`. Starts at 0.
 pub fn get_nonce(env: &Env, payer: &Address) -> u64 {
-    env.storage()
-        .persistent()
-        .get(&DataKey::Nonce(payer.clone()))
-        .unwrap_or(0u64)
+    let key = DataKey::Nonce(payer.clone());
+    let value = env.storage().persistent().get(&key);
+    if value.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, LEDGERS_TO_LIVE, LEDGERS_TO_LIVE);
+    }
+    value.unwrap_or(0u64)
 }
 
 /// Increment the stored nonce for `payer` by 1.
@@ -618,10 +673,14 @@ pub fn increment_nonce(env: &Env, payer: &Address) {
 /// a payment so that the contract can verify the signature includes a fresh,
 /// never-reused value.
 pub fn get_merchant_nonce(env: &Env, merchant: &Address) -> u64 {
-    env.storage()
-        .persistent()
-        .get(&DataKey::MerchantNonce(merchant.clone()))
-        .unwrap_or(0u64)
+    let key = DataKey::MerchantNonce(merchant.clone());
+    let value = env.storage().persistent().get(&key);
+    if value.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, LEDGERS_TO_LIVE, LEDGERS_TO_LIVE);
+    }
+    value.unwrap_or(0u64)
 }
 
 /// Increment the stored nonce for `merchant` by 1.
@@ -738,9 +797,14 @@ pub fn set_max_multisig_signers(env: &Env, limit: u32) {
 // -- Subscriptions -------------------------------------------------------------
 
 pub fn get_subscription_plan(env: &Env, plan_id: &String) -> Option<SubscriptionPlan> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::SP(plan_id.clone()))
+    let key = DataKey::SP(plan_id.clone());
+    let value = env.storage().persistent().get(&key);
+    if value.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, LEDGERS_TO_LIVE, LEDGERS_TO_LIVE);
+    }
+    value
 }
 
 pub fn set_subscription_plan(env: &Env, plan: &SubscriptionPlan) {
@@ -752,9 +816,14 @@ pub fn set_subscription_plan(env: &Env, plan: &SubscriptionPlan) {
 }
 
 pub fn get_subscription(env: &Env, subscription_id: &String) -> Option<Subscription> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::Sub(subscription_id.clone()))
+    let key = DataKey::Sub(subscription_id.clone());
+    let value = env.storage().persistent().get(&key);
+    if value.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, LEDGERS_TO_LIVE, LEDGERS_TO_LIVE);
+    }
+    value
 }
 
 pub fn set_subscription(env: &Env, sub: &Subscription) {
@@ -770,10 +839,14 @@ pub fn set_subscription(env: &Env, sub: &Subscription) {
 /// Total amount still chargeable across `subscriber`'s active subscriptions in
 /// `token`; the token allowance granted to the contract must cover this sum.
 pub fn get_subscription_reserve(env: &Env, subscriber: &Address, token: &Address) -> i128 {
-    env.storage()
-        .persistent()
-        .get(&DataKey::SR(subscriber.clone(), token.clone()))
-        .unwrap_or(0)
+    let key = DataKey::SR(subscriber.clone(), token.clone());
+    let value = env.storage().persistent().get(&key);
+    if value.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, LEDGERS_TO_LIVE, LEDGERS_TO_LIVE);
+    }
+    value.unwrap_or(0)
 }
 
 pub fn set_subscription_reserve(env: &Env, subscriber: &Address, token: &Address, amount: i128) {
@@ -801,9 +874,14 @@ const _ESCROW_TTL_CHECK: () = assert!(
 );
 
 pub fn get_escrow(env: &Env, order_id: &String) -> Option<EscrowRecord> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::Escrow(order_id.clone()))
+    let key = DataKey::Escrow(order_id.clone());
+    let value = env.storage().persistent().get(&key);
+    if value.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, LEDGERS_TO_LIVE, LEDGERS_TO_LIVE);
+    }
+    value
 }
 
 pub fn set_escrow(env: &Env, escrow: &EscrowRecord) {
@@ -854,6 +932,7 @@ pub fn current_window_start(env: &Env) -> u32 {
 }
 
 pub fn get_rate_limit_counter(env: &Env, merchant: &Address, window_start: u32) -> u32 {
+    // Temporary storage key — TTL is intentionally not extended on read.
     env.storage()
         .temporary()
         .get(&DataKey::RateLimitCounter(merchant.clone(), window_start))
@@ -1029,9 +1108,14 @@ pub fn migrate_storage_keys(env: &Env) {
 /// Returns the Unix timestamp (seconds) at which the merchant submitted their
 /// data-deletion request, or `None` if no pending request exists.
 pub fn get_deletion_request(env: &Env, merchant: &Address) -> Option<u64> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::DeletionRequest(merchant.clone()))
+    let key = DataKey::DeletionRequest(merchant.clone());
+    let value = env.storage().persistent().get(&key);
+    if value.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, LEDGERS_TO_LIVE, LEDGERS_TO_LIVE);
+    }
+    value
 }
 
 /// Records a pending data-deletion request for the given merchant address.
@@ -1099,6 +1183,7 @@ pub struct AuthFailRecord {
 
 /// Returns the current auth failure record for `address`, or a zeroed record.
 pub fn get_auth_fail_count(env: &Env, address: &Address) -> (u32, u32) {
+    // Temporary storage key — TTL is intentionally not extended on read.
     env.storage()
         .temporary()
         .get::<_, (u32, u32)>(&DataKey::AuthFailCount(address.clone()))
@@ -1123,6 +1208,7 @@ pub fn clear_auth_fail_count(env: &Env, address: &Address) {
 
 /// Returns the lockout-expiry ledger for `address`, or `0` if not locked out.
 pub fn get_auth_lockout_until(env: &Env, address: &Address) -> u32 {
+    // Temporary storage key — TTL is intentionally not extended on read.
     env.storage()
         .temporary()
         .get::<_, u32>(&DataKey::AuthLockoutUntil(address.clone()))
@@ -1228,6 +1314,7 @@ pub fn set_storage_version(env: &Env, version: u32) {
 pub const COMMITMENT_TTL_LEDGERS: u32 = 100;
 
 pub fn get_merchant_commitment(env: &Env, address: &Address) -> Option<MerchantCommitment> {
+    // Temporary storage key — TTL is intentionally not extended on read.
     env.storage()
         .temporary()
         .get(&DataKey::MerchantCommitment(address.clone()))
@@ -1257,9 +1344,14 @@ pub fn remove_merchant_commitment(env: &Env, address: &Address) {
 pub const ESCROW_HOLD_TTL_LEDGERS: u32 = 6_307_200;
 
 pub fn get_escrow_hold(env: &Env, escrow_id: &String) -> Option<EscrowHold> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::EscrowHold(escrow_id.clone()))
+    let key = DataKey::EscrowHold(escrow_id.clone());
+    let value = env.storage().persistent().get(&key);
+    if value.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, LEDGERS_TO_LIVE, LEDGERS_TO_LIVE);
+    }
+    value
 }
 
 pub fn set_escrow_hold(env: &Env, hold: &EscrowHold) {
@@ -1316,9 +1408,14 @@ pub fn set_admin_audit_max_entries(env: &Env, max: u32) {
 
 /// Read a single audit log entry by its 0-based index.
 pub fn get_admin_audit_entry(env: &Env, index: u32) -> Option<AdminAuditEntry> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::AdminAuditEntry(index))
+    let key = DataKey::AdminAuditEntry(index);
+    let value = env.storage().persistent().get(&key);
+    if value.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, LEDGERS_TO_LIVE, LEDGERS_TO_LIVE);
+    }
+    value
 }
 
 /// Append a new entry to the audit log (append-only, never mutated after write).

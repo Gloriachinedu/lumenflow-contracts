@@ -9822,6 +9822,194 @@ fn test_set_min_refund_amount_zero_fails() {
     assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
 }
 
+// ── Persistent storage TTL extension tests (issue #1585) ─────────────────────
+
+/// Helper: return the remaining TTL (in ledgers) of a persistent entry, or
+/// `None` when the entry does not exist.
+fn persistent_ttl(env: &Env, contract: &Address, key: &impl soroban_sdk::IntoVal<Env, soroban_sdk::Val>) -> Option<u32> {
+    env.as_contract(contract, || {
+        env.storage().persistent().get_ttl(key)
+    })
+}
+
+/// Reading a payment via `get_payment_by_id` must extend the persistent
+/// entry's TTL to `LEDGERS_TO_LIVE`.
+#[test]
+fn test_get_payment_by_id_extends_ttl() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "TTL_PAY_001", 100);
+
+    let key = storage::DataKey::Payment(str(&env, "TTL_PAY_001"));
+
+    // Advance the ledger so the entry's TTL is below the target.
+    env.ledger().with_mut(|l| {
+        l.sequence_number += 10;
+    });
+
+    let before = persistent_ttl(&env, &client.address, &key);
+    assert!(before.is_some(), "payment entry must exist");
+
+    // Read-only getter must extend the TTL.
+    let payment = client.get_payment_by_id(&payer, &str(&env, "TTL_PAY_001"));
+    assert_eq!(payment.amount, 100);
+
+    let after = persistent_ttl(&env, &client.address, &key);
+    assert_eq!(
+        after,
+        Some(storage::LEDGERS_TO_LIVE),
+        "get_payment_by_id must extend TTL to LEDGERS_TO_LIVE"
+    );
+}
+
+/// Reading a payment summary must extend the TTL of the underlying payment.
+#[test]
+fn test_get_payment_summary_extends_ttl() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "TTL_SUM_001", 250);
+
+    let key = storage::DataKey::Payment(str(&env, "TTL_SUM_001"));
+
+    env.ledger().with_mut(|l| {
+        l.sequence_number += 10;
+    });
+
+    let _summary = client.get_payment_summary(&payer, &str(&env, "TTL_SUM_001"));
+
+    let after = persistent_ttl(&env, &client.address, &key);
+    assert_eq!(
+        after,
+        Some(storage::LEDGERS_TO_LIVE),
+        "get_payment_summary must extend TTL to LEDGERS_TO_LIVE"
+    );
+}
+
+/// Reading a refund must extend the persistent entry's TTL.
+#[test]
+fn test_get_refund_extends_ttl() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "TTL_REF_ORD", 1_000);
+    client.initiate_refund(
+        &payer,
+        &str(&env, "TTL_REF_001"),
+        &str(&env, "TTL_REF_ORD"),
+        &100,
+        &str(&env, "ttl test"),
+    );
+
+    let key = storage::DataKey::Refund(str(&env, "TTL_REF_001"));
+
+    env.ledger().with_mut(|l| {
+        l.sequence_number += 10;
+    });
+
+    let refund = client.get_refund(&str(&env, "TTL_REF_001"));
+    assert_eq!(refund.amount, 100);
+
+    let after = persistent_ttl(&env, &client.address, &key);
+    assert_eq!(
+        after,
+        Some(storage::LEDGERS_TO_LIVE),
+        "get_refund must extend TTL to LEDGERS_TO_LIVE"
+    );
+}
+
+/// Reading a multisig payment must extend the persistent entry's TTL.
+#[test]
+fn test_get_multisig_extends_ttl() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let signer = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(signer.clone());
+
+    client.initiate_multisig_payment(
+        &payer,
+        &str(&env, "TTL_MS_001"),
+        &merchant,
+        &token,
+        &500,
+        &signers,
+        &1,
+        &None,
+    );
+
+    let key = storage::DataKey::MultisigPayment(str(&env, "TTL_MS_001"));
+
+    env.ledger().with_mut(|l| {
+        l.sequence_number += 10;
+    });
+
+    let ms = client.get_multisig_payment(&payer, &str(&env, "TTL_MS_001"));
+    assert_eq!(ms.amount, 500);
+
+    let after = persistent_ttl(&env, &client.address, &key);
+    assert_eq!(
+        after,
+        Some(storage::LEDGERS_TO_LIVE),
+        "get_multisig_payment must extend TTL to LEDGERS_TO_LIVE"
+    );
+}
+
+/// Reading a merchant must extend the persistent entry's TTL.
+#[test]
+fn test_get_merchant_extends_ttl() {
+    let (env, client, _admin, merchant, _payer, _token) = setup_payment_env();
+
+    let key = storage::DataKey::Merchant(merchant.clone());
+
+    env.ledger().with_mut(|l| {
+        l.sequence_number += 10;
+    });
+
+    let m = client.get_merchant(&merchant);
+    assert!(m.active);
+
+    let after = persistent_ttl(&env, &client.address, &key);
+    assert_eq!(
+        after,
+        Some(storage::LEDGERS_TO_LIVE),
+        "get_merchant must extend TTL to LEDGERS_TO_LIVE"
+    );
+}
+
+/// Reading a missing key must not panic and must not create a persistent
+/// entry (and therefore must not extend any TTL).
+#[test]
+fn test_get_missing_payment_does_not_create_entry() {
+    let (env, client, _admin, _merchant, payer, _token) = setup_payment_env();
+
+    let missing_id = str(&env, "TTL_MISSING_001");
+    let key = storage::DataKey::Payment(missing_id.clone());
+
+    // Reading a non-existent payment must fail gracefully (no panic).
+    let result = client.try_get_payment_by_id(&payer, &missing_id);
+    assert!(result.is_err(), "reading a missing payment must return an error");
+
+    // No persistent entry must have been created by the read.
+    let ttl = persistent_ttl(&env, &client.address, &key);
+    assert_eq!(
+        ttl, None,
+        "reading a missing key must not create or extend a persistent entry"
+    );
+}
+
+/// Reading a missing refund must not panic and must not create an entry.
+#[test]
+fn test_get_missing_refund_does_not_create_entry() {
+    let (env, client, _admin, _merchant, _payer, _token) = setup_payment_env();
+
+    let missing_id = str(&env, "TTL_MISSING_REF");
+    let key = storage::DataKey::Refund(missing_id.clone());
+
+    let result = client.try_get_refund(&missing_id);
+    assert!(result.is_err(), "reading a missing refund must return an error");
+
+    let ttl = persistent_ttl(&env, &client.address, &key);
+    assert_eq!(
+        ttl, None,
+        "reading a missing refund must not create or extend a persistent entry"
+    );
+}
+
 // ── Max signers limit tests (issue #1269) ─────────────────────────────────────
 
 /// Helper: build a Vec<Address> of `n` freshly generated addresses.

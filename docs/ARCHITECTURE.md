@@ -41,6 +41,8 @@ Typed get/set helpers for every storage key. Centralises all `env.storage()` cal
 | `get/set_payer_index` | Persistent | Per-payer order ID list |
 | `get/set_payer_nonce` | Persistent | Replay-protection counter |
 
+Every `get_*` helper for a persistent key extends that entry's TTL after a successful read (see [TTL / Archival Policy](#ttl--archival-policy)).
+
 ### `error.rs`
 `PaymentError` — a `#[contracterror]` enum. Every function returns `Result<T, PaymentError>`. No panics in contract code.
 
@@ -71,6 +73,21 @@ LumenFlow uses two Soroban storage tiers:
 - `PayerIndex(Address)` → `Vec<String>`  *(order IDs for history)*
 - `PayerNonce(Address)` → `u64`
 - `AllowedToken(Address)` → `bool`
+
+All persistent entries have their TTL extended on every read and write (see below).
+
+---
+
+## TTL / Archival Policy
+
+Soroban persistent storage entries are archived once their TTL expires, so LumenFlow extends TTLs explicitly:
+
+- **Single constant.** `LEDGERS_TO_LIVE` is defined once in `storage.rs` and referenced by every TTL extension. Do not hardcode ledger counts elsewhere.
+- **Reads extend TTL.** Every `get_*` helper in `storage.rs` that reads a persistent key calls `extend_ttl` after a successful read. This includes read-only query paths such as `get_payment`, so active payment records are not archived merely because they are only being queried.
+- **Writes extend TTL.** Every `set_*` helper for a persistent key also extends the TTL when writing, so newly created and updated entries start with a full TTL window.
+- **Missing keys are not extended.** If a key is absent, the read returns `None` and no TTL extension is attempted (extending a non-existent entry would fail).
+- **Temporary storage is not extended.** Payment request entries live in temporary storage and are intentionally left to expire; they are never TTL-extended.
+- **Instance storage is not extended per key.** Instance storage shares the contract instance's lifetime and is not subject to per-key TTL extension.
 
 ---
 
