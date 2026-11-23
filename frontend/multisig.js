@@ -228,5 +228,33 @@ function showExecuteAlert(msg, success) {
   el.style.display  = 'block';
 }
 
+// ── Confirmation modal focus management ───────────────────────────────────────
+
+let confirmModalFocusHandle = null;
+
+function openConfirmModal(triggerEl) {
+  const dialogEl = document.getElementById('confirm-modal');
+  if (!dialogEl) return;
+  dialogEl.setAttribute('aria-modal', 'true');
+  dialogEl.style.display = 'block';
+  if (window.LumenFocus && typeof window.LumenFocus.trapModal === 'function') {
+    confirmModalFocusHandle = window.LumenFocus.trapModal(dialogEl, {
+      onEscape: closeConfirmModal,
+    });
+  }
+}
+
+function closeConfirmModal() {
+  const dialogEl = document.getElementById('confirm-modal');
+  if (dialogEl) {
+    dialogEl.style.display = 'none';
+    dialogEl.removeAttribute('aria-modal');
+  }
+  if (confirmModalFocusHandle && typeof confirmModalFocusHandle.deactivate === 'function') {
+    confirmModalFocusHandle.deactivate();
+  }
+  confirmModalFocusHandle = null;
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 updateThresholdLabel();

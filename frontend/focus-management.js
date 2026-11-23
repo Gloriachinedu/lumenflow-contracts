@@ -175,6 +175,62 @@
     };
   }
 
+  // ── trapModal ──────────────────────────────────────────────────────────────
+
+  /**
+   * Convenience wrapper around `createFocusTrap` for modal dialogs.
+   *
+   * In addition to trapping focus, it:
+   *   - sets `aria-modal="true"` on the container (if not already set)
+   *   - wires an `onEscape` callback that closes the modal and restores focus
+   *     to the trigger element
+   *   - restores focus to the element focused at `activate()` time on
+   *     `deactivate()`
+   *
+   * @param {Element} container   The dialog element to trap focus within
+   * @param {object}  [options]
+   * @param {Function} [options.onEscape]       Called when Escape is pressed
+   * @param {Element} [options.initialFocusEl]  Override where focus lands on activate
+   * @param {Element} [options.triggerElement]  Explicit trigger to restore focus to
+   * @returns {{ activate: Function, deactivate: Function, isActive: Function }}
+   */
+  function trapModal(container, options) {
+    options = options || {};
+
+    var _trigger = options.triggerElement || null;
+    var _userOnEscape = options.onEscape;
+
+    if (container && typeof container.setAttribute === 'function') {
+      container.setAttribute('aria-modal', 'true');
+    }
+
+    var trap = createFocusTrap(container, {
+      initialFocusEl: options.initialFocusEl,
+      onEscape: function (e) {
+        if (typeof _userOnEscape === 'function') {
+          _userOnEscape(e);
+        }
+        trap.deactivate();
+      },
+    });
+
+    return {
+      activate: function () {
+        if (trap.isActive()) return;
+        _trigger = _trigger || document.activeElement;
+        trap.activate();
+      },
+      deactivate: function (skipRestoreFocus) {
+        if (!trap.isActive()) return;
+        trap.deactivate(skipRestoreFocus);
+        if (!skipRestoreFocus) {
+          restoreFocus(_trigger);
+        }
+      },
+      isActive: function () { return trap.isActive(); },
+    };
+  }
+
   // ── ToastManager ──────────────────────────────────────────────────────────
 
   /**
@@ -350,6 +406,7 @@
     moveFocusTo:     moveFocusTo,
     restoreFocus:    restoreFocus,
     createFocusTrap: createFocusTrap,
+    trapModal:       trapModal,
     toast:           toast,
   };
 }));
