@@ -215,6 +215,75 @@ else
 fi
 rm -f "${MALFORMED_TOML_CFG}"
 
+# ── Step 2c: `merchant register` CLI tests (non-interactive + interactive) ────
+# These exercise the CLI's own merchant registration path rather than invoking
+# the contract directly, covering both the all-flags mode and the prompt-based
+# `--interactive` mode (including re-prompting on invalid input).
+step "[2c/8] Running merchant register CLI tests"
+
+# Case 1: non-interactive registration using all flags.
+MERCHANT_CFG=$(mktemp /tmp/lumenflow-int-merchant-XXXXXX.toml)
+cat > "${MERCHANT_CFG}" <<EOF
+network        = "local"
+contract_id    = "${CONTRACT_ID:-CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4}"
+source_account = "${MERCHANT_KEY}"
+rpc_url        = "${LOCAL_RPC_URL}"
+network_passphrase = "${LOCAL_PASSPHRASE}"
+EOF
+
+MERCHANT_OUT=$("${LUMENFLOW}" --config "${MERCHANT_CFG}" merchant register \
+  --name "CLI Non-Interactive Store" \
+  --description "Registered via CLI flags" \
+  --contact-info "flags@local" \
+  --category Retail 2>&1) && MERCHANT_STATUS=0 || MERCHANT_STATUS=$?
+if [[ "${MERCHANT_STATUS}" -eq 0 ]]; then
+  pass "merchant register (non-interactive) succeeds with all flags"
+else
+  fail "merchant register (non-interactive) succeeds with all flags" \
+    "exit=${MERCHANT_STATUS}, output=${MERCHANT_OUT}"
+fi
+rm -f "${MERCHANT_CFG}"
+
+# Case 2: interactive registration. Pipe answers into stdin: the first name is
+# invalid (empty) to verify re-prompting, then valid values follow, ending with
+# a "y" confirmation for the summary prompt.
+INTERACTIVE_INPUT=$(printf '\n%s\n%s\n%s\n%s\ny\n' \
+  "CLI Interactive Store" \
+  "Registered via interactive prompts" \
+  "interactive@local" \
+  "Retail")
+
+INTERACTIVE_OUT=$(printf '%s' "${INTERACTIVE_INPUT}" | \
+  "${LUMENFLOW}" --config "${MERCHANT_CFG:-/dev/null}" merchant register --interactive 2>&1) \
+  && INTERACTIVE_STATUS=0 || INTERACTIVE_STATUS=$?
+
+if [[ "${INTERACTIVE_STATUS}" -eq 0 \
+      && "${INTERACTIVE_OUT}" == *"CLI Interactive Store"* \
+      && "${INTERACTIVE_OUT}" =~ [Ss]ummary ]]; then
+  pass "merchant register --interactive re-prompts, shows summary, and confirms"
+else
+  fail "merchant register --interactive re-prompts, shows summary, and confirms" \
+    "exit=${INTERACTIVE_STATUS}, output=${INTERACTIVE_OUT}"
+fi
+
+# Case 3: interactive registration aborted at the confirmation prompt.
+ABORT_INPUT=$(printf '%s\n%s\n%s\n%s\nn\n' \
+  "CLI Aborted Store" \
+  "Should not be submitted" \
+  "abort@local" \
+  "Retail")
+
+ABORT_OUT=$(printf '%s' "${ABORT_INPUT}" | \
+  "${LUMENFLOW}" --config "${MERCHANT_CFG:-/dev/null}" merchant register --interactive 2>&1) \
+  && ABORT_STATUS=0 || ABORT_STATUS=$?
+
+if [[ "${ABORT_OUT}" =~ [Cc]ancel || "${ABORT_OUT}" =~ [Aa]bort ]]; then
+  pass "merchant register --interactive handles 'no' at confirmation"
+else
+  fail "merchant register --interactive handles 'no' at confirmation" \
+    "exit=${ABORT_STATUS}, output=${ABORT_OUT}"
+fi
+
 # ── Step 3: Deploy the contract ───────────────────────────────────────────────
 step "[3/8] Deploying lumenflow contract to local node"
 

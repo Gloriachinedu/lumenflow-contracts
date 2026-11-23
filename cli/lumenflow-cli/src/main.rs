@@ -198,6 +198,31 @@ enum MerchantCommands {
         #[arg(long)]
         category: Option<String>,
     },
+    /// Register a new merchant.
+    ///
+    /// Pass `--interactive` to be prompted for each field with real-time
+    /// validation and a confirmation summary before submission. Otherwise all
+    /// flags are required and the merchant is submitted directly.
+    Register {
+        /// Merchant Stellar address (required unless --interactive)
+        #[arg(long)]
+        address: Option<String>,
+        /// Merchant name (required unless --interactive)
+        #[arg(long)]
+        name: Option<String>,
+        /// Merchant description (required unless --interactive)
+        #[arg(long)]
+        description: Option<String>,
+        /// Merchant contact information (required unless --interactive)
+        #[arg(long)]
+        contact_info: Option<String>,
+        /// Merchant category (required unless --interactive)
+        #[arg(long)]
+        category: Option<String>,
+        /// Prompt for each field interactively with validation and confirmation
+        #[arg(long, default_value_t = false)]
+        interactive: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1104,6 +1129,196 @@ fn print_results_table(results: &[RowResult]) {
     println!("{}", sep);
 }
 
+// ── Merchant registration ─────────────────────────────────────────────────────
+
+/// Valid merchant categories accepted by the contract.
+const VALID_MERCHANT_CATEGORIES: &[&str] = &[
+    "retail",
+    "food",
+    "services",
+    "digital",
+    "entertainment",
+    "other",
+];
+
+/// Collected merchant registration fields.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MerchantRegistration {
+    pub address: String,
+    pub name: String,
+    pub description: String,
+    pub contact_info: String,
+    pub category: String,
+}
+
+/// Validate a Stellar account address: starts with 'G' and is 56 chars.
+pub fn validate_merchant_address(value: &str) -> Result<(), String> {
+    let v = value.trim();
+    if v.is_empty() {
+        return Err("Address must not be empty".to_string());
+    }
+    if !v.starts_with('G') {
+        return Err("Address must start with 'G'".to_string());
+    }
+    if v.len() != 56 {
+        return Err(format!(
+            "Address must be exactly 56 characters (got {})",
+            v.len()
+        ));
+    }
+    Ok(())
+}
+
+/// Validate a merchant name: non-empty after trimming.
+pub fn validate_merchant_name(value: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        return Err("Name must not be empty".to_string());
+    }
+    Ok(())
+}
+
+/// Validate a merchant description: non-empty after trimming.
+pub fn validate_merchant_description(value: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        return Err("Description must not be empty".to_string());
+    }
+    Ok(())
+}
+
+/// Validate merchant contact info: non-empty after trimming.
+pub fn validate_merchant_contact_info(value: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        return Err("Contact info must not be empty".to_string());
+    }
+    Ok(())
+}
+
+/// Validate a merchant category against the allowed set (case-insensitive).
+pub fn validate_merchant_category(value: &str) -> Result<(), String> {
+    let v = value.trim().to_lowercase();
+    if v.is_empty() {
+        return Err("Category must not be empty".to_string());
+    }
+    if !VALID_MERCHANT_CATEGORIES.contains(&v.as_str()) {
+        return Err(format!(
+            "Invalid category '{}'. Allowed: {}",
+            value.trim(),
+            VALID_MERCHANT_CATEGORIES.join(", ")
+        ));
+    }
+    Ok(())
+}
+
+/// Prompt for a single field, re-prompting until the validator accepts the input.
+fn prompt_validated<F>(theme: &ColorfulTheme, prompt: &str, validator: F) -> Result<String>
+where
+    F: Fn(&str) -> Result<(), String>,
+{
+    loop {
+        let input: String = Input::with_theme(theme)
+            .with_prompt(prompt)
+            .interact_text()
+            .context("Failed to read input from terminal")?;
+        match validator(&input) {
+            Ok(()) => return Ok(input.trim().to_string()),
+            Err(msg) => eprintln!("  ✗ {}", msg),
+        }
+    }
+}
+
+/// Run the interactive prompt flow, collecting and confirming a registration.
+/// Returns `Ok(None)` if the user declines the confirmation.
+fn prompt_merchant_registration() -> Result<Option<MerchantRegistration>> {
+    let theme = ColorfulTheme::default();
+
+    println!("Register a new merchant (interactive mode).\n");
+
+    let address = prompt_validated(&theme, "Merchant address", validate_merchant_address)?;
+    let name = prompt_validated(&theme, "Merchant name", validate_merchant_name)?;
+    let description =
+        prompt_validated(&theme, "Description", validate_merchant_description)?;
+    let contact_info =
+        prompt_validated(&theme, "Contact info", validate_merchant_contact_info)?;
+    let category = prompt_validated(&theme, "Category", validate_merchant_category)?;
+    let category = category.to_lowercase();
+
+    let registration = MerchantRegistration {
+        address,
+        name,
+        description,
+        contact_info,
+        category,
+    };
+
+    // Summary table.
+    println!("\nRegistration summary:");
+    println!("  {:<14} {}", "Address:", registration.address);
+    println!("  {:<14} {}", "Name:", registration.name);
+    println!("  {:<14} {}", "Description:", registration.description);
+    println!("  {:<14} {}", "Contact info:", registration.contact_info);
+    println!("  {:<14} {}", "Category:", registration.category);
+
+    let confirmed = Confirm::with_theme(&theme)
+        .with_prompt("Submit this registration?")
+        .default(false)
+        .interact()
+        .context("Failed to read confirmation from terminal")?;
+
+    if confirmed {
+        Ok(Some(registration))
+    } else {
+        println!("Registration cancelled.");
+        Ok(None)
+    }
+}
+
+/// Build a registration from explicit flags, validating each field.
+fn registration_from_flags(
+    address: Option<String>,
+    name: Option<String>,
+    description: Option<String>,
+    contact_info: Option<String>,
+    category: Option<String>,
+) -> Result<MerchantRegistration> {
+    let address = address.context("Missing required flag: --address")?;
+    let name = name.context("Missing required flag: --name")?;
+    let description = description.context("Missing required flag: --description")?;
+    let contact_info = contact_info.context("Missing required flag: --contact-info")?;
+    let category = category.context("Missing required flag: --category")?;
+
+    validate_merchant_address(&address).map_err(|e| anyhow::anyhow!("--address: {}", e))?;
+    validate_merchant_name(&name).map_err(|e| anyhow::anyhow!("--name: {}", e))?;
+    validate_merchant_description(&description)
+        .map_err(|e| anyhow::anyhow!("--description: {}", e))?;
+    validate_merchant_contact_info(&contact_info)
+        .map_err(|e| anyhow::anyhow!("--contact-info: {}", e))?;
+    validate_merchant_category(&category)
+        .map_err(|e| anyhow::anyhow!("--category: {}", e))?;
+
+    Ok(MerchantRegistration {
+        address: address.trim().to_string(),
+        name: name.trim().to_string(),
+        description: description.trim().to_string(),
+        contact_info: contact_info.trim().to_string(),
+        category: category.trim().to_lowercase(),
+    })
+}
+
+/// Print the submission result for a registration.
+fn submit_merchant_registration(registration: &MerchantRegistration, contract_id: &str) {
+    println!("\nRegistering merchant...");
+    println!("  Contract:     {}", contract_id);
+    println!("  Address:      {}", registration.address);
+    println!("  Name:         {}", registration.name);
+    println!("  Description:  {}", registration.description);
+    println!("  Contact info: {}", registration.contact_info);
+    println!("  Category:     {}", registration.category);
+    println!(
+        "\nSuccess! Merchant {} has been registered.",
+        registration.address
+    );
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 fn main() -> Result<()> {
@@ -1213,6 +1428,33 @@ fn main() -> Result<()> {
                 }
 
                 println!("\nSuccess! Merchant profile updated for {}.", address);
+            }
+            MerchantCommands::Register {
+                address,
+                name,
+                description,
+                contact_info,
+                category,
+                interactive,
+            } => {
+                let contract_id = config.contract_id.as_deref().unwrap_or("N/A");
+
+                let registration = if *interactive {
+                    match prompt_merchant_registration()? {
+                        Some(r) => r,
+                        None => return Ok(()),
+                    }
+                } else {
+                    registration_from_flags(
+                        address.clone(),
+                        name.clone(),
+                        description.clone(),
+                        contact_info.clone(),
+                        category.clone(),
+                    )?
+                };
+
+                submit_merchant_registration(&registration, contract_id);
             }
         },
         Commands::Refund { action } => {
@@ -2216,5 +2458,220 @@ mod tests {
         std::env::remove_var("LUMENFLOW_ADMIN_KEY");
         let m = Cli::command().try_get_matches_from(["lumenflow", "merchant", "list"]);
         assert!(m.is_err(), "merchant list without --admin-key should fail");
+    }
+
+    // --- Merchant registration: validation helpers ---
+
+    fn valid_merchant_address() -> String {
+        format!("G{}", "A".repeat(55))
+    }
+
+    #[test]
+    fn test_validate_merchant_address_valid() {
+        assert!(validate_merchant_address(&valid_merchant_address()).is_ok());
+    }
+
+    #[test]
+    fn test_validate_merchant_address_empty() {
+        let err = validate_merchant_address("   ").unwrap_err();
+        assert!(err.contains("empty"));
+    }
+
+    #[test]
+    fn test_validate_merchant_address_wrong_prefix() {
+        let addr = format!("S{}", "A".repeat(55));
+        let err = validate_merchant_address(&addr).unwrap_err();
+        assert!(err.contains("start with 'G'"));
+    }
+
+    #[test]
+    fn test_validate_merchant_address_wrong_length() {
+        let err = validate_merchant_address("GABC").unwrap_err();
+        assert!(err.contains("56 characters"));
+    }
+
+    #[test]
+    fn test_validate_merchant_name_valid() {
+        assert!(validate_merchant_name("Acme Store").is_ok());
+    }
+
+    #[test]
+    fn test_validate_merchant_name_empty() {
+        assert!(validate_merchant_name("   ").is_err());
+    }
+
+    #[test]
+    fn test_validate_merchant_description_empty() {
+        assert!(validate_merchant_description("").is_err());
+        assert!(validate_merchant_description("A shop").is_ok());
+    }
+
+    #[test]
+    fn test_validate_merchant_contact_info_empty() {
+        assert!(validate_merchant_contact_info("  ").is_err());
+        assert!(validate_merchant_contact_info("acme@example.com").is_ok());
+    }
+
+    #[test]
+    fn test_validate_merchant_category_valid() {
+        for cat in VALID_MERCHANT_CATEGORIES {
+            assert!(
+                validate_merchant_category(cat).is_ok(),
+                "expected {cat} to be valid"
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_merchant_category_case_insensitive() {
+        assert!(validate_merchant_category("RETAIL").is_ok());
+    }
+
+    #[test]
+    fn test_validate_merchant_category_invalid() {
+        let err = validate_merchant_category("spaceships").unwrap_err();
+        assert!(err.contains("Invalid category"));
+        assert!(err.contains("retail"));
+    }
+
+    #[test]
+    fn test_validate_merchant_category_empty() {
+        assert!(validate_merchant_category("").is_err());
+    }
+
+    // --- Merchant registration: non-interactive flow ---
+
+    #[test]
+    fn test_registration_from_flags_valid() {
+        let reg = registration_from_flags(
+            Some(valid_merchant_address()),
+            Some("Acme".into()),
+            Some("A store".into()),
+            Some("acme@example.com".into()),
+            Some("Retail".into()),
+        )
+        .expect("valid flags should build a registration");
+        assert_eq!(reg.name, "Acme");
+        assert_eq!(reg.category, "retail"); // normalised to lowercase
+    }
+
+    #[test]
+    fn test_registration_from_flags_missing_address() {
+        let err = registration_from_flags(
+            None,
+            Some("Acme".into()),
+            Some("A store".into()),
+            Some("acme@example.com".into()),
+            Some("retail".into()),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("--address"));
+    }
+
+    #[test]
+    fn test_registration_from_flags_missing_name() {
+        let err = registration_from_flags(
+            Some(valid_merchant_address()),
+            None,
+            Some("A store".into()),
+            Some("acme@example.com".into()),
+            Some("retail".into()),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("--name"));
+    }
+
+    #[test]
+    fn test_registration_from_flags_invalid_address() {
+        let err = registration_from_flags(
+            Some("BADADDR".into()),
+            Some("Acme".into()),
+            Some("A store".into()),
+            Some("acme@example.com".into()),
+            Some("retail".into()),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("--address"));
+    }
+
+    #[test]
+    fn test_registration_from_flags_invalid_category() {
+        let err = registration_from_flags(
+            Some(valid_merchant_address()),
+            Some("Acme".into()),
+            Some("A store".into()),
+            Some("acme@example.com".into()),
+            Some("spaceships".into()),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("--category"));
+    }
+
+    // --- Merchant registration: CLI parsing ---
+
+    #[test]
+    fn test_merchant_register_interactive_flag_parses() {
+        let cli = Cli::try_parse_from(["lumenflow", "merchant", "register", "--interactive"])
+            .expect("merchant register --interactive should parse without other flags");
+
+        match cli.command {
+            Commands::Merchant {
+                action: MerchantCommands::Register { interactive, address, .. },
+            } => {
+                assert!(interactive);
+                assert!(address.is_none());
+            }
+            _ => panic!("expected Commands::Merchant {{ Register }}"),
+        }
+    }
+
+    #[test]
+    fn test_merchant_register_non_interactive_flags_parse() {
+        let cli = Cli::try_parse_from([
+            "lumenflow",
+            "merchant",
+            "register",
+            "--address",
+            &valid_merchant_address(),
+            "--name",
+            "Acme",
+            "--description",
+            "A store",
+            "--contact-info",
+            "acme@example.com",
+            "--category",
+            "retail",
+        ])
+        .expect("merchant register with all flags should parse");
+
+        match cli.command {
+            Commands::Merchant {
+                action:
+                    MerchantCommands::Register {
+                        interactive,
+                        name,
+                        category,
+                        ..
+                    },
+            } => {
+                assert!(!interactive);
+                assert_eq!(name.as_deref(), Some("Acme"));
+                assert_eq!(category.as_deref(), Some("retail"));
+            }
+            _ => panic!("expected Commands::Merchant {{ Register }}"),
+        }
+    }
+
+    #[test]
+    fn test_merchant_register_defaults_to_non_interactive() {
+        let cli = Cli::try_parse_from(["lumenflow", "merchant", "register"])
+            .expect("merchant register with no flags should parse (validation happens later)");
+
+        match cli.command {
+            Commands::Merchant {
+                action: MerchantCommands::Register { interactive, .. },
+            } => assert!(!interactive),
+            _ => panic!("expected Commands::Merchant {{ Register }}"),
+        }
     }
 }
