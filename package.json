@@ -5,6 +5,7 @@
     "test:receipt": "playwright test tests/receipt.spec.js",
     "test:playwright": "playwright test tests/playwright/",
     "test:e2e": "playwright test",
+    "test:lighthouse": "npm --prefix frontend run test:lighthouse",
     "lint:html": "htmlhint \"frontend/**/*.html\" --config .htmlhintrc",
     "lint:js": "eslint \"frontend/**/*.js\" \"tests/**/*.js\"",
     "check:i18n": "node scripts/check-i18n-locales.mjs",
