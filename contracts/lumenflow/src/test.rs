@@ -4232,6 +4232,120 @@ fn test_event_payment_processed_topics_and_data() {
     );
 }
 
+// ── Diagnostic telemetry event tests (#1589) ─────────────────────────────────
+//
+// Diagnostic events carry a `ledger_sequence_delta` field so off-chain
+// monitoring (lumenflow_exporter.py) can derive duration-equivalent metrics.
+// Event names: payment_processed_diagnostic, refund_issued_diagnostic,
+// batch_payment_completed_diagnostic.
+
+/// Extract the `ledger_sequence_delta` (u32) from the most recent event whose
+/// topics contain `name`, returning None if the event or field is absent.
+fn find_diagnostic_delta(
+    env: &Env,
+    events: &soroban_sdk::testutils::ContractEvents,
+    name: &str,
+) -> Option<u32> {
+    use soroban_sdk::xdr::{ContractEventBody, ScMap, ScString, ScSymbol, ScVal, StringM};
+    let needle = ScVal::String(ScString(StringM::try_from(name).unwrap()));
+    let key = ScVal::Symbol(ScSymbol(StringM::try_from("ledger_sequence_delta").unwrap()));
+    let _ = env;
+    events.events().iter().rev().find_map(|e| {
+        if let ContractEventBody::V0(ref body) = e.body {
+            if !body.topics.iter().any(|t| t == &needle) {
+                return None;
+            }
+            if let ScVal::Map(Some(ScMap(entries))) = &body.data {
+                for entry in entries.iter() {
+                    if entry.key == key {
+                        if let ScVal::U32(delta) = entry.val {
+                            return Some(delta);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    })
+}
+
+#[test]
+fn test_diagnostic_event_payment_processed() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Advance the ledger so the start/publish delta is non-zero.
+    env.ledger().with_mut(|l| l.sequence_number += 5);
+    make_payment(&env, &client, &merchant, &payer, &token, "DIAG_PAY", 1_000);
+
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "payment_processed_diagnostic"),
+        "payment_processed_diagnostic event must be emitted"
+    );
+    let delta = find_diagnostic_delta(&env, &events, "payment_processed_diagnostic")
+        .expect("payment_processed_diagnostic must carry ledger_sequence_delta");
+    // Delta is non-negative by type; assert it is present and sane.
+    assert!(delta < u32::MAX, "ledger_sequence_delta must be a valid delta");
+}
+
+#[test]
+fn test_diagnostic_event_refund_issued() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "DIAG_REF", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "RF_DIAG"),
+        &str(&env, "DIAG_REF"),
+        &500,
+        &str(&env, "diag"),
+    );
+    client.approve_refund(&merchant, &str(&env, "RF_DIAG"));
+
+    // Advance the ledger between approval and execution to exercise a delta.
+    env.ledger().with_mut(|l| l.sequence_number += 3);
+    client.execute_refund(&str(&env, "RF_DIAG"));
+
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "refund_issued_diagnostic"),
+        "refund_issued_diagnostic event must be emitted"
+    );
+    let delta = find_diagnostic_delta(&env, &events, "refund_issued_diagnostic")
+        .expect("refund_issued_diagnostic must carry ledger_sequence_delta");
+    assert!(delta < u32::MAX, "ledger_sequence_delta must be a valid delta");
+}
+
+#[test]
+fn test_diagnostic_event_batch_payment_completed() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut payments = Vec::new(&env);
+    for i in 0u32..3 {
+        payments.push_back(BatchPaymentItem {
+            order_id: str(&env, &format!("DIAG_BATCH_{}", i)),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 100,
+            memo: str(&env, ""),
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        });
+    }
+
+    env.ledger().with_mut(|l| l.sequence_number += 2);
+    client.batch_payment(&payer, &payments);
+
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "batch_payment_completed_diagnostic"),
+        "batch_payment_completed_diagnostic event must be emitted"
+    );
+    let delta = find_diagnostic_delta(&env, &events, "batch_payment_completed_diagnostic")
+        .expect("batch_payment_completed_diagnostic must carry ledger_sequence_delta");
+    assert!(delta < u32::MAX, "ledger_sequence_delta must be a valid delta");
+}
+
 #[test]
 fn test_event_payment_archived() {
     let (env, client, admin, merchant, payer, token) = setup_payment_env();

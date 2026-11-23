@@ -390,6 +390,34 @@ multisig_executed_total = Counter(
     LABELS,
 )
 
+# Diagnostic telemetry events published by the contract via env.events().publish()
+# for observability (see issue #1589). Each carries a ledger_sequence_delta value
+# (duration-equivalent) that is observed in lumenflow_ledger_sequence_delta.
+payments_processed_total = Counter(
+    "lumenflow_payments_processed_total",
+    "Total number of diagnostic payment_processed events",
+    LABELS,
+)
+
+refunds_issued_total = Counter(
+    "lumenflow_refunds_issued_total",
+    "Total number of diagnostic refund_issued events",
+    LABELS,
+)
+
+batch_payments_completed_total = Counter(
+    "lumenflow_batch_payments_completed_total",
+    "Total number of diagnostic batch_payment_completed events",
+    LABELS,
+)
+
+ledger_sequence_delta = Histogram(
+    "lumenflow_ledger_sequence_delta",
+    "Ledger sequence delta (duration-equivalent) reported by diagnostic events",
+    LABELS + ["event_name"],
+    buckets=[1, 2, 5, 10, 25, 50, 100, 250, 500, 1000],
+)
+
 payment_amount = Histogram(
     "lumenflow_payment_amount",
     "Distribution of payment amounts in stroops",
@@ -492,6 +520,29 @@ def process_event(event: dict) -> None:
 
     elif event_name == "multisig_executed":
         multisig_executed_total.labels(*lbl).inc()
+
+    # Diagnostic telemetry events (issue #1589). Each includes a
+    # ledger_sequence_delta field used as a duration-equivalent measure.
+    elif event_name in (
+        "payment_processed_diagnostic",
+        "refund_issued",
+        "batch_payment_completed",
+    ):
+        if event_name == "payment_processed_diagnostic":
+            payments_processed_total.labels(*lbl).inc()
+        elif event_name == "refund_issued":
+            refunds_issued_total.labels(*lbl).inc()
+        else:
+            batch_payments_completed_total.labels(*lbl).inc()
+
+        delta = value.get("ledger_sequence_delta")
+        if delta is not None:
+            try:
+                ledger_sequence_delta.labels(
+                    CONTRACT_ID, event_name
+                ).observe(float(delta))
+            except (ValueError, TypeError):
+                pass
 
     # Detect pause / unpause
     elif event_name == "contract_paused":
