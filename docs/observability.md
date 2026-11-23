@@ -29,6 +29,116 @@ The exporter is the single source of truth between Horizon and the rest of the s
 
 ---
 
+## Distributed Tracing
+
+Metrics tell you *that* something is slow or failing; traces tell you *where*. The webhook relay and the event poller are instrumented with the [OpenTelemetry SDK](https://opentelemetry.io/docs/) so a single payment can be followed across every hop:
+
+```
+SDK / client
+   │  traceparent header
+   ▼
+Webhook Relay  ── span: inbound request (HTTP server)
+   │            └─ span: RPC call (Stellar RPC / Soroban contract)
+   │            └─ span: outbound webhook (HTTP client)
+   ▼
+Event Poller   ── span: inbound request (HTTP server)
+                └─ span: RPC call (Horizon / RPC)
+```
+
+### Span hierarchy
+
+| Span name | Kind | Created by | Description |
+|-----------|------|------------|-------------|
+| `http.server.request` | Server | Relay, poller | Inbound HTTP request; root span for a new trace |
+| `rpc.client.call` | Client | Relay, poller | Outbound JSON-RPC call to Stellar RPC / Horizon |
+| `webhook.delivery` | Client | Relay | Outbound webhook POST to a merchant endpoint |
+
+Client spans are children of the active server span, so a slow `rpc.client.call` or a failing `webhook.delivery` is immediately attributable to the request that triggered it.
+
+### Trace context propagation
+
+All services propagate context using the [W3C Trace Context](https://www.w3.org/TR/trace-context/) standard. The `traceparent` (and optional `tracestate`) header is:
+
+- **extracted** from every inbound HTTP request, and
+- **injected** into every outbound HTTP request (RPC calls and webhook deliveries).
+
+This means a trace started by an SDK client continues seamlessly through the relay, into the RPC layer, and out to the merchant's webhook receiver — as long as the receiver also honours `traceparent`. No custom headers are required.
+
+### Local development with Jaeger
+
+A Jaeger all-in-one instance is included in `docker-compose.yml`:
+
+```bash
+docker compose up -d jaeger
+```
+
+- Jaeger UI: <http://localhost:16686>
+- OTLP gRPC endpoint: `localhost:4317`
+- OTLP HTTP endpoint: `localhost:4318`
+
+Point the services at it with:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+export OTEL_SERVICE_NAME=lumenflow-relay   # or lumenflow-poller
+```
+
+Then exercise a payment and search for the service in the Jaeger UI. You should see the full span tree (inbound request → RPC call → outbound webhook) under a single trace ID.
+
+### Production configuration
+
+In production, traces are exported over OTLP to a configurable collector/backend (Jaeger, Tempo, an OpenTelemetry Collector, or a hosted vendor). The endpoint is supplied via environment variables so no code change is needed to switch backends.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP endpoint (gRPC unless `OTEL_EXPORTER_OTLP_PROTOCOL` says otherwise) |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` | `grpc` or `http/protobuf` |
+| `OTEL_EXPORTER_OTLP_HEADERS` | — | Auth headers for hosted backends, e.g. `Authorization=Bearer <token>` |
+| `OTEL_SERVICE_NAME` | `lumenflow-relay` / `lumenflow-poller` | Service name shown in the tracing backend |
+| `OTEL_RESOURCE_ATTRIBUTES` | — | Extra resource attributes, e.g. `deployment.environment=production,service.version=1.4.0` |
+| `OTEL_TRACES_SAMPLER` | `parentbased_always_on` | Sampler; use `parentbased_traceidratio` with `OTEL_TRACES_SAMPLER_ARG` to reduce volume in high-traffic environments |
+| `OTEL_TRACES_SAMPLER_ARG` | `1.0` | Ratio for `traceidratio` samplers (e.g. `0.1` = 10%) |
+| `OTEL_SDK_DISABLED` | `false` | Set to `true` to disable tracing entirely (e.g. in unit tests) |
+
+Example production settings:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.example.com:4317
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $OTLP_TOKEN"
+export OTEL_SERVICE_NAME=lumenflow-relay
+export OTEL_RESOURCE_ATTRIBUTES="deployment.environment=production,service.version=$LUMENFLOW_VERSION"
+export OTEL_TRACES_SAMPLER=parentbased_traceidratio
+export OTEL_TRACES_SAMPLER_ARG=0.1
+```
+
+### Example span attributes
+
+Spans carry attributes that make filtering and root-cause analysis straightforward:
+
+| Span | Attribute | Example |
+|------|-----------|---------|
+| `http.server.request` | `http.request.method` | `POST` |
+| `http.server.request` | `url.path` | `/webhooks/payment` |
+| `http.server.request` | `http.response.status_code` | `200` |
+| `rpc.client.call` | `rpc.system` | `jsonrpc` |
+| `rpc.client.call` | `rpc.method` | `sendTransaction` |
+| `rpc.client.call` | `server.address` | `soroban-testnet.stellar.org` |
+| `webhook.delivery` | `http.request.method` | `POST` |
+| `webhook.delivery` | `url.full` | `https://merchant.example.com/hooks/lumenflow` |
+| `webhook.delivery` | `http.response.status_code` | `502` |
+| `webhook.delivery` | `lumenflow.payment_id` | `pay_01H...` |
+
+### Troubleshooting
+
+- **No traces in Jaeger** — confirm `OTEL_SDK_DISABLED` is not `true`, the OTLP endpoint is reachable from the service host (`grpcurl -plaintext localhost:4317 list` or `curl localhost:4318/v1/traces`), and the service was restarted after changing env vars.
+- **Traces appear but are split into separate traces** — the `traceparent` header is being dropped somewhere. Check that any proxy/load balancer in front of the relay forwards `traceparent` and `tracestate`, and that the upstream client sends them.
+- **Only server spans, no client spans** — the outbound HTTP client is not instrumented or is bypassing the instrumented client. Ensure RPC and webhook calls go through the shared instrumented client.
+- **Missing webhook spans** — webhook deliveries that fail before the HTTP request is made (e.g. invalid URL) will not produce a `webhook.delivery` span; check application logs for validation errors.
+- **High trace volume / cost** — lower the sampling ratio via `OTEL_TRACES_SAMPLER_ARG` (e.g. `0.05`). Sampling is parent-based, so a sampled trace stays sampled across all services.
+- **Clock skew warnings** — span timestamps come from each host's clock; keep NTP enabled on all service hosts.
+
+---
+
 ## Grafana Dashboards
 
 The pre-built dashboard is at `monitoring/grafana-dashboard.json`. Import it via  
@@ -296,3 +406,5 @@ All metrics are exposed at `http://<exporter-host>:9101/metrics` in Prometheus t
 - [SECURITY.md](../SECURITY.md) — responsible disclosure and incident escalation
 - [Stellar Horizon API](https://developers.stellar.org/docs/data/horizon/api-reference/resources/events)
 - [Grafana Alerting documentation](https://grafana.com/docs/grafana/latest/alerting/)
+- [OpenTelemetry documentation](https://opentelemetry.io/docs/) — SDK, OTLP exporter, and W3C Trace Context
+- [Jaeger documentation](https://www.jaegertracing.io/docs/) — local trace UI and querying

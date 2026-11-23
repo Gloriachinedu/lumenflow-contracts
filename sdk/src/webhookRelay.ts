@@ -23,6 +23,9 @@
  * must themselves be idempotent on the event key.
  */
 
+import { SpanStatusCode } from '@opentelemetry/api';
+import { tracer } from './tracing';
+
 export interface RelayEvent {
   /** Horizon paging token — the preferred idempotency key. */
   pagingToken?: string;
@@ -142,52 +145,106 @@ export class WebhookRelay {
       throw new TypeError('relay event is missing an idempotency key (pagingToken or id)');
     }
 
-    if (await this.store.has(key)) {
-      return { status: 'duplicate', key, attempts: 0 };
-    }
-
-    let lastStatus: number | undefined;
-    for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
-      let response: DeliveryResponse | undefined;
-      let threw = false;
+    return tracer.startActiveSpan('webhook.relay', async (span) => {
       try {
-        response = await this.deliver(event);
-      } catch {
-        threw = true;
-      }
+        span.setAttribute('webhook.event.key', key);
+        if (event.type !== undefined) {
+          span.setAttribute('webhook.event.type', event.type);
+        }
+        if (event.ledger !== undefined) {
+          span.setAttribute('webhook.event.ledger', event.ledger);
+        }
 
-      if (response && response.status >= 200 && response.status < 300) {
-        await this.store.add(key);
-        return { status: 'delivered', key, attempts: attempt };
-      }
+        if (await this.store.has(key)) {
+          span.setAttribute('webhook.duplicate', true);
+          return { status: 'duplicate', key, attempts: 0 };
+        }
 
-      lastStatus = response?.status;
-      const retryable = threw || (lastStatus !== undefined && isRetryableStatus(lastStatus));
-      const isLast = attempt === this.maxAttempts;
+        let lastStatus: number | undefined;
+        for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
+          let response: DeliveryResponse | undefined;
+          let threw = false;
+          let thrownError: unknown;
+          try {
+            response = await tracer.startActiveSpan('webhook.deliver', async (deliverSpan) => {
+              deliverSpan.setAttribute('webhook.attempt', attempt);
+              try {
+                const result = await this.deliver(event);
+                deliverSpan.setAttribute('http.status_code', result.status);
+                if (result.status < 200 || result.status >= 300) {
+                  deliverSpan.setStatus({
+                    code: SpanStatusCode.ERROR,
+                    message: `HTTP ${result.status}`,
+                  });
+                }
+                return result;
+              } catch (err) {
+                deliverSpan.recordException(err as Error);
+                deliverSpan.setStatus({
+                  code: SpanStatusCode.ERROR,
+                  message: err instanceof Error ? err.message : String(err),
+                });
+                throw err;
+              } finally {
+                deliverSpan.end();
+              }
+            });
+          } catch (err) {
+            threw = true;
+            thrownError = err;
+          }
 
-      if (!retryable) {
-        throw new WebhookDeliveryError(
-          `webhook rejected event ${key} with non-retryable status ${lastStatus}`,
+          if (response && response.status >= 200 && response.status < 300) {
+            await this.store.add(key);
+            span.setAttribute('webhook.attempts', attempt);
+            return { status: 'delivered', key, attempts: attempt };
+          }
+
+          lastStatus = response?.status;
+          const retryable = threw || (lastStatus !== undefined && isRetryableStatus(lastStatus));
+          const isLast = attempt === this.maxAttempts;
+
+          if (!retryable) {
+            const error = new WebhookDeliveryError(
+              `webhook rejected event ${key} with non-retryable status ${lastStatus}`,
+              event,
+              attempt,
+              lastStatus,
+            );
+            span.recordException(error);
+            span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+            throw error;
+          }
+          if (isLast) {
+            const error = new WebhookDeliveryError(
+              `webhook delivery for event ${key} exhausted ${this.maxAttempts} attempts`,
+              event,
+              attempt,
+              lastStatus,
+            );
+            span.recordException(thrownError instanceof Error ? thrownError : error);
+            span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+            throw error;
+          }
+
+          const backoff = Math.min(this.baseDelayMs * 2 ** (attempt - 1), this.maxDelayMs);
+          await this.sleep(backoff);
+        }
+
+        // Unreachable — the loop always returns or throws.
+        const error = new WebhookDeliveryError(
+          `webhook delivery for event ${key} failed`,
           event,
-          attempt,
+          this.maxAttempts,
           lastStatus,
         );
+        span.recordException(error);
+        span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+        throw error;
+      } finally {
+        span.end();
       }
-      if (isLast) {
-        throw new WebhookDeliveryError(
-          `webhook delivery for event ${key} exhausted ${this.maxAttempts} attempts`,
-          event,
-          attempt,
-          lastStatus,
-        );
-      }
-
-      const backoff = Math.min(this.baseDelayMs * 2 ** (attempt - 1), this.maxDelayMs);
-      await this.sleep(backoff);
-    }
-
-    // Unreachable — the loop always returns or throws.
-    throw new WebhookDeliveryError(`webhook delivery for event ${key} failed`, event, this.maxAttempts, lastStatus);
+    });
   }
 
   /**

@@ -33,6 +33,17 @@
 
 'use strict';
 
+// ---------------------------------------------------------------------------
+// Distributed tracing (OpenTelemetry)
+//
+// Must be required and started before any other module so that the SDK can
+// patch instrumented libraries (http, node-fetch, etc.) at load time.
+// ---------------------------------------------------------------------------
+
+const { startTracing, shutdownTracing, trace, propagation, SpanStatusCode } = require('./tracing');
+
+startTracing('webhook-relay');
+
 const EventSource = require('eventsource');
 const fetch = require('node-fetch');
 const fs = require('fs');
@@ -166,10 +177,27 @@ async function deliverWithRetry(eventName, data, ledger, pagingToken) {
   const payload = JSON.stringify({ event: eventName, data, ledger });
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    // One client span per delivery attempt so retries are individually visible.
+    const span = trace.getTracer('webhook-relay').startSpan('webhook.deliver', {
+      kind: trace.SpanKind.CLIENT,
+      attributes: {
+        'webhook.url': WEBHOOK_URL,
+        'webhook.event': eventName,
+        'webhook.paging_token': pagingToken,
+        'webhook.attempt': attempt,
+        'http.method': 'POST',
+      },
+    });
+
     try {
+      // Propagate W3C trace context to the downstream webhook receiver.
+      const traceHeaders = {};
+      propagation.inject(trace.setSpan(trace.context.active(), span), traceHeaders);
+
       const response = await fetch(WEBHOOK_URL, {
         method: 'POST',
         headers: applySecurityHeaders({
+          ...traceHeaders,
           'Content-Type': 'application/json',
           'X-LumenFlow-Event': eventName,
           'X-LumenFlow-Paging-Token': pagingToken,
@@ -178,19 +206,30 @@ async function deliverWithRetry(eventName, data, ledger, pagingToken) {
         body: payload,
       });
 
+      span.setAttribute('http.status_code', response.status);
+
       if (response.ok) {
+        span.setStatus({ code: SpanStatusCode.OK });
         console.log(`[delivered] ${eventName} (token=${pagingToken}, attempt=${attempt})`);
         return;
       }
 
       const body = await response.text().catch(() => '');
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: `HTTP ${response.status}`,
+      });
       console.warn(
         `[retry] ${eventName} attempt ${attempt}/${MAX_RETRIES} — HTTP ${response.status}: ${body}`,
       );
     } catch (err) {
+      span.recordException(err);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
       console.warn(
         `[retry] ${eventName} attempt ${attempt}/${MAX_RETRIES} — network error: ${err.message}`,
       );
+    } finally {
+      span.end();
     }
 
     if (attempt < MAX_RETRIES) {
@@ -228,39 +267,62 @@ let shutdownRequested = false;
  * @returns {Promise<void>}
  */
 async function handleMessage(msg) {
-  let event;
+  const span = trace.getTracer('webhook-relay').startSpan('webhook.handleMessage', {
+    kind: trace.SpanKind.SERVER,
+    attributes: {
+      'messaging.system': 'horizon-sse',
+      'messaging.operation': 'process',
+    },
+  });
+
   try {
-    event = JSON.parse(msg.data);
+    let event;
+    try {
+      event = JSON.parse(msg.data);
+    } catch (err) {
+      span.recordException(err);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+      console.error('[parse] Failed to parse SSE message:', err.message, msg.data);
+      return;
+    }
+
+    const pagingToken = event.paging_token;
+    if (!pagingToken) {
+      console.warn('[skip] Event missing paging_token — cannot deduplicate:', event);
+      return;
+    }
+
+    const eventName = Array.isArray(event.topic) ? event.topic[1] : String(event.topic);
+    span.setAttribute('webhook.paging_token', pagingToken);
+    span.setAttribute('webhook.event', eventName);
+    span.setAttribute('webhook.ledger', event.ledger);
+
+    // ── Idempotency check ──────────────────────────────────────────────────
+    if (await idempotencyStore.has(pagingToken)) {
+      span.setAttribute('webhook.duplicate', true);
+      console.log(`[duplicate] Skipping already-processed event (token=${pagingToken})`);
+      return;
+    }
+
+    // Record the token *before* delivery.  If the process crashes between
+    // recording and successful delivery, the event is skipped on the next run —
+    // which is the safer trade-off (at-most-once within a single run) versus
+    // re-delivering and relying solely on the downstream handler for dedup.
+    await idempotencyStore.add(pagingToken, { receivedAt: new Date().toISOString() });
+
+    const data = event.value;
+
+    await deliverWithRetry(eventName, data, event.ledger, pagingToken);
+
+    // Persist cursor after successful processing so restarts resume here.
+    saveCursor(pagingToken);
   } catch (err) {
-    console.error('[parse] Failed to parse SSE message:', err.message, msg.data);
-    return;
+    span.recordException(err);
+    span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+    throw err;
+  } finally {
+    span.end();
   }
-
-  const pagingToken = event.paging_token;
-  if (!pagingToken) {
-    console.warn('[skip] Event missing paging_token — cannot deduplicate:', event);
-    return;
-  }
-
-  // ── Idempotency check ────────────────────────────────────────────────────
-  if (await idempotencyStore.has(pagingToken)) {
-    console.log(`[duplicate] Skipping already-processed event (token=${pagingToken})`);
-    return;
-  }
-
-  // Record the token *before* delivery.  If the process crashes between
-  // recording and successful delivery, the event is skipped on the next run —
-  // which is the safer trade-off (at-most-once within a single run) versus
-  // re-delivering and relying solely on the downstream handler for dedup.
-  await idempotencyStore.add(pagingToken, { receivedAt: new Date().toISOString() });
-
-  const eventName = Array.isArray(event.topic) ? event.topic[1] : String(event.topic);
-  const data = event.value;
-
-  await deliverWithRetry(eventName, data, event.ledger, pagingToken);
-
-  // Persist cursor after successful processing so restarts resume here.
-  saveCursor(pagingToken);
 }
 
 function connect() {
@@ -295,7 +357,8 @@ function shutdown(signal) {
   console.log(`\n[shutdown] Received ${signal} — closing SSE connection.`);
   shutdownRequested = true;
   if (es) es.close();
-  process.exit(0);
+  // Flush any buffered spans before exiting.
+  shutdownTracing().finally(() => process.exit(0));
 }
 
 process.on('SIGINT', () => shutdown('SIGINT'));

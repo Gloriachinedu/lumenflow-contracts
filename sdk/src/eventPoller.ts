@@ -1,5 +1,8 @@
 import { LumenFlowError, PaymentErrorCode } from './errors';
 import { EventCompatError, parseLumenFlowEvent } from './eventCatalog';
+import { context, propagation, SpanStatusCode, trace } from '@opentelemetry/api';
+
+const tracer = trace.getTracer('lumenflow-event-poller');
 
 export interface ContractEvent {
   id: string;
@@ -75,39 +78,60 @@ export async function fetchContractEvents(options: EventPollerOptions): Promise<
   if (!options.rpcUrl) throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'rpcUrl is required');
   if (!options.contractId) throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'contractId is required');
 
-  let response: Response;
+  const span = tracer.startSpan('rpc.getEvents', {
+    attributes: {
+      'rpc.system': 'jsonrpc',
+      'rpc.method': 'getEvents',
+      'lumenflow.contract_id': options.contractId,
+    },
+  });
+
   try {
-    response = await fetch(options.rpcUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildRpcPayload(options)),
+    return await context.with(trace.setSpan(context.active(), span), async () => {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      propagation.inject(context.active(), headers);
+
+      let response: Response;
+      try {
+        response = await fetch(options.rpcUrl, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(buildRpcPayload(options)),
+        });
+      } catch (err) {
+        throw new LumenFlowError(PaymentErrorCode.InvalidInput, String(err));
+      }
+
+      let data: any;
+      try {
+        data = await response.json();
+      } catch (err) {
+        throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'Invalid JSON response from RPC');
+      }
+
+      if (data.error) {
+        throw new LumenFlowError(PaymentErrorCode.InvalidInput, data.error.message ?? JSON.stringify(data.error));
+      }
+
+      const events = data.result?.events ?? [];
+      const validEvents: ContractEvent[] = [];
+      for (const event of events) {
+        try {
+          validEvents.push(validateEvent(event));
+        } catch (error) {
+          if (options.strict) throw error;
+          console.warn('[LumenFlow] Discarding invalid contract event', error);
+        }
+      }
+      return validEvents;
     });
-  } catch (err) {
-    throw new LumenFlowError(PaymentErrorCode.InvalidInput, String(err));
+  } catch (error) {
+    span.recordException(error as Error);
+    span.setStatus({ code: SpanStatusCode.ERROR, message: String(error) });
+    throw error;
+  } finally {
+    span.end();
   }
-
-  let data: any;
-  try {
-    data = await response.json();
-  } catch (err) {
-    throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'Invalid JSON response from RPC');
-  }
-
-  if (data.error) {
-    throw new LumenFlowError(PaymentErrorCode.InvalidInput, data.error.message ?? JSON.stringify(data.error));
-  }
-
-  const events = data.result?.events ?? [];
-  const validEvents: ContractEvent[] = [];
-  for (const event of events) {
-    try {
-      validEvents.push(validateEvent(event));
-    } catch (error) {
-      if (options.strict) throw error;
-      console.warn('[LumenFlow] Discarding invalid contract event', error);
-    }
-  }
-  return validEvents;
 }
 
 export function pollContractEvents(
@@ -116,9 +140,21 @@ export function pollContractEvents(
   callback: (events: ContractEvent[]) => void,
 ): () => void {
   const timer = setInterval(() => {
-    fetchContractEvents(options)
+    const span = tracer.startSpan('event_poller.poll', {
+      attributes: {
+        'lumenflow.contract_id': options.contractId,
+        'lumenflow.poll_interval_ms': intervalMs,
+      },
+    });
+
+    context
+      .with(trace.setSpan(context.active(), span), () => fetchContractEvents(options))
       .then(callback)
-      .catch(() => {});
+      .catch((error) => {
+        span.recordException(error as Error);
+        span.setStatus({ code: SpanStatusCode.ERROR, message: String(error) });
+      })
+      .finally(() => span.end());
   }, intervalMs);
 
   return () => clearInterval(timer);

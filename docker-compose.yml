@@ -10,6 +10,20 @@ services:
       timeout: 3s
       retries: 10
 
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4318:4318"     # OTLP HTTP receiver
+      - "6831:6831/udp" # Jaeger agent (compact thrift over UDP)
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:16686"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   stellar:
     image: stellar/quickstart:latest
     ports:
@@ -59,6 +73,10 @@ services:
       - PAYER_KEY=${PAYER_KEY:-}
       - PAYER_ADDRESS=${PAYER_ADDRESS:-}
       - TOKEN_ADDRESS=${TOKEN_ADDRESS:-}
+      # ── OpenTelemetry / distributed tracing ──
+      # Export traces to the local Jaeger instance (OTLP HTTP).
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4318}
+      - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-stellar-payment-setup}
     # Install prerequisites (curl, Rust, Stellar CLI) then run the setup script.
     # The install step is intentionally fast-pathed: if the tools are already
     # present the commands are no-ops.
