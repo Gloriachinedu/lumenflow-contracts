@@ -311,15 +311,49 @@
     @media print {
       /* Reset background so the receipt prints cleanly on white paper */
       body {
-        background: #fff;
+        background: #fff !important;
+        color: #000 !important;
         padding: 0;
+        margin: 0;
         min-height: unset;
+        font-size: 11pt;
+        line-height: 1.4;
       }
 
-      /* Hide everything that isn't the receipt card */
-      #lf-mode-banner,
+      /* ── Hide non-essential chrome ── */
+
+      /* Navigation bar */
+      nav,
+      .lf-nav,
+      [role="navigation"],
+      .skip-link {
+        display: none !important;
+      }
+
+      /* Wallet status widget */
+      #wallet-status-container,
+      .wallet-status,
+      #lf-wallet-status,
+      [data-wallet-status] {
+        display: none !important;
+      }
+
+      /* Toast notifications */
+      .lf-toast,
+      #lf-toast,
+      [role="status"],
+      [role="alert"].toast {
+        display: none !important;
+      }
+
+      /* Dark-mode toggle and floating UI */
+      #lf-dark-toggle,
       #pwa-install-banner,
-      .skip-link,
+      #lf-mode-banner {
+        display: none !important;
+      }
+
+      /* Action buttons and interactive controls */
       .actions,
       #prefill-pay-btn,
       .btn,
@@ -329,24 +363,46 @@
         display: none !important;
       }
 
-      /* Remove shadows and rounded corners for print */
+      /* Remove shadows, rounded corners, and backgrounds for print */
       .receipt {
-        box-shadow: none;
-        border-radius: 0;
-        max-width: 100%;
-        width: 100%;
-        padding: 1rem;
+        box-shadow: none !important;
+        border-radius: 0 !important;
+        max-width: 100% !important;
+        width: 100% !important;
+        padding: 1rem !important;
+        background: #fff !important;
       }
 
-      /* Ensure text is black and links are plain */
-      * { color: #000 !important; }
+      /* ── Force black text; strip colour backgrounds ── */
+      *,
+      *::before,
+      *::after {
+        color: #000 !important;
+        background: transparent !important;
+        background-color: transparent !important;
+        box-shadow: none !important;
+        text-shadow: none !important;
+      }
+
+      /* Keep badge text readable with a border instead of a colour fill */
+      .badge {
+        border: 1px solid #000;
+        padding: 1pt 4pt;
+      }
+
       a { text-decoration: none; }
 
-      /* Avoid page breaks inside receipt sections */
+      /* ── Keep key payment fields together — no orphaned rows ── */
       .field,
       .refund-item,
       .refunds-section {
         break-inside: avoid;
+      }
+
+      /* ── Page setup ── */
+      @page {
+        size: A4 portrait;
+        margin: 18mm 15mm;
       }
     }
   </style>
