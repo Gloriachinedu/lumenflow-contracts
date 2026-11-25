@@ -149,6 +149,8 @@ pub enum PaymentError {
     // Rate limiting
     /// The merchant has exceeded the payment rate limit for the current ledger window. Remediation: Wait for the next rate-limit window (~25 minutes) before submitting more payments.
     RateLimitExceeded = 90,
+    /// The payer has exceeded their per-payer submission rate limit. Remediation: Wait for the next rate-limit window before submitting more payments.
+    PayerRateLimitExceeded = 91,
 
     // Escrow
     /// The requested escrow record was not found. Remediation: Verify the order ID.
@@ -177,4 +179,18 @@ pub enum PaymentError {
     DisputeNotOpen = 114,
     /// The dispute has already been escalated and cannot be escalated again.
     DisputeAlreadyEscalated = 115,
+
+    // Upgrade proposal (Issue #1611)
+    /// An upgrade is already proposed and pending. Cancel it first.
+    UpgradeAlreadyProposed = 120,
+    /// No upgrade is currently proposed.
+    NoUpgradeProposed = 121,
+    /// The upgrade timelock has not yet elapsed.
+    UpgradeTimelockActive = 122,
+    /// The upgrade proposal has already been executed or cancelled.
+    UpgradeAlreadyFinalised = 123,
+    /// Not enough admin approvals to execute the upgrade.
+    InsufficientUpgradeApprovals = 124,
+    /// This admin has already approved the pending upgrade.
+    UpgradeAlreadyApproved = 125,
 }

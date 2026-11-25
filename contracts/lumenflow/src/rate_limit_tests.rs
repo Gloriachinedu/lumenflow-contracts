@@ -306,6 +306,115 @@ mod rate_limit_tests {
             Err(PaymentError::RateLimitExceeded)
         );
     }
+
+    // ── Per-payer rate limit (Issue #1613) ────────────────────────────────────
+
+    /// Payments within the per-payer limit all succeed.
+    #[test]
+    fn test_payer_rate_limit_within_limit_succeeds() {
+        let (env, client, admin, merchant, payer, token) = full_setup();
+        // Set a generous merchant limit and a tight payer limit.
+        client.set_payment_rate_limit(&admin, &100);
+        client.set_payer_rate_limit(&admin, &3, &17_280);
+
+        for i in 0..3u32 {
+            let order_id = alloc::format!("PRL_OK_{i}");
+            assert!(
+                pay(&env, &client, &payer, &merchant, &token, &order_id).is_ok(),
+                "payer payment {i} within per-payer limit must succeed"
+            );
+        }
+    }
+
+    /// The payment exactly at the per-payer limit is accepted; the next one is rejected.
+    #[test]
+    fn test_payer_rate_limit_at_and_over_limit() {
+        let (env, client, admin, merchant, payer, token) = full_setup();
+        client.set_payment_rate_limit(&admin, &100);
+        client.set_payer_rate_limit(&admin, &2, &17_280);
+
+        // At limit — both accepted.
+        pay(&env, &client, &payer, &merchant, &token, "PRL_AT_0").unwrap();
+        pay(&env, &client, &payer, &merchant, &token, "PRL_AT_1").unwrap();
+
+        // Over limit — must be rejected.
+        assert_eq!(
+            pay(&env, &client, &payer, &merchant, &token, "PRL_OVER"),
+            Err(PaymentError::PayerRateLimitExceeded),
+            "payment over per-payer limit must return PayerRateLimitExceeded"
+        );
+    }
+
+    /// Counter resets when the payer's ledger window advances.
+    #[test]
+    fn test_payer_rate_limit_resets_after_window() {
+        let (env, client, admin, merchant, payer, token) = full_setup();
+        client.set_payment_rate_limit(&admin, &100);
+        // 10-ledger window for easy testing.
+        client.set_payer_rate_limit(&admin, &1, &10);
+
+        pay(&env, &client, &payer, &merchant, &token, "PRL_WIN_0").unwrap();
+        assert_eq!(
+            pay(&env, &client, &payer, &merchant, &token, "PRL_WIN_OVER"),
+            Err(PaymentError::PayerRateLimitExceeded)
+        );
+
+        // Advance ledger sequence into the next window.
+        env.ledger().with_mut(|l| l.sequence_number += 10);
+
+        assert!(
+            pay(&env, &client, &payer, &merchant, &token, "PRL_WIN_NEW").is_ok(),
+            "payment after payer window expiry must succeed"
+        );
+    }
+
+    /// Admin can reset a specific payer's counter mid-window.
+    #[test]
+    fn test_admin_can_reset_payer_rate_limit() {
+        let (env, client, admin, merchant, payer, token) = full_setup();
+        client.set_payment_rate_limit(&admin, &100);
+        client.set_payer_rate_limit(&admin, &1, &17_280);
+
+        // Exhaust the payer's quota.
+        pay(&env, &client, &payer, &merchant, &token, "PRL_RST_0").unwrap();
+        assert_eq!(
+            pay(&env, &client, &payer, &merchant, &token, "PRL_RST_OVER"),
+            Err(PaymentError::PayerRateLimitExceeded)
+        );
+
+        // Admin resets the counter.
+        client.reset_payer_rate_limit(&admin, &payer);
+
+        // Payer can submit again.
+        assert!(
+            pay(&env, &client, &payer, &merchant, &token, "PRL_RST_AFTER").is_ok(),
+            "payment after admin reset must succeed"
+        );
+    }
+
+    /// Per-payer limits are independent: exhausting one payer does not block another.
+    #[test]
+    fn test_payer_rate_limit_is_per_payer() {
+        let (env, client, admin, merchant, payer1, token) = full_setup();
+        let payer2 = Address::generate(&env);
+        mint(&env, &token, &payer2, 100_000_000);
+
+        client.set_payment_rate_limit(&admin, &100);
+        client.set_payer_rate_limit(&admin, &1, &17_280);
+
+        // Exhaust payer1.
+        pay(&env, &client, &payer1, &merchant, &token, "PRL_PP_P1_0").unwrap();
+        assert_eq!(
+            pay(&env, &client, &payer1, &merchant, &token, "PRL_PP_P1_OVER"),
+            Err(PaymentError::PayerRateLimitExceeded)
+        );
+
+        // payer2 has an independent counter — must still succeed.
+        assert!(
+            pay(&env, &client, &payer2, &merchant, &token, "PRL_PP_P2_0").is_ok(),
+            "payer2 must not be affected by payer1's rate limit"
+        );
+    }
 }
 
 // Required for alloc::format! in #![no_std] test modules.
