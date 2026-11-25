@@ -50,8 +50,15 @@ pub enum PaymentError {
     RefundNotFound = 30,
     /// A refund with the given ID already exists. Remediation: Use a unique refund ID.
     RefundAlreadyExists = 31,
-    /// The allowed time window for initiating a refund has passed. Remediation: Refunds must be initiated within 30 days of the payment.
+    /// The allowed time window for initiating a refund has passed. Remediation: Refunds must be
+    /// initiated within the merchant's configured `refund_window_secs` (set via
+    /// `set_refund_window`) or, if the merchant has not configured one, within the global
+    /// default refund window.
     RefundWindowExpired = 32,
+    /// The merchant-specific refund window value passed to `set_refund_window` is invalid
+    /// (e.g. zero or negative). Remediation: Provide a positive number of seconds, or pass
+    /// `None` to clear the override and fall back to the global default.
+    InvalidRefundWindow = 38,
     /// The total refund amount exceeds the original payment amount. Remediation: Ensure the refund amount (or cumulative partial refunds) does not exceed the original payment.
     RefundExceedsOriginal = 33,
     /// The refund has not been approved yet. Remediation: The merchant or admin must approve the refund before it can be executed.
