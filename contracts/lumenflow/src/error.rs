@@ -106,6 +106,8 @@ pub enum PaymentError {
     CommitmentNotFound = 85,
     CommitmentExpired = 86,
     CommitmentHashMismatch = 87,
+    Reentrancy = 90,
+    Overflow = 91,
 
     // General
     /// The provided input parameters are invalid. Remediation: Check the input values and format.
