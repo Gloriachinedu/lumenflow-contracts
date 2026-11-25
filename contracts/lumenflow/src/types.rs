@@ -232,6 +232,12 @@ pub struct MerchantCommitment {
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
 
+/// Aggregate contract-wide statistics returned by `get_global_stats`.
+///
+/// **Size note (Issue #1612):** This struct serialises to approximately 56 bytes
+/// of XDR (2 × u32 + 3 × i128). The Soroban host's value-size limit is 64 KiB,
+/// so sharding is not required at current field counts. This note must be
+/// updated if new fields are added.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GlobalStats {
@@ -583,6 +589,24 @@ pub enum AdminActionType {
     UpgradeContract,
     ConfirmMerchantDataDeletion,
     Other,
+}
+
+// ── Upgrade proposal (Issue #1611) ───────────────────────────────────────────
+
+/// A pending contract upgrade proposal created by `propose_upgrade`.
+/// Advances through propose → (optional approvals) → execute or cancel.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UpgradeProposal {
+    pub new_wasm_hash: soroban_sdk::BytesN<32>,
+    /// Ledger sequence at which the proposal was submitted.
+    pub proposed_at_ledger: u32,
+    /// Admin address that submitted the proposal.
+    pub proposed_by: Address,
+    /// True once `execute_upgrade` succeeds.
+    pub executed: bool,
+    /// True once `cancel_upgrade` is called.
+    pub cancelled: bool,
 }
 
 /// A single immutable entry in the admin audit log.

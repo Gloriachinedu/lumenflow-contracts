@@ -4,7 +4,7 @@ use crate::error::PaymentError;
 use crate::types::{
     AdminAuditEntry, DisputeRecord, EscrowRecord, GlobalStats, Merchant, MerchantStats,
     MultisigPayment, MerchantCommitment, PaymentOrder, PaymentRequest, RefundRecord, Subscription,
-    SubscriptionPlan, EscrowHold,
+    SubscriptionPlan, EscrowHold, UpgradeProposal,
 };
 
 // ── TTL / limit constants ─────────────────────────────────────────────────────
@@ -159,6 +159,24 @@ pub enum DataKey {
     AdminAuditMaxEntries,
     /// Configurable maximum signers per multisig payment (issue #1269). Short code `MSL`.
     MSL,
+    /// Pending contract upgrade proposal (Issue #1611).
+    UpgradeProposal,
+    /// Tracks which admin address has approved the pending upgrade (Issue #1611).
+    UpgradeApprovals(Address),
+    /// Count of approvals collected for the pending upgrade (Issue #1611).
+    UpgradeApprovalCount,
+    /// Per-payer rate limit counter: (payer, window_start_ledger) → count (Issue #1613).
+    PayerRateLimitCounter(Address, u32),
+    /// Configured per-payer rate limit max (payments per window). Default 50 (Issue #1613).
+    PayerRateLimitMax,
+    /// Per-payer window length in ledgers. Default = ~24h (Issue #1613).
+    PayerRateLimitWindow,
+    /// Signature expiry window in seconds (Issue #1350). Short code `SEW`.
+    SEW,
+    /// Maximum active payment requests per merchant.
+    MaxActivePaymentRequests,
+    /// Count of active (non-expired) payment requests per merchant.
+    MerchantActiveRequests(Address),
 }
 
 /// The schema version this binary was compiled against.
@@ -166,6 +184,15 @@ pub enum DataKey {
 /// a way that is not backwards-compatible (field added without `Option`, variant
 /// reordered, type changed, etc.).
 pub const CURRENT_STORAGE_VERSION: u32 = 1;
+
+/// Timelock in ledgers before an upgrade can be executed (~24 h at 5-second ledgers).
+pub const UPGRADE_TIMELOCK_LEDGERS: u32 = 17_280;
+/// Minimum approvals required to execute an upgrade (multisig threshold).
+pub const UPGRADE_REQUIRED_APPROVALS: u32 = 2;
+
+/// Approximate serialised size of `GlobalStats` in bytes (2×u32 + 3×i128 = 56).
+/// Soroban host limit is 65,536 bytes. Update this comment when fields are added.
+pub const GLOBAL_STATS_APPROX_BYTES: usize = 56;
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
 
@@ -1396,4 +1423,126 @@ pub fn query_admin_audit_log(
     }
 
     results
+}
+
+// ── Upgrade proposal (Issue #1611) ───────────────────────────────────────────
+
+pub fn get_upgrade_proposal(env: &Env) -> Option<UpgradeProposal> {
+    env.storage().instance().get(&DataKey::UpgradeProposal)
+}
+
+pub fn set_upgrade_proposal(env: &Env, proposal: &UpgradeProposal) {
+    env.storage().instance().set(&DataKey::UpgradeProposal, proposal);
+}
+
+pub fn remove_upgrade_proposal(env: &Env) {
+    env.storage().instance().remove(&DataKey::UpgradeProposal);
+}
+
+pub fn get_upgrade_approval(env: &Env, admin: &Address) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::UpgradeApprovals(admin.clone()))
+        .unwrap_or(false)
+}
+
+pub fn set_upgrade_approval(env: &Env, admin: &Address, approved: bool) {
+    env.storage()
+        .instance()
+        .set(&DataKey::UpgradeApprovals(admin.clone()), &approved);
+}
+
+pub fn remove_upgrade_approval(env: &Env, admin: &Address) {
+    env.storage()
+        .instance()
+        .remove(&DataKey::UpgradeApprovals(admin.clone()));
+}
+
+pub fn get_upgrade_approval_count(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::UpgradeApprovalCount)
+        .unwrap_or(0)
+}
+
+pub fn set_upgrade_approval_count(env: &Env, count: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::UpgradeApprovalCount, &count);
+}
+
+pub fn reset_upgrade_approval_count(env: &Env) {
+    env.storage().instance().remove(&DataKey::UpgradeApprovalCount);
+}
+
+// ── Per-payer rate limiting (Issue #1613) ─────────────────────────────────────
+
+/// Default per-payer max payments per window (50).
+pub const DEFAULT_PAYER_RATE_LIMIT: u32 = 50;
+/// Default per-payer rate-limit window in ledgers (~24 h at 5-second ledgers).
+pub const DEFAULT_PAYER_RATE_LIMIT_WINDOW: u32 = 17_280;
+
+pub fn get_payer_rate_limit_max(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::PayerRateLimitMax)
+        .unwrap_or(DEFAULT_PAYER_RATE_LIMIT)
+}
+
+pub fn set_payer_rate_limit_max(env: &Env, max: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::PayerRateLimitMax, &max);
+}
+
+pub fn get_payer_rate_limit_window(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::PayerRateLimitWindow)
+        .unwrap_or(DEFAULT_PAYER_RATE_LIMIT_WINDOW)
+}
+
+pub fn set_payer_rate_limit_window(env: &Env, window: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::PayerRateLimitWindow, &window);
+}
+
+pub fn get_payer_rate_limit_counter(env: &Env, payer: &Address, window_start: u32) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::PayerRateLimitCounter(payer.clone(), window_start))
+        .unwrap_or(0)
+}
+
+pub fn increment_payer_rate_limit_counter(env: &Env, payer: &Address, window_start: u32) {
+    let count = get_payer_rate_limit_counter(env, payer, window_start) + 1;
+    env.storage()
+        .instance()
+        .set(&DataKey::PayerRateLimitCounter(payer.clone(), window_start), &count);
+}
+
+pub fn reset_payer_rate_limit(env: &Env, payer: &Address, window_start: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::PayerRateLimitCounter(payer.clone(), window_start), &0u32);
+}
+
+/// Helper to append an audit log entry — convenience wrapper for lib.rs callers.
+pub fn append_admin_audit_log(
+    env: &Env,
+    action: crate::types::AdminActionType,
+    caller: &Address,
+    params: &soroban_sdk::String,
+) {
+    let index = get_admin_audit_count(env);
+    let entry = crate::types::AdminAuditEntry {
+        index,
+        action,
+        caller: caller.clone(),
+        params: params.clone(),
+        timestamp: env.ledger().timestamp(),
+        ledger_sequence: env.ledger().sequence(),
+    };
+    append_admin_audit_entry(env, &entry);
 }

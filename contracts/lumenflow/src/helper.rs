@@ -320,6 +320,20 @@ pub fn require_valid_memo(memo: &String) -> Result<(), PaymentError> {
     }
 }
 
+/// Enforce per-payer rate limiting. Returns `PayerRateLimitExceeded` if the
+/// payer has submitted `>= payer_rate_limit_max` payments in the current window.
+pub fn check_payer_rate_limit(env: &Env, payer: &Address) -> Result<(), PaymentError> {
+    let window = storage::get_payer_rate_limit_window(env);
+    let window_start = (env.ledger().sequence() / window) * window;
+    let count = storage::get_payer_rate_limit_counter(env, payer, window_start);
+    let max = storage::get_payer_rate_limit_max(env);
+    if count >= max {
+        return Err(PaymentError::PayerRateLimitExceeded);
+    }
+    storage::increment_payer_rate_limit_counter(env, payer, window_start);
+    Ok(())
+}
+
 // ── Regression tests — Issue #1098 timing-safe comparison audit ───────────────
 
 #[cfg(test)]

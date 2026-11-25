@@ -21,7 +21,7 @@ use helper::{
     require_admin, require_admin_or, require_admin_rate_limited, require_bounded_string,
     require_min_refund_amount, require_non_empty_string, require_not_paused, require_positive,
     require_valid_id, require_valid_limit, validate_merchant_category, validate_tags,
-    verify_signature,
+    verify_signature, check_payer_rate_limit,
 };
 use types::{
     BatchPaymentItem, DisputeOutcome, DisputeStatus, EscrowRecord, EscrowStatus, GlobalStats,
@@ -30,7 +30,7 @@ use types::{
     PaymentPage, PaymentRequest, PaymentStatus, PaymentStatusUpdatedEvent, PaymentSummary,
     RefundRecord, RefundStatus, SignatureEntry, SortField, SortOrder, StatusFilter, Subscription,
     SubscriptionPlan, SubscriptionStatus, SuspiciousActivityReason,
-    AdminActionType, AdminAuditEntry, EscrowHold, EscrowHoldStatus,
+    AdminActionType, AdminAuditEntry, EscrowHold, EscrowHoldStatus, UpgradeProposal,
 };
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -627,6 +627,47 @@ impl PaymentProcessingContract {
             return Err(PaymentError::InvalidInput);
         }
         storage::set_payment_rate_window(&env, window_secs);
+        Ok(())
+    }
+
+    /// Set the per-payer payment rate limit (admin only, Issue #1613).
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the administrator.
+    /// * `max_per_window` - Maximum payments a single payer may submit per window. Must be > 0.
+    /// * `window_ledgers` - Window length in ledgers. Must be > 0.
+    pub fn set_payer_rate_limit(
+        env: Env,
+        admin: Address,
+        max_per_window: u32,
+        window_ledgers: u32,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        if max_per_window == 0 || window_ledgers == 0 {
+            return Err(PaymentError::InvalidInput);
+        }
+        storage::set_payer_rate_limit_max(&env, max_per_window);
+        storage::set_payer_rate_limit_window(&env, window_ledgers);
+        Ok(())
+    }
+
+    /// Reset a specific payer's rate limit counter (admin only, Issue #1613).
+    ///
+    /// Clears the counter for the payer's current window, restoring their ability
+    /// to submit payments immediately.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the administrator.
+    /// * `payer` - The payer address whose counter should be reset.
+    pub fn reset_payer_rate_limit(
+        env: Env,
+        admin: Address,
+        payer: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        let window = storage::get_payer_rate_limit_window(&env);
+        let window_start = (env.ledger().sequence() / window) * window;
+        storage::reset_payer_rate_limit(&env, &payer, window_start);
         Ok(())
     }
 
@@ -1278,6 +1319,9 @@ impl PaymentProcessingContract {
         }
         storage::increment_rate_limit_counter(&env, &merchant_address, window_start);
 
+        // Per-payer rate limit check (Issue #1613)
+        check_payer_rate_limit(&env, &payer)?;
+
         // Transfer tokens from payer to merchant (minus platform fee)
         let token_client = token::Client::new(&env, &token_address);
         let fee_bps = storage::get_platform_fee_bps(&env);
@@ -1417,6 +1461,9 @@ impl PaymentProcessingContract {
 
         // Advance nonce before any external calls
         storage::increment_nonce(&env, &payer);
+
+        // Per-payer rate limit check (Issue #1613)
+        check_payer_rate_limit(&env, &payer)?;
 
         // Transfer tokens from payer to merchant (minus platform fee)
         let token_client = token::Client::new(&env, &token_address);
@@ -1608,6 +1655,9 @@ impl PaymentProcessingContract {
                 return Err(PaymentError::RateLimitExceeded);
             }
             storage::increment_rate_limit_counter(&env, &item.merchant_address, window_start);
+
+            // Per-payer rate limit check (Issue #1613)
+            check_payer_rate_limit(&env, &payer)?;
 
             // Build payload: network_id + contract address + order_id + amount
             let mut payload = Bytes::new(&env);
@@ -2126,6 +2176,21 @@ impl PaymentProcessingContract {
         }
 
         Ok(stats)
+    }
+
+    /// Returns global statistics. The optional `page_size` and `cursor` parameters
+    /// are reserved for future sharding support (Issue #1612); they are accepted but
+    /// ignored while the stats fit within a single storage entry.
+    ///
+    /// # Arguments
+    /// * `page_size` - Reserved. Pass `None`.
+    /// * `cursor` - Reserved. Pass `None`.
+    pub fn get_global_stats_page(
+        env: Env,
+        _page_size: Option<u32>,
+        _cursor: Option<u32>,
+    ) -> Result<GlobalStats, PaymentError> {
+        Ok(storage::get_global_stats(&env))
     }
 
     /// Get payment statistics for a specific merchant.
@@ -3152,38 +3217,172 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
-    /// Upgrade the contract WASM to a new hash (admin only).
+    /// Propose a contract WASM upgrade (admin only, step 1 of 3).
     ///
-    /// Replaces the deployed contract binary with the WASM identified by
-    /// `new_wasm_hash`. The hash must have been uploaded to the network with
-    /// `stellar contract upload` before this call. The function:
-    ///   1. Verifies the caller is the stored admin.
-    ///   2. Calls `env.deployer().update_current_contract_wasm(new_wasm_hash)`.
-    ///   3. Emits a `lumenflow/contract_upgraded` event with the new WASM hash.
-    ///
-    /// After the upgrade, call `set_contract_version` to record the new version
-    /// on-chain, then `assert_version_matches` to confirm the stored version
-    /// aligns with the binary. A mismatch returns [`PaymentError::VersionMismatch`].
-    ///
-    /// # Arguments
-    /// * `admin` - Must be the configured administrator address.
-    /// * `new_wasm_hash` - 32-byte SHA-256 hash of the new WASM binary.
-    ///
-    /// # Returns
-    /// `Ok(())` on success.
+    /// Records the proposed WASM hash and the current ledger as the proposal
+    /// start. A second admin must call `approve_upgrade` before `execute_upgrade`
+    /// can be called after the timelock elapses.
     ///
     /// # Errors
-    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
-    pub fn upgrade(
+    /// * [`PaymentError::Unauthorized`] — caller is not admin.
+    /// * [`PaymentError::UpgradeAlreadyProposed`] — a pending proposal exists.
+    pub fn propose_upgrade(
         env: Env,
         admin: Address,
         new_wasm_hash: soroban_sdk::BytesN<32>,
     ) -> Result<(), PaymentError> {
         require_admin_rate_limited(&env, &admin)?;
-        env.deployer()
-            .update_current_contract_wasm(new_wasm_hash.clone());
+
+        if storage::get_upgrade_proposal(&env).is_some() {
+            return Err(PaymentError::UpgradeAlreadyProposed);
+        }
+
+        let proposal = UpgradeProposal {
+            new_wasm_hash: new_wasm_hash.clone(),
+            proposed_at_ledger: env.ledger().sequence(),
+            proposed_by: admin.clone(),
+            executed: false,
+            cancelled: false,
+        };
+        storage::set_upgrade_proposal(&env, &proposal);
+        // Proposer counts as first approval
+        storage::set_upgrade_approval(&env, &admin, true);
+        storage::set_upgrade_approval_count(&env, 1);
+
+        storage::append_admin_audit_log(
+            &env,
+            AdminActionType::UpgradeContract,
+            &admin,
+            &String::from_str(&env, "action=propose"),
+        );
+
         env.events()
-            .publish(("lumenflow", "contract_upgraded"), new_wasm_hash);
+            .publish(("lumenflow", "upgrade_proposed"), new_wasm_hash);
+        Ok(())
+    }
+
+    /// Approve a pending upgrade proposal (admin only, step 2 of 3).
+    ///
+    /// Once [`storage::UPGRADE_REQUIRED_APPROVALS`] approvals are collected and the
+    /// timelock has elapsed, any signer may call `execute_upgrade`.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — caller is not admin.
+    /// * [`PaymentError::NoUpgradeProposed`] — no pending proposal.
+    /// * [`PaymentError::UpgradeAlreadyApproved`] — this admin already approved.
+    /// * [`PaymentError::UpgradeAlreadyFinalised`] — proposal is cancelled or executed.
+    pub fn approve_upgrade(
+        env: Env,
+        admin: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin_rate_limited(&env, &admin)?;
+
+        let proposal = storage::get_upgrade_proposal(&env)
+            .ok_or(PaymentError::NoUpgradeProposed)?;
+        if proposal.executed || proposal.cancelled {
+            return Err(PaymentError::UpgradeAlreadyFinalised);
+        }
+        if storage::get_upgrade_approval(&env, &admin) {
+            return Err(PaymentError::UpgradeAlreadyApproved);
+        }
+
+        storage::set_upgrade_approval(&env, &admin, true);
+        let count = storage::get_upgrade_approval_count(&env) + 1;
+        storage::set_upgrade_approval_count(&env, count);
+
+        env.events().publish(("lumenflow", "upgrade_approved"), admin);
+        Ok(())
+    }
+
+    /// Execute a pending upgrade after the timelock has elapsed (any signer).
+    ///
+    /// Requirements: a proposal exists, it has at least
+    /// [`storage::UPGRADE_REQUIRED_APPROVALS`] approvals, and at least
+    /// [`storage::UPGRADE_TIMELOCK_LEDGERS`] ledgers have passed since proposal.
+    ///
+    /// # Errors
+    /// * [`PaymentError::NoUpgradeProposed`] — no pending proposal.
+    /// * [`PaymentError::UpgradeAlreadyFinalised`] — already executed/cancelled.
+    /// * [`PaymentError::InsufficientUpgradeApprovals`] — not enough approvals.
+    /// * [`PaymentError::UpgradeTimelockActive`] — timelock not yet elapsed.
+    pub fn execute_upgrade(
+        env: Env,
+        caller: Address,
+    ) -> Result<(), PaymentError> {
+        caller.require_auth();
+
+        let proposal = storage::get_upgrade_proposal(&env)
+            .ok_or(PaymentError::NoUpgradeProposed)?;
+        if proposal.executed || proposal.cancelled {
+            return Err(PaymentError::UpgradeAlreadyFinalised);
+        }
+
+        let approvals = storage::get_upgrade_approval_count(&env);
+        if approvals < storage::UPGRADE_REQUIRED_APPROVALS {
+            return Err(PaymentError::InsufficientUpgradeApprovals);
+        }
+
+        let elapsed = env
+            .ledger()
+            .sequence()
+            .saturating_sub(proposal.proposed_at_ledger);
+        if elapsed < storage::UPGRADE_TIMELOCK_LEDGERS {
+            return Err(PaymentError::UpgradeTimelockActive);
+        }
+
+        // Mark executed before updating WASM (re-entrancy guard)
+        let mut updated = proposal.clone();
+        updated.executed = true;
+        storage::set_upgrade_proposal(&env, &updated);
+
+        storage::append_admin_audit_log(
+            &env,
+            AdminActionType::UpgradeContract,
+            &caller,
+            &String::from_str(&env, "action=execute"),
+        );
+
+        env.deployer()
+            .update_current_contract_wasm(proposal.new_wasm_hash.clone());
+        env.events()
+            .publish(("lumenflow", "contract_upgraded"), proposal.new_wasm_hash);
+        Ok(())
+    }
+
+    /// Cancel a pending upgrade proposal (admin only).
+    ///
+    /// Can be called at any time before `execute_upgrade` completes.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — caller is not admin.
+    /// * [`PaymentError::NoUpgradeProposed`] — no pending proposal.
+    /// * [`PaymentError::UpgradeAlreadyFinalised`] — already executed/cancelled.
+    pub fn cancel_upgrade(
+        env: Env,
+        admin: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin_rate_limited(&env, &admin)?;
+
+        let proposal = storage::get_upgrade_proposal(&env)
+            .ok_or(PaymentError::NoUpgradeProposed)?;
+        if proposal.executed || proposal.cancelled {
+            return Err(PaymentError::UpgradeAlreadyFinalised);
+        }
+
+        let mut updated = proposal;
+        updated.cancelled = true;
+        storage::set_upgrade_proposal(&env, &updated);
+
+        storage::reset_upgrade_approval_count(&env);
+
+        storage::append_admin_audit_log(
+            &env,
+            AdminActionType::UpgradeContract,
+            &admin,
+            &String::from_str(&env, "action=cancel"),
+        );
+
+        env.events().publish(("lumenflow", "upgrade_cancelled"), admin);
         Ok(())
     }
 
