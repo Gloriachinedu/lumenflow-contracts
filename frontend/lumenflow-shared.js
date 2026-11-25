@@ -76,6 +76,108 @@ export function isValidStellarContractId(value) {
  * Import via: <script type="module" src="lumenflow-shared.js"></script>
  */
 
+// ── DOM safety helpers (#1531) ────────────────────────────────────────────────
+
+/**
+ * Escapes a value for safe interpolation into an HTML string.
+ * Converts &, <, >, ", ' to their HTML entities.
+ *
+ * @param {*} value - Any value; coerced to string (null/undefined → '').
+ * @returns {string} Escaped string safe for use in HTML text or attribute values.
+ */
+export function escapeHtml(value) {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+/**
+ * Safely assigns untrusted text to an element using textContent.
+ * Never interprets the value as HTML.
+ *
+ * @param {Element} el    - Target element.
+ * @param {*}       value - Value to render (coerced to string).
+ * @returns {Element} The element, for chaining.
+ */
+export function setSafeText(el, value) {
+  if (!el) return el;
+  el.textContent = value === null || value === undefined ? '' : String(value);
+  return el;
+}
+
+/**
+ * Sanitizes an HTML string with DOMPurify before it is inserted into the DOM.
+ * Use only for the rare cases where rich HTML must be rendered; prefer
+ * textContent / createEl() for everything else.
+ *
+ * DOMPurify is loaded lazily from the global `DOMPurify` (UMD script tag) or
+ * via dynamic import of the npm package. If no sanitizer is available the
+ * input is escaped and returned as plain text (fail closed).
+ *
+ * @param {string} html - Untrusted HTML string.
+ * @returns {Promise<string>} Sanitized HTML string.
+ */
+export async function sanitizeHtml(html) {
+  const input = html === null || html === undefined ? '' : String(html);
+  let purifier = (typeof window !== 'undefined' && window.DOMPurify) || null;
+  if (!purifier) {
+    try {
+      const mod = await import('dompurify');
+      purifier = mod.default || mod;
+    } catch {
+      purifier = null;
+    }
+  }
+  if (!purifier || typeof purifier.sanitize !== 'function') {
+    // Fail closed: no sanitizer available → render as inert text.
+    return escapeHtml(input);
+  }
+  return purifier.sanitize(input);
+}
+
+/**
+ * Creates a DOM element with attributes and children, avoiding innerHTML.
+ *
+ * @param {string} tag - Tag name, e.g. 'span'.
+ * @param {Object} [attrs] - Attributes. Keys: 'class', 'text', 'dataset',
+ *   'style' (object), 'on*' event handlers, or any attribute name.
+ * @param {Array<Node|string>|Node|string} [children] - Child nodes or text.
+ * @returns {HTMLElement}
+ */
+export function createEl(tag, attrs = {}, children = []) {
+  const el = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs || {})) {
+    if (value === null || value === undefined || value === false) continue;
+    if (key === 'text') {
+      el.textContent = String(value);
+    } else if (key === 'class' || key === 'className') {
+      el.className = String(value);
+    } else if (key === 'dataset') {
+      for (const [dk, dv] of Object.entries(value)) {
+        if (dv !== null && dv !== undefined) el.dataset[dk] = String(dv);
+      }
+    } else if (key === 'style' && typeof value === 'object') {
+      Object.assign(el.style, value);
+    } else if (key.startsWith('on') && typeof value === 'function') {
+      el.addEventListener(key.slice(2).toLowerCase(), value);
+    } else if (value === true) {
+      el.setAttribute(key, '');
+    } else {
+      el.setAttribute(key, String(value));
+    }
+  }
+  const list = Array.isArray(children) ? children : [children];
+  for (const child of list) {
+    if (child === null || child === undefined) continue;
+    el.appendChild(typeof child === 'string' ? document.createTextNode(child) : child);
+  }
+  return el;
+}
+
 // ── Config ────────────────────────────────────────────────────────────────────
 // Pages can override these by setting window.LUMENFLOW_CONTRACT_ID etc. before
 // loading this module, or by injecting them at build/serve time.
@@ -103,7 +205,7 @@ export const STATUS_MAP = {
  */
 export function statusBadgeHtml(status) {
   const entry = STATUS_MAP[status] || { label: status || 'Unknown', cls: 'status-unknown' };
-  return `<span class="status-badge ${entry.cls}">${entry.label}</span>`;
+  return `<span class="status-badge ${escapeHtml(entry.cls)}">${escapeHtml(entry.label)}</span>`;
 }
 
 // ── Formatting helpers ────────────────────────────────────────────────────────
@@ -414,13 +516,14 @@ export async function copyToClipboard(text) {
  * @returns {string} HTML string.
  */
 export function copyButtonHtml(fullValue, ariaLabel = 'Copy') {
-  const escaped = fullValue.replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+  const escapedValue = escapeHtml(fullValue);
+  const escapedLabel = escapeHtml(ariaLabel);
   return `<button
     class="lf-copy-btn"
     type="button"
-    data-copy="${escaped}"
-    aria-label="${ariaLabel}"
-    title="${ariaLabel}"
+    data-copy="${escapedValue}"
+    aria-label="${escapedLabel}"
+    title="${escapedLabel}"
   ><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>`;
 }
 
@@ -673,14 +776,14 @@ export function renderModeBanner() {
   const badgeCls  = isLive ? 'lf-mode-badge--live'  : 'lf-mode-badge--demo';
   const badgeText = isLive ? 'Live'                  : 'Demo';
 
-  // Build descriptive text
+  // Build descriptive text (static markup only; dynamic values escaped)
   const labelText = isLive
-    ? `Connected to contract <code>${CONTRACT_ID.slice(0, 8)}…</code> on <strong>${NETWORK}</strong>.`
+    ? `Connected to contract <code>${escapeHtml(CONTRACT_ID.slice(0, 8))}…</code> on <strong>${escapeHtml(NETWORK)}</strong>.`
     : 'Displaying mock data. Set <code>LUMENFLOW_CONTRACT_ID</code> to connect to a live contract.';
 
   banner.innerHTML = `
-    <span class="lf-mode-badge ${badgeCls}" aria-hidden="true">
-      <span class="lf-mode-badge__dot"></span>${badgeText}
+    <span class="lf-mode-badge ${escapeHtml(badgeCls)}" aria-hidden="true">
+      <span class="lf-mode-badge__dot"></span>${escapeHtml(badgeText)}
     </span>
     <span class="lf-mode-label">${labelText}</span>
     <label class="lf-mode-toggle" title="${canGoLive ? 'Switch between demo and live mode' : 'Set LUMENFLOW_CONTRACT_ID to enable live mode'}">
@@ -717,11 +820,26 @@ export function renderModeBanner() {
     const textEl   = banner.querySelector('.lf-mode-toggle__text');
 
     badge.className = `lf-mode-badge ${nowLive ? 'lf-mode-badge--live' : 'lf-mode-badge--demo'}`;
-    badge.innerHTML = `<span class="lf-mode-badge__dot"></span>${nowLive ? 'Live' : 'Demo'}`;
+    badge.replaceChildren(
+      createEl('span', { class: 'lf-mode-badge__dot' }),
+      document.createTextNode(nowLive ? 'Live' : 'Demo')
+    );
     textEl.textContent = nowLive ? 'Live' : 'Demo';
-    labelEl.innerHTML = nowLive
-      ? `Connected to contract <code>${CONTRACT_ID.slice(0, 8)}…</code> on <strong>${NETWORK}</strong>.`
-      : 'Displaying mock data. Set <code>LUMENFLOW_CONTRACT_ID</code> to connect to a live contract.';
+    if (nowLive) {
+      labelEl.replaceChildren(
+        document.createTextNode('Connected to contract '),
+        createEl('code', { text: `${CONTRACT_ID.slice(0, 8)}…` }),
+        document.createTextNode(' on '),
+        createEl('strong', { text: NETWORK }),
+        document.createTextNode('.')
+      );
+    } else {
+      labelEl.replaceChildren(
+        document.createTextNode('Displaying mock data. Set '),
+        createEl('code', { text: 'LUMENFLOW_CONTRACT_ID' }),
+        document.createTextNode(' to connect to a live contract.')
+      );
+    }
 
     window.dispatchEvent(new CustomEvent('lf:modechange', { detail: { live: nowLive } }));
   });
@@ -812,13 +930,14 @@ export function makeCopyButton(value, label = 'Copy value') {
  * @returns {string}             - HTML string with a data-copy-value attribute the button reads.
  */
 export function copyableHtml(value, truncate = 8, type = 'address') {
-  const display = truncate > 0 && value.length > truncate + 1
-    ? `${value.slice(0, truncate)}…`
-    : value;
+  const str = value === null || value === undefined ? '' : String(value);
+  const display = truncate > 0 && str.length > truncate + 1
+    ? `${str.slice(0, truncate)}…`
+    : str;
   const label = type === 'order' ? 'Copy order ID' : `Copy address`;
   // The button is rendered client-side via attachCopyButtons(); this HTML acts
   // as a placeholder that attachCopyButtons() upgrades.
-  return `<span class="lf-copyable" data-copy-value="${value}" data-copy-label="${label}" title="${value}"><code>${display}</code></span>`;
+  return `<span class="lf-copyable" data-copy-value="${escapeHtml(str)}" data-copy-label="${escapeHtml(label)}" title="${escapeHtml(str)}"><code>${escapeHtml(display)}</code></span>`;
 }
 
 /**
