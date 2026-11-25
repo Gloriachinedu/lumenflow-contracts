@@ -4,7 +4,7 @@ use crate::error::PaymentError;
 use crate::types::{
     AdminAuditEntry, DisputeRecord, EscrowRecord, GlobalStats, Merchant, MerchantStats,
     MultisigPayment, MerchantCommitment, PaymentOrder, PaymentRequest, RefundRecord, Subscription,
-    SubscriptionPlan, EscrowHold,
+    SubscriptionPlan, EscrowHold, ProrationPolicy,
 };
 
 // ── TTL / limit constants ─────────────────────────────────────────────────────
@@ -151,6 +151,8 @@ pub enum DataKey {
     MerchantCommitment(Address),
     /// Conditional escrow hold keyed by escrow_id.
     EscrowHold(String),
+    /// Merchant-configured proration policy for subscription cancellations (Issue #1610).
+    MerchantProrationPolicy(Address),
     /// Admin audit log entry keyed by index.
     AdminAuditEntry(u32),
     /// Total count of admin audit log entries (append-only counter).
@@ -1396,4 +1398,21 @@ pub fn query_admin_audit_log(
     }
 
     results
+}
+
+// ── Proration policy (Issue #1610) ────────────────────────────────────────────
+
+/// Retrieve the proration policy a merchant has configured.
+/// Returns `ProrationPolicy::NoRefund` if none has been set.
+pub fn get_proration_policy(env: &Env, merchant: &Address) -> ProrationPolicy {
+    env.storage()
+        .persistent()
+        .get(&DataKey::MerchantProrationPolicy(merchant.clone()))
+        .unwrap_or(ProrationPolicy::NoRefund)
+}
+
+pub fn set_proration_policy(env: &Env, merchant: &Address, policy: &ProrationPolicy) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::MerchantProrationPolicy(merchant.clone()), policy);
 }

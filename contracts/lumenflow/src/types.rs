@@ -428,6 +428,24 @@ pub enum SubscriptionStatus {
     Completed,
 }
 
+/// Merchant-configurable policy for handling mid-cycle subscription cancellations.
+///
+/// Set per-merchant via `set_proration_policy`. Applies whenever a subscriber
+/// cancels before their current billing cycle has elapsed.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProrationPolicy {
+    /// No refund is issued on cancellation. The subscriber retains access for
+    /// the remainder of the paid cycle (default).
+    NoRefund,
+    /// The unused portion of the current cycle is refunded immediately.
+    /// Refund amount = plan_amount × (remaining_secs / interval_secs).
+    Prorate,
+    /// A fixed grace period (in seconds) is offered after cancellation.
+    /// No refund is issued, but no further charges occur during the grace window.
+    GracePeriod(u64),
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SubscriptionPlan {

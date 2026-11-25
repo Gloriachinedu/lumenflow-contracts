@@ -31,6 +31,7 @@ use types::{
     RefundRecord, RefundStatus, SignatureEntry, SortField, SortOrder, StatusFilter, Subscription,
     SubscriptionPlan, SubscriptionStatus, SuspiciousActivityReason,
     AdminActionType, AdminAuditEntry, EscrowHold, EscrowHoldStatus,
+    ProrationPolicy,
 };
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -3939,10 +3940,31 @@ impl PaymentProcessingContract {
     ///   cancelled or completed.
     /// * [`PaymentError::SubscriptionPlanNotFound`] - the underlying plan record
     ///   no longer exists.
+    /// Cancel an active subscription, applying the merchant's proration policy
+    /// if the subscriber requests it (Issue #1610).
+    ///
+    /// Three policies are supported, configured per-merchant via
+    /// `set_proration_policy`:
+    ///
+    /// - `NoRefund` (default) — no refund issued; subscriber retains access for
+    ///   the remainder of the paid cycle.
+    /// - `Prorate` — if `request_proration` is `true` and the caller is the
+    ///   subscriber, the unused portion of the current cycle is refunded:
+    ///   `refund = plan_amount × (remaining_secs / interval_secs)`.
+    /// - `GracePeriod(secs)` — no refund, but no further charges for `secs`
+    ///   seconds after cancellation.
+    ///
+    /// # Arguments
+    /// * `caller` - Subscriber, merchant, or admin. Must sign.
+    /// * `subscription_id` - ID of the subscription to cancel.
+    /// * `request_proration` - When `true` and the merchant's policy is
+    ///   `Prorate`, a proportional refund is transferred to the subscriber.
+    ///   Ignored under `NoRefund` and `GracePeriod` policies.
     pub fn cancel_subscription(
         env: Env,
         caller: Address,
         subscription_id: String,
+        request_proration: bool,
     ) -> Result<(), PaymentError> {
         require_not_paused(&env)?;
         caller.require_auth();
@@ -3959,6 +3981,26 @@ impl PaymentProcessingContract {
         let plan = storage::get_subscription_plan(&env, &sub.plan_id)
             .ok_or(PaymentError::SubscriptionPlanNotFound)?;
 
+        // ── Proration logic (Issue #1610) ─────────────────────────────────────
+        let policy = storage::get_proration_policy(&env, &sub.merchant);
+        let proration_refund: i128 = match &policy {
+            ProrationPolicy::Prorate if request_proration && caller == sub.subscriber => {
+                // Remaining seconds in the current cycle.
+                let now = env.ledger().timestamp();
+                let cycle_elapsed = now.saturating_sub(sub.last_charged_at);
+                let remaining_secs = plan.interval_secs.saturating_sub(cycle_elapsed);
+                if remaining_secs > 0 && plan.interval_secs > 0 {
+                    // Integer arithmetic: multiply first to preserve precision.
+                    plan.amount
+                        .saturating_mul(remaining_secs as i128)
+                        / (plan.interval_secs as i128)
+                } else {
+                    0
+                }
+            }
+            _ => 0,
+        };
+
         sub.status = SubscriptionStatus::Cancelled;
         storage::set_subscription(&env, &sub);
 
@@ -3968,6 +4010,19 @@ impl PaymentProcessingContract {
         let reserve = storage::get_subscription_reserve(&env, &sub.subscriber, &plan.token)
             .saturating_sub(remaining);
         storage::set_subscription_reserve(&env, &sub.subscriber, &plan.token, reserve);
+
+        // Issue proration refund from the contract's held reserve if applicable.
+        if proration_refund > 0 {
+            token::Client::new(&env, &plan.token).transfer(
+                &env.current_contract_address(),
+                &sub.subscriber,
+                &proration_refund,
+            );
+            env.events().publish(
+                ("lumenflow", "subscription_prorated"),
+                (subscription_id.clone(), sub.subscriber.clone(), proration_refund),
+            );
+        }
 
         // Shrinking the allowance needs the subscriber's auth, so it can only
         // happen on subscriber-initiated cancels.
@@ -3985,6 +4040,42 @@ impl PaymentProcessingContract {
             (subscription_id, caller),
         );
         Ok(())
+    }
+
+    /// Configure the proration policy applied when subscribers cancel
+    /// mid-cycle (Issue #1610).
+    ///
+    /// Only the merchant that owns the subscriptions may set their own policy.
+    ///
+    /// # Arguments
+    /// * `merchant` - Merchant address (must sign).
+    /// * `policy` - One of `NoRefund`, `Prorate`, or `GracePeriod(secs)`.
+    ///
+    /// # Errors
+    /// * [`PaymentError::MerchantNotFound`] — merchant is not registered.
+    pub fn set_proration_policy(
+        env: Env,
+        merchant: Address,
+        policy: ProrationPolicy,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        merchant.require_auth();
+        storage::get_merchant(&env, &merchant)
+            .ok_or(PaymentError::MerchantNotFound)?;
+        storage::set_proration_policy(&env, &merchant, &policy);
+        env.events()
+            .publish(("lumenflow", "proration_policy_set"), (merchant, policy));
+        Ok(())
+    }
+
+    /// Get the proration policy configured for a merchant.
+    ///
+    /// Returns `ProrationPolicy::NoRefund` if the merchant has not set a policy.
+    pub fn get_proration_policy(
+        env: Env,
+        merchant: Address,
+    ) -> ProrationPolicy {
+        storage::get_proration_policy(&env, &merchant)
     }
 
     /// Re-approve the contract's token allowance to exactly the reserve backing
