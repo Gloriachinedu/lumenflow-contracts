@@ -187,6 +187,8 @@ Only `SOURCE_ACCOUNT` is sensitive. Treat it like a password.
   source.
 - Use a dedicated **testnet** key for day-to-day work. Fund it from the
   [testnet friendbot](https://laboratory.stellar.org/#account-creator?network=test).
+- Generate fresh smoke-test keypairs with `scripts/generate_smoke_keypair.sh`
+  instead of reusing any key that appears in documentation or test fixtures.
 - For mainnet, store the key in a password manager or OS keychain and export it
   into the shell only for the deploy command:
 
@@ -201,9 +203,14 @@ The deploy scripts read the key from the environment, so it never needs to be
 written to a tracked file:
 
 ```bash
-SOURCE_ACCOUNT=<secret-key> ./scripts/local_up.sh
-NETWORK=testnet SOURCE_ACCOUNT=<testnet-secret-key> ./scripts/deploy.sh
+SOURCE_ACCOUNT=S_EXAMPLE_DO_NOT_USE ./scripts/local_up.sh
+NETWORK=testnet SOURCE_ACCOUNT=S_EXAMPLE_DO_NOT_USE ./scripts/deploy.sh
 ```
+
+> **Deprecated test keys:** any Stellar secret key previously shown in this
+> documentation or in test fixtures is deprecated and must be treated as
+> unfunded. Do not reuse them on any network. Generate a new keypair with
+> `scripts/generate_smoke_keypair.sh` for each environment.
 
 ## Validating Docker Compose
 

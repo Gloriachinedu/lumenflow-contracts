@@ -152,6 +152,37 @@ To suppress a false-positive finding, add a `.trivyignore` file at the
 repository root with the CVE IDs to skip, one per line, and include a comment
 explaining why the finding is not applicable.
 
+## Secret Handling and Test Keys
+
+**Never commit real private keys, seed phrases, or mnemonics to this repository.**
+This applies to source files, test fixtures, documentation, CI configuration, and
+commit messages alike. Any key that has ever been pushed to a public branch must
+be treated as compromised and rotated immediately.
+
+### Test keys
+
+- Generate all test keypairs with `scripts/generate_smoke_keypair.sh`. The script
+  produces a fresh keypair for each environment (local, CI, testnet) — do not
+  reuse keys across environments or copy them between machines.
+- Documentation and examples must use obviously fake placeholders such as
+  `S_EXAMPLE...` (secret) and `G_EXAMPLE...` (public). Never paste a working key
+  into a doc, README, or code comment.
+- Previously published testnet keys used in older docs and fixtures are
+  **deprecated and unfunded**. They must not be reused; if you find one, replace
+  it with a placeholder and note the deprecation in your PR.
+
+### Enforcement
+
+The `pre-commit` hook runs [gitleaks](https://github.com/gitleaks/gitleaks) with
+`.gitleaks.toml` and blocks commits containing detected secrets. Install it with
+`./scripts/install_hooks.sh`. For emergencies only, `SKIP_SECRET_SCAN=1 git commit ...`
+skips the scan and prints a warning — use it solely to work around a broken hook
+configuration, never to bypass a real finding.
+
+If you believe a real key was committed, do not just delete it in a follow-up
+commit: rotate the key, report it per [SECURITY.md](SECURITY.md), and coordinate
+with maintainers to purge it from history.
+
 ## Development Setup
 
 ### Secret Scanning Hook

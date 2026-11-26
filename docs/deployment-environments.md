@@ -19,15 +19,17 @@ Each file exports:
 
 ### Using `NETWORK` environment variable (original style)
 ```bash
-NETWORK=testnet SOURCE_ACCOUNT=<secret-key> ./scripts/deploy.sh
+NETWORK=testnet SOURCE_ACCOUNT=S_EXAMPLE_DO_NOT_USE ./scripts/deploy.sh
 ```
 
 ### Using `--network` flag
 ```bash
-SOURCE_ACCOUNT=<secret-key> ./scripts/deploy.sh --network testnet
+SOURCE_ACCOUNT=S_EXAMPLE_DO_NOT_USE ./scripts/deploy.sh --network testnet
 ```
 
 `deploy.sh` auto-loads the matching `scripts/env/<network>.env` file before invoking the Stellar CLI.
+
+> **Key hygiene:** `S_EXAMPLE_DO_NOT_USE` is a fake placeholder, not a valid key. Generate a fresh keypair for each environment with `scripts/generate_smoke_keypair.sh` and never commit real secret keys. Any testnet keys previously shown in this documentation are **deprecated and unfunded** — do not reuse them.
 
 ## Per-environment Values
 
@@ -36,19 +38,20 @@ SOURCE_ACCOUNT=<secret-key> ./scripts/deploy.sh --network testnet
 # Start the local network container first
 stellar network container start local
 
-SOURCE_ACCOUNT=<your-local-key> ./scripts/deploy.sh --network local
+SOURCE_ACCOUNT=S_EXAMPLE_DO_NOT_USE ./scripts/deploy.sh --network local
 ```
 
 ### Testnet
 ```bash
+# Generate a fresh keypair first: ./scripts/generate_smoke_keypair.sh
 # Fund with Friendbot: https://friendbot.stellar.org
-SOURCE_ACCOUNT=<testnet-secret-key> ./scripts/deploy.sh --network testnet
+SOURCE_ACCOUNT=S_EXAMPLE_DO_NOT_USE ./scripts/deploy.sh --network testnet
 ```
 
 ### Mainnet
 ```bash
 # Edit scripts/env/mainnet.env and set your RPC_URL with a real API key before deploying
-SOURCE_ACCOUNT=<mainnet-secret-key> ./scripts/deploy.sh --network mainnet
+SOURCE_ACCOUNT=S_EXAMPLE_DO_NOT_USE ./scripts/deploy.sh --network mainnet
 ```
 
 > **Mainnet warning:** The `mainnet.env` file contains a placeholder RPC URL. Replace `<YOUR_API_KEY>` before deploying to production. Never commit real secret keys or API keys to version control.
