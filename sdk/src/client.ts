@@ -144,6 +144,7 @@ import {
   GlobalStats,
   SubscriptionPlan,
   Subscription,
+  FeeConfig,
 } from "./types";
 import { LumenFlowError, PaymentErrorCode } from "./errors";
 import { withIdempotency, IdempotentResult } from "./idempotency";

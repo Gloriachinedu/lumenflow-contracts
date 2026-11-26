@@ -41,6 +41,10 @@ const PAUSE_TIMELOCK_SECS: u64 = 7 * 24 * 3600;
 const EARLY_UNPAUSE_THRESHOLD: u32 = 3;
 const MAX_BATCH_SIZE: u32 = 10;
 const MAX_SERIALIZED_PAYLOAD_BYTES: u32 = 4096;
+/// Maximum protocol fee, in basis points (10%).
+const MAX_FEE_BPS: u32 = 1_000;
+/// Basis-point denominator used for fee computation.
+const BPS_DENOMINATOR: i128 = 10_000;
 
 /// Compute the number of ledgers elapsed since `start_ledger`, saturating at 0.
 ///
@@ -197,6 +201,84 @@ impl PaymentProcessingContract {
         storage::set_fee_recipient(&env, &fee_recipient);
         Self::append_audit(&env, AdminActionType::SetPlatformFee, &admin, String::from_str(&env, ""));
         Ok(())
+    }
+
+    /// Configure the optional protocol fee module (admin only).
+    ///
+    /// The fee is expressed in basis points (1 bps = 0.01%) and is deducted from
+    /// each payment before the merchant receives funds. A fee of `0` bps disables
+    /// the module entirely: no fee transfer is performed.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator. Must sign the call.
+    /// * `recipient` - Address that receives the protocol fee.
+    /// * `bps` - Fee in basis points; must not exceed [`MAX_FEE_BPS`].
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    /// * [`PaymentError::InvalidInput`] — `bps` exceeds [`MAX_FEE_BPS`].
+    pub fn set_fee_config(
+        env: Env,
+        admin: Address,
+        recipient: Address,
+        bps: u32,
+    ) -> Result<(), PaymentError> {
+        require_admin_rate_limited(&env, &admin)?;
+        if bps > MAX_FEE_BPS {
+            return Err(PaymentError::InvalidInput);
+        }
+        storage::set_platform_fee_bps(&env, bps);
+        storage::set_fee_recipient(&env, &recipient);
+        Self::append_audit(&env, AdminActionType::SetPlatformFee, &admin, String::from_str(&env, ""));
+        env.events()
+            .publish(("lumenflow", "fee_config_set"), (recipient, bps));
+        Ok(())
+    }
+
+    /// Read the current fee configuration.
+    ///
+    /// # Returns
+    /// `(recipient, bps)`. When no recipient has been configured the contract
+    /// address is returned with `bps == 0`.
+    pub fn get_fee_config(env: Env) -> (Address, u32) {
+        let bps = storage::get_platform_fee_bps(&env);
+        let recipient = storage::get_fee_recipient(&env)
+            .unwrap_or_else(|| env.current_contract_address());
+        (recipient, bps)
+    }
+
+    /// Internal helper: compute the protocol fee for `amount` at `bps`.
+    fn compute_fee(amount: i128, bps: u32) -> i128 {
+        if bps == 0 {
+            return 0;
+        }
+        amount.saturating_mul(bps as i128) / BPS_DENOMINATOR
+    }
+
+    /// Internal helper: split `amount` into `(fee, net)` and transfer both parts.
+    ///
+    /// When `bps == 0` the fee module is disabled and a single transfer of the
+    /// full amount to the merchant is performed (no extra token transfer).
+    fn settle_with_fee(
+        env: &Env,
+        token: &Address,
+        payer: &Address,
+        merchant: &Address,
+        amount: i128,
+    ) {
+        let bps = storage::get_platform_fee_bps(env);
+        let fee = Self::compute_fee(amount, bps);
+        let token_client = token::Client::new(env, token);
+        if fee <= 0 || bps == 0 {
+            token_client.transfer(payer, merchant, &amount);
+            return;
+        }
+        let recipient = storage::get_fee_recipient(env)
+            .unwrap_or_else(|| env.current_contract_address());
+        let net = amount - fee;
+        // Fee first, then net — both happen in the same invocation (atomic).
+        token_client.transfer(payer, &recipient, &fee);
+        token_client.transfer(payer, merchant, &net);
     }
 
     /// Set the threshold for unusually large payments (emits suspicious_activity event).
@@ -2799,9 +2881,7 @@ impl PaymentProcessingContract {
         let mut dispute =
             storage::get_dispute(&env, &dispute_id).ok_or(PaymentError::DisputeNotFound)?;
 
-        if matches!(dispute.status, DisputeStatus::Resolved) {
-            return Err(PaymentError::DisputeAlreadyResolved);
-        }
+        Self::validate_dispute_transition(&dispute.status, &DisputeStatus::Resolved)?;
 
         // Effects: update dispute state before any external calls
         dispute.status = DisputeStatus::Resolved;
@@ -2873,6 +2953,41 @@ impl PaymentProcessingContract {
     /// * [`PaymentError::DisputeNotFound`] — no dispute exists with `dispute_id`.
     pub fn get_dispute(env: Env, dispute_id: String) -> Result<types::DisputeRecord, PaymentError> {
         storage::get_dispute(&env, &dispute_id).ok_or(PaymentError::DisputeNotFound)
+    }
+
+    /// Internal helper: single source of truth for dispute state transitions.
+    ///
+    /// Allowed transitions:
+    ///
+    /// ```text
+    /// Open        → UnderReview | Escalated | Resolved
+    /// UnderReview → Escalated   | Resolved
+    /// Escalated   → Resolved
+    /// Resolved    → (terminal)
+    /// ```
+    ///
+    /// Every other source→target pair is rejected with
+    /// [`PaymentError::InvalidDisputeState`].
+    fn validate_dispute_transition(
+        current: &DisputeStatus,
+        target: &DisputeStatus,
+    ) -> Result<(), PaymentError> {
+        let allowed = match current {
+            DisputeStatus::Open => matches!(
+                target,
+                DisputeStatus::UnderReview | DisputeStatus::Escalated | DisputeStatus::Resolved
+            ),
+            DisputeStatus::UnderReview => {
+                matches!(target, DisputeStatus::Escalated | DisputeStatus::Resolved)
+            }
+            DisputeStatus::Escalated => matches!(target, DisputeStatus::Resolved),
+            DisputeStatus::Resolved => false,
+        };
+        if allowed {
+            Ok(())
+        } else {
+            Err(PaymentError::InvalidDisputeState)
+        }
     }
 
     /// Initiate a payment dispute on-chain (payer or merchant).
@@ -2976,9 +3091,7 @@ impl PaymentProcessingContract {
         let mut dispute =
             storage::get_dispute(&env, &dispute_id).ok_or(PaymentError::DisputeNotFound)?;
 
-        if !matches!(dispute.status, DisputeStatus::Open) {
-            return Err(PaymentError::DisputeNotOpen);
-        }
+        Self::validate_dispute_transition(&dispute.status, &DisputeStatus::UnderReview)?;
 
         dispute.status = DisputeStatus::UnderReview;
         storage::set_dispute(&env, &dispute);
@@ -3018,11 +3131,7 @@ impl PaymentProcessingContract {
         let mut dispute =
             storage::get_dispute(&env, &dispute_id).ok_or(PaymentError::DisputeNotFound)?;
 
-        match dispute.status {
-            DisputeStatus::Resolved => return Err(PaymentError::DisputeAlreadyResolved),
-            DisputeStatus::Escalated => return Err(PaymentError::DisputeAlreadyEscalated),
-            _ => {}
-        }
+        Self::validate_dispute_transition(&dispute.status, &DisputeStatus::Escalated)?;
 
         if let Some(ref n) = notes {
             if n.len() > 256 {

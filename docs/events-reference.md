@@ -454,6 +454,20 @@ const parsed = parseLumenFlowEvent({
 //   data: { order_id: 'ORDER_123', payer: <payerAddr>, amount: 1000n } }
 ```
 
+Cross-asset payments decode the same way, with the conversion details in `data`:
+
+```ts
+const parsed = parseLumenFlowEvent({
+  topic: ['lumenflow', 'cross_asset_payment', merchantXdr],
+  value: ['ORDER_123', payerAddr, sendAssetAddr, 10500000n, destAssetAddr, 10000000n, 9523809n],
+});
+// { name: 'cross_asset_payment', merchant: <merchantXdr>,
+//   data: { order_id: 'ORDER_123', payer: <payerAddr>,
+//           send_asset: <sendAssetAddr>, send_amount: 10500000n,
+//           dest_asset: <destAssetAddr>, dest_amount: 10000000n,
+//           exchange_rate: 9523809n } }
+```
+
 `parseLumenFlowEvent` throws `EventCompatError` for events that aren't in the
 catalog, have a malformed topic, or whose data tuple arity doesn't match — so an
 unrecognised or changed contract event surfaces loudly instead of being
