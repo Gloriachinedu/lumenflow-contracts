@@ -480,6 +480,100 @@
     }
   }
 
+  // ── Confirmation modal focus management ────────────────────────────────────
+
+  /** @type {{deactivate: () => void}|null} */
+  let _modalFocusHandle = null;
+  /** @type {HTMLElement|null} */
+  let _modalTriggerEl = null;
+  /** @type {(() => void)|null} */
+  let _pendingSubmit = null;
+  let _submitting = false;
+
+  function getConfirmModalEl() {
+    return document.getElementById('confirm-modal');
+  }
+
+  /**
+   * Open the confirmation modal and trap focus inside it.
+   * Escape closes the modal and returns focus to the trigger element.
+   */
+  function showConfirmModal(details) {
+    const dialog = getConfirmModalEl();
+    if (!dialog) return;
+
+    // Remember the element that opened the modal so focus can be restored.
+    _modalTriggerEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+    // Populate the summary if the markup provides a slot for it.
+    const summary = document.getElementById('confirm-summary');
+    if (summary && details) {
+      summary.textContent =
+        `Send ${details.amount} of ${details.tokenAddress} to ${details.merchantAddress} ` +
+        `(${details.required} of ${details.signers.length} signatures required).`;
+    }
+
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('role', 'dialog');
+    dialog.hidden = false;
+    dialog.style.display = 'block';
+
+    // Release any previous trap before installing a new one.
+    if (_modalFocusHandle) {
+      _modalFocusHandle.deactivate();
+      _modalFocusHandle = null;
+    }
+
+    const LumenFocus = window.LumenFocus;
+    if (LumenFocus && typeof LumenFocus.trapModal === 'function') {
+      _modalFocusHandle = LumenFocus.trapModal(dialog, { onEscape: closeConfirmModal });
+    } else {
+      // Fallback: at minimum handle Escape so the modal can always be dismissed.
+      dialog.addEventListener('keydown', _fallbackEscapeHandler);
+    }
+  }
+
+  function _fallbackEscapeHandler(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeConfirmModal();
+    }
+  }
+
+  /**
+   * Close the confirmation modal, release the focus trap exactly once and
+   * return focus to the element that opened the modal.
+   */
+  function closeConfirmModal() {
+    const dialog = getConfirmModalEl();
+    if (!dialog) return;
+
+    if (_modalFocusHandle) {
+      _modalFocusHandle.deactivate();
+      _modalFocusHandle = null;
+    } else {
+      dialog.removeEventListener('keydown', _fallbackEscapeHandler);
+    }
+
+    dialog.hidden = true;
+    dialog.style.display = 'none';
+    dialog.removeAttribute('aria-modal');
+
+    const trigger = _modalTriggerEl;
+    _modalTriggerEl = null;
+    if (trigger && typeof trigger.focus === 'function' && document.contains(trigger)) {
+      trigger.focus();
+    }
+  }
+
+  /** User confirmed the modal: close it, then run the deferred submit. */
+  function confirmModalSubmit() {
+    const pending = _pendingSubmit;
+    _pendingSubmit = null;
+    closeConfirmModal();
+    if (pending) pending();
+  }
+
   // ── Submit ─────────────────────────────────────────────────────────────────
 
   async function submitForm() {
@@ -639,6 +733,9 @@
   window.executePayment  = executePayment;
   window.connectWallet   = connectWallet;
   window.stopPolling     = stopPolling;
+  window.showConfirmModal   = showConfirmModal;
+  window.closeConfirmModal  = closeConfirmModal;
+  window.confirmModalSubmit = confirmModalSubmit;
 
   document.getElementById('required-sigs').addEventListener('input', () => {
     validateThreshold();
