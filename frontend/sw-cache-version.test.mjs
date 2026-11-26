@@ -4,8 +4,8 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const serviceWorkerSource = await readFile(new URL('./sw.js', import.meta.url), 'utf8');
-const cacheVersion = serviceWorkerSource.match(/const CACHE_VERSION = '([^']+)'/)[1];
-const currentCacheName = `lumenflow-${cacheVersion}`;
+const buildHash = serviceWorkerSource.match(/const BUILD_HASH = '([^']+)'/)[1];
+const currentCacheName = `lf-cache-v${buildHash}`;
 
 function createServiceWorker() {
   const listeners = new Map();
@@ -21,7 +21,7 @@ function createServiceWorker() {
         put: async () => {},
       };
     },
-    keys: async () => ['lumenflow-v0.0.0', currentCacheName],
+    keys: async () => ['lumenflow-v0.0.0', 'lf-cache-voldhash', currentCacheName],
     delete: async (name) => {
       deletedCaches.push(name);
       return true;
@@ -54,7 +54,7 @@ test('service worker activation removes caches from older versions and claims cl
 
   await worker.trigger('activate');
 
-  assert.deepEqual(worker.deletedCaches, ['lumenflow-v0.0.0']);
+  assert.deepEqual(worker.deletedCaches, ['lumenflow-v0.0.0', 'lf-cache-voldhash']);
   assert.equal(worker.claimedClients, 1);
 });
 
@@ -64,6 +64,6 @@ test('service worker install uses a versioned cache and activates immediately', 
   await worker.trigger('install');
 
   assert.equal(worker.openedCaches[0], currentCacheName);
-  assert.match(worker.openedCaches[0], /^lumenflow-v\d+\.\d+\.\d+$/);
+  assert.match(worker.openedCaches[0], /^lf-cache-v/);
   assert.equal(worker.skippedWaiting, 1);
 });

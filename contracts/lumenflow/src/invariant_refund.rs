@@ -463,6 +463,76 @@ mod invariant_refund_state_tests {
         );
     }
 
+    // ── Invariant 15b: merchant-specific refund window respected ─────────────
+
+    #[test]
+    fn inv_refund_within_merchant_window_succeeds() {
+        let (env, client, _admin, merchant, payer, token) = full_setup();
+        make_payment(&env, &client, &merchant, &payer, &token, "ORD_I20", 1_000);
+
+        // Merchant sets a custom 7-day refund window.
+        client.set_refund_window(&merchant, &(7 * 24 * 3600));
+
+        // Advance 6 days — still inside the merchant window.
+        env.ledger().with_mut(|l| {
+            l.timestamp += 6 * 24 * 3600;
+        });
+
+        make_refund(&env, &client, &payer, "ORD_I20", "REF_I20", 100);
+        let r = client.get_refund(&str(&env, "REF_I20"));
+        assert!(
+            matches!(r.status, RefundStatus::Pending),
+            "refund within merchant window must be accepted"
+        );
+    }
+
+    #[test]
+    fn inv_refund_after_merchant_window_is_rejected() {
+        let (env, client, _admin, merchant, payer, token) = full_setup();
+        make_payment(&env, &client, &merchant, &payer, &token, "ORD_I21", 1_000);
+
+        // Merchant sets a custom 7-day refund window.
+        client.set_refund_window(&merchant, &(7 * 24 * 3600));
+
+        // Advance 8 days — past the merchant window but still inside the
+        // global 30-day default, proving the merchant window takes precedence.
+        env.ledger().with_mut(|l| {
+            l.timestamp += 8 * 24 * 3600;
+        });
+
+        let res = client.try_initiate_refund(
+            &payer,
+            &str(&env, "REF_I21"),
+            &str(&env, "ORD_I21"),
+            &100,
+            &str(&env, "late request"),
+        );
+        assert_eq!(
+            res,
+            Err(Ok(PaymentError::RefundWindowExpired)),
+            "refund after merchant window must be rejected"
+        );
+    }
+
+    #[test]
+    fn inv_refund_falls_back_to_global_window() {
+        let (env, client, _admin, merchant, payer, token) = full_setup();
+        make_payment(&env, &client, &merchant, &payer, &token, "ORD_I22", 1_000);
+
+        // No merchant window set — the global 30-day default applies.
+        // Advance 29 days: inside the global window.
+        env.ledger().with_mut(|l| {
+            l.timestamp += 29 * 24 * 3600;
+        });
+
+        make_refund(&env, &client, &payer, "ORD_I22", "REF_I22", 100);
+        let r = client.get_refund(&str(&env, "REF_I22"));
+        assert!(
+            matches!(r.status, RefundStatus::Pending),
+            "refund within global fallback window must be accepted"
+        );
+    }
+
     // ── Invariant 16: complete lifecycle — full round-trip ────────────────────
 
     #[test]

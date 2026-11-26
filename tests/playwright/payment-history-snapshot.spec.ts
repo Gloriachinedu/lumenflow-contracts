@@ -148,7 +148,15 @@ test("snapshot: filter controls structure", async ({ page }) => {
 
 test("snapshot: pagination controls structure", async ({ page }) => {
   const paginationHtml = await page.evaluate(() => {
-    const nav = document.querySelector(".pagination");
+    // payment-history-paginated.html uses .pagination-bar; fall back to the
+    // legacy .pagination container and any navigation landmark labelled
+    // "pagination" so the snapshot keeps working across both pages.
+    const nav =
+      document.querySelector(".pagination-bar") ??
+      document.querySelector(".pagination") ??
+      document.querySelector(
+        '[role="navigation"][aria-label*="pagination" i]'
+      );
     return nav ? nav.outerHTML : "";
   });
 
@@ -284,6 +292,37 @@ test("structural: required pagination control elements are present", async ({
     );
     expect(exists, `Expected element with id="${id}" to exist`).toBe(true);
   }
+});
+
+// ── 9b. Paginated page pagination controls ───────────────────────────────────
+
+test("structural: paginated page exposes prev/next and page meta", async ({
+  page,
+}) => {
+  await page.goto("/payment-history-paginated.html");
+  await page.waitForLoadState("domcontentloaded");
+  await page.waitForTimeout(400);
+
+  // The pagination container must be present and be a navigation landmark
+  const container = page.locator(
+    '.pagination-bar, [role="navigation"][aria-label*="pagination" i]'
+  );
+  await expect(container.first()).toBeVisible();
+
+  // Prev / Next buttons and the page indicator must exist
+  for (const id of ["prev-btn", "next-btn", "page-meta"]) {
+    await expect(
+      page.locator(`#${id}`),
+      `Expected element with id="${id}" to exist on the paginated page`
+    ).toHaveCount(1);
+  }
+
+  // Prev/Next must be keyboard-focusable buttons
+  await expect(page.locator("#prev-btn")).toHaveJSProperty("tagName", "BUTTON");
+  await expect(page.locator("#next-btn")).toHaveJSProperty("tagName", "BUTTON");
+
+  // Page indicator should display the current page and total
+  await expect(page.locator("#page-meta")).toContainText(/page/i);
 });
 
 // ── 10. State elements are present (hidden by default) ───────────────────────
