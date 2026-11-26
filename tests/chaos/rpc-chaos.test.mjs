@@ -18,6 +18,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import { withRetry } from '../../sdk/retry.mjs';
+import { EventPoller } from '../../sdk/eventPoller.mjs';
+import { IdempotencyStore } from '../../sdk/idempotency.mjs';
+import { submitBatchPayments } from '../../sdk/payments.mjs';
+import { LumenflowError, ErrorCodes } from '../../sdk/errors.mjs';
+
 // ── Configuration ─────────────────────────────────────────────────────────────
 
 const adminUrl  = process.env.TOXIPROXY_ADMIN_URL ?? 'http://localhost:8474';
@@ -79,6 +85,29 @@ async function rpcCall(method = 'getHealth', params = []) {
   } catch (err) {
     return { ok: false, status: null, body: null, error: err };
   }
+}
+
+// ── Mock RPC helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Builds a mock RPC client whose `call` method fails the first `failures`
+ * invocations with the supplied error, then succeeds with `successValue`.
+ * Records every attempt so tests can assert on retry behaviour.
+ */
+function makeFlakyRpc({ failures = 0, error, successValue = { status: 'ok' } } = {}) {
+  const attempts = [];
+  let remaining = failures;
+  return {
+    attempts,
+    async call(method, params) {
+      attempts.push({ method, params });
+      if (remaining > 0) {
+        remaining -= 1;
+        throw error ?? new LumenflowError(ErrorCodes.RPC_TIMEOUT, 'mock RPC timeout');
+      }
+      return successValue;
+    },
+  };
 }
 
 // ── Legacy smoke tests (original coverage) ────────────────────────────────────
@@ -211,4 +240,178 @@ test('connection reset via proxy disable/re-enable — retry succeeds', {
     typeof result.ok === 'boolean',
     'Expected rpcCall to return a result object after connection reset',
   );
+});
+
+// ── Scenario 1: RPC timeout → SDK retries and eventually succeeds ─────────────
+
+test('RPC timeout — SDK retries and eventually succeeds', {
+  skip: !enabled,
+}, async () => {
+  const rpc = makeFlakyRpc({
+    failures:    2,
+    error:       new LumenflowError(ErrorCodes.RPC_TIMEOUT, 'mock RPC timeout'),
+    successValue: { status: 'healthy' },
+  });
+
+  const result = await withRetry(() => rpc.call('getHealth', []), {
+    maxAttempts: 5,
+    baseDelayMs: 1,
+    maxDelayMs:  5,
+    retryOn:     err => err.code === ErrorCodes.RPC_TIMEOUT,
+  });
+
+  assert.deepStrictEqual(result, { status: 'healthy' });
+  assert.strictEqual(
+    rpc.attempts.length,
+    3,
+    'Expected exactly 3 attempts (2 failures + 1 success)',
+  );
+});
+
+test('RPC timeout — SDK gives up after max retries', {
+  skip: !enabled,
+}, async () => {
+  const rpc = makeFlakyRpc({
+    failures: 10,
+    error:    new LumenflowError(ErrorCodes.RPC_TIMEOUT, 'mock RPC timeout'),
+  });
+
+  await assert.rejects(
+    () => withRetry(() => rpc.call('getHealth', []), {
+      maxAttempts: 3,
+      baseDelayMs: 1,
+      maxDelayMs:  5,
+      retryOn:     err => err.code === ErrorCodes.RPC_TIMEOUT,
+    }),
+    err => err.code === ErrorCodes.RPC_TIMEOUT,
+  );
+  assert.strictEqual(rpc.attempts.length, 3, 'Expected exactly maxAttempts calls');
+});
+
+// ── Scenario 2: partial batch payment failure → per-item error codes ──────────
+
+test('batch payment partial failure — returns correct per-item error codes', {
+  skip: !enabled,
+}, async () => {
+  const payments = [
+    { id: 'p1', destination: 'GDEST1', amount: '10' },
+    { id: 'p2', destination: 'GDEST2', amount: '20' },
+    { id: 'p3', destination: 'GDEST3', amount: '30' },
+  ];
+
+  // p2 fails with insufficient funds; p3 fails with a timeout; p1 succeeds.
+  const rpc = {
+    async call(method, params) {
+      const { id } = params;
+      if (id === 'p2') {
+        throw new LumenflowError(ErrorCodes.INSUFFICIENT_FUNDS, 'not enough funds');
+      }
+      if (id === 'p3') {
+        throw new LumenflowError(ErrorCodes.RPC_TIMEOUT, 'mock RPC timeout');
+      }
+      return { id, hash: `0x${id}`, status: 'submitted' };
+    },
+  };
+
+  const results = await submitBatchPayments(payments, { rpc, continueOnError: true });
+
+  assert.strictEqual(results.length, 3);
+
+  const byId = Object.fromEntries(results.map(r => [r.id, r]));
+
+  assert.strictEqual(byId.p1.ok, true);
+  assert.strictEqual(byId.p1.error, undefined);
+
+  assert.strictEqual(byId.p2.ok, false);
+  assert.strictEqual(byId.p2.error.code, ErrorCodes.INSUFFICIENT_FUNDS);
+
+  assert.strictEqual(byId.p3.ok, false);
+  assert.strictEqual(byId.p3.error.code, ErrorCodes.RPC_TIMEOUT);
+});
+
+// ── Scenario 3: concurrent duplicate submissions → idempotent handling ────────
+
+test('concurrent duplicate payment submissions — handled idempotently', {
+  skip: !enabled,
+}, async () => {
+  const store = new IdempotencyStore();
+  let submitCount = 0;
+
+  const rpc = {
+    async call() {
+      submitCount += 1;
+      // Simulate latency so concurrent calls overlap.
+      await new Promise(resolve => setTimeout(resolve, 20));
+      return { hash: '0xabc', status: 'submitted' };
+    },
+  };
+
+  const payment = { id: 'dup-1', destination: 'GDEST', amount: '5' };
+  const key     = 'idem-dup-1';
+
+  const submissions = Array.from({ length: 5 }, () =>
+    store.run(key, () => rpc.call('sendPayment', payment)),
+  );
+
+  const results = await Promise.all(submissions);
+
+  // All callers must observe the same result.
+  for (const result of results) {
+    assert.deepStrictEqual(result, { hash: '0xabc', status: 'submitted' });
+  }
+
+  // The underlying RPC must only be invoked once despite 5 concurrent callers.
+  assert.strictEqual(submitCount, 1, 'Expected exactly one underlying submission');
+});
+
+// ── Scenario 4: event poller recovers after 30-second RPC outage ──────────────
+
+test('event poller recovers after 30-second RPC outage', {
+  skip: !enabled,
+}, async () => {
+  // Use a compressed timeline: the poller sees an outage window that spans
+  // several poll intervals, then the RPC comes back and events resume.
+  const outageMs   = 30_000;
+  const pollMs     = 100;
+  const start      = Date.now();
+  const received   = [];
+
+  let outage = true;
+  const rpc = {
+    async call(method) {
+      if (outage) {
+        throw new LumenflowError(ErrorCodes.RPC_TIMEOUT, 'mock RPC outage');
+      }
+      return { events: [{ id: 'evt-1', method }] };
+    },
+  };
+
+  const poller = new EventPoller({
+    rpc,
+    intervalMs: pollMs,
+    onEvent:    evt => received.push(evt),
+    onError:    () => { /* swallow during outage */ },
+  });
+
+  poller.start();
+
+  // End the outage after the configured window (compressed for test speed).
+  const outageTimer = setTimeout(() => { outage = false; }, Math.min(outageMs, 500));
+
+  try {
+    // Wait until at least one event is received post-recovery.
+    const deadline = Date.now() + 5_000;
+    while (received.length === 0 && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  } finally {
+    clearTimeout(outageTimer);
+    poller.stop();
+  }
+
+  assert.ok(
+    received.length >= 1,
+    `Expected the poller to recover and deliver events (elapsed ${Date.now() - start}ms)`,
+  );
+  assert.strictEqual(received[0].id, 'evt-1');
 });

@@ -6,6 +6,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.50"
     }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.30"
+    }
   }
 
   # Remote state: S3 + DynamoDB locking
@@ -30,6 +34,11 @@ provider "aws" {
       ManagedBy   = "terraform"
     }
   }
+}
+
+provider "kubernetes" {
+  config_path    = var.kubeconfig_path
+  config_context = var.kube_context
 }
 
 # ─── Artifact Storage ────────────────────────────────────────────────────────
@@ -259,4 +268,125 @@ resource "aws_cloudwatch_metric_alarm" "high_error_rate" {
   ok_actions          = [aws_sns_topic.alerts.arn]
 
   treat_missing_data = "notBreaching"
+}
+
+# ─── Kubernetes Workloads: Resource Limits & Autoscaling ─────────────────────
+#
+# Target configuration is documented in docs/resource-limits-autoscaling.md.
+# Every workload gets explicit CPU/memory requests and limits, and an HPA with
+# min 2 / max 10 replicas scaling on CPU utilization > 70%.
+
+locals {
+  # Per-workload resource requests/limits, reviewed against load test results.
+  k8s_workloads = {
+    api = {
+      replicas = 2
+      requests = { cpu = "250m", memory = "512Mi" }
+      limits   = { cpu = "1000m", memory = "1Gi" }
+    }
+    worker = {
+      replicas = 2
+      requests = { cpu = "500m", memory = "512Mi" }
+      limits   = { cpu = "2000m", memory = "2Gi" }
+    }
+    web = {
+      replicas = 2
+      requests = { cpu = "100m", memory = "256Mi" }
+      limits   = { cpu = "500m", memory = "512Mi" }
+    }
+  }
+
+  # HPA policy shared by all workloads.
+  hpa_min_replicas                     = 2
+  hpa_max_replicas                     = 10
+  hpa_cpu_target_utilization_percentage = 70
+}
+
+resource "kubernetes_deployment" "workload" {
+  for_each = local.k8s_workloads
+
+  metadata {
+    name      = "lumenflow-${each.key}"
+    namespace = var.k8s_namespace
+    labels = {
+      app         = "lumenflow-${each.key}"
+      environment = var.environment
+      managed-by  = "terraform"
+    }
+  }
+
+  spec {
+    replicas = each.value.replicas
+
+    selector {
+      match_labels = {
+        app = "lumenflow-${each.key}"
+      }
+    }
+
+    template {
+      metadata {
+        labels = {
+          app         = "lumenflow-${each.key}"
+          environment = var.environment
+        }
+      }
+
+      spec {
+        container {
+          name  = each.key
+          image = "${var.k8s_image_repository}:${var.k8s_image_tag}"
+
+          resources {
+            requests = {
+              cpu    = each.value.requests.cpu
+              memory = each.value.requests.memory
+            }
+            limits = {
+              cpu    = each.value.limits.cpu
+              memory = each.value.limits.memory
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+resource "kubernetes_horizontal_pod_autoscaler_v2" "workload" {
+  for_each = local.k8s_workloads
+
+  metadata {
+    name      = "lumenflow-${each.key}"
+    namespace = var.k8s_namespace
+    labels = {
+      app         = "lumenflow-${each.key}"
+      environment = var.environment
+      managed-by  = "terraform"
+    }
+  }
+
+  spec {
+    min_replicas = local.hpa_min_replicas
+    max_replicas = local.hpa_max_replicas
+
+    scale_target_ref {
+      api_version = "apps/v1"
+      kind        = "Deployment"
+      name        = kubernetes_deployment.workload[each.key].metadata[0].name
+    }
+
+    metric {
+      type = "Resource"
+
+      resource {
+        name = "cpu"
+
+        target {
+          type                = "Utilization"
+          average_utilization = local.hpa_cpu_target_utilization_percentage
+        }
+      }
+    }
+  }
 }

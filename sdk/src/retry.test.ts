@@ -253,4 +253,56 @@ describe('withRetry', () => {
     const result = await withRetry(fn, { ...fastOptions, maxRetries: 2 });
     expect(result).toBe('ok');
   });
+
+  // ── Chaos Scenario Tests ────────────────────────────────────────────────
+
+  describe('chaos: RPC node unavailability', () => {
+    it('recovers after a sequence of transient failures followed by success', async () => {
+      // Simulates an RPC node that is flapping: timeout, 503, 429, then healthy.
+      const failures: unknown[] = [
+        new Error('ETIMEDOUT'),
+        { status: 503, message: 'Service Unavailable' },
+        { status: 429, headers: { 'retry-after': '0' } },
+      ];
+      let calls = 0;
+      const fn = jest.fn().mockImplementation(async () => {
+        const failure = failures[calls];
+        calls++;
+        if (failure !== undefined) throw failure;
+        return 'rpc-recovered';
+      });
+
+      const result = await withRetry(fn, { ...fastOptions, maxRetries: 5 });
+
+      expect(result).toBe('rpc-recovered');
+      expect(fn).toHaveBeenCalledTimes(failures.length + 1);
+    });
+
+    it('surfaces RetryExhaustedError when the RPC node stays down', async () => {
+      const timeoutError = new Error('ETIMEDOUT');
+      const fn = jest.fn().mockRejectedValue(timeoutError);
+
+      let thrown: RetryExhaustedError | undefined;
+      try {
+        await withRetry(fn, { ...fastOptions, maxRetries: 3 });
+      } catch (e) {
+        thrown = e as RetryExhaustedError;
+      }
+
+      expect(thrown).toBeInstanceOf(RetryExhaustedError);
+      expect(thrown!.retryCount).toBe(3);
+      expect(thrown!.lastError).toBe(timeoutError);
+      expect(fn).toHaveBeenCalledTimes(4);
+    });
+
+    it('does not retry non-retryable RPC errors (e.g. 400 bad request)', async () => {
+      const badRequest = { status: 400, message: 'Bad Request' };
+      const fn = jest.fn().mockRejectedValue(badRequest);
+
+      await expect(withRetry(fn, { ...fastOptions, maxRetries: 5 })).rejects.toEqual(
+        badRequest,
+      );
+      expect(fn).toHaveBeenCalledTimes(1);
+    });
+  });
 });

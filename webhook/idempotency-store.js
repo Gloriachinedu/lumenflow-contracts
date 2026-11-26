@@ -13,6 +13,7 @@
  * Every store implementation must expose:
  *   async has(token: string): Promise<boolean>
  *   async add(token: string, meta?: object): Promise<void>
+ *   async get(token: string): Promise<object|null>   // stored record, if any
  *   async size(): Promise<number>          // optional, for observability
  *
  * Usage
@@ -55,6 +56,15 @@ class MemoryIdempotencyStore {
   }
 
   /**
+   * Returns the stored record for a token, or null if not present.
+   * @param {string} token
+   * @returns {Promise<object|null>}
+   */
+  async get(token) {
+    return this._records.get(token) || null;
+  }
+
+  /**
    * Returns the number of stored tokens.
    * @returns {Promise<number>}
    */
@@ -72,6 +82,10 @@ class MemoryIdempotencyStore {
  *
  * Tokens are stored as Redis keys with an optional TTL so that the
  * store does not grow without bound in long-running deployments.
+ *
+ * The stored value is a JSON record containing the original response
+ * payload (if any) so that duplicate submissions within the TTL window
+ * can be answered with the original response instead of an error.
  *
  * @example
  *   const Redis = require('ioredis');
@@ -108,6 +122,11 @@ class RedisIdempotencyStore {
 
   /**
    * Records a token as processed (atomic SET NX with TTL).
+   *
+   * The `meta` object may include a `response` property holding the
+   * original response payload; it is persisted alongside the record so
+   * that duplicates can be answered with the original response.
+   *
    * @param {string} token
    * @param {object} [meta={}]
    * @returns {Promise<void>}
@@ -118,6 +137,23 @@ class RedisIdempotencyStore {
       await this._redis.set(this._key(token), value, 'EX', this._ttl, 'NX');
     } else {
       await this._redis.setnx(this._key(token), value);
+    }
+  }
+
+  /**
+   * Returns the stored record for a token, or null if not present
+   * (e.g. after the TTL window has expired).
+   * @param {string} token
+   * @returns {Promise<object|null>}
+   */
+  async get(token) {
+    const raw = await this._redis.get(this._key(token));
+    if (raw === null || raw === undefined) return null;
+    try {
+      return JSON.parse(raw);
+    } catch (_err) {
+      // Corrupt / non-JSON value: treat as a seen flag without payload.
+      return { processedAt: null, meta: {} };
     }
   }
 

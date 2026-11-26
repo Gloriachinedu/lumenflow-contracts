@@ -18,7 +18,12 @@
 
 const STORAGE_KEY = 'lf-theme';
 
+function hasDom() {
+  return typeof window !== 'undefined' && typeof document !== 'undefined';
+}
+
 function getSystemTheme() {
+  if (!hasDom() || typeof window.matchMedia !== 'function') return 'light';
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
@@ -31,6 +36,8 @@ function saveTheme(theme) {
 }
 
 function applyTheme(theme) {
+  if (!hasDom()) return;
+
   document.documentElement.setAttribute('data-theme', theme);
 
   // Update toggle button if already rendered
@@ -48,7 +55,9 @@ function applyTheme(theme) {
  * Initialises dark mode.  Call once per page after DOMContentLoaded.
  */
 export function initDarkMode() {
-  // Determine initial theme
+  if (!hasDom()) return;
+
+  // Determine initial theme: stored preference wins, otherwise follow the OS.
   const stored = getStoredTheme();
   const initial = stored || getSystemTheme();
   applyTheme(initial);
@@ -77,8 +86,10 @@ export function initDarkMode() {
   }
 
   // React to OS preference changes (only when no stored preference)
-  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
-    if (getStoredTheme()) return; // user has an explicit choice — don't override
-    applyTheme(e.matches ? 'dark' : 'light');
-  });
+  if (typeof window.matchMedia === 'function') {
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+      if (getStoredTheme()) return; // user has an explicit choice — don't override
+      applyTheme(e.matches ? 'dark' : 'light');
+    });
+  }
 }

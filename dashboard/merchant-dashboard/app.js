@@ -26,7 +26,138 @@ const state = {
   refunds: [],        // RefundRecord[]
   wallet: null,  // { type: 'freighter', account: string }
   client: null,  // LumenFlowClient | null
+  apiKey: null,  // string | null — per-merchant dashboard API key
 };
+
+// ── API key authentication ────────────────────────────────────────────────────
+
+/** localStorage key used to persist the merchant dashboard API key. */
+const API_KEY_STORAGE = 'lumenflow_merchant_api_key';
+
+/** Per-key rate limit: 100 requests per 60 s window. */
+const RATE_LIMIT_MAX    = 100;
+const RATE_LIMIT_WINDOW = 60_000;
+
+/** In-memory rate-limit buckets keyed by API key. */
+const rateLimitBuckets = new Map();
+
+/**
+ * Returns the stored API key, if any.
+ * @returns {string|null}
+ */
+function getApiKey() {
+  if (state.apiKey) return state.apiKey;
+  try {
+    state.apiKey = localStorage.getItem(API_KEY_STORAGE) || null;
+  } catch {
+    state.apiKey = null;
+  }
+  return state.apiKey;
+}
+
+/**
+ * Persists (or clears) the merchant dashboard API key.
+ * @param {string|null} key
+ */
+function setApiKey(key) {
+  state.apiKey = key || null;
+  try {
+    if (key) localStorage.setItem(API_KEY_STORAGE, key);
+    else localStorage.removeItem(API_KEY_STORAGE);
+  } catch { /* ignore storage errors */ }
+}
+
+/**
+ * Builds request headers including the `Authorization: Bearer <key>` header
+ * when an API key is configured.
+ * @param {Record<string,string>} [extra]
+ * @returns {Record<string,string>}
+ */
+function authHeaders(extra = {}) {
+  const headers = { ...extra };
+  const key = getApiKey();
+  if (key) headers['Authorization'] = `Bearer ${key}`;
+  return headers;
+}
+
+/**
+ * Client-side mirror of the server's per-key rate limiter. Throws a 429-style
+ * error when the key exceeds 100 requests per minute.
+ * @param {string} key
+ */
+function enforceRateLimit(key) {
+  const now = Date.now();
+  let bucket = rateLimitBuckets.get(key);
+  if (!bucket || now - bucket.start >= RATE_LIMIT_WINDOW) {
+    bucket = { start: now, count: 0 };
+    rateLimitBuckets.set(key, bucket);
+  }
+  bucket.count += 1;
+  if (bucket.count > RATE_LIMIT_MAX) {
+    const err = new Error('Rate limit exceeded: 100 requests per minute per API key.');
+    err.status = 429;
+    throw err;
+  }
+}
+
+/**
+ * Authenticated fetch wrapper. Attaches the Bearer header, applies per-key
+ * rate limiting, and surfaces 401 (invalid/revoked key) and 429 responses.
+ *
+ * @param {string} url
+ * @param {RequestInit} [options]
+ * @returns {Promise<Response>}
+ */
+async function apiFetch(url, options = {}) {
+  const key = getApiKey();
+  if (key) enforceRateLimit(key);
+
+  const res = await fetch(url, {
+    ...options,
+    headers: authHeaders(options.headers || {}),
+  });
+
+  if (res.status === 401) {
+    showError('API key is invalid or has been revoked. Please re-authenticate.');
+    throw Object.assign(new Error('Unauthorized'), { status: 401 });
+  }
+  if (res.status === 429) {
+    showError('Rate limit exceeded (100 requests/min per API key). Please slow down.');
+    throw Object.assign(new Error('Too Many Requests'), { status: 429 });
+  }
+  return res;
+}
+
+/**
+ * Generates a new API key scoped to a merchant address.
+ * Calls `POST /admin/merchant-keys`.
+ *
+ * @param {string} merchant - Merchant Stellar address the key is scoped to.
+ * @returns {Promise<{id:string, key:string, merchant:string}>}
+ */
+async function createMerchantKey(merchant) {
+  const res = await apiFetch('/admin/merchant-keys', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ merchant }),
+  });
+  if (!res.ok) throw new Error(`Failed to create API key (${res.status})`);
+  return res.json();
+}
+
+/**
+ * Revokes an API key by id.
+ * Calls `DELETE /admin/merchant-keys/:id`.
+ *
+ * @param {string} id
+ * @returns {Promise<void>}
+ */
+async function revokeMerchantKey(id) {
+  const res = await apiFetch(`/admin/merchant-keys/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error(`Failed to revoke API key (${res.status})`);
+}
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 
@@ -266,17 +397,421 @@ function showError(msg) {
   }
   banner.textContent = `⚠ ${msg}`;
   banner.style.display = 'block';
+  announce(`Error: ${msg}`);
   clearTimeout(banner._timer);
   banner._timer = setTimeout(() => { banner.style.display = 'none'; }, 8000);
 }
 
+// ── Merchant tier + settlement reporting ─────────────────────────────────────
+
+/** Human-readable messages for known contract / SDK error codes. */
+const ERROR_MESSAGES = {
+  WALLET_NOT_CONNECTED: 'Please connect a wallet first.',
+  MERCHANT_NOT_FOUND: 'No merchant record found for this account.',
+  INVALID_DATE_RANGE: 'The selected date range is invalid. Start must be before end.',
+  RPC_ERROR: 'Could not reach the Stellar RPC. Please try again shortly.',
+  NETWORK_ERROR: 'Network error while contacting the contract. Check your connection.',
+  DEFAULT: 'Something went wrong. Please try again.',
+};
+
+/**
+ * Maps an arbitrary error (SDK error object, string, or Error) to a
+ * human-readable message using ERROR_MESSAGES.
+ *
+ * @param {*} err
+ * @returns {string}
+ */
+function friendlyError(err) {
+  if (!err) return ERROR_MESSAGES.DEFAULT;
+  const code = (err.code || err.errorCode || err.name || '').toString().toUpperCase();
+  if (code && ERROR_MESSAGES[code]) return ERROR_MESSAGES[code];
+  const msg = (err.message || String(err)).toString();
+  for (const key of Object.keys(ERROR_MESSAGES)) {
+    if (key !== 'DEFAULT' && msg.toUpperCase().includes(key)) return ERROR_MESSAGES[key];
+  }
+  return msg || ERROR_MESSAGES.DEFAULT;
+}
+
+/** Tier metadata: display label and the default fee-reduction percentage. */
+const TIER_META = {
+  Standard: { label: 'Standard', reductionPct: 0 },
+  Silver:   { label: 'Silver',   reductionPct: 25 },
+  Gold:     { label: 'Gold',     reductionPct: 50 },
+  Platinum: { label: 'Platinum', reductionPct: 100 },
+};
+
+/** Ordered tier list used to determine the "next" tier. */
+const TIER_ORDER = ['Standard', 'Silver', 'Gold', 'Platinum'];
+
+/**
+ * Fetches the merchant tier from the contract via get_merchant_tier and
+ * renders the current tier plus the next tier threshold in the dashboard.
+ *
+ * @param {string} merchant - Merchant Stellar address.
+ */
+async function loadMerchantTier(merchant) {
+  const tierEl     = document.getElementById('tierCurrent');
+  const nextEl     = document.getElementById('tierNext');
+  const progressEl = document.getElementById('tierProgress');
+  if (!tierEl) return;
+
+  if (DEMO_MODE || !state.client) {
+    renderMerchantTier(buildMockTier());
+    return;
+  }
+
+  if (!merchant) {
+    tierEl.textContent = '—';
+    if (nextEl) nextEl.textContent = 'Connect a wallet to view your tier.';
+    return;
+  }
+
+  try {
+    const tier = await state.client.getMerchantTier(merchant);
+    renderMerchantTier(tier);
+  } catch (err) {
+    showError(friendlyError(err));
+    tierEl.textContent = '—';
+    if (nextEl) nextEl.textContent = 'Tier unavailable.';
+  }
+}
+
+/**
+ * Renders tier information returned by get_merchant_tier.
+ *
+ * @param {{tier:string, volume30d:string|number, nextTier?:string,
+ *          nextThreshold?:string|number, feeReductionBps?:number}} info
+ */
+function renderMerchantTier(info) {
+  const tierEl     = document.getElementById('tierCurrent');
+  const nextEl     = document.getElementById('tierNext');
+  const progressEl = document.getElementById('tierProgress');
+  if (!tierEl) return;
+
+  const tierName = info.tier || 'Standard';
+  const meta     = TIER_META[tierName] || TIER_META.Standard;
+  const reduction = info.feeReductionBps != null
+    ? Number(info.feeReductionBps) / 100
+    : meta.reductionPct;
+
+  tierEl.textContent = `${meta.label} (${reduction}% fee reduction)`;
+
+  const idx = TIER_ORDER.indexOf(tierName);
+  const nextTier = info.nextTier || TIER_ORDER[idx + 1] || null;
+
+  if (nextEl) {
+    if (nextTier && info.nextThreshold != null) {
+      const remaining = Math.max(0, Number(info.nextThreshold) - Number(info.volume30d || 0));
+      nextEl.textContent =
+        `Next tier: ${nextTier} at ${formatAmount(info.nextThreshold, 'native')} ` +
+        `30-day volume (${formatAmount(remaining, 'native')} to go).`;
+    } else {
+      nextEl.textContent = 'You are on the highest tier. 🎉';
+    }
+  }
+
+  if (progressEl) {
+    if (nextTier && info.nextThreshold != null && Number(info.nextThreshold) > 0) {
+      const pct = Math.min(100, (Number(info.volume30d || 0) / Number(info.nextThreshold)) * 100);
+      progressEl.style.width = `${pct.toFixed(1)}%`;
+    } else {
+      progressEl.style.width = '100%';
+    }
+  }
+}
+
+/** Mock tier payload for demo mode. */
+function buildMockTier() {
+  return {
+    tier: 'Silver',
+    volume30d: 150_0000000,
+    nextTier: 'Gold',
+    nextThreshold: 500_0000000,
+    feeReductionBps: 2500,
+  };
+}
+
+/**
+ * Builds a structured settlement report for a merchant over a date range.
+ *
+ * Paginates get_merchant_payment_history, fetches refunds for each order,
+ * aggregates summary totals (matching get_merchant_stats semantics) and
+ * returns the itemised rows plus totals.
+ *
+ * @param {string} merchant
+ * @param {Date|string|number} dateStart
+ * @param {Date|string|number} dateEnd
+ * @returns {Promise<{merchant:string, dateStart:string, dateEnd:string,
+ *                    items:Array, totals:Object}>}
+ */
+async function generateSettlementReport(merchant, dateStart, dateEnd) {
+  const startMs = toMs(dateStart);
+  const endMs   = toMs(dateEnd);
+  if (isNaN(startMs) || isNaN(endMs) || startMs > endMs) {
+    throw Object.assign(new Error(ERROR_MESSAGES.INVALID_DATE_RANGE), { code: 'INVALID_DATE_RANGE' });
+  }
+
+  if (DEMO_MODE || !state.client) {
+    return buildMockSettlementReport(merchant, startMs, endMs);
+  }
+
+  if (!merchant) {
+    throw Object.assign(new Error(ERROR_MESSAGES.WALLET_NOT_CONNECTED), { code: 'WALLET_NOT_CONNECTED' });
+  }
+
+  const items = [];
+  let cursor = null;
+  let guard  = 0;
+
+  // Paginate through the merchant's payment history.
+  do {
+    const page = await state.client.getMerchantPaymentHistory(
+      merchant,
+      cursor,
+      50,
+      null,
+      'Date',
+      'Ascending'
+    );
+    const payments = page.payments || [];
+    for (const p of payments) {
+      const ts = toMs(p.timestamp || p.createdAt);
+      if (ts < startMs || ts > endMs) continue;
+      items.push({
+        orderId:   p.orderId,
+        amount:    Number(p.amount || 0),
+        fee:       Number(p.fee != null ? p.fee : (p.platformFee || 0)),
+        net:       Number(p.net != null ? p.net : Number(p.amount || 0) - Number(p.fee || p.platformFee || 0)),
+        token:     p.token || 'native',
+        timestamp: ts,
+        refunded:  0,
+      });
+    }
+    cursor = page.cursor || page.nextCursor || null;
+    guard += 1;
+  } while (cursor && guard < 100);
+
+  // Attach refund totals per order.
+  await Promise.all(items.map(async (item) => {
+    try {
+      const refunds = await state.client.getRefundsForOrder(merchant, item.orderId);
+      item.refunded = (refunds || []).reduce((sum, r) => sum + Number(r.amount || 0), 0);
+    } catch {
+      item.refunded = 0;
+    }
+  }));
+
+  const totals = aggregateTotals(items);
+  return {
+    merchant,
+    dateStart: new Date(startMs).toISOString(),
+    dateEnd:   new Date(endMs).toISOString(),
+    items,
+    totals,
+  };
+}
+
+/** Normalises a Date | ISO string | epoch (s or ms) into milliseconds. */
+function toMs(value) {
+  if (value == null) return NaN;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'number') return value < 1e12 ? value * 1000 : value;
+  const parsed = Date.parse(value);
+  return isNaN(parsed) ? Number(value) : parsed;
+}
+
+/** Aggregates itemised rows into summary totals. */
+function aggregateTotals(items) {
+  const totals = {
+    paymentCount: items.length,
+    grossVolume:  0,
+    totalFees:    0,
+    netVolume:    0,
+    refundedVolume: 0,
+  };
+  for (const it of items) {
+    totals.grossVolume    += it.amount;
+    totals.totalFees      += it.fee;
+    totals.netVolume      += it.net;
+    totals.refundedVolume += it.refunded || 0;
+  }
+  return totals;
+}
+
+/** Mock settlement report for demo mode. */
+function buildMockSettlementReport(merchant, startMs, endMs) {
+  const base = [
+    { orderId: 'ORDER_001', amount: 10_0000000, fee: 25_00000,  token: 'native', offset: 2 },
+    { orderId: 'ORDER_002', amount: 5_0000000,  fee: 12_50000,  token: 'native', offset: 1 },
+    { orderId: 'ORDER_003', amount: 20_0000000, fee: 50_00000,  token: 'USDC',   offset: 5 },
+    { orderId: 'ORDER_004', amount: 3_0000000,  fee: 7_50000,   token: 'native', offset: 3 },
+  ];
+  const items = base
+    .map(b => ({
+      orderId:   b.orderId,
+      amount:    b.amount,
+      fee:       b.fee,
+      net:       b.amount - b.fee,
+      token:     b.token,
+      timestamp: Date.now() - b.offset * 86_400_000,
+      refunded:  b.orderId === 'ORDER_003' ? 5_0000000 : 0,
+    }))
+    .filter(it => it.timestamp >= startMs && it.timestamp <= endMs);
+
+  return {
+    merchant: merchant || 'demo-merchant',
+    dateStart: new Date(startMs).toISOString(),
+    dateEnd:   new Date(endMs).toISOString(),
+    items,
+    totals: aggregateTotals(items),
+  };
+}
+
+/** Renders the settlement summary + itemised table for a report. */
+function renderSettlementReport(report) {
+  const summaryEl = document.getElementById('settlementSummary');
+  const bodyEl    = document.querySelector('#settlementTable tbody');
+  const emptyEl2  = document.getElementById('settlementEmpty');
+  if (!summaryEl || !bodyEl) return;
+
+  const t = report.totals;
+  summaryEl.innerHTML = `
+    <div class="summary-card"><span>Payments</span><strong>${t.paymentCount}</strong></div>
+    <div class="summary-card"><span>Gross volume</span><strong>${formatAmount(t.grossVolume, 'native')}</strong></div>
+    <div class="summary-card"><span>Fees</span><strong>${formatAmount(t.totalFees, 'native')}</strong></div>
+    <div class="summary-card"><span>Net</span><strong>${formatAmount(t.netVolume, 'native')}</strong></div>
+    <div class="summary-card"><span>Refunded</span><strong>${formatAmount(t.refundedVolume, 'native')}</strong></div>
+  `;
+
+  bodyEl.innerHTML = '';
+  if (!report.items.length) {
+    if (emptyEl2) emptyEl2.style.display = 'block';
+    return;
+  }
+  if (emptyEl2) emptyEl2.style.display = 'none';
+
+  report.items.forEach(it => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${it.orderId}</td>
+      <td>${formatAmount(it.amount, it.token)}</td>
+      <td>${formatAmount(it.fee, it.token)}</td>
+      <td>${formatAmount(it.net, it.token)}</td>
+      <td>${new Date(it.timestamp).toLocaleString()}</td>
+    `;
+    bodyEl.appendChild(tr);
+  });
+}
+
+/** Currently displayed settlement report (used by exports). */
+let currentReport = null;
+
+/** Loads and renders a settlement report for the selected date range. */
+async function refreshSettlementReport() {
+  const startEl = document.getElementById('settlementStart');
+  const endEl   = document.getElementById('settlementEnd');
+  if (!startEl || !endEl) return;
+
+  const merchant = state.wallet ? state.wallet.account : null;
+  try {
+    const report = await generateSettlementReport(merchant, startEl.value, endEl.value);
+    currentReport = report;
+    renderSettlementReport(report);
+  } catch (err) {
+    showError(friendlyError(err));
+  }
+}
+
+/** Triggers a browser download for the given text content. */
+function downloadFile(filename, content, mime) {
+  const blob = new Blob([content], { type: mime });
+  const url  = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href  = url;
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+/** Exports the current settlement report as CSV. */
+function exportSettlementCsv() {
+  if (!currentReport) { showError('No settlement report loaded yet.'); return; }
+  const header = ['order_id', 'amount', 'fee', 'net', 'token', 'timestamp'];
+  const lines  = [header.join(',')];
+  currentReport.items.forEach(it => {
+    lines.push([
+      csvEscape(it.orderId),
+      csvEscape(it.amount),
+      csvEscape(it.fee),
+      csvEscape(it.net),
+      csvEscape(it.token),
+      csvEscape(new Date(it.timestamp).toISOString()),
+    ].join(','));
+  });
+  const from = currentReport.dateStart.slice(0, 10);
+  const to   = currentReport.dateEnd.slice(0, 10);
+  downloadFile(`lumenflow-settlement-${from}-${to}.csv`, lines.join('\r\n'), 'text/csv;charset=utf-8;');
+}
+
+/** Exports the current settlement report as JSON. */
+function exportSettlementJson() {
+  if (!currentReport) { showError('No settlement report loaded yet.'); return; }
+  const from = currentReport.dateStart.slice(0, 10);
+  const to   = currentReport.dateEnd.slice(0, 10);
+  downloadFile(
+    `lumenflow-settlement-${from}-${to}.json`,
+    JSON.stringify(currentReport, null, 2),
+    'application/json;charset=utf-8;'
+  );
+}
+
+// Wire settlement report controls (guarded — elements may be absent).
+(function wireSettlementControls() {
+  const refreshBtn = document.getElementById('settlementRefresh');
+  const csvBtn     = document.getElementById('settlementExportCsv');
+  const jsonBtn    = document.getElementById('settlementExportJson');
+  if (refreshBtn) refreshBtn.addEventListener('click', refreshSettlementReport);
+  if (csvBtn)     csvBtn.addEventListener('click', exportSettlementCsv);
+  if (jsonBtn)    jsonBtn.addEventListener('click', exportSettlementJson);
+})();
+
 // ── Formatting ────────────────────────────────────────────────────────────────
+// Token metadata (symbol + decimals) is resolved via the shared helpers in
+// frontend/lumenflow-shared.js so USDC renders as "USDC" with 6 decimals and
+// native XLM keeps its 7 decimals. See issue #1576.
+const sharedTokenHelpers = (typeof window !== 'undefined' && window.LumenFlowShared) || {};
+
+/**
+ * Resolve token metadata for a token identifier.
+ * Accepts a token address (SAC / contract id) or a symbol like 'XLM' / 'USDC'.
+ * Falls back to the native asset when the shared helper is unavailable.
+ *
+ * @param {string} token
+ * @returns {{symbol:string, decimals:number}}
+ */
+function resolveTokenMetadata(token) {
+  if (typeof sharedTokenHelpers.getTokenMetadata === 'function') {
+    try {
+      const meta = sharedTokenHelpers.getTokenMetadata(token);
+      if (meta && meta.symbol) return meta;
+    } catch { /* fall through to native defaults */ }
+  }
+  // Fallback: native XLM metadata
+  return { symbol: 'XLM', decimals: 7 };
+}
+
 function formatAmount(amount, token) {
-  // Use 7 decimals for XLM / native; 6 for USDC; 7 as default
-  const isUsdc = typeof token === 'string' && token.length > 10;
-  const decimals = isUsdc ? 6 : 7;
-  const symbol   = isUsdc ? 'USDC' : 'XLM';
-  const value    = Number(amount) / Math.pow(10, decimals);
+  const { symbol, decimals } = resolveTokenMetadata(token || 'native');
+
+  if (typeof sharedTokenHelpers.formatTokenAmount === 'function') {
+    try {
+      return sharedTokenHelpers.formatTokenAmount(amount, token || 'native');
+    } catch { /* fall through to local formatting */ }
+  }
+
+  const value = Number(amount) / Math.pow(10, decimals);
   return value.toLocaleString(undefined, {
     minimumFractionDigits: 2,
     maximumFractionDigits: decimals,
@@ -295,9 +830,34 @@ function shorten(addr) {
 function setStatus(status) {
   state.status = status;
   document.querySelectorAll('.tabs .tab').forEach(btn => {
-    btn.setAttribute('aria-selected', btn.dataset.status === status);
+    const selected = btn.dataset.status === status;
+    btn.setAttribute('aria-selected', selected ? 'true' : 'false');
+    btn.setAttribute('tabindex', selected ? '0' : '-1');
   });
   render();
+  announce(`Showing ${status} refunds`);
+}
+
+// ── Live region announcements ─────────────────────────────────────────────────
+/** Announce a message to screen readers via the polite live region. */
+function announce(msg) {
+  let region = document.getElementById('a11y-live');
+  if (!region) {
+    region = document.createElement('div');
+    region.id = 'a11y-live';
+    region.setAttribute('role', 'status');
+    region.setAttribute('aria-live', 'polite');
+    region.setAttribute('aria-atomic', 'true');
+    region.style.cssText = [
+      'position:absolute', 'width:1px', 'height:1px',
+      'padding:0', 'margin:-1px', 'overflow:hidden',
+      'clip:rect(0,0,0,0)', 'white-space:nowrap', 'border:0',
+    ].join(';');
+    document.body.appendChild(region);
+  }
+  // Clear then set so repeated identical messages are re-announced
+  region.textContent = '';
+  setTimeout(() => { region.textContent = msg; }, 50);
 }
 
 function render() {
@@ -329,14 +889,24 @@ function render() {
       <td></td>
     `;
     const actions = tr.querySelector('td:last-child');
+    const label = r.refundId || r.id;
     if (r.status === 'pending') {
-      const approve = document.createElement('button'); approve.textContent = 'Approve';
-      const reject  = document.createElement('button'); reject.textContent  = 'Reject';
+      const approve = document.createElement('button');
+      approve.type = 'button';
+      approve.textContent = 'Approve';
+      approve.setAttribute('aria-label', `Approve refund ${label}`);
+      const reject = document.createElement('button');
+      reject.type = 'button';
+      reject.textContent = 'Reject';
+      reject.setAttribute('aria-label', `Reject refund ${label}`);
       approve.addEventListener('click', () => confirmAction('approve', r.id));
       reject.addEventListener('click',  () => confirmAction('reject',  r.id));
       actions.appendChild(approve); actions.appendChild(reject);
     } else if (r.status === 'approved') {
-      const execute = document.createElement('button'); execute.textContent = 'Execute';
+      const execute = document.createElement('button');
+      execute.type = 'button';
+      execute.textContent = 'Execute';
+      execute.setAttribute('aria-label', `Execute refund ${label}`);
       execute.addEventListener('click', () => confirmAction('execute', r.id));
       actions.appendChild(execute);
     }
@@ -361,6 +931,7 @@ function updateStatus(id, newStatus) {
   const r = state.refunds.find(x => x.id === id);
   if (r) r.status = newStatus;
   render();
+  announce(`Refund ${id} marked ${newStatus}`);
 }
 
 async function executeRefund(id) {
@@ -386,12 +957,16 @@ async function executeRefund(id) {
 // ── Modal helpers ─────────────────────────────────────────────────────────────
 
 function openModal(modal) {
+  if (!modal) return;
   modal.style.display = 'block';
   modal.setAttribute('aria-hidden', 'false');
+  modal.setAttribute('aria-modal', 'true');
+  if (!modal.hasAttribute('role')) modal.setAttribute('role', 'dialog');
   trapFocus(modal);
 }
 
 function closeModal(modal) {
+  if (!modal) return;
   modal.style.display = 'none';
   modal.setAttribute('aria-hidden', 'true');
   releaseFocusTrap();
@@ -401,18 +976,24 @@ let lastFocused  = null;
 let trapListener = null;
 function trapFocus(modal) {
   lastFocused = document.activeElement;
-  const focusable = modal.querySelectorAll('button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])');
+  const focusable = Array.from(
+    modal.querySelectorAll(
+      'button:not([disabled]),[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
+    )
+  ).filter(el => el.offsetParent !== null || el === document.activeElement);
   const first = focusable[0];
   const last  = focusable[focusable.length - 1];
-  first && first.focus();
+  if (first) first.focus();
   trapListener = (e) => {
     if (e.key === 'Tab') {
+      if (!focusable.length) { e.preventDefault(); return; }
       if (e.shiftKey && document.activeElement === first) {
         e.preventDefault(); last.focus();
       } else if (!e.shiftKey && document.activeElement === last) {
         e.preventDefault(); first.focus();
       }
     } else if (e.key === 'Escape') {
+      e.preventDefault();
       closeModal(modal);
     }
   };
@@ -420,9 +1001,10 @@ function trapFocus(modal) {
 }
 
 function releaseFocusTrap() {
-  document.removeEventListener('keydown', trapListener);
+  if (trapListener) document.removeEventListener('keydown', trapListener);
   trapListener = null;
-  if (lastFocused) lastFocused.focus();
+  if (lastFocused && typeof lastFocused.focus === 'function') lastFocused.focus();
+  lastFocused = null;
 }
 
 // ── Wallet connect handlers ───────────────────────────────────────────────────
@@ -467,12 +1049,47 @@ document.querySelectorAll('.tabs .tab').forEach(btn =>
   btn.addEventListener('click', () => setStatus(btn.dataset.status))
 );
 
+// Keyboard support for the tablist: Arrow keys move focus, Home/End jump.
+(function initTabKeyboard() {
+  const tabs = Array.from(document.querySelectorAll('.tabs .tab'));
+  if (!tabs.length) return;
+  const tablist = tabs[0].parentElement;
+  if (tablist && !tablist.hasAttribute('role')) tablist.setAttribute('role', 'tablist');
+
+  tabs.forEach((btn, i) => {
+    if (!btn.hasAttribute('role')) btn.setAttribute('role', 'tab');
+    btn.setAttribute('tabindex', btn.getAttribute('aria-selected') === 'true' ? '0' : '-1');
+    btn.addEventListener('keydown', (e) => {
+      let target = null;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        target = tabs[(i + 1) % tabs.length];
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        target = tabs[(i - 1 + tabs.length) % tabs.length];
+      } else if (e.key === 'Home') {
+        target = tabs[0];
+      } else if (e.key === 'End') {
+        target = tabs[tabs.length - 1];
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        setStatus(btn.dataset.status);
+        return;
+      }
+      if (target) {
+        e.preventDefault();
+        target.focus();
+        setStatus(target.dataset.status);
+      }
+    });
+  });
+})();
+
 // ── Mock fetch — replace with real API/EventSource in production ──────────────
 
   const caller = state.wallet.account;
 
 // Mock fetch — in real app call backend API or use streaming (EventSource)
-async function fetchRefunds() {
+async function fetchMockRefunds() {
+  const now = Date.now();
   state.refunds = [
     {
       id: 'r1',
@@ -577,23 +1194,33 @@ async function fetchRefunds() {
 
   const merchant = state.wallet.account;
 
+  // Require an API key scoped to this merchant before querying the dashboard API.
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    showError('No merchant API key configured. Generate one via POST /admin/merchant-keys.');
+    render();
+    return;
+  }
+
   try {
-    // 1. Fetch recent orders for this merchant
-    const page = await state.client.getMerchantPaymentHistory(
-      merchant,
-      null,   // cursor — start from beginning
-      50,     // limit
-      null,   // filter — all statuses
-      'Date',
-      'Descending'
-    );
+    // 1. Fetch recent orders for this merchant (authenticated via Bearer key)
+    const page = await apiFetch(
+      `/dashboard/merchants/${encodeURIComponent(merchant)}/payments?limit=50`
+    ).then(res => {
+      if (!res.ok) throw new Error(`Failed to load payments (${res.status})`);
+      return res.json();
+    });
 
     const orders = page.payments || [];
 
     // 2. For each order, fetch its associated refunds
     const refundLists = await Promise.all(
       orders.map(order =>
-        state.client.getRefundsForOrder(merchant, order.orderId).catch(() => [])
+        apiFetch(
+          `/dashboard/merchants/${encodeURIComponent(merchant)}/orders/${encodeURIComponent(order.orderId)}/refunds`
+        )
+          .then(res => (res.ok ? res.json() : []))
+          .catch(() => [])
       )
     );
 
@@ -612,6 +1239,7 @@ async function fetchRefunds() {
     state.refunds = all;
     render();
   } catch (err) {
+    if (err && (err.status === 401 || err.status === 429)) return; // already surfaced
     showError(friendlyError(err));
   }
 }
@@ -635,6 +1263,8 @@ function applyWallet(info) {
 
   // Refresh data for the newly connected wallet
   fetchRefunds();
+  loadMerchantTier(info.account);
+  refreshSettlementReport();
 }
 
 document.getElementById('connectWallet').addEventListener('click', () =>
@@ -676,6 +1306,40 @@ document.getElementById('albedo').addEventListener('click', async () => {
 document.querySelectorAll('.tabs .tab').forEach(btn =>
   btn.addEventListener('click', () => setStatus(btn.dataset.status))
 );
+
+// Keyboard support for the tablist: Arrow keys move focus, Home/End jump.
+(function initTabKeyboard() {
+  const tabs = Array.from(document.querySelectorAll('.tabs .tab'));
+  if (!tabs.length) return;
+  const tablist = tabs[0].parentElement;
+  if (tablist && !tablist.hasAttribute('role')) tablist.setAttribute('role', 'tablist');
+
+  tabs.forEach((btn, i) => {
+    if (!btn.hasAttribute('role')) btn.setAttribute('role', 'tab');
+    btn.setAttribute('tabindex', btn.getAttribute('aria-selected') === 'true' ? '0' : '-1');
+    btn.addEventListener('keydown', (e) => {
+      let target = null;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        target = tabs[(i + 1) % tabs.length];
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        target = tabs[(i - 1 + tabs.length) % tabs.length];
+      } else if (e.key === 'Home') {
+        target = tabs[0];
+      } else if (e.key === 'End') {
+        target = tabs[tabs.length - 1];
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        setStatus(btn.dataset.status);
+        return;
+      }
+      if (target) {
+        e.preventDefault();
+        target.focus();
+        setStatus(target.dataset.status);
+      }
+    });
+  });
+})();
 
 // ── CSV export ────────────────────────────────────────────────────────────────
 function csvEscape(value) {
@@ -742,7 +1406,11 @@ function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   localStorage.setItem('lumenflow_theme', theme);
   const btn = document.getElementById('themeToggle');
-  if (btn) btn.textContent = theme === 'dark' ? '☀️ Light' : '🌙 Dark';
+  if (btn) {
+    btn.textContent = theme === 'dark' ? '☀️ Light' : '🌙 Dark';
+    btn.setAttribute('aria-label', theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+    btn.setAttribute('aria-pressed', theme === 'dark' ? 'true' : 'false');
+  }
 }
 
 const themeToggleBtn = document.getElementById('themeToggle');
@@ -753,7 +1421,73 @@ if (themeToggleBtn) {
   });
   const initialTheme = document.documentElement.getAttribute('data-theme') || 'light';
   themeToggleBtn.textContent = initialTheme === 'dark' ? '☀️ Light' : '🌙 Dark';
+  themeToggleBtn.setAttribute('aria-label', initialTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+  themeToggleBtn.setAttribute('aria-pressed', initialTheme === 'dark' ? 'true' : 'false');
 }
+
+// ── Health badge ──────────────────────────────────────────────────────────────
+/**
+ * Polls the backend `/health` endpoint and reflects dependency status in the
+ * dashboard badge. The badge shows green when all dependencies are healthy,
+ * amber/red when any are degraded, and grey when the status is unknown.
+ */
+const HEALTH_ENDPOINT = '/health';
+const HEALTH_POLL_INTERVAL_MS = 15_000;
+
+function renderHealthBadge(health) {
+  const badge = document.getElementById('healthBadge');
+  if (!badge) return;
+
+  const deps = [
+    ['rpc', health && health.rpc],
+    ['redis', health && health.redis],
+    ['webhookRelay', health && health.webhookRelay],
+  ];
+
+  const known = deps.filter(([, dep]) => dep && typeof dep.ok === 'boolean');
+  const allOk = known.length === deps.length && known.every(([, dep]) => dep.ok);
+
+  let label = 'Unknown';
+  let color = '#6c757d';
+  if (known.length) {
+    if (allOk) {
+      label = 'Healthy';
+      color = '#1a7f37';
+    } else {
+      label = 'Degraded';
+      color = '#b02a37';
+    }
+  }
+
+  badge.textContent = `● ${label}`;
+  badge.style.color = color;
+  badge.dataset.status = allOk ? 'healthy' : (known.length ? 'degraded' : 'unknown');
+
+  const lines = deps.map(([name, dep]) => {
+    if (!dep) return `${name}: unknown`;
+    const parts = [`ok=${dep.ok}`];
+    if (typeof dep.latency_ms === 'number') parts.push(`${dep.latency_ms}ms`);
+    return `${name}: ${parts.join(' ')}`;
+  });
+  badge.title = lines.join('\n');
+}
+
+async function refreshHealth() {
+  try {
+    const resp = await fetch(HEALTH_ENDPOINT, {
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    });
+    let body = null;
+    try { body = await resp.json(); } catch { /* non-JSON response */ }
+    renderHealthBadge(body);
+  } catch {
+    renderHealthBadge(null);
+  }
+}
+
+refreshHealth();
+setInterval(refreshHealth, HEALTH_POLL_INTERVAL_MS);
 
 // ── Demo / live mode banner ───────────────────────────────────────────────────
 (function renderModeBanner() {
@@ -772,6 +1506,9 @@ if (themeToggleBtn) {
     : `✔ Live mode – connected to contract ${CONTRACT_ID.slice(0, 8)}… on ${NETWORK}.`;
   document.body.prepend(banner);
 })();
+
+// ── Accessibility: ensure the live region exists on load ─────────────────────
+announce('Merchant dashboard loaded');
 
 // ── Initialise ────────────────────────────────────────────────────────────────
 
@@ -796,3 +1533,54 @@ if (savedWallet) {
 // Initial fetch + poll every 30 s
 fetchRefunds();
 setInterval(fetchRefunds, 30_000);
+
+// ── API key management UI ─────────────────────────────────────────────────────
+(function initApiKeyUi() {
+  const form = document.getElementById('apiKeyForm');
+  if (!form) return;
+
+  const input   = document.getElementById('apiKeyMerchant');
+  const statusEl = document.getElementById('apiKeyStatus');
+
+  // Pre-fill merchant address from the connected wallet
+  if (state.wallet && state.wallet.account && input && !input.value) {
+    input.value = state.wallet.account;
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const merchant = (input && input.value.trim()) || (state.wallet && state.wallet.account);
+    if (!merchant) {
+      showError('A merchant address is required to generate an API key.');
+      return;
+    }
+    try {
+      const created = await createMerchantKey(merchant);
+      setApiKey(created.key);
+      if (statusEl) {
+        statusEl.textContent = `✔ API key ${created.id} created for ${shorten(created.merchant || merchant)}.`;
+      }
+      fetchRefunds();
+    } catch (err) {
+      showError(err.message || 'Failed to generate API key.');
+    }
+  });
+
+  const revokeBtn = document.getElementById('apiKeyRevoke');
+  if (revokeBtn) {
+    revokeBtn.addEventListener('click', async () => {
+      const id = (document.getElementById('apiKeyId') || {}).value;
+      if (!id) {
+        showError('Enter the API key id to revoke.');
+        return;
+      }
+      try {
+        await revokeMerchantKey(id.trim());
+        setApiKey(null);
+        if (statusEl) statusEl.textContent = `✔ API key ${id} revoked.`;
+      } catch (err) {
+        showError(err.message || 'Failed to revoke API key.');
+      }
+    });
+  }
+})();

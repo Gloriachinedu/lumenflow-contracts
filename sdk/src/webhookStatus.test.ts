@@ -65,3 +65,53 @@ describe('WebhookStatusTracker', () => {
     expect(failed[0].key).toBe('fail-1');
   });
 });
+
+describe('getWebhookDeliveryStatus', () => {
+  it('returns delivered status for a successfully relayed event', async () => {
+    const deliver = jest.fn().mockResolvedValue({ status: 200 });
+    const tracker = new WebhookStatusTracker(makeRelay(deliver));
+
+    await tracker.relay(event);
+
+    const status = tracker.getWebhookDeliveryStatus('evt-1');
+    expect(status).not.toBeNull();
+    expect(status?.delivered).toBe(true);
+    expect(status?.attempts).toBe(1);
+    expect(typeof status?.lastAttemptAt).toBe('string');
+    expect(status?.lastAttemptAt).toBeDefined();
+  });
+
+  it('returns failed status with attempts after exhausted retries', async () => {
+    const deliver = jest.fn().mockResolvedValue({ status: 503 });
+    const tracker = new WebhookStatusTracker(makeRelay(deliver));
+
+    await expect(tracker.relay(event)).rejects.toBeInstanceOf(WebhookDeliveryError);
+
+    const status = tracker.getWebhookDeliveryStatus('evt-1');
+    expect(status).not.toBeNull();
+    expect(status?.delivered).toBe(false);
+    expect(status?.attempts).toBe(2);
+    expect(typeof status?.lastAttemptAt).toBe('string');
+  });
+
+  it('returns pending status for a record not yet delivered', async () => {
+    const deliver = jest.fn().mockResolvedValue({ status: 200 });
+    const tracker = new WebhookStatusTracker(makeRelay(deliver));
+
+    const pending = tracker.getWebhookDeliveryStatus('evt-pending');
+    expect(pending).toBeNull();
+
+    tracker.markPending('evt-pending');
+    const status = tracker.getWebhookDeliveryStatus('evt-pending');
+    expect(status).not.toBeNull();
+    expect(status?.delivered).toBe(false);
+    expect(status?.attempts).toBe(0);
+  });
+
+  it('returns null for unknown event IDs', () => {
+    const deliver = jest.fn().mockResolvedValue({ status: 200 });
+    const tracker = new WebhookStatusTracker(makeRelay(deliver));
+
+    expect(tracker.getWebhookDeliveryStatus('does-not-exist')).toBeNull();
+  });
+});

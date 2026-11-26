@@ -7,6 +7,7 @@ Terraform configuration for all LumenFlow cloud resources:
 - **IAM roles & policies** — least-privilege access for CI runner  
 - **CloudWatch** — log group and high-error-rate alarm  
 - **SNS topic** — alert delivery (email; extend to Slack / PagerDuty as needed)
+- **AWS Secrets Manager** — per-environment secrets (admin keys, webhook signing secrets, RPC API keys) with automated rotation lambdas
 
 ---
 
@@ -164,6 +165,9 @@ terraform destroy
 | `github_runner_token` | Runner registration token | `""` (sensitive) |
 | `github_repo` | owner/repo for runner | `Gloriachinedu/lumenflow-contracts` |
 | `alert_email` | SNS alert recipient | `""` |
+| `secret_rotation_overlap_minutes` | Dual-active overlap window before the old secret version is deactivated | `15` |
+| `secret_rotation_schedule` | EventBridge schedule expression for the rotation job | `rate(30 days)` |
+| `enable_secret_rotation` | Provision rotation lambdas and schedules | `true` |
 
 ---
 
@@ -179,6 +183,97 @@ terraform destroy
 | `github_actions_role_arn` | IAM role ARN for GitHub Actions OIDC |
 | `alerts_topic_arn` | SNS topic ARN |
 | `cloudwatch_log_group` | CloudWatch log group name |
+| `secrets_admin_key_arn` | Secrets Manager ARN for the admin key (per environment) |
+| `secrets_webhook_signing_arn` | Secrets Manager ARN for the webhook signing secret |
+| `secrets_rpc_api_key_arn` | Secrets Manager ARN for the RPC API key |
+| `secret_rotation_lambda_arn` | ARN of the rotation lambda |
+
+---
+
+## Secret Rotation (Dual-Active)
+
+Secrets are stored in **AWS Secrets Manager**, one secret per environment
+(`testnet`, `mainnet`). Each secret is a JSON document, e.g.:
+
+```json
+{
+  "admin_key": "…",
+  "webhook_signing_secret": "…",
+  "rpc_api_key": "…"
+}
+```
+
+### Resources per environment
+
+| Resource | Name pattern | Purpose |
+|----------|--------------|---------|
+| Secret | `lumenflow/<env>/admin-key` | Admin key (JSON) |
+| Secret | `lumenflow/<env>/webhook-signing` | Webhook signing secret (JSON) |
+| Secret | `lumenflow/<env>/rpc-api-key` | RPC API key (JSON) |
+| Rotation lambda | `lumenflow-<env>-secret-rotation` | Creates a new secret version, never deletes the old one |
+| EventBridge rule | `lumenflow-<env>-secret-rotation` | Triggers the lambda on `var.secret_rotation_schedule` |
+| EventBridge rule | `lumenflow-<env>-secret-deactivate` | Triggers deactivation after the overlap window |
+
+The rotation lambda is wired to Secrets Manager via
+`aws_secretsmanager_secret_rotation`, so both the scheduled EventBridge rule
+and the manual `aws secretsmanager rotate-secret` call use the same code path.
+
+### Dual-active versioning strategy
+
+1. **Rotate** — the lambda calls `PutSecretValue` to create a **new version**
+   (`AWSCURRENT` moves to the new version; the previous version becomes
+   `AWSPREVIOUS`). The old version is **not deleted**.
+2. **Overlap window** — for `var.secret_rotation_overlap_minutes` (default
+   **15 minutes**) both versions are valid. Applications that read
+   `AWSCURRENT` pick up the new value immediately; in-flight requests signed
+   with the old value still verify against `AWSPREVIOUS`.
+3. **Deactivate** — after the overlap window, a scheduled EventBridge rule
+   invokes the lambda in `deactivate` mode, which moves the stale version to
+   `AWSPENDING`/deprecated staging and removes it from the active set. The
+   version is retained (recoverable) but no longer returned by
+   `GetSecretValue` without an explicit `VersionStage`.
+
+### Rotation flow
+
+```
+EventBridge (rate) ──▶ rotation lambda ──▶ PutSecretValue (new AWSCURRENT)
+                                              │
+                                              ▼
+                                  15-minute overlap (dual-active)
+                                              │
+EventBridge (overlap) ──▶ rotation lambda ──▶ deactivate old version
+```
+
+### Manual rotation
+
+```bash
+aws secretsmanager rotate-secret \
+  --secret-id lumenflow/testnet/admin-key \
+  --rotation-lambda-arn "$(terraform output -raw secret_rotation_lambda_arn)"
+```
+
+### Application runtime retrieval
+
+Applications must **not** cache secrets at boot. Instead they read the latest
+version at runtime and refresh on a short TTL so a rotation is picked up
+without a restart:
+
+- **Read** — call `GetSecretValue` with `VersionStage=AWSCURRENT` (the default)
+  and parse the JSON payload.
+- **Refresh** — re-read on a TTL shorter than the overlap window (e.g. 5
+  minutes) and on any authentication/verification failure, then retry once.
+- **Verify** — webhook signature verification accepts both `AWSCURRENT` and
+  `AWSPREVIOUS` during the overlap window, so no requests fail mid-rotation.
+- **No restart** — because the secret is fetched from Secrets Manager on each
+  refresh, no redeploy is required when a new version becomes current.
+
+IAM: the application role needs `secretsmanager:GetSecretValue` on the
+`lumenflow/<env>/*` secret ARNs and `secretsmanager:DescribeSecret` for
+version metadata. The rotation lambda role needs `PutSecretValue`,
+`UpdateSecretVersionStage`, `GetSecretValue`, and `DescribeSecret` on the same
+ARNs.
+
+See `docs/admin-key-rotation.md` for the operational runbook.
 
 ---
 
@@ -203,6 +298,7 @@ after trusted workflows succeed with OIDC. The role ARN itself is not secret.
 - State is encrypted at rest in S3 (`AES256`) and in transit via HTTPS.  
 - The CI runner IAM role follows least privilege — it only has read/write access to the artifact bucket.  
 - Public access is blocked on the artifact bucket; use pre-signed URLs or CloudFront for distribution.
+- Secrets live in AWS Secrets Manager, never in `terraform.tfvars` or state. Rotation keeps the previous version active for a 15-minute overlap window before deactivation.
 
 ---
 

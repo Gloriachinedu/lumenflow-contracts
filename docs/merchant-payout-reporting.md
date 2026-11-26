@@ -1,10 +1,10 @@
 # Merchant Payout and Settlement Reporting
 
-**Issue:** [#371](https://github.com/Gloriachinedu/lumenflow-contracts/issues/371)  
-**Status:** Backlog / Planning  
-**Priority:** Low  
-**Effort:** Medium  
-**Labels:** product, feature, planning
+**Issues:** [#371](https://github.com/Gloriachinedu/lumenflow-contracts/issues/371), [#1572](https://github.com/Gloriachinedu/lumenflow-contracts/issues/1572), [#1573](https://github.com/Gloriachinedu/lumenflow-contracts/issues/1573)  
+**Status:** Implemented (v1)  
+**Priority:** Medium  
+**Effort:** Large  
+**Labels:** product, feature, dashboard, sdk
 
 ---
 
@@ -106,6 +106,63 @@ report: daily, weekly, monthly, or custom date range.
 
 ---
 
+## Merchant Tier System
+
+Merchants are assigned a tier based on their **30-day rolling payment volume**.
+Higher tiers receive reduced platform fees. The tier is derived on-chain and is
+read-only from the client's perspective.
+
+### Tiers
+
+| Tier | Default fee treatment | Notes |
+|---|---|---|
+| `Standard` | Full fee | Default for new / low-volume merchants |
+| `Silver` | Configurable (default: full fee) | First volume threshold |
+| `Gold` | 50% fee reduction (default) | Mid-volume merchants |
+| `Platinum` | 0% fee (default) | Highest volume merchants |
+
+The `MerchantTier` enum is exposed by the contract and the SDK:
+
+```ts
+enum MerchantTier {
+  Standard = 'Standard',
+  Silver = 'Silver',
+  Gold = 'Gold',
+  Platinum = 'Platinum',
+}
+```
+
+### Tier Assignment
+
+- Volume is computed over a **rolling 30-day window** ending at the current
+  ledger timestamp.
+- The volume thresholds for each tier are **configurable by the admin** via the
+  fee module configuration (see `set_merchant_tier_config` / admin fee config).
+- Fee reductions per tier are likewise admin-configurable; the defaults are
+  `Standard = full fee`, `Silver = full fee`, `Gold = 50% reduction`,
+  `Platinum = 0% fee`.
+
+### Reading the Tier
+
+```ts
+const tier: MerchantTier = await client.getMerchantTier(merchantAddress);
+```
+
+`get_merchant_tier` is a **read-only** entrypoint (no auth required) that returns
+the merchant's current tier. The dashboard uses it to display the current tier
+and the volume threshold required to reach the next tier.
+
+### Dashboard Display
+
+The merchant dashboard shows:
+
+1. **Current tier badge** (Standard / Silver / Gold / Platinum).
+2. **Next tier threshold** — the 30-day volume needed to advance, plus the
+   merchant's current rolling volume.
+3. **Effective fee rate** — the fee percentage applied at the current tier.
+
+---
+
 ## Contract / Statistics Data Required
 
 The following existing contract endpoints provide the data needed for this report:
@@ -117,6 +174,7 @@ The following existing contract endpoints provide the data needed for this repor
 | Merchant name and verification status | `get_merchant` | Public |
 | Platform fee configuration | `set_platform_fee` / admin-controlled config | Admin read |
 | Aggregate merchant stats | `get_merchant_stats` | Merchant |
+| Merchant tier | `get_merchant_tier` | Public |
 
 ### Gaps / New Contract Work Required
 
@@ -164,16 +222,129 @@ ORDER_002,2026-06-02T14:30:00Z,25000000,CDLZFC3...,PartiallyRefunded,10000000,15
 
 ## UI / Dashboard Integration
 
-A "Settlement Report" section should be added to the merchant dashboard with:
+The merchant dashboard (`dashboard/merchant-dashboard/app.js`) includes a
+**Settlement Report** panel with:
 
 1. **Date range picker** — select period start and end.
 2. **Summary card** — shows gross volume, refunds, fees, and net settlement.
-3. **Line-items table** — paginated, sortable by date or amount.
+3. **Line-items table** — itemised payments with amount, fee, net, and
+   timestamp; paginated and sortable by date or amount.
 4. **Export buttons** — "Download CSV" and "Download JSON."
+5. **Tier badge** — current tier and next-tier threshold (see
+   [Merchant Tier System](#merchant-tier-system)).
 
-This can be built on top of the existing `get_merchant_payment_history` pagination
-loop combined with `get_refunds_for_order` fetches. No new contract methods are
-strictly required for a v1 implementation.
+The layout is **mobile-responsive**: the summary card stacks above the
+line-items table on narrow viewports, and the table scrolls horizontally.
+
+### How Totals Are Derived
+
+The summary card's totals are taken directly from the contract's
+`get_merchant_stats` values so the dashboard and on-chain figures always agree:
+
+| Summary field | Source |
+|---|---|
+| `total_payments` | `get_merchant_stats.total_payments` (period-scoped) |
+| `gross_volume` | `get_merchant_stats.total_volume` |
+| `refunded_amount` | `get_merchant_stats.total_refunded` |
+| `platform_fees` | `get_merchant_stats.total_fees` |
+| `net_settlement` | `gross_volume − refunded_amount − platform_fees` |
+
+Line items are fetched via the `get_merchant_payment_history` pagination loop
+combined with `get_refunds_for_order`; their summed `amount`, `fee`, and
+`net_amount` must reconcile with the `get_merchant_stats` totals above (this is
+asserted in the dashboard's export path).
+
+### Export Formats
+
+Both exports are generated client-side from the same in-memory report object, so
+CSV and JSON always contain identical data.
+
+**CSV** — one row per line item, with a header row:
+
+```
+order_id,paid_at,amount,fee,net_amount,token_address,status,refunded_amount,memo
+ORDER_001,2026-06-01T10:00:00Z,50000000,250000,49750000,CDLZFC3...,Completed,0,Invoice #001
+ORDER_002,2026-06-02T14:30:00Z,25000000,125000,24875000,CDLZFC3...,PartiallyRefunded,10000000,Invoice #002
+```
+
+**JSON** — a `summary` object (matching the `get_merchant_stats`-derived totals)
+plus a `line_items` array:
+
+```json
+{
+  "summary": {
+    "merchant_address": "GBXGQ...",
+    "merchant_name": "Demo Store",
+    "period_start": "2026-06-01T00:00:00Z",
+    "period_end": "2026-06-30T23:59:59Z",
+    "total_payments": 42,
+    "gross_volume": 2100000000,
+    "total_refunds": 3,
+    "refunded_amount": 75000000,
+    "platform_fees": 10500000,
+    "net_settlement": 2014500000,
+    "token_address": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+    "generated_at": "2026-07-01T06:00:00Z"
+  },
+  "line_items": [ ... ]
+}
+```
+
+### SDK Types Added
+
+The v1 implementation adds the following TypeScript SDK types
+(`@lumenflow/sdk`):
+
+```ts
+enum MerchantTier {
+  Standard = 'Standard',
+  Silver = 'Silver',
+  Gold = 'Gold',
+  Platinum = 'Platinum',
+}
+
+interface MerchantTierInfo {
+  tier: MerchantTier;
+  rollingVolume: bigint;      // 30-day rolling volume (stroops)
+  nextTier: MerchantTier | null;
+  nextTierThreshold: bigint;  // volume required for nextTier (stroops)
+  feeBps: number;             // effective fee in basis points at this tier
+}
+
+interface SettlementSummary {
+  merchantAddress: string;
+  merchantName: string;
+  periodStart: bigint;
+  periodEnd: bigint;
+  totalPayments: bigint;
+  grossVolume: bigint;
+  totalRefunds: bigint;
+  refundedAmount: bigint;
+  platformFees: bigint;
+  netSettlement: bigint;
+  tokenAddress: string;
+  generatedAt: bigint;
+}
+
+interface SettlementLineItem {
+  orderId: string;
+  paidAt: bigint;
+  amount: bigint;
+  fee: bigint;
+  netAmount: bigint;
+  tokenAddress: string;
+  status: PaymentStatus;
+  refundedAmount: bigint;
+  memo?: string;
+}
+```
+
+New client methods:
+
+```ts
+client.getMerchantTier(merchant: string): Promise<MerchantTierInfo>;
+client.getSettlementReport(merchant: string, periodStart: bigint, periodEnd: bigint): Promise<SettlementReport>;
+```
 
 ---
 
@@ -198,9 +369,28 @@ strictly required for a v1 implementation.
 
 ## Acceptance Criteria
 
+### Payout reporting (#371)
+
 - [x] Product spec includes payout frequency model, report fields, and export formats.
 - [x] Spec identifies contract/statistics data required (and gaps).
 - [x] Added to roadmap / backlog docs (see `ROADMAP.md`).
+
+### Merchant tier system (#1572)
+
+- [x] `MerchantTier` enum: `Standard`, `Silver`, `Gold`, `Platinum`.
+- [x] Tier assigned based on 30-day rolling payment volume.
+- [x] Fee reduction per tier configurable by admin (default: Standard=full fee, Gold=50%, Platinum=0%).
+- [x] `get_merchant_tier` read-only entrypoint.
+- [x] Dashboard shows current tier and next tier threshold.
+- [x] SDK types and docs updated.
+
+### Payout reporting dashboard (#1573)
+
+- [x] Dashboard page shows settlement summary for a selected date range.
+- [x] Itemised payment list with amount, fee, net, and timestamp.
+- [x] CSV and JSON export buttons work correctly.
+- [x] Totals match contract `get_merchant_stats` values.
+- [x] Mobile-responsive layout.
 
 ---
 
@@ -484,6 +674,7 @@ main().catch((err) => {
 
 - [`get_merchant_payment_history`](../README.md#payment-history-queries)
 - [`get_merchant_stats`](../README.md#payment-history-queries)
+- [`get_merchant_tier`](../README.md#merchant-tiers)
 - [`get_refunds_for_order`](../README.md#refunds)
 - [Merchant Dashboard](../dashboard/merchant-dashboard/)
 - [Merchant-Facing Reconciliation Between Payouts and Payments](merchant-payment-reconciliation.md)

@@ -17,6 +17,32 @@ A LumenFlow event has three components:
 
 All three components are required for events that carry operational significance (i.e., anything beyond an internal audit trail). Read the checklist at the end of this guide before opening a PR.
 
+### Diagnostic events
+
+LumenFlow distinguishes two kinds of events:
+
+- **Domain events** — business facts that integrators consume (e.g., `payment_processed`, `refund_issued`). These are part of the public contract API and must be stable.
+- **Diagnostic events** — telemetry emitted for off-chain monitoring of performance-critical paths (e.g., `payment_processed`, `refund_issued`, `batch_payment_completed`). They carry timing information so the exporter can derive execution metrics.
+
+Diagnostic events follow the same topic convention as domain events, but their data payload always ends with a **ledger-sequence delta** — the difference between the ledger sequence at which the operation started and the ledger sequence at which the event is emitted. Soroban does not expose wall-clock time inside the contract, so the ledger-sequence delta is used as a duration proxy.
+
+```rust
+// Capture the starting ledger sequence at the top of the entrypoint:
+let start_ledger = env.ledger().sequence();
+
+// ... validation and state changes ...
+
+// Emit the diagnostic event last, including the delta:
+let ledger_delta = env.ledger().sequence() - start_ledger;
+env.events().publish(
+    ("lumenflow", "payment_processed", merchant_address.clone()),
+    (order_id, ledger_delta),
+);
+```
+
+> The delta is a `u32` and is normally `0` within a single transaction. It becomes non-zero when an operation spans multiple ledgers (e.g., deferred settlement). The exporter treats it as a duration-equivalent and aggregates it per event type.
+=======
+
 ---
 
 ## Step 1 — Define the Event in Rust
@@ -237,12 +263,47 @@ Open `monitoring/lumenflow_exporter.py` and:
 
 3. Update the metrics reference table in [docs/observability.md](observability.md).
 
+### Wiring diagnostic events into the exporter
+
+Diagnostic events carry a ledger-sequence delta as their last data field. The exporter must decode that delta and export it as a duration-equivalent metric, in addition to any volume counter.
+
+1. Declare a histogram (or summary) for the duration-equivalent, alongside the volume counter:
+
+   ```python
+   payment_processed_ledger_delta = Histogram(
+       "lumenflow_payment_processed_ledger_delta",
+       "Ledger-sequence delta (duration proxy) for lumenflow/payment_processed events",
+       buckets=(0, 1, 2, 5, 10, 25, 50, 100),
+   )
+   ```
+
+2. In `handle_event`, unpack the delta from the data payload and observe it:
+
+   ```python
+   elif event_name == "payment_processed":
+       payment_processed_total.inc()
+       _, ledger_delta = data  # (order_id, ledger_delta)
+       payment_processed_ledger_delta.observe(ledger_delta)
+   ```
+
+3. If the event is used to compute a per-ledger rate (e.g., average payments per ledger), derive it in PromQL from the volume counter rather than adding a new exporter metric — see the Grafana step below.
+
+4. Update the metrics reference table in [docs/observability.md](observability.md) with both the counter and the delta histogram.
+
 ### Add a Grafana panel
 
 1. Open Grafana and edit the **LumenFlow Contract Health** dashboard.
 2. Add a panel for `lumenflow_my_new_actions_total` (Counter → rate or total display as appropriate).
 3. Save the dashboard and re-export the JSON to `monitoring/grafana-dashboard.json`.
 4. Commit the updated JSON.
+
+For diagnostic events, add a companion panel for the ledger-delta histogram (e.g., `histogram_quantile(0.95, rate(lumenflow_payment_processed_ledger_delta_bucket[5m]))`) so on-call engineers can see the duration-equivalent distribution. When the event represents throughput, also add a per-ledger panel using a PromQL expression such as:
+
+```promql
+sum(increase(lumenflow_payments_processed_total[1m])) / sum(increase(lumenflow_ledgers_processed_total[1m]))
+```
+
+This yields the average payments per ledger over the window. Name the panel **Average Payments per Ledger** and place it next to the existing volume panels.
 
 ### Add an alert rule (if the event indicates failure or risk)
 
@@ -275,7 +336,9 @@ Use this checklist before marking your PR ready for review. Each box corresponds
 [ ] docs/events-reference.md: new section added with trigger, topics, and data table
 [ ] README.md: row added to the Events table
 [ ] monitoring/lumenflow_exporter.py: metric added (if operational significance)
+[ ] monitoring/lumenflow_exporter.py: diagnostic events decode the ledger-sequence delta and observe it in a histogram
 [ ] monitoring/grafana-dashboard.json: panel added and JSON re-exported (if applicable)
+[ ] monitoring/grafana-dashboard.json: ledger-delta and per-ledger panels added for diagnostic events (if applicable)
 [ ] docs/observability.md: metrics reference table updated (if metric added)
 [ ] sdk/src/events.ts or types.ts: event type added (if SDK-relevant)
 [ ] sdk/src/events.test.ts: test added (if SDK-relevant)
@@ -302,6 +365,12 @@ If an event is naturally filtered by merchant (payments, refunds), include the m
 
 **Not updating the monitoring stack:**  
 An event that represents a meaningful operational signal (volume, errors, state changes) without a corresponding Prometheus metric means the on-call team has no visibility. If in doubt, add a simple Counter.
+
+**Omitting the ledger-sequence delta on diagnostic events:**  
+Diagnostic events exist to provide timing telemetry. If you emit a diagnostic event without the ledger-sequence delta as the final data field, the exporter cannot compute duration-equivalent metrics and the Grafana panels will be empty. Always capture `env.ledger().sequence()` at the start of the entrypoint and append the delta to the payload.
+
+**Treating the ledger delta as wall-clock time:**  
+The delta is measured in ledgers, not seconds. Do not label the metric with a unit of time; document it as a duration-equivalent and let dashboards convert it using the known ledger close interval.
 
 ---
 

@@ -134,6 +134,14 @@ export const EVENT_CATALOG: readonly CatalogEntry[] = [
     ['payer', 'address'],
     ['amount', 'i128'],
   ]),
+  // ── Escrow Expiry Warning (Issue #1623) ───────────────────────────────────
+  entry('escrow_expiry_warning', false, [
+    ['escrow_id', 'string'],
+    ['payer', 'address'],
+    ['merchant', 'address'],
+    ['unlock_at', 'u64'],
+    ['lead_time', 'u64'],
+  ]),
 ] as const;
 
 const BY_NAME = new Map(EVENT_CATALOG.map((e) => [e.name, e]));

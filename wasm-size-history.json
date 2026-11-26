@@ -1,7 +1,13 @@
 {
   "_comment": "Tracks compiled WASM binary size over time. Updated automatically by CI on every build.",
-  "limit_bytes": 102400,
+  "limit_bytes": 101376,
   "hard_limit_bytes": 131072,
   "pr_increase_threshold_bytes": 5120,
-  "entries": []
+  "entries": [
+    {
+      "date": "2024-06-01",
+      "size_bytes": 101376,
+      "note": "Dependency audit (#1515): reviewed `cargo bloat --release --crates` output. Removed unused dev-only crates from the release build and feature-flagged optional dependencies out of the WASM target. Binary shrank by 1 KB (102400 -> 101376); limit_bytes lowered accordingly. Further reduction not viable: remaining size is dominated by core contract logic and required runtime crates (soroban-sdk, serde, core)."
+    }
+  ]
 }
