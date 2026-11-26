@@ -104,6 +104,32 @@
       font-size: 0.9rem;
     }
     .dashboard-nav a:hover { text-decoration: underline; }
+
+    .health-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      border: 1px solid var(--color-border);
+      border-radius: 999px;
+      padding: 0.3rem 0.75rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: default;
+      background: var(--color-surface);
+      color: var(--color-text-muted);
+    }
+
+    .health-badge .health-dot {
+      width: 0.6rem;
+      height: 0.6rem;
+      border-radius: 50%;
+      background: var(--color-text-muted);
+      flex-shrink: 0;
+    }
+
+    .health-badge[data-status="healthy"] .health-dot { background: #22c55e; }
+    .health-badge[data-status="degraded"] .health-dot { background: #ef4444; }
+    .health-badge[data-status="unknown"] .health-dot { background: #9ca3af; }
   </style>
 </head>
 <body>

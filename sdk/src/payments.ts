@@ -202,6 +202,104 @@ export function parsePaymentEvent(raw: Record<string, unknown>): PaymentEvent {
 }
 
 /**
+ * Fetches the aggregated payment summary for a payer from the smart contract.
+ *
+ * Calls the contract's `get_payer_payment_summary` read-only method, which
+ * computes the totals from live storage (no caching, no auth required).
+ *
+ * @param payer - Stellar account address of the payer.
+ * @param options - Optional configuration.
+ * @param options.contractId - Contract ID to query. Defaults to the SDK's
+ *   configured contract ID when omitted.
+ * @param options.serverUrl - Soroban RPC URL. Defaults to testnet.
+ * @returns A typed `PayerPaymentSummary` with totals and payment count.
+ *
+ * @example
+ * ```typescript
+ * import { getPayerPaymentSummary } from '@lumenflow/sdk';
+ *
+ * const summary = await getPayerPaymentSummary('GABC...payerAddress');
+ * console.log(summary.totalPaid, summary.totalRefunded, summary.totalPending);
+ * ```
+ */
+export async function getPayerPaymentSummary(
+  payer: string,
+  options: GetPayerPaymentSummaryOptions = {},
+): Promise<PayerPaymentSummary> {
+  const serverUrl = options.serverUrl ?? 'https://soroban-testnet.stellar.org';
+  const contractId = options.contractId;
+
+  if (!contractId) {
+    throw new Error('getPayerPaymentSummary: contractId is required');
+  }
+
+  const response = await fetch(serverUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: '1',
+      method: 'simulateTransaction',
+      params: {
+        transaction: {
+          contract_id: contractId,
+          function: 'get_payer_payment_summary',
+          args: [payer],
+        },
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `getPayerPaymentSummary: RPC request failed with status ${response.status}`,
+    );
+  }
+
+  const body = (await response.json()) as {
+    result?: { retval?: unknown };
+    error?: { message?: string };
+  };
+
+  if (body.error) {
+    throw new Error(
+      `getPayerPaymentSummary: ${body.error.message ?? 'RPC error'}`,
+    );
+  }
+
+  const raw = (body.result?.retval ?? {}) as Record<string, unknown>;
+
+  return {
+    totalPaid: toBigInt(raw['total_paid']),
+    totalRefunded: toBigInt(raw['total_refunded']),
+    totalPending: toBigInt(raw['total_pending']),
+    paymentCount: Number(raw['payment_count'] ?? 0),
+  };
+}
+
+/** Options for `getPayerPaymentSummary`. */
+export interface GetPayerPaymentSummaryOptions {
+  /** Contract ID to query. */
+  contractId?: string;
+  /** Soroban RPC URL. Defaults to testnet. */
+  serverUrl?: string;
+}
+
+/** Best-effort conversion of an RPC scalar to bigint. */
+function toBigInt(value: unknown): bigint {
+  if (typeof value === 'bigint') return value;
+  if (typeof value === 'number') return BigInt(Math.trunc(value));
+  if (typeof value === 'string' && value !== '') {
+    try {
+      return BigInt(value);
+    } catch {
+      return 0n;
+    }
+  }
+  return 0n;
+}
+
+/**
  * Subscribes to real-time payment events for a given merchant address using
  * Horizon's SSE payment stream.
  *
