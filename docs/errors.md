@@ -31,8 +31,8 @@ This document lists all the error codes returned by the LumenFlow contract, alon
 | `InsufficientBalance` | 25 | The payer does not have enough tokens to complete the payment. | Ensure the payer has sufficient funds in the specified token. |
 | `TokenNotAllowed` | 26 | The specified token is not accepted. | Use a supported token. |
 | `InvalidTtl` | 27 | The `ttl` parameter is zero, would overflow the ledger timestamp type, or would produce an expiry timestamp in the past. | Provide a positive `ttl` value (seconds) that does not cause `current_ledger_timestamp + ttl` to overflow `u64`. Typical valid values range from `1` (1 second) to `31536000` (1 year). |
-| `BatchTooLarge` | 28 | The batch contains more items than the maximum allowed (`MAX_BATCH_SIZE`, 10). | Reduce the batch to at most 10 items. |
-| `EmptyBatch` | 29 | The batch contains no items. | Supply at least one item in the batch. |
+| `SlippageExceeded` | 28 | The cross-asset path payment would deliver less than the caller's `min_receive` amount after DEX conversion. | Increase `send_max` or lower `min_receive`, or retry when the DEX path offers a better rate. The transaction is rejected atomically; no funds are moved. |
+======
 
 ## Refund Errors
 
@@ -48,6 +48,8 @@ This document lists all the error codes returned by the LumenFlow contract, alon
 | `RefundNotRejected` | 37 | The refund cannot be disputed because it was not rejected. | Only rejected refunds can be disputed. |
 | `DisputeAlreadyExists` | 38 | A dispute already exists for this refund. | Check the existing dispute status. |
 | `DisputeNotFound` | 39 | The requested dispute was not found. | Verify the refund ID. |
+| `InvalidDisputeState` | 67 | The requested dispute state transition is not allowed from the dispute's current state (e.g. `Resolved → Escalated`). | Only the transitions `Open → UnderReview → Escalated → Resolved` (plus the documented terminal transitions) are permitted. Query the current dispute status before attempting a transition. |
+======
 
 ## Multisig Errors
 
@@ -140,3 +142,21 @@ If the contract returns `PaymentError::RefundExceedsOriginal` (code `33`), the c
 
 - Ensure the cumulative refund amount does not exceed the original payment amount.
 - Adjust the refund request to a valid amount.
+
+### Dispute state transition errors
+
+If the contract returns `PaymentError::InvalidDisputeState` (code `67`), the client should:
+
+- Fetch the current dispute status before attempting a transition.
+- Only issue transitions permitted by the state machine: `Open → UnderReview → Escalated → Resolved`.
+- Treat `Resolved` as terminal; do not attempt to escalate or reopen a resolved dispute.
+- Surface a clear message to the user that the requested action is not valid for the dispute's current state.
+
+### Cross-asset slippage errors
+
+If the contract returns `PaymentError::SlippageExceeded` (code `28`), the client should:
+
+- Recompute the expected received amount from the current DEX path before retrying.
+- Increase `send_max` or lower `min_receive` within the user's tolerance.
+- Retry with a fresh path and quote; the failed call moved no funds.
+======

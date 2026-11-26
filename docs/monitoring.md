@@ -336,60 +336,38 @@ The dashboard opens with the following panels:
 
 ### Alerts
 
-Three alert rules are embedded in the dashboard JSON:
+Alert rules are provisioned from `monitoring/grafana-alerting.json` (Grafana
+provisioning format). The earlier claim that alert rules are embedded in the
+dashboard JSON is **superseded** — the dashboard file now contains only panels,
+and all alerting lives in the provisioning file so rules can be version
+controlled, reviewed, and deployed independently of the dashboard.
 
-| Alert | Condition | Severity |
-|-------|-----------|----------|
-| High Error Rate | Error rate > 5% for 5 min | Critical |
-| Payment Volume Drop 50% | Volume this hour < 50% of last hour | Warning |
-| Contract Paused | `lumenflow_contract_paused == 1` for 1 min | Critical |
+| Alert | PromQL expression | Window | Threshold | Severity | Routing |
+|-------|-------------------|--------|-----------|----------|---------|
+| Payment Failure Rate High | `sum(rate(lumenflow_payments_failed_total[5m])) / clamp_min(sum(rate(lumenflow_payments_total[5m])), 1) * 100` | 5m | > 5% | Critical | PagerDuty + Slack |
+| Webhook Delivery Failure Rate High | `sum(rate(lumenflow_webhook_deliveries_failed_total[5m])) / clamp_min(sum(rate(lumenflow_webhook_deliveries_total[5m])), 1) * 100` | 5m | > 1% | Critical | PagerDuty + Slack |
+| RPC Error Rate High | `sum(rate(lumenflow_rpc_errors_total[2m])) / clamp_min(sum(rate(lumenflow_rpc_requests_total[2m])), 1) * 100` | 2m | > 2% | Critical | PagerDuty + Slack |
 
-To enable alerts, configure a **Contact point** (Slack, PagerDuty, email, etc.)
-in Grafana under **Alerting → Contact points**, then link it to a
-**Notification policy**.
+All three rules use `for: 0m` so that, combined with the short evaluation
+windows above, on-call is paged within the 2-minute target.
 
+#### Threshold justification
 
----
+- **Payment failure rate > 5% over 5m.** A sustained 5% failure rate across a
+  5-minute window indicates systemic breakage (bad contract state, token
+  misconfiguration, or a broken payment path) rather than isolated user errors.
+  Lower thresholds produce noise from individual failed attempts; 5% over 5m
+  reliably separates real incidents from background failures.
+- **Webhook delivery failure rate > 1% over 5m.** Webhook delivery is covered by
+  a 99% delivery SLO, so a 1% failure rate sustained for 5 minutes means the SLO
+  is actively being breached. The 5-minute window avoids paging on transient
+  single-delivery retries while still catching degradation quickly.
+- **RPC error rate > 2% over 2m.** RPC errors typically signal a provider outage
+  or rate-limiting. A 2% error rate over a 2-minute window is high enough to
+  exclude normal transient errors but short enough to detect an outage fast
+  enough to meet the 2-minute paging target.
 
-## Multi-Region Failover Drill Results
-
-Failover capability is validated automatically by the
-`.github/workflows/multi-region-failover.yml` workflow. The drill detects
-configuration drift in secondary regions before an actual incident occurs.
-
-### Schedule
-
-The workflow runs **weekly** (every Monday at 06:00 UTC) via a `schedule`
-trigger, and can also be started manually with `workflow_dispatch`.
-
-### What the drill does
-
-1. Simulates primary region unavailability (traffic is blocked to the primary
-   region endpoint).
-2. Verifies the secondary region continues to serve traffic and that contract
-   reads/writes succeed.
-3. Measures **recovery time** — the interval from primary failure to the first
-   successful request served by the secondary region.
-
-### Pass / fail criteria
-
-| Criterion | Requirement |
-|-----------|-------------|
-| Secondary region serves traffic | All probe requests succeed |
-| Recovery time | **< 60 seconds** |
-| Data consistency | Secondary state matches expected checkpoint |
-
-If any criterion fails, the workflow fails and **pages the on-call team via
-PagerDuty** (the `PAGERDUTY_ROUTING_KEY` secret is used to trigger the
-incident). A passing run does not page.
-
-### Monthly results log
-
-Append the outcome of each drill to the table below at the end of every month
-so failover history is auditable. Record the run date, measured recovery time,
-result, and any notes (e.g. drift found, incident link).
-
-| Date | Recovery time (s) | Result | Notes |
-|------|-------------------|--------|-------|
-| _YYYY-MM-DD_ | _e.g. 12.4_ | _Pass / Fail_ | _Drift found in eu-west secondary; PagerDuty incident #123_ |
-=======
+To enable alerts, apply the provisioning file (or mount it into Grafana's
+`provisioning/alerting/` directory), then configure the **PagerDuty** and
+**Slack** contact points referenced by the rules under
+**Alerting → Contact points** and link them via the **Notification policy**.

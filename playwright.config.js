@@ -19,7 +19,10 @@ const path = require('path');
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:4444';
 
 module.exports = defineConfig({
+  // Include both the top-level tests directory and the Playwright-specific
+  // specs (including the axe-core accessibility suite) under tests/playwright.
   testDir: './tests',
+  testMatch: ['**/*.spec.js', '**/playwright/**/*.spec.js'],
   timeout: 30_000,
   retries: process.env.CI ? 1 : 0,
 
@@ -35,7 +38,9 @@ module.exports = defineConfig({
     trace: 'on-first-retry',
   },
 
-  // Start the lightweight static server before the test run.
+  // Start the lightweight static server before the test run. The server is
+  // rooted at the repository root so both `frontend/` and `dashboard/` pages
+  // are reachable (e.g. /frontend/history.html, /dashboard/index.html).
   webServer: process.env.BASE_URL
     ? undefined // External server supplied — skip auto-start.
     : {
@@ -43,12 +48,28 @@ module.exports = defineConfig({
         url: BASE_URL,
         reuseExistingServer: !process.env.CI,
         timeout: 10_000,
+        env: {
+          // Expose the repository root so the static server can serve every
+          // top-level directory (frontend/, dashboard/, etc.).
+          STATIC_ROOT: path.resolve(__dirname),
+        },
       },
 
   projects: [
     {
       name: 'chromium',
       use: { browserName: 'chromium' },
+    },
+    {
+      // Dedicated accessibility project running axe-core scans in headless
+      // Chromium with a stable desktop viewport for consistent results.
+      name: 'a11y',
+      testMatch: ['**/playwright/**/*a11y*.spec.js'],
+      use: {
+        browserName: 'chromium',
+        headless: true,
+        viewport: { width: 1280, height: 800 },
+      },
     },
   ],
 });

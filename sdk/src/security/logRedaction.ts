@@ -51,6 +51,20 @@ const SECRET_KEYS = new Set(
     "payer_key",
     "sourceaccount",
     "source_account",
+    "rawpayload",
+    "raw_payload",
+    "payload",
+    "body",
+    "requestbody",
+    "request_body",
+    "responsebody",
+    "response_body",
+    "signingkey",
+    "signing_key",
+    "stellar_secret",
+    "stellarsecret",
+    "webhook_secret",
+    "webhooksecret",
   ].map(normalizeKey)
 );
 
@@ -66,7 +80,9 @@ const PATTERNS: RegExp[] = [
   // AWS access key IDs
   /\bAKIA[0-9A-Z]{16}\b/g,
   // key=value / key: value assignments for a secret-looking name
-  /\b(password|passwd|secret|api[_-]?key|auth[_-]?token|access[_-]?token|private[_-]?key)\b(\s*[:=]\s*)("?)[^\s"',}]{6,}\3/gi,
+  /\b(password|passwd|secret|api[_-]?key|auth[_-]?token|access[_-]?token|private[_-]?key|signing[_-]?key)\b(\s*[:=]\s*)("?)[^\s"',}]{6,}\3/gi,
+  // JSON-style "privateKey": "..." / "rawPayload": "..." assignments
+  /"(private[_-]?key|signing[_-]?key|raw[_-]?payload|secret[_-]?key)"\s*:\s*"[^"]*"/gi,
 ];
 
 /** Redact secrets found inside a single string. */
@@ -77,6 +93,10 @@ export function redactString(input: string): string {
       // Keep the leading scheme/key so the log stays readable.
       if (p2 !== undefined && /^\s*[:=]\s*$/.test(p2)) return `${p1}${p2}${REDACTED}`;
       if (typeof p1 === "string" && /^(bearer|basic)$/i.test(p1)) return `${p1} ${REDACTED}`;
+      // JSON-style assignment: keep the quoted key, redact the value.
+      if (typeof p1 === "string" && match.trimStart().startsWith('"')) {
+        return `"${p1}":"${REDACTED}"`;
+      }
       return REDACTED;
     });
   }
