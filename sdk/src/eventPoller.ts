@@ -1,4 +1,4 @@
-import { LumenFlowError, PaymentErrorCode } from './errors';
+import { LumenFlowError, NetworkError, PaymentErrorCode, RateLimitError } from './errors';
 import { EventCompatError, parseLumenFlowEvent } from './eventCatalog';
 import { LogLevel, StructuredLogger, resolveCorrelationId } from './logging';
 import { redactSensitive } from './logRedaction';
@@ -73,8 +73,49 @@ function validateEvent(event: unknown): ContractEvent {
   };
 }
 
-function buildRpcPayload(options: EventPollerOptions) {
-  const filters: any[] = [
+export interface RpcFilter {
+  type: 'contract';
+  contractIds: string[];
+  topics?: string[][];
+}
+
+interface RpcRequestPayload {
+  jsonrpc: '2.0';
+  id: number;
+  method: 'getEvents';
+  params: {
+    startLedger: number;
+    filters: RpcFilter[];
+  };
+}
+
+interface RpcErrorObject {
+  code?: number;
+  message?: string;
+}
+
+interface RpcSuccessResponse {
+  jsonrpc: '2.0';
+  id: number;
+  result?: {
+    events?: unknown[];
+  };
+}
+
+interface RpcErrorResponse {
+  jsonrpc: '2.0';
+  id: number;
+  error: RpcErrorObject;
+}
+
+type RpcResponse = RpcSuccessResponse | RpcErrorResponse;
+
+function isRpcErrorResponse(data: RpcResponse): data is RpcErrorResponse {
+  return typeof (data as RpcErrorResponse).error === 'object' && (data as RpcErrorResponse).error !== null;
+}
+
+function buildRpcPayload(options: EventPollerOptions): RpcRequestPayload {
+  const filters: RpcFilter[] = [
     {
       type: 'contract',
       contractIds: [options.contractId],

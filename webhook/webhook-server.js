@@ -360,14 +360,31 @@ function saveCursor(token) {
 // ---------------------------------------------------------------------------
 // Idempotency store
 //
-// Swap MemoryIdempotencyStore for RedisIdempotencyStore in production:
-//
-//   const Redis = require('ioredis');
-//   const { RedisIdempotencyStore } = require('./idempotency-store');
-//   const idempotencyStore = new RedisIdempotencyStore(new Redis());
+// Keys are persisted durably in Redis (TTL = idempotency window) so that a
+// server restart does not clear deduplication state.  MemoryIdempotencyStore
+// is used only as a local-dev fallback when REDIS_URL is not configured.
 // ---------------------------------------------------------------------------
 
-const idempotencyStore = new MemoryIdempotencyStore();
+const REDIS_URL = process.env.REDIS_URL;
+const IDEMPOTENCY_TTL_SECONDS = parseInt(process.env.IDEMPOTENCY_TTL_SECONDS || '86400', 10);
+
+let redisClient = null;
+let idempotencyStore;
+
+if (REDIS_URL) {
+  const Redis = require('ioredis');
+  redisClient = new Redis(REDIS_URL);
+  redisClient.on('error', (err) => {
+    console.error('[redis] Connection error:', err.message);
+  });
+  idempotencyStore = new RedisIdempotencyStore(redisClient, {
+    ttlSeconds: IDEMPOTENCY_TTL_SECONDS,
+  });
+  console.log(`[idempotency] Using Redis store (ttl=${IDEMPOTENCY_TTL_SECONDS}s)`);
+} else {
+  idempotencyStore = new MemoryIdempotencyStore();
+  console.warn('[idempotency] REDIS_URL not set — using in-memory store (local dev only)');
+}
 
 // ---------------------------------------------------------------------------
 // Delivery with retries and exponential back-off
@@ -588,10 +605,12 @@ let shutdownRequested = false;
  *
  *  1. Parse the raw message.
  *  2. Extract the paging_token (unique, stable event identifier).
- *  3. Check the idempotency store — skip if already processed.
- *  4. Record the token atomically before delivering to avoid double-processing
- *     on in-flight retries.
- *  5. Deliver to WEBHOOK_URL with retry / back-off.
+ *  3. Atomically claim the token in the idempotency store.  If the token is
+ *     already present, return the previously stored response instead of
+ *     re-delivering (duplicate within window) — a token whose TTL has expired
+ *     is treated as a brand-new request.
+ *  4. Deliver to WEBHOOK_URL with retry / back-off.
+ *  5. Store the delivery response alongside the token for duplicate replays.
  *  6. Persist the cursor for crash recovery.
  *
  * @param {MessageEvent} msg  Raw SSE message event.
@@ -613,22 +632,37 @@ async function handleMessage(msg) {
   }
 
   // ── Idempotency check ────────────────────────────────────────────────────
-  if (await idempotencyStore.has(pagingToken)) {
-    console.log(`[duplicate] Skipping already-processed event (token=${pagingToken})`);
-    return;
-  }
+  // Atomically claim the token before delivery.  If it is already claimed
+  // (duplicate within the idempotency window), replay the stored response
+  // rather than re-delivering or raising an error.  An expired key is gone
+  // from the store, so the same token is treated as a new request.
+  const claimed = await idempotencyStore.add(pagingToken, {
+    receivedAt: new Date().toISOString(),
+    status: 'in_progress',
+  });
 
-  // Record the token *before* delivery.  If the process crashes between
-  // recording and successful delivery, the event is skipped on the next run —
-  // which is the safer trade-off (at-most-once within a single run) versus
-  // re-delivering and relying solely on the downstream handler for dedup.
-  await idempotencyStore.add(pagingToken, { receivedAt: new Date().toISOString() });
+  if (!claimed) {
+    const previous = await idempotencyStore.get(pagingToken);
+    console.log(
+      `[duplicate] Returning stored response for token=${pagingToken}`,
+      previous ? JSON.stringify(previous) : '(no stored response)',
+    );
+    return previous;
+  }
 
   const eventName = Array.isArray(event.topic) ? event.topic[1] : String(event.topic);
   const data = event.value;
   const merchantId = event.merchant_id || event.merchantId || data && data.merchant_id;
 
   await deliverWithRetry(eventName, data, event.ledger, pagingToken, merchantId);
+
+  // Persist the delivery response so duplicates within the window can replay it.
+  await idempotencyStore.add(pagingToken, {
+    receivedAt: new Date().toISOString(),
+    status: 'delivered',
+    event: eventName,
+    ledger: event.ledger,
+  });
 
   // Persist cursor after successful processing so restarts resume here.
   saveCursor(pagingToken);
@@ -666,6 +700,9 @@ function shutdown(signal) {
   console.log(`\n[shutdown] Received ${signal} — closing SSE connection.`);
   shutdownRequested = true;
   if (es) es.close();
+  if (redisClient) {
+    redisClient.quit().catch(() => {});
+  }
   process.exit(0);
 }
 

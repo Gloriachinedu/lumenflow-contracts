@@ -7,8 +7,14 @@ import { defineConfig, devices } from "@playwright/test";
  *
  * Environment variables:
  *   BASE_URL     – URL of the running frontend (default: http://localhost:3000)
+ *   DASHBOARD_URL – URL of the running dashboard (default: http://localhost:3001)
  *   API_URL      – URL of the local mock-contract API   (default: http://localhost:8080)
  *   MOCK_WALLET  – Set to "1" to bypass Freighter/wallet in CI (default: "1")
+ *
+ * Accessibility (#1527):
+ *   The `a11y` project runs the axe-core / keyboard / screen-reader specs in
+ *   ./playwright/a11y against both the frontend and dashboard apps. Both apps
+ *   are served from the repository root so relative asset paths resolve.
  */
 
 export default defineConfig({

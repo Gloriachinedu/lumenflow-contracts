@@ -13,12 +13,19 @@ categories = ["cryptography::cryptocurrencies"]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+# Runtime dependencies: keep this list minimal so nothing extra is pulled into
+# the release WASM build. `soroban-sdk` is the only crate required at runtime.
 soroban-sdk = { version = "29.0.1", features = ["alloc"] }
 
 [dev-dependencies]
+# Dev-only dependencies. These are never compiled into the release WASM binary.
 soroban-sdk = { version = "29.0.1", features = ["testutils", "alloc"] }
 criterion = "0.8"
 lumenflow = { path = ".", features = ["testutils"] }
+proptest = { version = "1", optional = true }
 
 [features]
 testutils = ["soroban-sdk/testutils"]
+# Enables the proptest-based refund invariant tests. Optional so the crate is
+# only pulled in when explicitly requested (e.g. `cargo test --features proptest`).
+proptest = ["dep:proptest"]

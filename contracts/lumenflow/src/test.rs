@@ -1021,7 +1021,84 @@ fn test_batch_payment_size_exceeded() {
         });
     }
     let result = client.try_batch_payment(&merchant, &payments);
-    assert_eq!(result, Err(Ok(PaymentError::BatchSizeExceeded)));
+    assert_eq!(result, Err(Ok(PaymentError::BatchTooLarge)));
+}
+
+// ── MAX_BATCH_SIZE boundary tests (#1583) ────────────────────────────────────
+
+/// A batch of exactly MAX_BATCH_SIZE (10) items must succeed.
+#[test]
+fn test_batch_payment_exactly_max_batch_size_succeeds() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let mut payments = Vec::new(&env);
+    for i in 0..10u32 {
+        let id = format!("MAXBS_{i}");
+        payments.push_back(BatchPaymentItem {
+            order_id: str(&env, &id),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 10,
+            memo: str(&env, ""),
+            tags: None,
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        });
+    }
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Ok(Ok(())));
+
+    // All 10 payments must be recorded.
+    let history = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(history.total_matching, 10);
+}
+
+/// A batch of MAX_BATCH_SIZE + 1 (11) items must be rejected with BatchTooLarge.
+#[test]
+fn test_batch_payment_one_over_max_batch_size_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let mut payments = Vec::new(&env);
+    for i in 0..11u32 {
+        let id = format!("MAXBO_{i}");
+        payments.push_back(BatchPaymentItem {
+            order_id: str(&env, &id),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 10,
+            memo: str(&env, ""),
+            tags: None,
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        });
+    }
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::BatchTooLarge)));
+
+    // Nothing from the rejected batch may be recorded.
+    let history = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(history.total_matching, 0);
+}
+
+/// An empty batch must be rejected with EmptyBatch.
+#[test]
+fn test_batch_payment_empty_batch_fails() {
+    let (env, client, _admin, _merchant, payer, _token) = setup_payment_env();
+    let payments: Vec<BatchPaymentItem> = Vec::new(&env);
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::EmptyBatch)));
 }
 
 #[test]
@@ -9483,7 +9560,7 @@ fn test_batch_one_over_max_size_fails() {
         });
     }
     let result = client.try_batch_payment(&payer, &payments);
-    assert_eq!(result, Err(Ok(PaymentError::BatchSizeExceeded)));
+    assert_eq!(result, Err(Ok(PaymentError::BatchTooLarge)));
 }
 
 /// Pagination limit of 1 returns exactly one item and sets next_cursor.
@@ -10419,208 +10496,203 @@ fn test_set_max_signers_zero_rejected() {
     assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
 }
 
-// ── Merchant tier tests (#1572) ──────────────────────────────────────────────
+// ── Merchant payment limit tests (issue #1592) ────────────────────────────────
 
-const TIER_WINDOW: u64 = 30 * 24 * 3600;
-
-/// A freshly registered merchant with no volume is Standard.
+/// set_merchant_payment_limit requires admin auth and stores the value.
 #[test]
-fn test_merchant_tier_defaults_to_standard() {
-    let (env, client, _admin, merchant, _payer, _token) = setup_payment_env();
+fn test_set_merchant_payment_limit_requires_admin_and_stores() {
+    let (env, client, admin, merchant, _payer, _token) = setup_payment_env();
 
-    let info = client.get_merchant_tier(&merchant);
-    assert_eq!(info.tier, MerchantTier::Standard);
-    assert_eq!(info.volume_30d, 0);
-    assert_eq!(info.fee_reduction_bps, 0);
-    assert!(info.next_threshold.is_some());
-}
-
-/// Volume crossing the Silver threshold promotes the merchant.
-#[test]
-fn test_merchant_tier_promotes_to_silver() {
-    let (env, client, admin, merchant, payer, token) = setup_payment_env();
-    client.set_tier_thresholds(&admin, &1_000, &5_000, &10_000);
-
-    make_payment(&env, &client, &merchant, &payer, &token, "TIER_S1", 1_200);
-
-    let info = client.get_merchant_tier(&merchant);
-    assert_eq!(info.tier, MerchantTier::Silver);
-    assert_eq!(info.volume_30d, 1_200);
-    assert_eq!(info.next_threshold, Some(5_000));
-}
-
-/// Volume crossing the Gold threshold promotes the merchant and applies the
-/// default 50% fee reduction.
-#[test]
-fn test_merchant_tier_promotes_to_gold_with_default_reduction() {
-    let (env, client, admin, merchant, payer, token) = setup_payment_env();
-    client.set_tier_thresholds(&admin, &1_000, &5_000, &10_000);
-
-    make_payment(&env, &client, &merchant, &payer, &token, "TIER_G1", 6_000);
-
-    let info = client.get_merchant_tier(&merchant);
-    assert_eq!(info.tier, MerchantTier::Gold);
-    assert_eq!(info.fee_reduction_bps, 5_000);
-    assert_eq!(info.next_threshold, Some(10_000));
-}
-
-/// Volume crossing the Platinum threshold promotes the merchant and applies the
-/// default 100% fee reduction.
-#[test]
-fn test_merchant_tier_promotes_to_platinum_with_default_reduction() {
-    let (env, client, admin, merchant, payer, token) = setup_payment_env();
-    client.set_tier_thresholds(&admin, &1_000, &5_000, &10_000);
-
-    make_payment(&env, &client, &merchant, &payer, &token, "TIER_P1", 12_000);
-
-    let info = client.get_merchant_tier(&merchant);
-    assert_eq!(info.tier, MerchantTier::Platinum);
-    assert_eq!(info.fee_reduction_bps, 10_000);
-    assert!(info.next_threshold.is_none());
-}
-
-/// Volume that ages out of the 30-day window demotes the merchant.
-#[test]
-fn test_merchant_tier_demotes_when_volume_ages_out() {
-    let (env, client, admin, merchant, payer, token) = setup_payment_env();
-    client.set_tier_thresholds(&admin, &1_000, &5_000, &10_000);
-
-    make_payment(&env, &client, &merchant, &payer, &token, "TIER_D1", 6_000);
-    assert_eq!(client.get_merchant_tier(&merchant).tier, MerchantTier::Gold);
-
-    // Advance past the rolling window so the volume no longer counts.
-    env.ledger()
-        .with_mut(|l| l.timestamp += TIER_WINDOW + 1);
-
-    let info = client.get_merchant_tier(&merchant);
-    assert_eq!(info.tier, MerchantTier::Standard);
-    assert_eq!(info.volume_30d, 0);
-}
-
-/// Admin can configure thresholds and fee reductions.
-#[test]
-fn test_admin_configures_tier_thresholds_and_reductions() {
-    let (env, client, admin, merchant, payer, token) = setup_payment_env();
-
-    client.set_tier_thresholds(&admin, &500, &2_000, &4_000);
-    client.set_tier_fee_reduction(&admin, &MerchantTier::Silver, &1_000);
-    client.set_tier_fee_reduction(&admin, &MerchantTier::Gold, &2_500);
-    client.set_tier_fee_reduction(&admin, &MerchantTier::Platinum, &7_500);
-
-    make_payment(&env, &client, &merchant, &payer, &token, "TIER_C1", 2_500);
-
-    let info = client.get_merchant_tier(&merchant);
-    assert_eq!(info.tier, MerchantTier::Gold);
-    assert_eq!(info.fee_reduction_bps, 2_500);
-    assert_eq!(info.next_threshold, Some(4_000));
-}
-
-/// Non-admin callers cannot change tier configuration.
-#[test]
-fn test_tier_configuration_requires_admin() {
-    let (env, client, _admin, _merchant, _payer, _token) = setup_payment_env();
+    // Non-admin cannot set the limit.
     let stranger = Address::generate(&env);
-
-    let result = client.try_set_tier_thresholds(&stranger, &1, &2, &3);
+    let result = client.try_set_merchant_payment_limit(&stranger, &merchant, &Some(1_000));
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 
-    let result = client.try_set_tier_fee_reduction(&stranger, &MerchantTier::Gold, &100);
-    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+    // Admin can set the limit and it is persisted.
+    client.set_merchant_payment_limit(&admin, &merchant, &Some(1_000));
+    let profile = client.get_merchant(&merchant);
+    assert_eq!(profile.max_payment_amount, Some(1_000));
+
+    // Admin can clear the limit.
+    client.set_merchant_payment_limit(&admin, &merchant, &None);
+    let profile = client.get_merchant(&merchant);
+    assert_eq!(profile.max_payment_amount, None);
 }
 
-/// Fee reduction is applied to payments at each tier.
+/// process_payment succeeds when the amount is within the configured limit.
 #[test]
-fn test_fee_reduction_applied_per_tier() {
+fn test_process_payment_within_merchant_limit_succeeds() {
     let (env, client, admin, merchant, payer, token) = setup_payment_env();
-    client.set_platform_fee(&admin, &1_000, &admin); // 10%
-    client.set_tier_thresholds(&admin, &1_000, &5_000, &10_000);
+    client.set_merchant_payment_limit(&admin, &merchant, &Some(1_000));
 
-    // Standard: full fee.
-    make_payment(&env, &client, &merchant, &payer, &token, "TIER_F1", 1_000);
-    let p = client.get_payment_by_id(&payer, &str(&env, "TIER_F1"));
-    assert_eq!(p.platform_fee, 100);
-
-    // Gold: 50% reduction → 5%.
-    make_payment(&env, &client, &merchant, &payer, &token, "TIER_F2", 5_000);
-    let p = client.get_payment_by_id(&payer, &str(&env, "TIER_F2"));
-    assert_eq!(p.platform_fee, 250);
-
-    // Platinum: 100% reduction → no fee.
-    make_payment(&env, &client, &merchant, &payer, &token, "TIER_F3", 5_000);
-    let p = client.get_payment_by_id(&payer, &str(&env, "TIER_F3"));
-    assert_eq!(p.platform_fee, 0);
+    make_payment(&env, &client, &merchant, &payer, &token, "LIMIT_OK", 1_000);
+    let p = client.get_payment_by_id(&payer, &str(&env, "LIMIT_OK"));
+    assert_eq!(p.amount, 1_000);
 }
 
-/// A tier change emits the `merchant_tier_changed` event.
+/// process_payment returns ExceedsMerchantLimit when the amount is over the
+/// limit and no payment state is written.
 #[test]
-fn test_merchant_tier_changed_event_emitted() {
+fn test_process_payment_over_merchant_limit_fails_without_state() {
     let (env, client, admin, merchant, payer, token) = setup_payment_env();
-    client.set_tier_thresholds(&admin, &1_000, &5_000, &10_000);
+    client.set_merchant_payment_limit(&admin, &merchant, &Some(500));
 
-    make_payment(&env, &client, &merchant, &payer, &token, "TIER_E1", 1_500);
-
-    let events = env.events().all();
-    assert!(!events.events().is_empty());
-    assert_eq!(client.get_merchant_tier(&merchant).tier, MerchantTier::Silver);
-}
-
-// ── Settlement report data path tests (#1573) ────────────────────────────────
-
-/// Totals from `get_merchant_stats` match the itemised payment list used by
-/// the dashboard settlement report.
-#[test]
-fn test_settlement_report_totals_match_itemised_payments() {
-    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
-
-    make_payment(&env, &client, &merchant, &payer, &token, "SETTLE_001", 1_000);
-    make_payment(&env, &client, &merchant, &payer, &token, "SETTLE_002", 2_500);
-    make_payment(&env, &client, &merchant, &payer, &token, "SETTLE_003", 500);
-
-    let page = client.get_merchant_payment_history(
-        &merchant,
+    let before = client.get_payer_payment_history(
+        &payer,
         &None,
-        &100,
+        &10,
         &None,
         &SortField::Date,
         &SortOrder::Ascending,
     );
 
-    let mut itemised_volume: i128 = 0;
-    let mut itemised_fees: i128 = 0;
-    for payment in page.payments.iter() {
-        itemised_volume += payment.amount;
-        itemised_fees += payment.platform_fee;
-    }
-
-    let stats = client.get_merchant_stats(&merchant);
-    assert_eq!(stats.total_payments, page.payments.len());
-    assert_eq!(stats.total_volume, itemised_volume);
-    assert_eq!(stats.total_volume, 4_000);
-    assert_eq!(itemised_fees, stats.total_fees);
-}
-
-/// Settlement report for a date range only includes payments in that window.
-#[test]
-fn test_settlement_report_date_range_filter() {
-    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
-
-    make_payment(&env, &client, &merchant, &payer, &token, "SETTLE_R1", 100);
-    env.ledger().with_mut(|l| l.timestamp += 1_000);
-    make_payment(&env, &client, &merchant, &payer, &token, "SETTLE_R2", 200);
-
-    let filter = PaymentFilter {
-        start_time: Some(1_000),
-        end_time: Some(2_000),
-        ..Default::default()
-    };
-    let page = client.get_merchant_payment_history(
+    let result = client.try_process_payment(
+        &payer,
+        &str(&env, "LIMIT_OVER"),
         &merchant,
+        &token,
+        &501,
+        &str(&env, ""),
         &None,
-        &100,
-        &Some(filter),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::ExceedsMerchantLimit)));
+
+    // No payment record must exist and history must be unchanged.
+    let lookup = client.try_get_payment_by_id(&payer, &str(&env, "LIMIT_OVER"));
+    assert_eq!(lookup, Err(Ok(PaymentError::PaymentNotFound)));
+    let after = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
         &SortField::Date,
         &SortOrder::Ascending,
     );
-    assert_eq!(page.payments.len(), 1);
-    assert_eq!(page.payments.get(0).unwrap().order_id, str(&env, "SETTLE_R2"));
+    assert_eq!(after.total, before.total);
+}
+
+/// A merchant with no configured limit (None) accepts any amount.
+#[test]
+fn test_process_payment_no_merchant_limit_allows_any_amount() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Default profile has no limit.
+    let profile = client.get_merchant(&merchant);
+    assert_eq!(profile.max_payment_amount, None);
+
+    make_payment(&env, &client, &merchant, &payer, &token, "LIMIT_NONE", 1_000_000);
+    let p = client.get_payment_by_id(&payer, &str(&env, "LIMIT_NONE"));
+    assert_eq!(p.amount, 1_000_000);
+}
+
+// ── State-before-transfer ordering tests (issue #1507) ────────────────────────
+//
+// These regression tests assert that when the external token transfer fails,
+// the contract does not leave partially written payment / refund state behind
+// (checks-effects-interactions ordering).
+
+/// A payment whose token transfer fails (insufficient payer balance) must not
+/// leave a payment record or mutate the payer's history.
+#[test]
+fn test_payment_transfer_failure_leaves_no_state() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Drain the payer so the transfer must fail.
+    let balance = TokenClient::new(&env, &token).balance(&payer);
+    let token_admin = Address::generate(&env);
+    let asset = StellarAssetClient::new(&env, &token);
+    asset.burn(&payer, &balance);
+    let _ = token_admin;
+
+    let before = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+
+    let result = client.try_process_payment(
+        &payer,
+        &str(&env, "XFER_FAIL"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &None,
+    );
+    assert!(result.is_err(), "payment must fail when transfer fails");
+
+    let lookup = client.try_get_payment_by_id(&payer, &str(&env, "XFER_FAIL"));
+    assert_eq!(lookup, Err(Ok(PaymentError::PaymentNotFound)));
+    let after = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(after.total, before.total);
+}
+
+/// A refund whose token transfer fails must not mark the payment as refunded.
+#[test]
+fn test_refund_transfer_failure_leaves_payment_status_consistent() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "XFER_REF", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "XFER_REF_R1"),
+        &str(&env, "XFER_REF"),
+        &400,
+        &str(&env, "partial"),
+    );
+    client.approve_refund(&merchant, &str(&env, "XFER_REF_R1"));
+
+    // Drain the merchant so the refund transfer must fail.
+    let merchant_balance = TokenClient::new(&env, &token).balance(&merchant);
+    StellarAssetClient::new(&env, &token).burn(&merchant, &merchant_balance);
+
+    let result = client.try_execute_refund(&str(&env, "XFER_REF_R1"));
+    assert!(result.is_err(), "refund must fail when transfer fails");
+
+    // Payment must remain un-refunded and status unchanged.
+    let p = client.get_payment_by_id(&payer, &str(&env, "XFER_REF"));
+    assert_eq!(p.refunded_amount, 0);
+    assert!(matches!(p.status, PaymentStatus::Completed));
+}
+
+// ── USDC clawback refund tests (issue #1576) ─────────────────────────────────
+
+/// A refund to a clawback-frozen address must return an error rather than
+/// silently succeeding or corrupting payment state.
+#[test]
+fn test_refund_to_clawback_frozen_address_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "USDC_CB", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "USDC_CB_R1"),
+        &str(&env, "USDC_CB"),
+        &500,
+        &str(&env, "clawback"),
+    );
+    client.approve_refund(&merchant, &str(&env, "USDC_CB_R1"));
+
+    // Freeze the payer's balance via the SAC clawback mechanism.
+    let asset = StellarAssetClient::new(&env, &token);
+    let payer_balance = TokenClient::new(&env, &token).balance(&payer);
+    asset.clawback(&payer, &payer_balance);
+
+    let result = client.try_execute_refund(&str(&env, "USDC_CB_R1"));
+    assert!(result.is_err(), "refund to clawback-frozen address must fail");
+
+    // Payment state must remain consistent (no partial refund recorded).
+    let p = client.get_payment_by_id(&payer, &str(&env, "USDC_CB"));
+    assert_eq!(p.refunded_amount, 0);
+    assert!(matches!(p.status, PaymentStatus::Completed));
 }

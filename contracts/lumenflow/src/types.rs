@@ -29,6 +29,9 @@ pub struct Merchant {
     pub total_received: i128,
     /// Number of merchants that registered using this merchant's referral address.
     pub referral_count: u32,
+    /// Optional maximum payment amount this merchant will accept. `None` means
+    /// no limit is enforced (issue #1592).
+    pub max_payment_amount: Option<i128>,
 }
 
 /// Per-merchant profile settings that can be configured by the merchant.
@@ -355,6 +358,23 @@ pub struct EscrowRecord {
     pub created_at: u64,
 }
 
+/// Paginated result returned by `list_active_escrows`.
+///
+/// Contains only escrows whose status is `EscrowStatus::Locked`, sorted by
+/// `unlock_at` ascending (soonest expiring first).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaginatedEscrows {
+    /// The escrows on the requested page.
+    pub escrows: Vec<EscrowRecord>,
+    /// The 1-based page number that was requested.
+    pub page: u32,
+    /// The maximum number of records per page that was requested.
+    pub limit: u32,
+    /// Total number of active (locked) escrows before pagination is applied.
+    pub total: u32,
+}
+
 /// Escrow state for conditional (condition-hash) holds.
 ///
 /// Unlike time-locked escrows the funds here are held until an arbiter
@@ -464,6 +484,33 @@ pub enum DisputeStatus {
     Escalated,
 }
 
+impl DisputeStatus {
+    /// Returns `true` if a transition from `self` to `target` is allowed.
+    ///
+    /// The only legal transitions are:
+    ///
+    /// ```text
+    /// Open         → UnderReview
+    /// Open         → Escalated
+    /// UnderReview  → Escalated
+    /// UnderReview  → Resolved
+    /// Escalated    → Resolved
+    /// ```
+    ///
+    /// Every other source→target pair (including self-transitions and any
+    /// transition out of `Resolved`, which is terminal) returns `false`.
+    pub fn can_transition_to(&self, target: &DisputeStatus) -> bool {
+        matches!(
+            (self, target),
+            (DisputeStatus::Open, DisputeStatus::UnderReview)
+                | (DisputeStatus::Open, DisputeStatus::Escalated)
+                | (DisputeStatus::UnderReview, DisputeStatus::Escalated)
+                | (DisputeStatus::UnderReview, DisputeStatus::Resolved)
+                | (DisputeStatus::Escalated, DisputeStatus::Resolved)
+        )
+    }
+}
+
 /// Final outcome recorded when a dispute is resolved.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -494,6 +541,48 @@ pub struct DisputeRecord {
     /// Optional resolution or escalation notes written by the admin.
     pub resolution: Option<String>,
     pub created_at: u64,
+}
+
+// ── Fee module ────────────────────────────────────────────────────────────────
+
+/// Protocol fee configuration.
+///
+/// The fee is expressed in basis points (1 bps = 0.01 %). A `bps` value of `0`
+/// disables the fee module entirely: no fee is deducted and no extra token
+/// transfer is performed during payment processing.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeeConfig {
+    /// Address that receives the deducted protocol fee.
+    pub recipient: Address,
+    /// Fee in basis points. Must be ≤ 10_000 (100 %). `0` disables the module.
+    pub bps: u32,
+}
+
+// ── Cross-asset payments ──────────────────────────────────────────────────────
+
+/// Data payload for `lumenflow/cross_asset_payment`.
+///
+/// Emitted by `process_payment_cross_asset` after a DEX path payment has been
+/// executed. `exchange_rate` is the effective rate expressed in basis points
+/// scaled by 10_000 (i.e. `received_amount * 10_000 / send_amount`).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CrossAssetPaymentEvent {
+    pub order_id: String,
+    pub payer: Address,
+    pub merchant: Address,
+    /// Asset the payer sent.
+    pub send_asset: Address,
+    /// Asset the merchant received.
+    pub dest_asset: Address,
+    /// Amount of `send_asset` debited from the payer.
+    pub send_amount: i128,
+    /// Amount of `dest_asset` credited to the merchant.
+    pub received_amount: i128,
+    /// Effective exchange rate in basis points (received * 10_000 / sent).
+    pub exchange_rate: u32,
+    pub timestamp: u64,
 }
 
 // ── Suspicious Activity ───────────────────────────────────────────────────────

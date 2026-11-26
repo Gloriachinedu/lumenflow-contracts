@@ -14,11 +14,44 @@
     { order_id: 'ORDER_012', merchant_address: 'GCMR...Y9KP', amount: 540,  status: 'Completed',          paid_at: '2026-06-23' },
   ];
 
-  const PAGE_SIZE = 5;
+  const DEFAULT_PAGE_SIZE = 5;
+  let pageSize = DEFAULT_PAGE_SIZE;
   let currentPage = 1;
   let sortField = 'paid_at';
   let sortAsc = false;
   let filtered = [...MOCK_PAYMENTS];
+
+  // ── Cursor-based pagination state ──────────────────────────────────────────
+  // cursorStack holds the cursor used to fetch each page. Index 0 is always
+  // null (first page). The cursor at index i is the "before" cursor for page i+1.
+  let cursorStack = [null];
+  let hasPrev = false;
+  let hasNext = false;
+  let totalRecords = 0;
+
+  // ── URL helpers ────────────────────────────────────────────────────────────
+  function readUrlState() {
+    const params = new URLSearchParams(window.location.search);
+    const cursor = params.get('cursor');
+    const limit = parseInt(params.get('limit'), 10);
+    if (!isNaN(limit) && limit > 0) {
+      pageSize = limit;
+    }
+    return cursor || null;
+  }
+
+  function writeUrlState(cursor) {
+    const params = new URLSearchParams(window.location.search);
+    if (cursor) {
+      params.set('cursor', cursor);
+    } else {
+      params.delete('cursor');
+    }
+    params.set('limit', String(pageSize));
+    const qs = params.toString();
+    const url = window.location.pathname + (qs ? '?' + qs : '');
+    history.pushState({ cursor }, '', url);
+  }
 
   // ── Filtering ──────────────────────────────────────────────────────────────
   function applyFilters() {
@@ -74,6 +107,36 @@
     renderPage(sorted);
   }
 
+  // ── Data loading (cursor-based) ────────────────────────────────────────────
+  // Replace the mock slice with a contract/backend call that accepts a cursor
+  // and returns { records, has_prev, has_next, total }.
+  function fetchPage(cursor) {
+    const sorted = [...filtered].sort((a, b) => {
+      const av = a[sortField], bv = b[sortField];
+      if (av < bv) return sortAsc ? -1 : 1;
+      if (av > bv) return sortAsc ? 1 : -1;
+      return 0;
+    });
+    const start = cursor ? parseInt(cursor, 10) : 0;
+    const records = sorted.slice(start, start + pageSize);
+    const nextStart = start + pageSize;
+    return {
+      records,
+      has_prev: start > 0,
+      has_next: nextStart < sorted.length,
+      total: sorted.length,
+      next_cursor: nextStart < sorted.length ? String(nextStart) : null,
+    };
+  }
+
+  function loadPage(cursor) {
+    const result = fetchPage(cursor);
+    hasPrev = result.has_prev;
+    hasNext = result.has_next;
+    totalRecords = result.total;
+    renderPage(result.records);
+  }
+
   // ── Rendering ──────────────────────────────────────────────────────────────
   function statusBadge(status) {
     const map = {
@@ -88,13 +151,7 @@
     return span;
   }
 
-  function renderPage(sorted) {
-    const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
-    if (currentPage > totalPages) currentPage = totalPages;
-
-    const start = (currentPage - 1) * PAGE_SIZE;
-    const page  = sorted.slice(start, start + PAGE_SIZE);
-
+  function renderPage(page) {
     // Table rows
     const tbody = document.getElementById('table-body');
     const cardsList = document.getElementById('cards-list');
@@ -203,15 +260,72 @@
     }
 
     // Pagination controls
-    document.getElementById('page-info').textContent =
-      sorted.length === 0 ? 'No results' : `Page ${currentPage} of ${totalPages} (${sorted.length} records)`;
-    document.getElementById('prev-btn').disabled = currentPage <= 1;
-    document.getElementById('next-btn').disabled = currentPage >= totalPages;
+    const pageInfo = document.getElementById('page-info');
+    pageInfo.textContent = totalRecords === 0
+      ? 'No results'
+      : `Page ${currentPage} (${totalRecords} records)`;
+
+    const prevBtn = document.getElementById('prev-btn');
+    const nextBtn = document.getElementById('next-btn');
+    prevBtn.disabled = !hasPrev;
+    nextBtn.disabled = !hasNext;
+    prevBtn.setAttribute('aria-disabled', String(!hasPrev));
+    nextBtn.setAttribute('aria-disabled', String(!hasNext));
   }
 
   // ── Pagination ─────────────────────────────────────────────────────────────
-  function prevPage() { if (currentPage > 1) { currentPage--; sortAndRender(); } }
-  function nextPage() { currentPage++; sortAndRender(); }
+  function prevPage() {
+    if (!hasPrev || cursorStack.length <= 1) return;
+    cursorStack.pop();
+    currentPage = Math.max(1, currentPage - 1);
+    const cursor = cursorStack[cursorStack.length - 1];
+    writeUrlState(cursor);
+    loadPage(cursor);
+  }
+
+  function nextPage() {
+    if (!hasNext) return;
+    const result = fetchPage(cursorStack[cursorStack.length - 1]);
+    if (!result.next_cursor) return;
+    cursorStack.push(result.next_cursor);
+    currentPage++;
+    writeUrlState(result.next_cursor);
+    loadPage(result.next_cursor);
+  }
+
+  function changePageSize(newSize) {
+    const size = parseInt(newSize, 10);
+    if (isNaN(size) || size <= 0) return;
+    pageSize = size;
+    currentPage = 1;
+    cursorStack = [null];
+    writeUrlState(null);
+    loadPage(null);
+  }
 
   // ── Init ───────────────────────────────────────────────────────────────────
-  sortAndRender();
+  function init() {
+    const initialCursor = readUrlState();
+    if (initialCursor) {
+      cursorStack = [null, initialCursor];
+      currentPage = 2;
+    } else {
+      cursorStack = [null];
+      currentPage = 1;
+    }
+    loadPage(initialCursor);
+  }
+
+  window.addEventListener('popstate', () => {
+    const cursor = readUrlState();
+    if (cursor) {
+      cursorStack = [null, cursor];
+      currentPage = 2;
+    } else {
+      cursorStack = [null];
+      currentPage = 1;
+    }
+    loadPage(cursor);
+  });
+
+  init();

@@ -579,3 +579,294 @@ mod invariant_refund_state_tests {
         assert!(stats.total_refund_volume >= 400, "total_refund_volume must include refund amount");
     }
 }
+
+// ── Property-based refund invariant tests (proptest) ─────────────────────────
+//
+// These tests are gated behind the `proptest` feature so that the default
+// build does not pull in the extra dev-dependency.  Run them with:
+//
+//     cargo test --features proptest
+//
+// Each property drives the contract through an arbitrary sequence of partial
+// refunds and asserts the refund invariants hold.  On failure proptest shrinks
+// the generated input to a minimal counterexample.
+#[cfg(all(test, feature = "proptest"))]
+mod invariant_refund_proptest {
+    use proptest::prelude::*;
+    use soroban_sdk::{
+        testutils::Address as _,
+        Address, Env, String,
+    };
+
+    use crate::{
+        types::{PaymentStatus, RefundStatus},
+        PaymentProcessingContract, PaymentProcessingContractClient, MAX_REFUNDS_PER_PAYMENT,
+    };
+
+    // ── Test helpers (mirrors the hand-crafted suite) ────────────────────────
+
+    fn setup() -> (Env, PaymentProcessingContractClient<'static>) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register(PaymentProcessingContract, ());
+        let client = PaymentProcessingContractClient::new(&env, &id);
+        (env, client)
+    }
+
+    fn str(env: &Env, s: &str) -> String {
+        String::from_str(env, s)
+    }
+
+    fn bytes32(env: &Env) -> soroban_sdk::Bytes {
+        soroban_sdk::Bytes::from_slice(env, &[0u8; 32])
+    }
+
+    fn bytes64(env: &Env) -> soroban_sdk::Bytes {
+        soroban_sdk::Bytes::from_slice(env, &[0u8; 64])
+    }
+
+    fn create_token(env: &Env, admin: &Address) -> Address {
+        env.register_stellar_asset_contract_v2(admin.clone()).address()
+    }
+
+    fn mint(env: &Env, token: &Address, to: &Address, amount: i128) {
+        soroban_sdk::token::StellarAssetClient::new(env, token).mint(to, &amount);
+    }
+
+    /// Full environment: admin, allowed token, registered merchant, funded payer.
+    fn full_setup() -> (
+        Env,
+        PaymentProcessingContractClient<'static>,
+        Address, // admin
+        Address, // merchant
+        Address, // payer
+        Address, // token
+    ) {
+        use crate::types::MerchantCategory;
+
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let merchant = Address::generate(&env);
+        let payer = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = create_token(&env, &token_admin);
+
+        client.set_admin(&admin);
+        client.add_allowed_token(&admin, &token);
+        client.register_merchant(
+            &merchant,
+            &str(&env, "InvShop"),
+            &str(&env, "invariant test merchant"),
+            &str(&env, "contact"),
+            &MerchantCategory::Retail,
+        );
+        mint(&env, &token, &payer, 10_000_000);
+        mint(&env, &token, &merchant, 10_000_000);
+        (env, client, admin, merchant, payer, token)
+    }
+
+    fn make_payment(
+        env: &Env,
+        client: &PaymentProcessingContractClient,
+        merchant: &Address,
+        payer: &Address,
+        token: &Address,
+        order_id: &str,
+        amount: i128,
+    ) {
+        client.process_payment_with_signature(
+            payer,
+            &str(env, order_id),
+            merchant,
+            token,
+            &amount,
+            &str(env, ""),
+            &None,
+            &bytes64(env),
+            &bytes32(env),
+        );
+    }
+
+    fn make_refund(
+        env: &Env,
+        client: &PaymentProcessingContractClient,
+        payer: &Address,
+        order_id: &str,
+        refund_id: &str,
+        amount: i128,
+    ) {
+        client.initiate_refund(
+            payer,
+            &str(env, refund_id),
+            &str(env, order_id),
+            &amount,
+            &str(env, "test reason"),
+        );
+    }
+
+    // ── Property 1: cumulative refunds never exceed the payment amount ───────
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        #[test]
+        fn prop_total_refunded_never_exceeds_payment(
+            payment_amount in 1i128..=1_000_000i128,
+            refund_amounts in prop::collection::vec(1i128..=1_000_000i128, 1..=8),
+        ) {
+            let (env, client, _admin, merchant, payer, token) = full_setup();
+            make_payment(&env, &client, &merchant, &payer, &token, "ORD_P1", payment_amount);
+
+            let mut accepted_total: i128 = 0;
+            for (i, amt) in refund_amounts.iter().enumerate() {
+                let refund_id = format!("REF_P1_{}", i);
+                let res = client.try_initiate_refund(
+                    &payer,
+                    &str(&env, &refund_id),
+                    &str(&env, "ORD_P1"),
+                    amt,
+                    &str(&env, "prop reason"),
+                );
+
+                match res {
+                    Ok(_) => {
+                        // Accepted refunds must keep the running total within bounds.
+                        accepted_total = accepted_total
+                            .checked_add(*amt)
+                            .expect("accepted refund total overflowed i128");
+                        prop_assert!(
+                            accepted_total <= payment_amount,
+                            "accepted refunds {} exceed payment amount {}",
+                            accepted_total,
+                            payment_amount
+                        );
+
+                        // Approve + execute so the payment's refunded_amount updates.
+                        client.approve_refund(&merchant, &str(&env, &refund_id));
+                        client.execute_refund(&str(&env, &refund_id));
+
+                        let p = client.get_payment_by_id(&payer, &str(&env, "ORD_P1"));
+                        prop_assert!(
+                            p.refunded_amount <= p.amount,
+                            "refunded_amount {} exceeds amount {}",
+                            p.refunded_amount,
+                            p.amount
+                        );
+                        prop_assert_eq!(p.refunded_amount, accepted_total);
+                    }
+                    Err(_) => {
+                        // Rejected refunds must not have mutated the payment.
+                        let p = client.get_payment_by_id(&payer, &str(&env, "ORD_P1"));
+                        prop_assert_eq!(p.refunded_amount, accepted_total);
+                    }
+                }
+            }
+
+            // Final invariant: total refunded never exceeds the original amount.
+            let p = client.get_payment_by_id(&payer, &str(&env, "ORD_P1"));
+            prop_assert!(p.refunded_amount <= payment_amount);
+        }
+    }
+
+    // ── Property 2: status transitions Completed → Partially → Fully ────────
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        #[test]
+        fn prop_payment_status_tracks_refund_progress(
+            payment_amount in 1i128..=1_000_000i128,
+            refund_amounts in prop::collection::vec(1i128..=1_000_000i128, 1..=8),
+        ) {
+            let (env, client, _admin, merchant, payer, token) = full_setup();
+            make_payment(&env, &client, &merchant, &payer, &token, "ORD_P2", payment_amount);
+
+            // A freshly processed payment is Completed with nothing refunded.
+            let p0 = client.get_payment_by_id(&payer, &str(&env, "ORD_P2"));
+            prop_assert!(matches!(p0.status, PaymentStatus::Completed));
+            prop_assert_eq!(p0.refunded_amount, 0);
+
+            let mut accepted_total: i128 = 0;
+            for (i, amt) in refund_amounts.iter().enumerate() {
+                let refund_id = format!("REF_P2_{}", i);
+                let res = client.try_initiate_refund(
+                    &payer,
+                    &str(&env, &refund_id),
+                    &str(&env, "ORD_P2"),
+                    amt,
+                    &str(&env, "prop reason"),
+                );
+                if res.is_err() {
+                    continue;
+                }
+
+                client.approve_refund(&merchant, &str(&env, &refund_id));
+                client.execute_refund(&str(&env, &refund_id));
+                accepted_total += *amt;
+
+                let p = client.get_payment_by_id(&payer, &str(&env, "ORD_P2"));
+                prop_assert_eq!(p.refunded_amount, accepted_total);
+
+                if accepted_total == payment_amount {
+                    prop_assert!(
+                        matches!(p.status, PaymentStatus::FullyRefunded),
+                        "fully refunded payment must be FullyRefunded"
+                    );
+                } else {
+                    prop_assert!(
+                        matches!(p.status, PaymentStatus::PartiallyRefunded),
+                        "partially refunded payment must be PartiallyRefunded"
+                    );
+                }
+            }
+        }
+    }
+
+    // ── Property 3: refund count per payment is bounded ──────────────────────
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+
+        #[test]
+        fn prop_refund_count_is_bounded(
+            payment_amount in 1i128..=1_000_000i128,
+            // Generate more attempts than the cap to exercise the bound.
+            refund_amounts in prop::collection::vec(
+                1i128..=1_000_000i128,
+                1..=(MAX_REFUNDS_PER_PAYMENT as usize + 4),
+            ),
+        ) {
+            let (env, client, _admin, merchant, payer, token) = full_setup();
+            make_payment(&env, &client, &merchant, &payer, &token, "ORD_P3", payment_amount);
+
+            let mut accepted: u32 = 0;
+            for (i, amt) in refund_amounts.iter().enumerate() {
+                let refund_id = format!("REF_P3_{}", i);
+                let res = client.try_initiate_refund(
+                    &payer,
+                    &str(&env, &refund_id),
+                    &str(&env, "ORD_P3"),
+                    amt,
+                    &str(&env, "prop reason"),
+                );
+                if res.is_ok() {
+                    accepted += 1;
+                    prop_assert!(
+                        accepted <= MAX_REFUNDS_PER_PAYMENT,
+                        "accepted refund count {} exceeds MAX_REFUNDS_PER_PAYMENT {}",
+                        accepted,
+                        MAX_REFUNDS_PER_PAYMENT
+                    );
+
+                    // Execute so the refund is counted against the payment.
+                    client.approve_refund(&merchant, &str(&env, &refund_id));
+                    client.execute_refund(&str(&env, &refund_id));
+                    let r = client.get_refund(&str(&env, &refund_id));
+                    prop_assert!(matches!(r.status, RefundStatus::Completed));
+                }
+            }
+
+            prop_assert!(accepted <= MAX_REFUNDS_PER_PAYMENT);
+        }
+    }
+}

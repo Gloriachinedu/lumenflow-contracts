@@ -26,6 +26,9 @@ pub const PAYMENT_HISTORY_WARNING_THRESHOLD: u32 = MAX_PAYMENT_IDS_PER_ACCOUNT *
 pub const DEFAULT_PLATFORM_FEE_BPS: u32 = 0;
 /// Maximum allowed platform fee: 10 000 bps = 100 %. Prevents mis-configuration.
 pub const MAX_PLATFORM_FEE_BPS: u32 = 10_000;
+/// Maximum allowed fee in basis points for the fee module (issue #1518).
+/// 10 000 bps = 100 %; values above this are rejected by `set_fee_config`.
+pub const MAX_FEE_BPS: u32 = 10_000;
 /// Default refund window: 30 days in seconds.
 pub const DEFAULT_REFUND_WINDOW_SECS: u64 = 30 * 24 * 3600;
 /// Minimum refund window: 1 hour in seconds. Prevents locking out refunds entirely.
@@ -34,6 +37,8 @@ pub const MIN_REFUND_WINDOW_SECS: u64 = 3600;
 pub const DEFAULT_CLEANUP_PERIOD_SECS: u64 = 30 * 24 * 3600;
 /// Default large-payment threshold in stroops (10 XLM equivalent).
 pub const DEFAULT_LARGE_PAYMENT_THRESHOLD: i128 = 10_000_000;
+/// Default maximum number of registered merchants (storage DoS guard).
+pub const DEFAULT_MAX_MERCHANTS: u32 = 10_000;
 
 // Approximate ledger-count equivalents (5-second ledgers):
 //   1 year  ≈ 6_307_200 ledgers
@@ -241,7 +246,11 @@ pub enum DataKey {
 /// Bump this constant whenever a `#[contracttype]` struct or enum is changed in
 /// a way that is not backwards-compatible (field added without `Option`, variant
 /// reordered, type changed, etc.).
-pub const CURRENT_STORAGE_VERSION: u32 = 1;
+///
+/// v2 (issue #1592): added `DataKey::MPL(Address)` for the per-merchant maximum
+/// payment amount.  This is a purely additive variant, so existing entries are
+/// unaffected and no data migration is required.
+pub const CURRENT_STORAGE_VERSION: u32 = 2;
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
 
@@ -298,6 +307,30 @@ pub fn get_fee_recipient(env: &Env) -> Option<Address> {
 
 pub fn set_fee_recipient(env: &Env, recipient: &Address) {
     env.storage().instance().set(&DataKey::FR, recipient);
+}
+
+// ── Fee module config (issue #1518) ───────────────────────────────────────────
+
+/// TTL for the fee config entry — 2 years, matching other config singletons.
+pub const FEE_CONFIG_TTL_LEDGERS: u32 = 12_614_400;
+
+/// Return the stored fee module configuration `(recipient, bps)`, if any.
+///
+/// A missing entry (or a stored `bps` of 0) means the fee module is disabled.
+pub fn get_fee_config(env: &Env) -> Option<(Address, u32)> {
+    env.storage().instance().get(&DataKey::FeeConfig)
+}
+
+/// Persist the fee module configuration `(recipient, bps)`.
+///
+/// Callers are responsible for validating `bps <= MAX_FEE_BPS` and for
+/// admin authorization before invoking this function.
+pub fn set_fee_config(env: &Env, recipient: &Address, bps: u32) {
+    let key = DataKey::FeeConfig;
+    env.storage().instance().set(&key, &(recipient.clone(), bps));
+    env.storage()
+        .instance()
+        .extend_ttl(FEE_CONFIG_TTL_LEDGERS, FEE_CONFIG_TTL_LEDGERS);
 }
 
 // ── Refund window ─────────────────────────────────────────────────────────────

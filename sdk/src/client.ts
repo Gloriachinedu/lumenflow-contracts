@@ -6,6 +6,20 @@ feat/sdk-rpc-retry-integration
 
 import { LumenFlowError } from './errors';
 import { withRetry, RetryConfig, DEFAULT_RETRY_CONFIG } from './retry';
+import { WebhookStatusTracker } from './webhookStatus';
+
+/**
+ * Delivery status of a webhook event, as returned by
+ * {@link Client.getWebhookDeliveryStatus}.
+ */
+export interface WebhookDeliveryStatus {
+  /** `true` only when the event has been successfully delivered. */
+  delivered: boolean;
+  /** Total number of delivery attempts made so far. */
+  attempts: number;
+  /** ISO timestamp of the most recent attempt, or `""` if never attempted. */
+  lastAttemptAt: string;
+}
 
 export interface ClientConfig {
   /** Soroban RPC server URL */
@@ -14,17 +28,22 @@ export interface ClientConfig {
   contractId: string;
   /** Optional retry configuration */
   retryConfig?: Partial<RetryConfig>;
+  /** Optional webhook status tracker used by {@link Client.getWebhookDeliveryStatus}. */
+  webhookStatusTracker?: WebhookStatusTracker;
 }
 
 export class Client {
   private rpcUrl: string;
   private contractId: string;
   private retryConfig: RetryConfig;
+  private webhookStatusTracker: WebhookStatusTracker;
 
   constructor(config: ClientConfig) {
     this.rpcUrl = config.rpcUrl;
     this.contractId = config.contractId;
     this.retryConfig = { ...DEFAULT_RETRY_CONFIG, ...config.retryConfig };
+    this.webhookStatusTracker =
+      config.webhookStatusTracker ?? new WebhookStatusTracker();
   }
 
   /**
@@ -76,6 +95,30 @@ export class Client {
    */
   getRetryConfig(): RetryConfig {
     return { ...this.retryConfig };
+  }
+
+  /**
+   * Look up the delivery status of a webhook event.
+   *
+   * Delegates to the configured {@link WebhookStatusTracker} so merchants can
+   * programmatically confirm event delivery without checking the dashboard.
+   *
+   * @param eventId - The unique webhook event identifier.
+   * @returns A {@link WebhookDeliveryStatus} for the event, or `null` if the
+   *   event ID is unknown.
+   */
+  getWebhookDeliveryStatus(eventId: string): WebhookDeliveryStatus | null {
+    const status = this.webhookStatusTracker.getStatus(eventId);
+    if (!status) {
+      return null;
+    }
+    return {
+      delivered: status.state === 'delivered',
+      attempts: status.totalAttempts,
+      lastAttemptAt: status.lastAttemptAt
+        ? new Date(status.lastAttemptAt).toISOString()
+        : '',
+    };
   }
 }
 
@@ -144,6 +187,7 @@ import {
   GlobalStats,
   SubscriptionPlan,
   Subscription,
+  FeeConfig,
 } from "./types";
 import { LumenFlowError, PaymentErrorCode } from "./errors";
 import { withIdempotency, IdempotentResult } from "./idempotency";
@@ -559,6 +603,43 @@ export class LumenFlowClient {
     await this.invoke("set_max_refunds_per_order", [
       new Address(admin),
       max,
+    ]);
+  }
+
+  /**
+   * Sets the optional maximum payment amount allowed for a merchant.
+   *
+   * Once configured, the contract enforces this limit during `process_payment`
+   * (and related payment flows): any payment whose amount exceeds the limit is
+   * rejected with {@link PaymentErrorCode.ExceedsMerchantLimit}.
+   *
+   * Pass `null` to remove the limit and allow payments of any amount.
+   *
+   * @param admin - Stellar address of the administrator (must sign).
+   * @param merchantAddress - Stellar address of the merchant whose limit is being set.
+   * @param limit - Maximum payment amount in the token's smallest unit (e.g. stroops
+   *   for XLM), or `null` to clear the limit and allow any amount.
+   * @returns A Promise that resolves when the limit has been updated.
+   * @throws {@link LumenFlowError} if the caller is not the admin.
+   * @throws {@link LumenFlowError} with `PaymentErrorCode.MerchantNotFound` if the merchant is not registered.
+   * @throws {@link LumenFlowError} with `PaymentErrorCode.ExceedsMerchantLimit` if the contract rejects the value.
+   *
+   * @example
+   * // Cap payments to this merchant at 100 XLM
+   * await client.setMerchantPaymentLimit("GADMIN...", "GMERCHANT...", 1_000_000_000n);
+   *
+   * // Remove the limit entirely
+   * await client.setMerchantPaymentLimit("GADMIN...", "GMERCHANT...", null);
+   */
+  async setMerchantPaymentLimit(
+    admin: string,
+    merchantAddress: string,
+    limit: bigint | null
+  ): Promise<void> {
+    await this.invoke("set_merchant_payment_limit", [
+      new Address(admin),
+      new Address(merchantAddress),
+      limit,
     ]);
   }
 
@@ -1657,5 +1738,95 @@ export class LumenFlowClient {
       }
     }
     return new Error(`Simulation failed: ${errorMsg}`);
+  }
+
+  // ── Event subscription ────────────────────────────────────────────────────
+
+  /**
+   * Subscribe to on-chain contract events of a given type.
+   *
+   * This is a high-level wrapper around the low-level event poller. It polls
+   * the Soroban RPC endpoint at a configurable interval, decodes each raw
+   * contract event into a typed {@link TypedEventPayload}, and invokes
+   * `handler` for every matching event.
+   *
+   * Handler errors are caught and logged so that a single faulty handler
+   * cannot crash the poller or prevent subsequent events from being delivered.
+   *
+   * @param eventType - The contract event type to listen for (e.g. `"payment_completed"`).
+   * @param handler - Callback invoked with the decoded, typed event payload.
+   * @param options - Optional configuration; `intervalMs` defaults to `5000` (5 s).
+   * @returns An {@link Unsubscribe} function that stops polling and clears the interval.
+   *
+   * @example
+   * const unsubscribe = client.subscribe("payment_completed", (event) => {
+   *   console.log("Payment completed:", event);
+   * });
+   *
+   * // Later, when no longer interested:
+   * unsubscribe();
+   */
+  subscribe(
+    eventType: string,
+    handler: (payload: TypedEventPayload) => void,
+    options: SubscribeOptions = {}
+  ): Unsubscribe {
+    const intervalMs = options.intervalMs ?? 5000;
+    let stopped = false;
+    let inFlight = false;
+
+    const tick = async (): Promise<void> => {
+      if (stopped || inFlight) {
+        return;
+      }
+      inFlight = true;
+      try {
+        const rawEvents = await pollContractEvents({
+          server: this.server,
+          contractId: this.contract.contractId(),
+          eventType,
+        });
+
+        for (const raw of rawEvents) {
+          if (stopped) {
+            break;
+          }
+          let payload: TypedEventPayload;
+          try {
+            payload = parseLumenFlowEvent(raw);
+          } catch (decodeErr) {
+            console.warn(
+              "[LumenFlowSDK] Failed to decode contract event:",
+              decodeErr
+            );
+            continue;
+          }
+          try {
+            handler(payload);
+          } catch (handlerErr) {
+            console.error(
+              "[LumenFlowSDK] Event handler threw an error:",
+              handlerErr
+            );
+          }
+        }
+      } catch (pollErr) {
+        console.warn("[LumenFlowSDK] Event polling failed:", pollErr);
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const intervalId = setInterval(() => {
+      void tick();
+    }, intervalMs);
+
+    return () => {
+      if (stopped) {
+        return;
+      }
+      stopped = true;
+      clearInterval(intervalId);
+    };
   }
 }

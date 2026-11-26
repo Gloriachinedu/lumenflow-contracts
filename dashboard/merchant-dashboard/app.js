@@ -26,7 +26,138 @@ const state = {
   refunds: [],        // RefundRecord[]
   wallet: null,  // { type: 'freighter', account: string }
   client: null,  // LumenFlowClient | null
+  apiKey: null,  // string | null — per-merchant dashboard API key
 };
+
+// ── API key authentication ────────────────────────────────────────────────────
+
+/** localStorage key used to persist the merchant dashboard API key. */
+const API_KEY_STORAGE = 'lumenflow_merchant_api_key';
+
+/** Per-key rate limit: 100 requests per 60 s window. */
+const RATE_LIMIT_MAX    = 100;
+const RATE_LIMIT_WINDOW = 60_000;
+
+/** In-memory rate-limit buckets keyed by API key. */
+const rateLimitBuckets = new Map();
+
+/**
+ * Returns the stored API key, if any.
+ * @returns {string|null}
+ */
+function getApiKey() {
+  if (state.apiKey) return state.apiKey;
+  try {
+    state.apiKey = localStorage.getItem(API_KEY_STORAGE) || null;
+  } catch {
+    state.apiKey = null;
+  }
+  return state.apiKey;
+}
+
+/**
+ * Persists (or clears) the merchant dashboard API key.
+ * @param {string|null} key
+ */
+function setApiKey(key) {
+  state.apiKey = key || null;
+  try {
+    if (key) localStorage.setItem(API_KEY_STORAGE, key);
+    else localStorage.removeItem(API_KEY_STORAGE);
+  } catch { /* ignore storage errors */ }
+}
+
+/**
+ * Builds request headers including the `Authorization: Bearer <key>` header
+ * when an API key is configured.
+ * @param {Record<string,string>} [extra]
+ * @returns {Record<string,string>}
+ */
+function authHeaders(extra = {}) {
+  const headers = { ...extra };
+  const key = getApiKey();
+  if (key) headers['Authorization'] = `Bearer ${key}`;
+  return headers;
+}
+
+/**
+ * Client-side mirror of the server's per-key rate limiter. Throws a 429-style
+ * error when the key exceeds 100 requests per minute.
+ * @param {string} key
+ */
+function enforceRateLimit(key) {
+  const now = Date.now();
+  let bucket = rateLimitBuckets.get(key);
+  if (!bucket || now - bucket.start >= RATE_LIMIT_WINDOW) {
+    bucket = { start: now, count: 0 };
+    rateLimitBuckets.set(key, bucket);
+  }
+  bucket.count += 1;
+  if (bucket.count > RATE_LIMIT_MAX) {
+    const err = new Error('Rate limit exceeded: 100 requests per minute per API key.');
+    err.status = 429;
+    throw err;
+  }
+}
+
+/**
+ * Authenticated fetch wrapper. Attaches the Bearer header, applies per-key
+ * rate limiting, and surfaces 401 (invalid/revoked key) and 429 responses.
+ *
+ * @param {string} url
+ * @param {RequestInit} [options]
+ * @returns {Promise<Response>}
+ */
+async function apiFetch(url, options = {}) {
+  const key = getApiKey();
+  if (key) enforceRateLimit(key);
+
+  const res = await fetch(url, {
+    ...options,
+    headers: authHeaders(options.headers || {}),
+  });
+
+  if (res.status === 401) {
+    showError('API key is invalid or has been revoked. Please re-authenticate.');
+    throw Object.assign(new Error('Unauthorized'), { status: 401 });
+  }
+  if (res.status === 429) {
+    showError('Rate limit exceeded (100 requests/min per API key). Please slow down.');
+    throw Object.assign(new Error('Too Many Requests'), { status: 429 });
+  }
+  return res;
+}
+
+/**
+ * Generates a new API key scoped to a merchant address.
+ * Calls `POST /admin/merchant-keys`.
+ *
+ * @param {string} merchant - Merchant Stellar address the key is scoped to.
+ * @returns {Promise<{id:string, key:string, merchant:string}>}
+ */
+async function createMerchantKey(merchant) {
+  const res = await apiFetch('/admin/merchant-keys', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ merchant }),
+  });
+  if (!res.ok) throw new Error(`Failed to create API key (${res.status})`);
+  return res.json();
+}
+
+/**
+ * Revokes an API key by id.
+ * Calls `DELETE /admin/merchant-keys/:id`.
+ *
+ * @param {string} id
+ * @returns {Promise<void>}
+ */
+async function revokeMerchantKey(id) {
+  const res = await apiFetch(`/admin/merchant-keys/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error(`Failed to revoke API key (${res.status})`);
+}
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 
@@ -266,6 +397,7 @@ function showError(msg) {
   }
   banner.textContent = `⚠ ${msg}`;
   banner.style.display = 'block';
+  announce(`Error: ${msg}`);
   clearTimeout(banner._timer);
   banner._timer = setTimeout(() => { banner.style.display = 'none'; }, 8000);
 }
@@ -646,12 +778,40 @@ function exportSettlementJson() {
 })();
 
 // ── Formatting ────────────────────────────────────────────────────────────────
+// Token metadata (symbol + decimals) is resolved via the shared helpers in
+// frontend/lumenflow-shared.js so USDC renders as "USDC" with 6 decimals and
+// native XLM keeps its 7 decimals. See issue #1576.
+const sharedTokenHelpers = (typeof window !== 'undefined' && window.LumenFlowShared) || {};
+
+/**
+ * Resolve token metadata for a token identifier.
+ * Accepts a token address (SAC / contract id) or a symbol like 'XLM' / 'USDC'.
+ * Falls back to the native asset when the shared helper is unavailable.
+ *
+ * @param {string} token
+ * @returns {{symbol:string, decimals:number}}
+ */
+function resolveTokenMetadata(token) {
+  if (typeof sharedTokenHelpers.getTokenMetadata === 'function') {
+    try {
+      const meta = sharedTokenHelpers.getTokenMetadata(token);
+      if (meta && meta.symbol) return meta;
+    } catch { /* fall through to native defaults */ }
+  }
+  // Fallback: native XLM metadata
+  return { symbol: 'XLM', decimals: 7 };
+}
+
 function formatAmount(amount, token) {
-  // Use 7 decimals for XLM / native; 6 for USDC; 7 as default
-  const isUsdc = typeof token === 'string' && token.length > 10;
-  const decimals = isUsdc ? 6 : 7;
-  const symbol   = isUsdc ? 'USDC' : 'XLM';
-  const value    = Number(amount) / Math.pow(10, decimals);
+  const { symbol, decimals } = resolveTokenMetadata(token || 'native');
+
+  if (typeof sharedTokenHelpers.formatTokenAmount === 'function') {
+    try {
+      return sharedTokenHelpers.formatTokenAmount(amount, token || 'native');
+    } catch { /* fall through to local formatting */ }
+  }
+
+  const value = Number(amount) / Math.pow(10, decimals);
   return value.toLocaleString(undefined, {
     minimumFractionDigits: 2,
     maximumFractionDigits: decimals,
@@ -670,9 +830,34 @@ function shorten(addr) {
 function setStatus(status) {
   state.status = status;
   document.querySelectorAll('.tabs .tab').forEach(btn => {
-    btn.setAttribute('aria-selected', btn.dataset.status === status);
+    const selected = btn.dataset.status === status;
+    btn.setAttribute('aria-selected', selected ? 'true' : 'false');
+    btn.setAttribute('tabindex', selected ? '0' : '-1');
   });
   render();
+  announce(`Showing ${status} refunds`);
+}
+
+// ── Live region announcements ─────────────────────────────────────────────────
+/** Announce a message to screen readers via the polite live region. */
+function announce(msg) {
+  let region = document.getElementById('a11y-live');
+  if (!region) {
+    region = document.createElement('div');
+    region.id = 'a11y-live';
+    region.setAttribute('role', 'status');
+    region.setAttribute('aria-live', 'polite');
+    region.setAttribute('aria-atomic', 'true');
+    region.style.cssText = [
+      'position:absolute', 'width:1px', 'height:1px',
+      'padding:0', 'margin:-1px', 'overflow:hidden',
+      'clip:rect(0,0,0,0)', 'white-space:nowrap', 'border:0',
+    ].join(';');
+    document.body.appendChild(region);
+  }
+  // Clear then set so repeated identical messages are re-announced
+  region.textContent = '';
+  setTimeout(() => { region.textContent = msg; }, 50);
 }
 
 function render() {
@@ -704,14 +889,24 @@ function render() {
       <td></td>
     `;
     const actions = tr.querySelector('td:last-child');
+    const label = r.refundId || r.id;
     if (r.status === 'pending') {
-      const approve = document.createElement('button'); approve.textContent = 'Approve';
-      const reject  = document.createElement('button'); reject.textContent  = 'Reject';
+      const approve = document.createElement('button');
+      approve.type = 'button';
+      approve.textContent = 'Approve';
+      approve.setAttribute('aria-label', `Approve refund ${label}`);
+      const reject = document.createElement('button');
+      reject.type = 'button';
+      reject.textContent = 'Reject';
+      reject.setAttribute('aria-label', `Reject refund ${label}`);
       approve.addEventListener('click', () => confirmAction('approve', r.id));
       reject.addEventListener('click',  () => confirmAction('reject',  r.id));
       actions.appendChild(approve); actions.appendChild(reject);
     } else if (r.status === 'approved') {
-      const execute = document.createElement('button'); execute.textContent = 'Execute';
+      const execute = document.createElement('button');
+      execute.type = 'button';
+      execute.textContent = 'Execute';
+      execute.setAttribute('aria-label', `Execute refund ${label}`);
       execute.addEventListener('click', () => confirmAction('execute', r.id));
       actions.appendChild(execute);
     }
@@ -736,6 +931,7 @@ function updateStatus(id, newStatus) {
   const r = state.refunds.find(x => x.id === id);
   if (r) r.status = newStatus;
   render();
+  announce(`Refund ${id} marked ${newStatus}`);
 }
 
 async function executeRefund(id) {
@@ -761,12 +957,16 @@ async function executeRefund(id) {
 // ── Modal helpers ─────────────────────────────────────────────────────────────
 
 function openModal(modal) {
+  if (!modal) return;
   modal.style.display = 'block';
   modal.setAttribute('aria-hidden', 'false');
+  modal.setAttribute('aria-modal', 'true');
+  if (!modal.hasAttribute('role')) modal.setAttribute('role', 'dialog');
   trapFocus(modal);
 }
 
 function closeModal(modal) {
+  if (!modal) return;
   modal.style.display = 'none';
   modal.setAttribute('aria-hidden', 'true');
   releaseFocusTrap();
@@ -776,18 +976,24 @@ let lastFocused  = null;
 let trapListener = null;
 function trapFocus(modal) {
   lastFocused = document.activeElement;
-  const focusable = modal.querySelectorAll('button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])');
+  const focusable = Array.from(
+    modal.querySelectorAll(
+      'button:not([disabled]),[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
+    )
+  ).filter(el => el.offsetParent !== null || el === document.activeElement);
   const first = focusable[0];
   const last  = focusable[focusable.length - 1];
-  first && first.focus();
+  if (first) first.focus();
   trapListener = (e) => {
     if (e.key === 'Tab') {
+      if (!focusable.length) { e.preventDefault(); return; }
       if (e.shiftKey && document.activeElement === first) {
         e.preventDefault(); last.focus();
       } else if (!e.shiftKey && document.activeElement === last) {
         e.preventDefault(); first.focus();
       }
     } else if (e.key === 'Escape') {
+      e.preventDefault();
       closeModal(modal);
     }
   };
@@ -795,9 +1001,10 @@ function trapFocus(modal) {
 }
 
 function releaseFocusTrap() {
-  document.removeEventListener('keydown', trapListener);
+  if (trapListener) document.removeEventListener('keydown', trapListener);
   trapListener = null;
-  if (lastFocused) lastFocused.focus();
+  if (lastFocused && typeof lastFocused.focus === 'function') lastFocused.focus();
+  lastFocused = null;
 }
 
 // ── Wallet connect handlers ───────────────────────────────────────────────────
@@ -842,12 +1049,47 @@ document.querySelectorAll('.tabs .tab').forEach(btn =>
   btn.addEventListener('click', () => setStatus(btn.dataset.status))
 );
 
+// Keyboard support for the tablist: Arrow keys move focus, Home/End jump.
+(function initTabKeyboard() {
+  const tabs = Array.from(document.querySelectorAll('.tabs .tab'));
+  if (!tabs.length) return;
+  const tablist = tabs[0].parentElement;
+  if (tablist && !tablist.hasAttribute('role')) tablist.setAttribute('role', 'tablist');
+
+  tabs.forEach((btn, i) => {
+    if (!btn.hasAttribute('role')) btn.setAttribute('role', 'tab');
+    btn.setAttribute('tabindex', btn.getAttribute('aria-selected') === 'true' ? '0' : '-1');
+    btn.addEventListener('keydown', (e) => {
+      let target = null;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        target = tabs[(i + 1) % tabs.length];
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        target = tabs[(i - 1 + tabs.length) % tabs.length];
+      } else if (e.key === 'Home') {
+        target = tabs[0];
+      } else if (e.key === 'End') {
+        target = tabs[tabs.length - 1];
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        setStatus(btn.dataset.status);
+        return;
+      }
+      if (target) {
+        e.preventDefault();
+        target.focus();
+        setStatus(target.dataset.status);
+      }
+    });
+  });
+})();
+
 // ── Mock fetch — replace with real API/EventSource in production ──────────────
 
   const caller = state.wallet.account;
 
 // Mock fetch — in real app call backend API or use streaming (EventSource)
-async function fetchRefunds() {
+async function fetchMockRefunds() {
+  const now = Date.now();
   state.refunds = [
     {
       id: 'r1',
@@ -952,23 +1194,33 @@ async function fetchRefunds() {
 
   const merchant = state.wallet.account;
 
+  // Require an API key scoped to this merchant before querying the dashboard API.
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    showError('No merchant API key configured. Generate one via POST /admin/merchant-keys.');
+    render();
+    return;
+  }
+
   try {
-    // 1. Fetch recent orders for this merchant
-    const page = await state.client.getMerchantPaymentHistory(
-      merchant,
-      null,   // cursor — start from beginning
-      50,     // limit
-      null,   // filter — all statuses
-      'Date',
-      'Descending'
-    );
+    // 1. Fetch recent orders for this merchant (authenticated via Bearer key)
+    const page = await apiFetch(
+      `/dashboard/merchants/${encodeURIComponent(merchant)}/payments?limit=50`
+    ).then(res => {
+      if (!res.ok) throw new Error(`Failed to load payments (${res.status})`);
+      return res.json();
+    });
 
     const orders = page.payments || [];
 
     // 2. For each order, fetch its associated refunds
     const refundLists = await Promise.all(
       orders.map(order =>
-        state.client.getRefundsForOrder(merchant, order.orderId).catch(() => [])
+        apiFetch(
+          `/dashboard/merchants/${encodeURIComponent(merchant)}/orders/${encodeURIComponent(order.orderId)}/refunds`
+        )
+          .then(res => (res.ok ? res.json() : []))
+          .catch(() => [])
       )
     );
 
@@ -987,6 +1239,7 @@ async function fetchRefunds() {
     state.refunds = all;
     render();
   } catch (err) {
+    if (err && (err.status === 401 || err.status === 429)) return; // already surfaced
     showError(friendlyError(err));
   }
 }
@@ -1054,6 +1307,40 @@ document.querySelectorAll('.tabs .tab').forEach(btn =>
   btn.addEventListener('click', () => setStatus(btn.dataset.status))
 );
 
+// Keyboard support for the tablist: Arrow keys move focus, Home/End jump.
+(function initTabKeyboard() {
+  const tabs = Array.from(document.querySelectorAll('.tabs .tab'));
+  if (!tabs.length) return;
+  const tablist = tabs[0].parentElement;
+  if (tablist && !tablist.hasAttribute('role')) tablist.setAttribute('role', 'tablist');
+
+  tabs.forEach((btn, i) => {
+    if (!btn.hasAttribute('role')) btn.setAttribute('role', 'tab');
+    btn.setAttribute('tabindex', btn.getAttribute('aria-selected') === 'true' ? '0' : '-1');
+    btn.addEventListener('keydown', (e) => {
+      let target = null;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        target = tabs[(i + 1) % tabs.length];
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        target = tabs[(i - 1 + tabs.length) % tabs.length];
+      } else if (e.key === 'Home') {
+        target = tabs[0];
+      } else if (e.key === 'End') {
+        target = tabs[tabs.length - 1];
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        setStatus(btn.dataset.status);
+        return;
+      }
+      if (target) {
+        e.preventDefault();
+        target.focus();
+        setStatus(target.dataset.status);
+      }
+    });
+  });
+})();
+
 // ── CSV export ────────────────────────────────────────────────────────────────
 function csvEscape(value) {
   const str = value == null ? '' : String(value);
@@ -1119,7 +1406,11 @@ function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   localStorage.setItem('lumenflow_theme', theme);
   const btn = document.getElementById('themeToggle');
-  if (btn) btn.textContent = theme === 'dark' ? '☀️ Light' : '🌙 Dark';
+  if (btn) {
+    btn.textContent = theme === 'dark' ? '☀️ Light' : '🌙 Dark';
+    btn.setAttribute('aria-label', theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+    btn.setAttribute('aria-pressed', theme === 'dark' ? 'true' : 'false');
+  }
 }
 
 const themeToggleBtn = document.getElementById('themeToggle');
@@ -1130,6 +1421,8 @@ if (themeToggleBtn) {
   });
   const initialTheme = document.documentElement.getAttribute('data-theme') || 'light';
   themeToggleBtn.textContent = initialTheme === 'dark' ? '☀️ Light' : '🌙 Dark';
+  themeToggleBtn.setAttribute('aria-label', initialTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+  themeToggleBtn.setAttribute('aria-pressed', initialTheme === 'dark' ? 'true' : 'false');
 }
 
 // ── Demo / live mode banner ───────────────────────────────────────────────────
@@ -1149,6 +1442,9 @@ if (themeToggleBtn) {
     : `✔ Live mode – connected to contract ${CONTRACT_ID.slice(0, 8)}… on ${NETWORK}.`;
   document.body.prepend(banner);
 })();
+
+// ── Accessibility: ensure the live region exists on load ─────────────────────
+announce('Merchant dashboard loaded');
 
 // ── Initialise ────────────────────────────────────────────────────────────────
 
@@ -1174,8 +1470,53 @@ if (savedWallet) {
 fetchRefunds();
 setInterval(fetchRefunds, 30_000);
 
-// Initialise tier + settlement report for the restored wallet (if any).
-if (state.wallet && state.wallet.account) {
-  loadMerchantTier(state.wallet.account);
-}
-refreshSettlementReport();
+// ── API key management UI ─────────────────────────────────────────────────────
+(function initApiKeyUi() {
+  const form = document.getElementById('apiKeyForm');
+  if (!form) return;
+
+  const input   = document.getElementById('apiKeyMerchant');
+  const statusEl = document.getElementById('apiKeyStatus');
+
+  // Pre-fill merchant address from the connected wallet
+  if (state.wallet && state.wallet.account && input && !input.value) {
+    input.value = state.wallet.account;
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const merchant = (input && input.value.trim()) || (state.wallet && state.wallet.account);
+    if (!merchant) {
+      showError('A merchant address is required to generate an API key.');
+      return;
+    }
+    try {
+      const created = await createMerchantKey(merchant);
+      setApiKey(created.key);
+      if (statusEl) {
+        statusEl.textContent = `✔ API key ${created.id} created for ${shorten(created.merchant || merchant)}.`;
+      }
+      fetchRefunds();
+    } catch (err) {
+      showError(err.message || 'Failed to generate API key.');
+    }
+  });
+
+  const revokeBtn = document.getElementById('apiKeyRevoke');
+  if (revokeBtn) {
+    revokeBtn.addEventListener('click', async () => {
+      const id = (document.getElementById('apiKeyId') || {}).value;
+      if (!id) {
+        showError('Enter the API key id to revoke.');
+        return;
+      }
+      try {
+        await revokeMerchantKey(id.trim());
+        setApiKey(null);
+        if (statusEl) statusEl.textContent = `✔ API key ${id} revoked.`;
+      } catch (err) {
+        showError(err.message || 'Failed to revoke API key.');
+      }
+    });
+  }
+})();

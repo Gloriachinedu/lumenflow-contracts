@@ -116,13 +116,97 @@ let state = {
   merchants: new Map(),
   /** @type {Map<string, object>} refundId → refund */
   refunds: new Map(),
+  /** @type {Map<string, object>} keyId → apiKey */
+  apiKeys: new Map(),
+  /** @type {Map<string, object>} keyId → rate limit window */
+  rateLimits: new Map(),
 };
+
+const RATE_LIMIT_MAX = 100;
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 
 function resetState() {
   state.payments = new Map();
   state.merchants = new Map();
   state.refunds = new Map();
+  state.apiKeys = new Map();
+  state.rateLimits = new Map();
 }
+
+function generateApiKey() {
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let key = "lf_";
+  for (let i = 0; i < 40; i++) {
+    key += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return key;
+}
+
+function generateKeyId() {
+  return `key_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Resolve the API key record from an Authorization header.
+ * Returns { apiKey } on success or { status, body } on failure.
+ */
+function authenticate(req) {
+  const header = req.headers["authorization"] || "";
+  const match = /^Bearer\s+(.+)$/i.exec(header.trim());
+  if (!match) {
+    return {
+      status: 401,
+      body: { error: "Unauthorized", message: "Missing or malformed Authorization header" },
+    };
+  }
+
+  const token = match[1].trim();
+  for (const apiKey of state.apiKeys.values()) {
+    if (apiKey.key === token) {
+      if (apiKey.revoked) {
+        return {
+          status: 401,
+          body: { error: "Unauthorized", message: "API key has been revoked" },
+        };
+      }
+      return { apiKey };
+    }
+  }
+
+  return {
+    status: 401,
+    body: { error: "Unauthorized", message: "Invalid API key" },
+  };
+}
+
+/**
+ * Apply a fixed-window rate limit per API key.
+ * Returns null when allowed, or a { status, body } response when limited.
+ */
+function checkRateLimit(apiKey) {
+  const now = Date.now();
+  let window = state.rateLimits.get(apiKey.id);
+
+  if (!window || now - window.start >= RATE_LIMIT_WINDOW_MS) {
+    window = { start: now, count: 0 };
+    state.rateLimits.set(apiKey.id, window);
+  }
+
+  window.count += 1;
+
+  if (window.count > RATE_LIMIT_MAX) {
+    return {
+      status: 429,
+      body: {
+        error: "TooManyRequests",
+        message: `Rate limit exceeded: ${RATE_LIMIT_MAX} requests per minute`,
+      },
+    };
+  }
+
+  return null;
+}
+=======
 
 // ── HTTP utilities ────────────────────────────────────────────────────────────
 
@@ -184,6 +268,41 @@ const routes = {
     state.merchants.set(body.address, body);
     json(res, 201, { ok: true });
   },
+
+  // ── Admin: merchant API keys ────────────────────────────────────────────────
+
+  "POST /admin/merchant-keys": async (req, res) => {
+    const body = await readBody(req);
+    if (!body.merchant_address) {
+      return badRequest(res, "merchant_address required");
+    }
+
+    const id = generateKeyId();
+    const apiKey = {
+      id,
+      key: generateApiKey(),
+      merchant_address: body.merchant_address,
+      label: body.label || null,
+      revoked: false,
+      created_at: new Date().toISOString(),
+    };
+
+    state.apiKeys.set(id, apiKey);
+    json(res, 201, {
+      id: apiKey.id,
+      key: apiKey.key,
+      merchant_address: apiKey.merchant_address,
+      label: apiKey.label,
+      created_at: apiKey.created_at,
+    });
+  },
+
+  "DELETE /admin/merchant-keys": (req, res) => {
+    // Route matched without an :id segment
+    badRequest(res, "key id required");
+  },
+
+  // ── Seed endpoints ──────────────────────────────────────────────────────────
 
   "POST /mock/seed/refund": async (req, res) => {
     const body = await readBody(req);

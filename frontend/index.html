@@ -24,14 +24,15 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <main>
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+    <main id="main-content" tabindex="-1">
       <h1>LumenFlow</h1>
       <p>Scalable, secure, and decentralized payments on Stellar Soroban.</p>
-      <nav style="margin-top:1.5rem;display:flex;flex-wrap:wrap;gap:0.75rem;">
-        <a href="dashboard.html" style="font-weight:600;color:#6c47ff;text-decoration:none;padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:8px;">Merchant Dashboard</a>
-        <a href="history.html"   style="font-weight:600;color:#6c47ff;text-decoration:none;padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:8px;">Payment History</a>
-        <a href="receipt.html"   style="font-weight:600;color:#6c47ff;text-decoration:none;padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:8px;">View Receipt</a>
-        <a href="multisig.html"  style="font-weight:600;color:#6c47ff;text-decoration:none;padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:8px;">Multisig Payment</a>
+      <nav aria-label="Primary" style="margin-top:1.5rem;display:flex;flex-wrap:wrap;gap:0.75rem;">
+        <a href="dashboard.html" class="nav-link">Merchant Dashboard</a>
+        <a href="history.html"   class="nav-link">Payment History</a>
+        <a href="receipt.html"   class="nav-link">View Receipt</a>
+        <a href="multisig.html"  class="nav-link">Multisig Payment</a>
       </nav>
     </main>
     <script src="sw-register.js"></script>

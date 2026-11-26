@@ -25,6 +25,8 @@ pub enum PaymentError {
     MerchantAlreadyRegistered = 11,
     /// The merchant profile is deactivated. Remediation: An admin must reactivate the merchant profile to resume operations.
     MerchantInactive = 12,
+    /// The maximum number of registered merchants has been reached. Remediation: An admin can raise the cap via `set_merchant_cap`.
+    MerchantLimitExceeded = 13,
 
     // Payment
     /// The specified payment was not found. Remediation: Verify the payment ID or order ID.
@@ -87,6 +89,12 @@ pub enum PaymentError {
     MultisigCancelled = 45,
     /// The multi-signature payment has expired. Remediation: Create a new multisig payment.
     MultisigExpired = 46,
+
+    // Merchant limits
+    /// The payment amount exceeds the merchant's configured `max_payment_amount`.
+    /// Remediation: Use a smaller payment amount or ask an admin to raise the merchant's
+    /// payment limit via `set_merchant_payment_limit`.
+    ExceedsMerchantLimit = 76,
 
     // Contract state
     /// The contract is currently paused. Remediation: An admin must unpause the contract.
@@ -194,4 +202,8 @@ pub enum PaymentError {
     DisputeNotOpen = 114,
     /// The dispute has already been escalated and cannot be escalated again.
     DisputeAlreadyEscalated = 115,
+    /// The requested dispute state transition is not permitted from the dispute's current state.
+    /// Remediation: Check the dispute's current state and only perform transitions allowed by the
+    /// dispute state machine (Open -> UnderReview -> Escalated -> Resolved).
+    InvalidDisputeState = 116,
 }

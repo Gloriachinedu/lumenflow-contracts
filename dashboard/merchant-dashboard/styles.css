@@ -1,13 +1,16 @@
-:root{--accent:#0b66ff}
-body{font-family:system-ui,Arial,Helvetica,sans-serif;margin:0;padding:16px;color:#0b1726}
+:root{--accent:#0b66ff;--text:#0b1726;--muted:#4a4a4a;--border:#767676;--focus:#0b66ff}
+body{font-family:system-ui,Arial,Helvetica,sans-serif;margin:0;padding:16px;color:var(--text)}
 .site-header{display:flex;justify-content:space-between;align-items:center}
 .tabs{margin:12px 0}
 .tab{margin-right:8px}
-button{padding:10px 12px;border:1px solid #bfc7d1;background:#fff;border-radius:6px;min-height:44px;min-width:44px;cursor:pointer}
-button:focus{outline:3px solid rgba(11,102,255,.25);box-shadow:0 0 0 3px rgba(11,102,255,0.12)}
-.empty{padding:24px;border:1px dashed #ddd;color:#595959}
+button{padding:10px 12px;border:1px solid var(--border);background:#fff;color:var(--text);border-radius:6px;min-height:44px;min-width:44px;cursor:pointer}
+button:hover{border-color:var(--text)}
+button:focus,button:focus-visible{outline:3px solid var(--focus);outline-offset:2px;box-shadow:0 0 0 3px rgba(11,102,255,0.35)}
+button:disabled,button[aria-disabled="true"]{background:#e6e6e6;color:#595959;border-color:#8a8a8a;cursor:not-allowed;opacity:1}
+a:focus,a:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+.empty{padding:24px;border:1px dashed #767676;color:var(--muted)}
 table{width:100%;border-collapse:collapse}
-th,td{padding:8px;border-bottom:1px solid #eee;text-align:left}
+th,td{padding:8px;border-bottom:1px solid #d0d0d0;text-align:left}
 .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);align-items:center;justify-content:center}
 .modal-content{background:#fff;padding:16px;border-radius:8px;min-width:280px}
 
@@ -15,101 +18,8 @@ th,td{padding:8px;border-bottom:1px solid #eee;text-align:left}
 @media (max-width:600px){table,thead,tbody,tr,th,td{display:block}}
 
 .skip-link{position:absolute;left:-999px;top:auto;width:1px;height:1px;overflow:hidden}
-.skip-link:focus{left:8px;top:8px;width:auto;height:auto;padding:8px;background:#fff;border:1px solid #ccc}
+.skip-link:focus{left:8px;top:8px;width:auto;height:auto;padding:8px;background:#fff;color:var(--text);border:1px solid var(--border);outline:3px solid var(--focus);outline-offset:2px}
 .visually-hidden{position:absolute!important;height:1px;width:1px;overflow:hidden;clip:rect(1px,1px,1px,1px);white-space:nowrap}
 
 /* QR download button */
 .btn-download-qr{margin-top:8px;display:block;width:100%;max-width:192px;font-size:0.875rem}
-
-/* Merchant tier section */
-.tier-section{margin:16px 0;padding:16px;border:1px solid #e3e8ef;border-radius:8px;background:#f8fafc}
-.tier-section h2{margin:0 0 12px;font-size:1.125rem}
-.tier-current{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-bottom:12px}
-.tier-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:999px;font-size:0.875rem;font-weight:600;line-height:1.4;border:1px solid transparent;white-space:nowrap}
-.tier-badge--standard{background:#eef2f7;color:#334155;border-color:#cbd5e1}
-.tier-badge--silver{background:#f1f5f9;color:#475569;border-color:#94a3b8}
-.tier-badge--gold{background:#fef9c3;color:#854d0e;border-color:#eab308}
-.tier-badge--platinum{background:#e0e7ff;color:#3730a3;border-color:#818cf8}
-.tier-next{font-size:0.875rem;color:#475569}
-.tier-next strong{color:#0b1726}
-.tier-progress{position:relative;height:8px;border-radius:4px;background:#e2e8f0;overflow:hidden;margin-top:8px}
-.tier-progress-bar{height:100%;background:var(--accent);border-radius:4px;transition:width .3s ease}
-.tier-progress-label{font-size:0.75rem;color:#64748b;margin-top:4px}
-
-/* Settlement report section */
-.report-section{margin:16px 0}
-.report-section h2{margin:0 0 12px;font-size:1.125rem}
-.report-controls{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:16px}
-.report-controls label{display:flex;flex-direction:column;gap:4px;font-size:0.875rem;color:#475569}
-.report-controls input[type="date"]{padding:8px;border:1px solid #bfc7d1;border-radius:6px;min-height:44px;font-size:1rem}
-.report-controls input[type="date"]:focus{outline:3px solid rgba(11,102,255,.25);box-shadow:0 0 0 3px rgba(11,102,255,0.12)}
-
-/* Summary card grid */
-.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
-.summary-card{padding:16px;border:1px solid #e3e8ef;border-radius:8px;background:#fff}
-.summary-card-label{font-size:0.75rem;text-transform:uppercase;letter-spacing:.04em;color:#64748b;margin-bottom:4px}
-.summary-card-value{font-size:1.25rem;font-weight:600;color:#0b1726;word-break:break-word}
-
-/* Export button layout */
-.export-actions{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
-.export-actions button{flex:0 1 auto}
-.btn-export{display:inline-flex;align-items:center;gap:6px}
-
-/* Itemised payment table */
-.report-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
-.report-table{width:100%;border-collapse:collapse}
-.report-table th,.report-table td{padding:8px;border-bottom:1px solid #eee;text-align:left}
-.report-table td.num,.report-table th.num{text-align:right;font-variant-numeric:tabular-nums}
-.report-table tfoot td{font-weight:600;border-top:2px solid #e3e8ef;border-bottom:none}
-
-/* Responsive: collapse itemised table to stacked rows */
-@media (max-width:600px){
-  .summary-grid{grid-template-columns:1fr 1fr}
-  .report-controls{flex-direction:column;align-items:stretch}
-  .report-controls label{width:100%}
-  .export-actions{flex-direction:column}
-  .export-actions button{width:100%}
-  .report-table-wrap{overflow-x:visible}
-  .report-table thead{position:absolute!important;height:1px;width:1px;overflow:hidden;clip:rect(1px,1px,1px,1px);white-space:nowrap}
-  .report-table,.report-table tbody,.report-table tfoot,.report-table tr,.report-table td{display:block;width:100%}
-  .report-table tr{border:1px solid #e3e8ef;border-radius:8px;margin-bottom:12px;padding:8px;background:#fff}
-  .report-table td{border-bottom:1px solid #f1f5f9;padding:6px 4px;display:flex;justify-content:space-between;gap:12px;text-align:right}
-  .report-table td:last-child{border-bottom:none}
-  .report-table td::before{content:attr(data-label);font-weight:600;color:#475569;text-align:left;flex:0 0 auto}
-  .report-table td.num{text-align:right}
-  .report-table tfoot tr{border:none;background:#f8fafc}
-}
-
-@media (max-width:360px){
-  .summary-grid{grid-template-columns:1fr}
-}
-
-/* Dark mode */
-@media (prefers-color-scheme:dark){
-  body{background:#0b1726;color:#e2e8f0}
-  button{background:#1e293b;color:#e2e8f0;border-color:#334155}
-  .empty{border-color:#334155;color:#94a3b8}
-  th,td{border-bottom-color:#1e293b}
-  .modal-content{background:#1e293b;color:#e2e8f0}
-  .skip-link:focus{background:#1e293b;border-color:#334155}
-  .tier-section{background:#111c2e;border-color:#1e293b}
-  .tier-next{color:#94a3b8}
-  .tier-next strong{color:#e2e8f0}
-  .tier-progress{background:#1e293b}
-  .tier-badge--standard{background:#1e293b;color:#cbd5e1;border-color:#334155}
-  .tier-badge--silver{background:#1e293b;color:#e2e8f0;border-color:#64748b}
-  .tier-badge--gold{background:#422006;color:#fde68a;border-color:#a16207}
-  .tier-badge--platinum{background:#1e1b4b;color:#c7d2fe;border-color:#6366f1}
-  .tier-progress-label{color:#94a3b8}
-  .report-controls label{color:#94a3b8}
-  .report-controls input[type="date"]{background:#1e293b;color:#e2e8f0;border-color:#334155}
-  .summary-card{background:#111c2e;border-color:#1e293b}
-  .summary-card-label{color:#94a3b8}
-  .summary-card-value{color:#e2e8f0}
-  .report-table th,.report-table td{border-bottom-color:#1e293b}
-  .report-table tfoot td{border-top-color:#334155}
-  .report-table tr{background:#111c2e;border-color:#1e293b}
-  .report-table td{border-bottom-color:#1e293b}
-  .report-table td::before{color:#94a3b8}
-  .report-table tfoot tr{background:#0f1a2b}
-}

@@ -44,6 +44,20 @@ export interface Merchant {
   verified: boolean;
   registeredAt: bigint;
   totalReceived: bigint;
+  /**
+   * Optional maximum payment amount enforced during `process_payment`.
+   * Maps the Rust `Option<i128>`; `null`/`undefined` means no limit.
+   */
+  maxPaymentAmount?: bigint | null;
+}
+
+/**
+ * Arguments for the `set_merchant_payment_limit` admin entrypoint.
+ * `limit` of `null` clears the limit (no maximum).
+ */
+export interface SetMerchantPaymentLimitArgs {
+  merchant: string;
+  limit: bigint | null;
 }
 
 /**
@@ -196,10 +210,67 @@ export interface PaymentFilter {
   tag?: string;
 }
 
+/**
+ * Generic page shape used by paginated list endpoints.
+ *
+ * `nextCursor` is `null` when there are no further pages; consumers should
+ * treat both `null` and `undefined` as "end of results".
+ */
+export interface PaginatedPage<T> {
+  items: T[];
+  nextCursor?: string | null;
+  total: number;
+}
+
 export interface PaymentPage {
   payments: PaymentOrder[];
-  nextCursor?: string;
+  nextCursor?: string | null;
   total: number;
+}
+
+/** Event types emitted by the smart contract that can be subscribed to. */
+export type LumenFlowEventType =
+  | "PaymentReceived"
+  | "RefundInitiated"
+  | "RefundCompleted"
+  | "DisputeOpened"
+  | "DisputeResolved"
+  | "MerchantRegistered"
+  | "SubscriptionCharged";
+
+/** Map of event type to its decoded payload shape. */
+export interface LumenFlowEventPayloadMap {
+  PaymentReceived: PaymentSummary;
+  RefundInitiated: RefundRecord;
+  RefundCompleted: RefundRecord;
+  DisputeOpened: DisputeRecord;
+  DisputeResolved: DisputeRecord;
+  MerchantRegistered: Merchant;
+  SubscriptionCharged: Subscription;
+}
+
+/**
+ * Typed event payload delivered to subscription handlers.
+ *
+ * `payload` is the decoded, strongly-typed event body (never raw XDR).
+ */
+export interface TypedEventPayload<T extends LumenFlowEventType> {
+  type: T;
+  payload: LumenFlowEventPayloadMap[T];
+  ledger: number;
+  txHash: string;
+  timestamp: bigint;
+}
+
+/** Handler invoked for each event received by a subscription. */
+export type EventHandler<T extends LumenFlowEventType> = (
+  event: TypedEventPayload<T>,
+) => void | Promise<void>;
+
+/** Options controlling event subscription polling. */
+export interface SubscribeOptions {
+  /** Polling interval in milliseconds. Defaults to 5000 (5 s). */
+  intervalMs?: number;
 }
 
 export interface GlobalStats {
@@ -242,75 +313,49 @@ export interface Subscription {
 }
 
 /**
- * Merchant volume tier.
+ * Protocol fee configuration.
  *
- * Tiers are assigned based on the merchant's 30-day rolling payment volume
- * and grant progressively larger fee reductions.
+ * `bps` is expressed in basis points (1 bps = 0.01%).  A value of `0`
+ * disables the fee module entirely, meaning no extra token transfer occurs.
  */
-export enum MerchantTier {
-  Standard = "Standard",
-  Silver = "Silver",
-  Gold = "Gold",
-  Platinum = "Platinum",
+export interface FeeConfig {
+  /** Address that receives the deducted protocol fee. */
+  recipient: string;
+  /** Fee in basis points (0–10000). `0` disables the fee module. */
+  bps: number;
 }
 
 /**
- * Fee reduction configuration for a single tier.
+ * Parameters for a cross-asset payment.
  *
- * `feeReductionBps` is expressed in basis points (0–10000), where 0 means the
- * full fee is charged and 10000 means the fee is waived entirely.
+ * The payer sends `sendAsset` (up to `sendMax`) and the merchant receives
+ * `destAsset` via a Stellar DEX path payment.  `path` lists intermediate
+ * assets used for conversion; pass an empty array for a direct conversion.
  */
-export interface MerchantTierFeeConfig {
-  tier: MerchantTier;
-  /** Minimum 30-day rolling volume (in base token units) required for this tier. */
-  minVolume: bigint;
-  /** Fee reduction in basis points (0–10000). */
-  feeReductionBps: number;
+export interface CrossAssetPaymentParams {
+  /** Asset the payer sends (e.g. "native" or "CODE:ISSUER"). */
+  sendAsset: string;
+  /** Maximum amount of `sendAsset` the payer is willing to spend. */
+  sendMax: bigint;
+  /** Asset the merchant receives. */
+  destAsset: string;
+  /** Intermediate assets used for the conversion path. */
+  path: string[];
+  /** Minimum amount of `destAsset` the merchant must receive (slippage guard). */
+  minReceive: bigint;
 }
 
-/** Full tier configuration, as managed by the admin. */
-export interface MerchantTierConfig {
-  tiers: MerchantTierFeeConfig[];
-}
-
-/**
- * Read-only tier information for a merchant.
- *
- * `nextTier` and `nextTierThreshold` are `undefined` when the merchant is
- * already at the highest tier.
- */
-export interface MerchantTierInfo {
-  merchant: string;
-  tier: MerchantTier;
-  /** 30-day rolling payment volume used for the tier calculation. */
-  rollingVolume: bigint;
-  /** Fee reduction in basis points currently applied to this merchant. */
-  feeReductionBps: number;
-  nextTier?: MerchantTier;
-  /** Volume required to reach `nextTier`. */
-  nextTierThreshold?: bigint;
-}
-
-/** A single itemised payment row in a settlement report. */
-export interface SettlementLineItem {
+/** Event emitted after a successful cross-asset payment conversion. */
+export interface CrossAssetPaymentEvent {
   orderId: string;
+  merchantAddress: string;
   payer: string;
-  token: string;
-  amount: bigint;
-  fee: bigint;
-  net: bigint;
-  paidAt: bigint;
-  status: PaymentStatus;
-}
-
-/** Aggregated settlement report for a merchant over a date range. */
-export interface SettlementSummary {
-  merchant: string;
-  dateStart: bigint;
-  dateEnd: bigint;
-  lineItems: SettlementLineItem[];
-  totalAmount: bigint;
-  totalFee: bigint;
-  totalNet: bigint;
-  paymentCount: number;
+  sendAsset: string;
+  sendAmount: bigint;
+  destAsset: string;
+  destAmount: bigint;
+  /** Exchange rate used, expressed as destAmount / sendAmount. */
+  exchangeRate: number;
+  path: string[];
+  timestamp: bigint;
 }
