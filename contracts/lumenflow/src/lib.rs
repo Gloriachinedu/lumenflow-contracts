@@ -4430,6 +4430,7 @@ impl PaymentProcessingContract {
             status: SubscriptionStatus::Active,
             cycles_charged: 0,
             last_charged_at: now,
+            next_due_at: now.saturating_add(plan.interval_secs),
             created_at: now,
         };
         storage::set_subscription(&env, &sub);
@@ -4484,23 +4485,22 @@ impl PaymentProcessingContract {
     /// * [`PaymentError::MerchantNotFound`] - the merchant record no longer exists.
     /// * [`PaymentError::MerchantInactive`] - the merchant has been deactivated.
     /// * [`PaymentError::SubscriptionMaxCyclesReached`] - all cycles have been charged.
-    /// * [`PaymentError::SubscriptionIntervalNotElapsed`] - the billing interval
-    ///   has not yet elapsed.
+    /// * [`PaymentError::SubscriptionNotDue`] - `next_due_at` has not yet passed.
     pub fn charge_subscription(
         env: Env,
-        merchant: Address,
         subscription_id: String,
     ) -> Result<(), PaymentError> {
         require_not_paused(&env)?;
-        merchant.require_auth();
 
         let mut sub = storage::get_subscription(&env, &subscription_id)
             .ok_or(PaymentError::SubscriptionNotFound)?;
-        if merchant != sub.merchant {
-            return Err(PaymentError::Unauthorized);
-        }
-        if matches!(sub.status, SubscriptionStatus::Cancelled) {
+        if !matches!(sub.status, SubscriptionStatus::Active) {
             return Err(PaymentError::SubscriptionNotActive);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < sub.next_due_at {
+            return Err(PaymentError::SubscriptionNotDue);
         }
 
         let plan = storage::get_subscription_plan(&env, &sub.plan_id)
@@ -4517,37 +4517,35 @@ impl PaymentProcessingContract {
             return Err(PaymentError::MerchantInactive);
         }
 
-        // Checked before the Completed status so an exhausted subscription
-        // reports MaxCyclesReached rather than the generic NotActive.
-        if sub.cycles_charged >= plan.max_cycles {
-            return Err(PaymentError::SubscriptionMaxCyclesReached);
-        }
-
-        let now = env.ledger().timestamp();
-        if now < sub.last_charged_at.saturating_add(plan.interval_secs) {
-            return Err(PaymentError::SubscriptionIntervalNotElapsed);
-        }
-
-        // Effects before interaction (checks-effects-interactions)
-        sub.cycles_charged += 1;
-        sub.last_charged_at = now;
-        if sub.cycles_charged >= plan.max_cycles {
-            sub.status = SubscriptionStatus::Completed;
-        }
-        storage::set_subscription(&env, &sub);
-
         // transfer_from consumes the allowance; keep the reserve in step
         let reserve = storage::get_subscription_reserve(&env, &sub.subscriber, &plan.token)
             .saturating_sub(plan.amount);
         storage::set_subscription_reserve(&env, &sub.subscriber, &plan.token, reserve);
 
         let token_client = token::Client::new(&env, &plan.token);
-        token_client.transfer_from(
+        let transfer_result = token_client.try_transfer_from(
             &env.current_contract_address(),
             &sub.subscriber,
             &sub.merchant,
             &plan.amount,
         );
+
+        if transfer_result.is_err() {
+            // Insufficient balance / allowance: mark the subscription past due
+            // so off-chain monitors can surface the failure, then report it.
+            sub.status = SubscriptionStatus::PastDue;
+            storage::set_subscription(&env, &sub);
+            return Err(PaymentError::InsufficientBalance);
+        }
+
+        // Effects after a successful interaction.
+        sub.cycles_charged += 1;
+        sub.last_charged_at = now;
+        sub.next_due_at = now.saturating_add(plan.interval_secs);
+        if sub.cycles_charged >= plan.max_cycles {
+            sub.status = SubscriptionStatus::Completed;
+        }
+        storage::set_subscription(&env, &sub);
 
         env.events().publish(
             ("lumenflow", "subscription_charged"),

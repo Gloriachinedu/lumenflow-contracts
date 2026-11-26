@@ -603,6 +603,9 @@ pub enum SubscriptionStatus {
     Active,
     Cancelled,
     Completed,
+    /// A charge attempt failed (e.g. insufficient balance). The subscription
+    /// remains chargeable once the subscriber tops up their balance.
+    PastDue,
 }
 
 #[contracttype]
@@ -628,7 +631,23 @@ pub struct Subscription {
     /// Timestamp the interval is measured from: subscribe time until the first
     /// charge, then the time of the most recent charge.
     pub last_charged_at: u64,
+    /// Timestamp at/after which the next charge is permitted. Advanced by the
+    /// plan interval on every successful charge.
+    pub next_due_at: u64,
     pub created_at: u64,
+}
+
+/// Data payload for `lumenflow/subscription_charged`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubscriptionChargedEvent {
+    pub subscription_id: String,
+    pub merchant: Address,
+    pub subscriber: Address,
+    pub amount: i128,
+    pub token: Address,
+    pub charged_at: u64,
+    pub next_due_at: u64,
 }
 
 // ── Event payload types ───────────────────────────────────────────────────────

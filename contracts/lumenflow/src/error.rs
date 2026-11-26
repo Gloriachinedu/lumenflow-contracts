@@ -162,6 +162,8 @@ pub enum PaymentError {
     SubscriptionMaxCyclesReached = 65,
     /// The required interval between subscription charges has not elapsed. Remediation: Wait for the next billing cycle.
     SubscriptionIntervalNotElapsed = 66,
+    /// The subscription charge was attempted before `next_due_at`. Remediation: Wait until the next billing cycle (when `next_due_at` has passed) before charging again.
+    SubscriptionNotDue = 67,
 
     // Rate limiting
     /// The merchant has exceeded the payment rate limit for the current ledger window. Remediation: Wait for the next rate-limit window (~25 minutes) before submitting more payments.

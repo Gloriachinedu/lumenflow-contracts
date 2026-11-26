@@ -6792,8 +6792,12 @@ fn test_charge_subscription_success() {
         &str(&env, "SUB_1"),
     );
 
+    let sub_before = client.get_subscription(&str(&env, "SUB_1"));
+    let first_due = sub_before.next_due_at;
+
     advance_time(&env, PLAN_INTERVAL);
-    client.charge_subscription(&merchant, &str(&env, "SUB_1"));
+    // Permissionless: any caller may charge once the subscription is due.
+    client.charge_subscription(&str(&env, "SUB_1"));
 
     let events = env.events().all();
     assert!(
@@ -6809,35 +6813,43 @@ fn test_charge_subscription_success() {
     assert_eq!(sub.cycles_charged, 1);
     assert_eq!(sub.status, SubscriptionStatus::Active);
     assert_eq!(sub.last_charged_at, env.ledger().timestamp());
+    // next_due_at must advance by exactly one interval.
+    assert_eq!(sub.next_due_at, first_due + PLAN_INTERVAL);
 }
 
 #[test]
-fn test_charge_subscription_unknown_fails() {
-    // Error 63: SubscriptionNotFound
-    let (env, client, _admin, merchant, _subscriber, _token) = setup_subscription_env();
-    let result = client.try_charge_subscription(&merchant, &str(&env, "NO_SUB"));
-    assert_eq!(result, Err(Ok(PaymentError::SubscriptionNotFound)));
-}
-
-#[test]
-fn test_charge_subscription_wrong_merchant_fails() {
-    let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
+fn test_charge_subscription_permissionless() {
+    let (env, client, _admin, merchant, subscriber, token) = setup_subscription_env();
     client.subscribe(
         &merchant,
         &subscriber,
         &str(&env, "PLAN_1"),
         &str(&env, "SUB_1"),
     );
-    advance_time(&env, PLAN_INTERVAL);
 
-    let stranger = Address::generate(&env);
-    let result = client.try_charge_subscription(&stranger, &str(&env, "SUB_1"));
-    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+    advance_time(&env, PLAN_INTERVAL);
+    // A completely unrelated caller can trigger the charge.
+    let keeper = Address::generate(&env);
+    let _ = keeper;
+    client.charge_subscription(&str(&env, "SUB_1"));
+
+    let token_client = TokenClient::new(&env, &token);
+    assert_eq!(token_client.balance(&merchant), PLAN_AMOUNT);
+    let sub = client.get_subscription(&str(&env, "SUB_1"));
+    assert_eq!(sub.cycles_charged, 1);
+}
+
+#[test]
+fn test_charge_subscription_unknown_fails() {
+    // Error 63: SubscriptionNotFound
+    let (env, client, _admin, _merchant, _subscriber, _token) = setup_subscription_env();
+    let result = client.try_charge_subscription(&str(&env, "NO_SUB"));
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionNotFound)));
 }
 
 #[test]
 fn test_charge_subscription_interval_not_elapsed() {
-    // Error 66: SubscriptionIntervalNotElapsed
+    // Error 66: SubscriptionNotDue
     let (env, client, _admin, merchant, subscriber, _token) = setup_subscription_env();
     client.subscribe(
         &merchant,
@@ -6847,28 +6859,48 @@ fn test_charge_subscription_interval_not_elapsed() {
     );
 
     // Immediately after subscribing
-    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
-    assert_eq!(
-        result,
-        Err(Ok(PaymentError::SubscriptionIntervalNotElapsed))
-    );
+    let result = client.try_charge_subscription(&str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionNotDue)));
 
     // One second short of the interval
     advance_time(&env, PLAN_INTERVAL - 1);
-    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
-    assert_eq!(
-        result,
-        Err(Ok(PaymentError::SubscriptionIntervalNotElapsed))
-    );
+    let result = client.try_charge_subscription(&str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionNotDue)));
 
     // Immediately after a successful charge
     advance_time(&env, 1);
-    client.charge_subscription(&merchant, &str(&env, "SUB_1"));
-    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
-    assert_eq!(
-        result,
-        Err(Ok(PaymentError::SubscriptionIntervalNotElapsed))
+    client.charge_subscription(&str(&env, "SUB_1"));
+    let result = client.try_charge_subscription(&str(&env, "SUB_1"));
+    assert_eq!(result, Err(Ok(PaymentError::SubscriptionNotDue)));
+}
+
+#[test]
+fn test_charge_subscription_insufficient_balance_marks_past_due() {
+    let (env, client, _admin, merchant, subscriber, token) = setup_subscription_env();
+    client.subscribe(
+        &merchant,
+        &subscriber,
+        &str(&env, "PLAN_1"),
+        &str(&env, "SUB_1"),
     );
+
+    // Drain the subscriber's balance so the charge cannot be funded.
+    let token_client = TokenClient::new(&env, &token);
+    let subscriber_balance = token_client.balance(&subscriber);
+    token_client.transfer(
+        &subscriber,
+        &Address::generate(&env),
+        &subscriber_balance,
+    );
+
+    advance_time(&env, PLAN_INTERVAL);
+    let result = client.try_charge_subscription(&str(&env, "SUB_1"));
+    assert!(result.is_err(), "charge must fail without funds");
+
+    let sub = client.get_subscription(&str(&env, "SUB_1"));
+    assert_eq!(sub.status, SubscriptionStatus::PastDue);
+    assert_eq!(sub.cycles_charged, 0);
+    assert_eq!(token_client.balance(&merchant), 0);
 }
 
 #[test]
@@ -6884,7 +6916,7 @@ fn test_charge_subscription_max_cycles_reached() {
 
     for _ in 0..PLAN_MAX_CYCLES {
         advance_time(&env, PLAN_INTERVAL);
-        client.charge_subscription(&merchant, &str(&env, "SUB_1"));
+        client.charge_subscription(&str(&env, "SUB_1"));
     }
 
     let sub = client.get_subscription(&str(&env, "SUB_1"));
@@ -6892,7 +6924,7 @@ fn test_charge_subscription_max_cycles_reached() {
     assert_eq!(sub.status, SubscriptionStatus::Completed);
 
     advance_time(&env, PLAN_INTERVAL);
-    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
+    let result = client.try_charge_subscription(&str(&env, "SUB_1"));
     assert_eq!(result, Err(Ok(PaymentError::SubscriptionMaxCyclesReached)));
 
     // No funds moved beyond the allowed cycles
@@ -6919,7 +6951,7 @@ fn test_charge_subscription_after_cancel_fails() {
     client.cancel_subscription(&subscriber, &str(&env, "SUB_1"));
 
     advance_time(&env, PLAN_INTERVAL);
-    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
+    let result = client.try_charge_subscription(&str(&env, "SUB_1"));
     assert_eq!(result, Err(Ok(PaymentError::SubscriptionNotActive)));
 }
 
@@ -7010,7 +7042,7 @@ fn test_cancel_completed_subscription_fails() {
 
     for _ in 0..PLAN_MAX_CYCLES {
         advance_time(&env, PLAN_INTERVAL);
-        client.charge_subscription(&merchant, &str(&env, "SUB_1"));
+        client.charge_subscription(&str(&env, "SUB_1"));
     }
 
     let result = client.try_cancel_subscription(&subscriber, &str(&env, "SUB_1"));
@@ -7029,7 +7061,7 @@ fn test_charge_subscription_inactive_merchant_fails() {
     client.deactivate_merchant(&admin, &merchant);
 
     advance_time(&env, PLAN_INTERVAL);
-    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
+    let result = client.try_charge_subscription(&str(&env, "SUB_1"));
     assert_eq!(result, Err(Ok(PaymentError::MerchantInactive)));
 
     let token_client = TokenClient::new(&env, &token);
@@ -7039,7 +7071,7 @@ fn test_charge_subscription_inactive_merchant_fails() {
 
     // Reactivation restores charging
     client.reactivate_merchant(&admin, &merchant);
-    client.charge_subscription(&merchant, &str(&env, "SUB_1"));
+    client.charge_subscription(&str(&env, "SUB_1"));
     assert_eq!(token_client.balance(&merchant), PLAN_AMOUNT);
 }
 
@@ -7055,7 +7087,7 @@ fn test_charge_subscription_delisted_token_fails() {
     client.remove_allowed_token(&admin, &token);
 
     advance_time(&env, PLAN_INTERVAL);
-    let result = client.try_charge_subscription(&merchant, &str(&env, "SUB_1"));
+    let result = client.try_charge_subscription(&str(&env, "SUB_1"));
     assert_eq!(result, Err(Ok(PaymentError::TokenNotAllowed)));
 
     let sub = client.get_subscription(&str(&env, "SUB_1"));
