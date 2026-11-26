@@ -244,10 +244,33 @@ stellar contract invoke --id $CONTRACT_ID --source-account $PAYER_KEY --network 
 |-------|-------|
 | `InvalidAmount` | `amount` ≤ 0 |
 | `InvalidInput` | `order_id` empty or `unlock_at` ≤ current timestamp |
+| `LockPeriodTooShort` | `unlock_at - created_at < MIN_LOCK_SECS` (see below) |
 | `TokenNotAllowed` | `token` not on the allow-list |
 | `EscrowAlreadyExists` | An escrow with `order_id` already exists |
 | `MerchantNotFound` | No merchant registered at `merchant` |
 | `MerchantInactive` | Merchant has been deactivated |
+
+#### Minimum lock period
+
+To prevent a payer and merchant from colluding to create and immediately
+release an escrow in the same ledger (bypassing the intended time lock), the
+contract enforces a minimum lock period between creation and `unlock_at`.
+
+- `MIN_LOCK_SECS` is a contract constant, defaulting to **3600** (1 hour).
+- `create_escrow` returns `PaymentError::LockPeriodTooShort` when
+  `unlock_at - created_at < MIN_LOCK_SECS`.
+- An `unlock_at` exactly `MIN_LOCK_SECS` after creation is accepted; one second
+  less is rejected.
+- Admins can override the minimum per merchant via `set_escrow_min_lock`:
+
+```bash
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- set_escrow_min_lock \
+  --merchant $MERCHANT_ADDR \
+  --min_lock_secs 7200
+```
+
+When no per-merchant override is set, `MIN_LOCK_SECS` applies.
 
 ---
 
@@ -348,6 +371,32 @@ cancel_before_lock  release_escrow
 | `lumenflow/escrow_created` | `create_escrow` succeeds | `(order_id, amount)` |
 | `lumenflow/escrow_released` | `release_escrow` succeeds | `(order_id, amount)` |
 | `lumenflow/escrow_cancelled` | `cancel_escrow_before_lock` succeeds | `(order_id, amount)` |
+| `lumenflow/escrow_expiry_warning` | Any escrow query where `unlock_at - current_time <= WARNING_LEAD_TIME` | `(order_id, merchant, unlock_at)` |
+
+### Expiry warning
+
+Escrows auto-cancel at `unlock_at` without further notice, so merchants can
+miss the window to release funds proactively. The contract emits
+`EscrowExpiryWarningEvent` (`lumenflow/escrow_expiry_warning`) whenever an
+escrow is queried and its remaining lock time is at or below the configured
+lead time:
+
+```
+unlock_at - current_time <= WARNING_LEAD_TIME
+```
+
+- `WARNING_LEAD_TIME` defaults to **86400** seconds (24 hours).
+- Admins can change it via `set_escrow_warning_lead_time`:
+
+```bash
+stellar contract invoke --id $CONTRACT_ID --source-account $ADMIN_KEY --network $NETWORK \
+  -- set_escrow_warning_lead_time \
+  --lead_time_secs 43200
+```
+
+- The SDK exposes the event in `eventCatalog.ts` as
+  `escrow_expiry_warning`, and the off-chain event poller surfaces it as a
+  webhook event so merchants can act before auto-cancellation.
 
 ---
 
@@ -389,3 +438,4 @@ Full error codes and remediation steps: [`docs/errors.md`](errors.md).
 | 103 | `EscrowAlreadyFinalised` | Escrow is complete; no further action needed |
 | 104 | `EscrowUnauthorised` | Only the payer can cancel |
 | 105 | `EscrowLockExpired` | Timeout passed; call `escrow_release` instead |
+| 106 | `LockPeriodTooShort` | Set `unlock_at` at least `MIN_LOCK_SECS` (or the merchant override) after creation |

@@ -27,10 +27,24 @@
 #   MULTISIG_SIGNER_TX_XDRS — JSON array of five pre-signed sign_multisig_payment
 #                     transaction envelopes for the same payment and unique signers
 #   MULTISIG_THRESHOLD — signatures required for the multisig payment (default: 3)
+#   DB_LOAD_TEST_URL — base URL of the off-chain service exposing the
+#                     database-backed webhook/event endpoints (default:
+#                     http://localhost:8080). Used by the Issue #1628
+#                     connection-pool scenario.
+#   DB_LOAD_TEST_PATH — path of the database-backed endpoint to exercise
+#                     (default: /api/v1/events)
+#   DB_LOAD_VUS     — concurrent requests for the DB pool scenario (default: 500)
 #
 # Pass/fail thresholds:
 #   p99 latency < 5 000 ms
 #   error rate  < 1 %
+#
+# Issue #1578: when WEBHOOK_RELAY_URL is provided, a "webhook_relay" scenario
+# drives WEBHOOK_EVENTS_PER_MIN events/minute for WEBHOOK_DURATION, measures
+# P99 delivery latency and dropped events, and fails if P99 >= 2 000 ms, any
+# event is dropped, or P99 regresses more than 20% over WEBHOOK_BASELINE_P99_MS.
+# The JSON report includes webhook_relay.latency_p99_ms for baseline comparison.
+=======
 #
 # Issue #1084: a second scenario ("concurrent_batch_payments") simulates
 # BATCH_CLIENTS concurrent clients each submitting a single batch_payment
@@ -41,6 +55,12 @@
 # Issue #1276: when MULTISIG_SIGNER_TX_XDRS is provided, five concurrent k6 VUs
 # submit pre-signed sign_multisig_payment transactions and wait for finality.
 # This requires funded signer accounts and an already initiated payment.
+#
+# Issue #1628: a third scenario ("db_connection_pool") fires DB_LOAD_VUS
+# (default 500) concurrent requests at the off-chain service's database-backed
+# endpoint to verify the connection pool (min 2 / max 20) does not exhaust
+# under load. It fails if any connection-pool error is observed or if the
+# error rate exceeds 1%.
 #
 # Results are printed to stdout and written to RESULTS_FILE in JSON format.
 set -euo pipefail
@@ -71,6 +91,9 @@ BATCH_ITEMS="${BATCH_ITEMS:-10}"
 BASELINE_P95_MS="${BASELINE_P95_MS:-1200}"
 MULTISIG_SIGNER_TX_XDRS="${MULTISIG_SIGNER_TX_XDRS:-}"
 MULTISIG_THRESHOLD="${MULTISIG_THRESHOLD:-3}"
+DB_LOAD_TEST_URL="${DB_LOAD_TEST_URL:-http://localhost:8080}"
+DB_LOAD_TEST_PATH="${DB_LOAD_TEST_PATH:-/api/v1/events}"
+DB_LOAD_VUS="${DB_LOAD_VUS:-500}"
 
 echo "════════════════════════════════════════════════════════════════"
 echo "  LumenFlow Load Test — High-Frequency Payment Submission"
@@ -83,6 +106,7 @@ echo "  Payments/VU:  $PAYMENTS_PER_VU"
 echo "  Total:        $((VUS * PAYMENTS_PER_VU)) payment submissions"
 echo "  Batch scenario: $BATCH_CLIENTS concurrent clients x $BATCH_ITEMS items"
 echo "  Baseline P95: ${BASELINE_P95_MS}ms (batch scenario, 20% regression gate)"
+echo "  DB pool scenario: $DB_LOAD_VUS concurrent requests -> ${DB_LOAD_TEST_URL}${DB_LOAD_TEST_PATH}"
 echo "  Results file: $RESULTS_FILE"
 echo "════════════════════════════════════════════════════════════════"
 echo ""
@@ -112,7 +136,7 @@ cat > "$K6_SCRIPT" <<'K6_EOF'
 
 import http from 'k6/http';
 import { check, sleep } from 'k6';
-import { Trend, Rate } from 'k6/metrics';
+import { Trend, Rate, Counter } from 'k6/metrics';
 
 // ── Custom metrics ──────────────────────────────────────────────────────────
 const paymentDuration = new Trend('lumenflow_payment_duration', true);
@@ -123,6 +147,11 @@ const batchPaymentDuration = new Trend('lumenflow_batch_payment_duration', true)
 const batchPaymentErrors   = new Rate('lumenflow_batch_payment_error_rate');
 const multisigSignerDuration = new Trend('lumenflow_multisig_signer_duration', true);
 const multisigSignerErrors = new Rate('lumenflow_multisig_signer_error_rate');
+
+// Issue #1628 — database connection pool scenario metrics
+const dbRequestDuration = new Trend('lumenflow_db_request_duration', true);
+const dbRequestErrors   = new Rate('lumenflow_db_request_error_rate');
+const dbPoolErrors      = new Rate('lumenflow_db_pool_error_rate');
 
 const RPC_URL     = __ENV.RPC_URL     || 'https://soroban-testnet.stellar.org';
 const CONTRACT_ID = __ENV.CONTRACT_ID || '';
@@ -147,6 +176,24 @@ if (MULTISIG_ENABLED && new Set(MULTISIG_SIGNER_TX_XDRS).size !== MULTISIG_SIGNE
 // recorded baseline (docs/benchmarking.md — "Load Test Baseline") by >20%.
 const BASELINE_P95_MS = parseFloat(__ENV.BASELINE_P95_MS) || 1200;
 const BATCH_P95_GATE_MS = BASELINE_P95_MS * 1.2;
+
+// Issue #1628 — DB connection pool scenario configuration
+const DB_LOAD_TEST_URL  = __ENV.DB_LOAD_TEST_URL  || 'http://localhost:8080';
+const DB_LOAD_TEST_PATH = __ENV.DB_LOAD_TEST_PATH || '/api/v1/events';
+const DB_LOAD_VUS       = parseInt(__ENV.DB_LOAD_VUS) || 500;
+const DB_REQUEST_TIMEOUT = '10s';
+// Substrings that indicate the connection pool was exhausted / a query was
+// killed by the 5s query timeout rather than a genuine application error.
+const DB_POOL_ERROR_MARKERS = [
+  'connection pool',
+  'pool exhausted',
+  'too many connections',
+  'connection timeout',
+  'timed out acquiring',
+  'query timeout',
+  'statement timeout',
+  'canceling statement',
+];
 
 // ── Test configuration ──────────────────────────────────────────────────────
 export const options = {
@@ -179,6 +226,16 @@ export const options = {
         maxDuration: '5m',
       },
     } : {}),
+    // Issue #1628 — 500 concurrent requests against the DB-backed endpoint
+    // to verify the connection pool (min 2 / max 20) does not exhaust.
+    db_connection_pool: {
+      executor: 'per-vu-iterations',
+      exec: 'dbConnectionPool',
+      vus: DB_LOAD_VUS,
+      iterations: 1,
+      startTime: '0s',
+      maxDuration: '5m',
+    },
   },
   summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(20)', 'p(40)', 'p(50)', 'p(60)', 'p(80)', 'p(90)', 'p(95)', 'p(99)', 'p(100)'],
   thresholds: {
@@ -198,6 +255,11 @@ export const options = {
       'lumenflow_multisig_signer_error_rate': ['rate<0.01'],
       'lumenflow_multisig_signer_duration': ['p(99)<30000'],
     } : {}),
+    // DB pool scenario: no connection-pool errors at all, error rate < 1%,
+    // and p99 latency under the 5s query timeout budget.
+    'lumenflow_db_pool_error_rate': ['rate==0'],
+    'lumenflow_db_request_error_rate': ['rate<0.01'],
+    'lumenflow_db_request_duration': ['p(99)<5000'],
   },
 };
 
@@ -378,6 +440,37 @@ export function concurrentMultisigSigner() {
   }
 }
 
+// ── Scenario: db_connection_pool (Issue #1628) ───────────────────────────────
+// Each of DB_LOAD_VUS virtual users issues one request to the off-chain
+// service's database-backed endpoint. Responses are inspected for
+// connection-pool exhaustion markers so the test fails loudly if the pool
+// (min 2 / max 20) is starved under load.
+export function dbConnectionPool() {
+  const vuId = __VU;
+  const url = `${DB_LOAD_TEST_URL}${DB_LOAD_TEST_PATH}?vu=${vuId}&ts=${Date.now()}`;
+
+  const start = Date.now();
+  const response = http.get(url, {
+    headers: { 'Content-Type': 'application/json' },
+    timeout: DB_REQUEST_TIMEOUT,
+  });
+  const elapsed = Date.now() - start;
+
+  dbRequestDuration.add(elapsed);
+
+  const body = (response.body || '').toLowerCase();
+  const poolError = DB_POOL_ERROR_MARKERS.some((marker) => body.includes(marker));
+  dbPoolErrors.add(poolError);
+
+  const ok = check(response, {
+    'db status is 2xx':       (r) => r.status >= 200 && r.status < 300,
+    'db no network error':    (r) => r.status !== 0,
+    'db no pool exhaustion':  () => !poolError,
+  });
+
+  dbRequestErrors.add(!ok);
+}
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 export function handleSummary(data) {
   const p50  = Math.round(data.metrics.http_req_duration?.values?.['p(50)'] ?? 0);
@@ -407,7 +500,18 @@ export function handleSummary(data) {
     multisigSignerCount === MULTISIG_SIGNERS && parseFloat(multisigErrorRate) === 0
   );
 
-  const passed = p99 < 5000 && parseFloat(errRate) < 1.0 && batchPassed && multisigPassed;
+  // Issue #1628 — DB connection pool scenario metrics
+  const dbRequestCount = data.metrics.lumenflow_db_request_duration?.values?.count ?? 0;
+  const dbP95 = Math.round(data.metrics.lumenflow_db_request_duration?.values?.['p(95)'] ?? 0);
+  const dbP99 = Math.round(data.metrics.lumenflow_db_request_duration?.values?.['p(99)'] ?? 0);
+  const dbErrRate = ((data.metrics.lumenflow_db_request_error_rate?.values?.rate ?? 0) * 100).toFixed(2);
+  const dbPoolErrRate = ((data.metrics.lumenflow_db_pool_error_rate?.values?.rate ?? 0) * 100).toFixed(2);
+  const dbPoolPassed = dbRequestCount > 0
+    && parseFloat(dbPoolErrRate) === 0
+    && parseFloat(dbErrRate) < 1.0
+    && dbP99 < 5000;
+
+  const passed = p99 < 5000 && parseFloat(errRate) < 1.0 && batchPassed && multisigPassed && dbPoolPassed;
   const status = passed ? '✅ PASSED' : '❌ FAILED';
 
   const summary = [
@@ -437,6 +541,14 @@ export function handleSummary(data) {
     `  Threshold completion: ${multisigThresholdCompletionMs} ms (threshold-th successful signer)`,
     `  Successful signers: ${multisigSignerCount} / ${MULTISIG_ENABLED ? MULTISIG_SIGNERS : 0}`,
     `  Signer error rate: ${multisigErrorRate}%`,
+    '',
+    '  -- DB connection pool (Issue #1628) --',
+    `  Concurrent requests: ${DB_LOAD_VUS} -> ${DB_LOAD_TEST_URL}${DB_LOAD_TEST_PATH}`,
+    `  Requests completed:  ${dbRequestCount}`,
+    `  p95 latency:  ${dbP95} ms`,
+    `  p99 latency:  ${dbP99} ms  (threshold: < 5000 ms)`,
+    `  Error rate:   ${dbErrRate}%  (threshold: < 1%)`,
+    `  Pool errors:  ${dbPoolErrRate}%  (threshold: 0% — no connection exhaustion)`,
     '════════════════════════════════════════════════════════════════',
     '',
   ].join('\n');
@@ -471,6 +583,16 @@ export function handleSummary(data) {
       error_rate_pct: parseFloat(multisigErrorRate),
       passed: multisigPassed,
     },
+    db_connection_pool: {
+      url: `${DB_LOAD_TEST_URL}${DB_LOAD_TEST_PATH}`,
+      concurrent_requests: DB_LOAD_VUS,
+      requests_completed: dbRequestCount,
+      latency_p95_ms: dbP95,
+      latency_p99_ms: dbP99,
+      error_rate_pct: parseFloat(dbErrRate),
+      pool_error_rate_pct: parseFloat(dbPoolErrRate),
+      passed: dbPoolPassed,
+    },
     passed,
   }, null, 2);
 
@@ -497,6 +619,9 @@ k6 run \
   --env BASELINE_P95_MS="$BASELINE_P95_MS" \
   --env MULTISIG_SIGNER_TX_XDRS="$MULTISIG_SIGNER_TX_XDRS" \
   --env MULTISIG_THRESHOLD="$MULTISIG_THRESHOLD" \
+  --env DB_LOAD_TEST_URL="$DB_LOAD_TEST_URL" \
+  --env DB_LOAD_TEST_PATH="$DB_LOAD_TEST_PATH" \
+  --env DB_LOAD_VUS="$DB_LOAD_VUS" \
   --env RESULTS_FILE="$RESULTS_FILE" \
   --summary-export="$RESULTS_FILE" \
   "$K6_SCRIPT"

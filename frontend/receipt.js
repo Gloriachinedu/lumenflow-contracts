@@ -106,6 +106,14 @@ function refundStatusIcon(status) {
   return { Pending: '⏳', Approved: '✔', Rejected: '✗', Completed: '✅' }[status] || '•';
 }
 
+/**
+ * Escapes a string for safe insertion into HTML text/attribute contexts.
+ * Retained for any future unavoidable HTML string building; prefer
+ * textContent/createElement wherever possible (issue #1531).
+ *
+ * @param {*} str
+ * @returns {string}
+ */
 function escapeHtml(str) {
   return String(str ?? '')
     .replace(/&/g, '&amp;')
@@ -115,37 +123,47 @@ function escapeHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
+/**
+ * Builds a refund timeline element using DOM APIs only.
+ * Contract-derived values (dates) are inserted via textContent to prevent
+ * stored XSS (issue #1531).
+ *
+ * @param {object} r - refund record
+ * @returns {HTMLElement}
+ */
 function buildRefundTimeline(r) {
-  const steps = [];
+  const timeline = document.createElement('div');
+  timeline.className = 'refund-timeline';
+
+  const addStep = (cls, icon, text) => {
+    const step = document.createElement('div');
+    step.className = 'timeline-step ' + cls;
+    const em = document.createElement('em');
+    em.className = 'refund-status-icon';
+    em.textContent = icon;
+    step.appendChild(em);
+    step.appendChild(document.createTextNode(' ' + text));
+    timeline.appendChild(step);
+  };
 
   // Step 1 — always present: submitted
-  steps.push(`<div class="timeline-step step-status-approved">
-    <em class="refund-status-icon">📩</em> Submitted — ${formatDate(r.created_at)}
-  </div>`);
+  addStep('step-status-approved', '📩', 'Submitted — ' + formatDate(r.created_at));
 
   // Step 2 — middle state
   if (r.status === 'Completed' || r.status === 'Approved') {
-    steps.push(`<div class="timeline-step step-status-approved">
-      <em class="refund-status-icon">✔</em> Approved
-    </div>`);
+    addStep('step-status-approved', '✔', 'Approved');
   } else if (r.status === 'Rejected') {
-    steps.push(`<div class="timeline-step step-status-rejected">
-      <em class="refund-status-icon">✗</em> Rejected
-    </div>`);
+    addStep('step-status-rejected', '✗', 'Rejected');
   } else {
-    steps.push(`<div class="timeline-step step-status-pending">
-      <em class="refund-status-icon">⏳</em> Awaiting merchant review
-    </div>`);
+    addStep('step-status-pending', '⏳', 'Awaiting merchant review');
   }
 
   // Step 3 — completed transfer
   if (r.status === 'Completed' && r.executed_at) {
-    steps.push(`<div class="timeline-step step-status-completed">
-      <em class="refund-status-icon">✅</em> Refund transferred — ${formatDate(r.executed_at)}
-    </div>`);
+    addStep('step-status-completed', '✅', 'Refund transferred — ' + formatDate(r.executed_at));
   }
 
-  return `<div class="refund-timeline">${steps.join('')}</div>`;
+  return timeline;
 }
 
 // ── Data fetching ─────────────────────────────────────────────────────────────
@@ -215,7 +233,44 @@ async function fetchPayment(orderId) {
       ? { name: payment.merchant_address, verified: false }
       : scValToNative(mResult.result.retval);
 
-    return { payment, merchant, refunds: [] };
+    // Payer-facing summary (issue #1629).  The payer address is used only
+    // transiently as a contract argument and is never rendered.
+    const payerSummary = await fetchPayerSummary(server, contract, rawPayment.payer);
+
+    return { payment, merchant, refunds: [], payerSummary };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch the payer's aggregated payment stats via `get_payer_payment_summary`.
+ * Public read — no auth required.  Returns null if unavailable.
+ *
+ * @param {object} server   - SorobanRpc.Server instance
+ * @param {object} contract - Contract instance
+ * @param {string} payer    - payer address
+ * @returns {Promise<{ total_paid, total_refunded, total_pending, payment_count }|null>}
+ */
+async function fetchPayerSummary(server, contract, payer) {
+  if (!payer) return null;
+  try {
+    const { SorobanRpc, nativeToScVal, scValToNative } =
+      await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
+
+    const payerArg = nativeToScVal(payer, { type: 'address' });
+    const result = await server.simulateTransaction(
+      contract.call('get_payer_payment_summary', payerArg)
+    );
+    if (SorobanRpc.Api.isSimulationError(result)) return null;
+
+    const raw = scValToNative(result.result.retval);
+    return {
+      total_paid:     raw.total_paid,
+      total_refunded: raw.total_refunded,
+      total_pending:  raw.total_pending,
+      payment_count:  raw.payment_count,
+    };
   } catch {
     return null;
   }
@@ -236,6 +291,12 @@ function getDemoData(orderId) {
       paid_at:          BigInt(Math.floor(Date.now() / 1000) - 3600),
     },
     merchant: { name: 'Demo Store', verified: true },
+    payerSummary: {
+      total_paid:     50000000n,
+      total_refunded: 5000000n,
+      total_pending:  10000000n,
+      payment_count:  1,
+    },
     refunds: [
       {
         refund_id:   'REFUND_001',
@@ -266,7 +327,23 @@ function getDemoData(orderId) {
 
 // ── Render ────────────────────────────────────────────────────────────────────
 
-function renderReceipt({ payment, merchant, refunds }) {
+function renderPayerSummary(summary) {
+  const section = document.getElementById('payer-summary-section');
+  if (!section) return;
+  if (!summary) {
+    section.style.display = 'none';
+    return;
+  }
+
+  document.getElementById('payer-total-paid').textContent     = formatAmount(summary.total_paid) + ' XLM';
+  document.getElementById('payer-total-refunded').textContent = formatAmount(summary.total_refunded) + ' XLM';
+  document.getElementById('payer-total-pending').textContent  = formatAmount(summary.total_pending) + ' XLM';
+  document.getElementById('payer-payment-count').textContent  = String(summary.payment_count ?? 0);
+
+  section.style.display = 'block';
+}
+
+function renderReceipt({ payment, merchant, refunds, payerSummary }) {
   document.getElementById('field-order-id').textContent      = payment.order_id;
   document.getElementById('field-merchant-name').textContent = merchant.name || payment.merchant_address;
   document.getElementById('field-amount').textContent        = formatAmount(payment.amount) + ' XLM';
@@ -287,22 +364,60 @@ function renderReceipt({ payment, merchant, refunds }) {
     refunds.forEach(r => {
       const item = document.createElement('div');
       item.className = 'refund-item';
-      item.innerHTML = `
-        <div class="refund-row">
-          <span><strong>${r.refund_id}</strong></span>
-          <span><strong>${formatAmount(r.amount)} XLM</strong></span>
-        </div>
-        <div class="refund-row">
-          <span>${refundStatusLabel(r.status)}</span>
-        </div>
-        <div class="refund-meta">
-          <div><strong>Reason:</strong> ${r.reason || '—'}</div>
-          ${r.executed_at ? `<div><strong>Processed:</strong> ${formatDate(r.executed_at)}</div>` : ''}
-        </div>`;
+
+      // All contract-derived values are inserted via textContent to prevent
+      // stored XSS (issue #1531). No innerHTML is used here.
+      const row1 = document.createElement('div');
+      row1.className = 'refund-row';
+
+      const idSpan = document.createElement('span');
+      const idStrong = document.createElement('strong');
+      idStrong.textContent = r.refund_id ?? '';
+      idSpan.appendChild(idStrong);
+
+      const amountSpan = document.createElement('span');
+      const amountStrong = document.createElement('strong');
+      amountStrong.textContent = formatAmount(r.amount) + ' XLM';
+      amountSpan.appendChild(amountStrong);
+
+      row1.appendChild(idSpan);
+      row1.appendChild(amountSpan);
+
+      const row2 = document.createElement('div');
+      row2.className = 'refund-row';
+      const statusSpan = document.createElement('span');
+      statusSpan.textContent = refundStatusLabel(r.status);
+      row2.appendChild(statusSpan);
+
+      const meta = document.createElement('div');
+      meta.className = 'refund-meta';
+
+      const reasonDiv = document.createElement('div');
+      const reasonLabel = document.createElement('strong');
+      reasonLabel.textContent = 'Reason:';
+      reasonDiv.appendChild(reasonLabel);
+      reasonDiv.appendChild(document.createTextNode(' ' + (r.reason || '—')));
+
+      meta.appendChild(reasonDiv);
+
+      if (r.executed_at) {
+        const processedDiv = document.createElement('div');
+        const processedLabel = document.createElement('strong');
+        processedLabel.textContent = 'Processed:';
+        processedDiv.appendChild(processedLabel);
+        processedDiv.appendChild(document.createTextNode(' ' + formatDate(r.executed_at)));
+        meta.appendChild(processedDiv);
+      }
+
+      item.appendChild(row1);
+      item.appendChild(row2);
+      item.appendChild(meta);
       list.appendChild(item);
     });
     document.getElementById('refunds-section').style.display = 'block';
   }
+
+  renderPayerSummary(payerSummary);
 
   document.getElementById('receipt-content').style.display = 'block';
 }
@@ -327,6 +442,7 @@ function copyLink() {
     return;
   }
 
+  // document.title is a text sink (not parsed as HTML), so interpolation is safe.
   document.title = `Receipt ${orderId} – LumenFlow`;
   document.getElementById('loading').style.display = 'block';
 

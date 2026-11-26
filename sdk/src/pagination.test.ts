@@ -1,4 +1,10 @@
-import { fetchAllPages, fetchAllPayments, PaginatedPage } from './pagination';
+import {
+  fetchAllPages,
+  fetchAllPayments,
+  paginatePayments,
+  paginateMerchants,
+  PaginatedPage,
+} from './pagination';
 import { LumenFlowError, PaymentErrorCode } from './errors';
 
 describe('fetchAllPages', () => {
@@ -50,5 +56,131 @@ describe('fetchAllPayments', () => {
     const results = await fetchAllPayments(fetchPage);
     expect(results).toEqual(['a']);
     expect(fetchPage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('paginatePayments', () => {
+  it('yields all records from a single page', async () => {
+    const fetchPage = jest.fn().mockResolvedValue({ items: ['a', 'b'], nextCursor: null });
+    const results: string[] = [];
+    for await (const record of paginatePayments({ fetchPage })) {
+      results.push(record);
+    }
+    expect(results).toEqual(['a', 'b']);
+    expect(fetchPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('transparently fetches all pages and yields individual records', async () => {
+    const fetchPage = jest
+      .fn()
+      .mockResolvedValueOnce({ items: ['a', 'b'], nextCursor: 'cursor-1' })
+      .mockResolvedValueOnce({ items: ['c'], nextCursor: 'cursor-2' })
+      .mockResolvedValueOnce({ items: ['d', 'e'], nextCursor: null });
+
+    const results: string[] = [];
+    for await (const record of paginatePayments({ fetchPage })) {
+      results.push(record);
+    }
+
+    expect(results).toEqual(['a', 'b', 'c', 'd', 'e']);
+    expect(fetchPage).toHaveBeenCalledTimes(3);
+    expect(fetchPage).toHaveBeenNthCalledWith(1, null);
+    expect(fetchPage).toHaveBeenNthCalledWith(2, 'cursor-1');
+    expect(fetchPage).toHaveBeenNthCalledWith(3, 'cursor-2');
+  });
+
+  it('yields nothing for an empty result', async () => {
+    const fetchPage = jest.fn().mockResolvedValue({ items: [], nextCursor: null });
+    const results: string[] = [];
+    for await (const record of paginatePayments({ fetchPage })) {
+      results.push(record);
+    }
+    expect(results).toEqual([]);
+    expect(fetchPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates a typed LumenFlowError thrown mid-pagination', async () => {
+    const error = new LumenFlowError(
+      PaymentErrorCode.NetworkError,
+      'network failed mid-pagination',
+    );
+    const fetchPage = jest
+      .fn()
+      .mockResolvedValueOnce({ items: ['a'], nextCursor: 'cursor-1' })
+      .mockRejectedValueOnce(error);
+
+    const results: string[] = [];
+    await expect(
+      (async () => {
+        for await (const record of paginatePayments({ fetchPage })) {
+          results.push(record);
+        }
+      })(),
+    ).rejects.toBeInstanceOf(LumenFlowError);
+
+    expect(results).toEqual(['a']);
+    expect(fetchPage).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('paginateMerchants', () => {
+  it('yields all records from a single page', async () => {
+    const fetchPage = jest.fn().mockResolvedValue({ items: ['m1', 'm2'], nextCursor: null });
+    const results: string[] = [];
+    for await (const record of paginateMerchants({ fetchPage })) {
+      results.push(record);
+    }
+    expect(results).toEqual(['m1', 'm2']);
+    expect(fetchPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('transparently fetches all pages and yields individual records', async () => {
+    const fetchPage = jest
+      .fn()
+      .mockResolvedValueOnce({ items: ['m1'], nextCursor: 'cursor-1' })
+      .mockResolvedValueOnce({ items: ['m2', 'm3'], nextCursor: null });
+
+    const results: string[] = [];
+    for await (const record of paginateMerchants({ fetchPage })) {
+      results.push(record);
+    }
+
+    expect(results).toEqual(['m1', 'm2', 'm3']);
+    expect(fetchPage).toHaveBeenCalledTimes(2);
+    expect(fetchPage).toHaveBeenNthCalledWith(1, null);
+    expect(fetchPage).toHaveBeenNthCalledWith(2, 'cursor-1');
+  });
+
+  it('yields nothing for an empty result', async () => {
+    const fetchPage = jest.fn().mockResolvedValue({ items: [], nextCursor: null });
+    const results: string[] = [];
+    for await (const record of paginateMerchants({ fetchPage })) {
+      results.push(record);
+    }
+    expect(results).toEqual([]);
+    expect(fetchPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates a typed LumenFlowError thrown mid-pagination', async () => {
+    const error = new LumenFlowError(
+      PaymentErrorCode.NetworkError,
+      'network failed mid-pagination',
+    );
+    const fetchPage = jest
+      .fn()
+      .mockResolvedValueOnce({ items: ['m1'], nextCursor: 'cursor-1' })
+      .mockRejectedValueOnce(error);
+
+    const results: string[] = [];
+    await expect(
+      (async () => {
+        for await (const record of paginateMerchants({ fetchPage })) {
+          results.push(record);
+        }
+      })(),
+    ).rejects.toBeInstanceOf(LumenFlowError);
+
+    expect(results).toEqual(['m1']);
+    expect(fetchPage).toHaveBeenCalledTimes(2);
   });
 });

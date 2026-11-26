@@ -33,12 +33,54 @@ const { buildValidator, conformingBody } = require('./lib/schema-validator');
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const SPEC_PATH = path.join(REPO_ROOT, 'docs/openapi.yaml');
 const CONTRACT_LIB = path.join(REPO_ROOT, 'contracts/lumenflow/src/lib.rs');
+const MOCK_SERVER_DIR = path.join(REPO_ROOT, 'tests/mock-server');
 
 const spec = parseSpec(fs.readFileSync(SPEC_PATH, 'utf8'));
 const operations = Object.values(spec.paths);
 const contractFns = new Set(
   [...fs.readFileSync(CONTRACT_LIB, 'utf8').matchAll(/pub fn ([a-z_]+)\s*\(/g)].map((m) => m[1]),
 );
+
+/**
+ * Collect the routes implemented by the mock server in `tests/mock-server`.
+ *
+ * The mock server registers routes with `app.post('/contract/<method>', ...)`
+ * (and occasionally `router.post(...)` / `server.post(...)`). We scan every
+ * `.js` file under the mock-server directory for those registrations and
+ * return the set of `/contract/<method>` paths that are actually served.
+ *
+ * Exported so the CI workflow (and any other tooling) can consume the list of
+ * implemented routes without duplicating the parsing logic.
+ *
+ * @param {string} [dir] directory to scan (defaults to tests/mock-server)
+ * @returns {string[]} sorted list of implemented `/contract/<method>` routes
+ */
+function listImplementedRoutes(dir = MOCK_SERVER_DIR) {
+  const routes = new Set();
+  if (!fs.existsSync(dir)) return [];
+
+  const walk = (current) => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === 'node_modules') continue;
+        walk(full);
+      } else if (entry.isFile() && entry.name.endsWith('.js')) {
+        const source = fs.readFileSync(full, 'utf8');
+        // Match `<app|router|server>.post('/contract/<method>', ...)`.
+        const re = /\.(?:post|get|put|patch|delete)\(\s*['"`](\/contract\/[A-Za-z0-9_]+)['"`]/g;
+        for (const match of source.matchAll(re)) routes.add(match[1]);
+      }
+    }
+  };
+
+  walk(dir);
+  return [...routes].sort();
+}
+
+const implementedRoutes = new Set(listImplementedRoutes());
+
+module.exports = { listImplementedRoutes };
 
 // ─── 0. sanity ────────────────────────────────────────────────────────────────
 
@@ -179,7 +221,41 @@ test('enum-constrained fields reject out-of-set values', () => {
   }
 });
 
-// ─── 5. negative — the extractor guards itself ───────────────────────────────
+// ─── 5. mock-server drift — spec vs. implemented routes ──────────────────────
+
+test('every spec operation is implemented by the mock server', async (t) => {
+  for (const op of operations) {
+    await t.test(op.path, () => {
+      assert.ok(
+        implementedRoutes.has(op.path),
+        `${op.path} is declared in docs/openapi.yaml but has no route in tests/mock-server`,
+      );
+    });
+  }
+});
+
+test('every mock-server route is declared in the spec (warning)', (t) => {
+  const specPaths = new Set(operations.map((o) => o.path));
+  const missing = [...implementedRoutes].filter((route) => !specPaths.has(route));
+  if (missing.length > 0) {
+    t.diagnostic(
+      `warning: ${missing.length} mock-server route(s) missing from docs/openapi.yaml: ${missing.join(', ')}`,
+    );
+  }
+  // A missing spec entry is a warning, not a failure — the spec is the contract
+  // and may legitimately lag behind experimental mock routes.
+  assert.ok(true);
+});
+
+test('listImplementedRoutes returns the mock-server routes', () => {
+  const routes = listImplementedRoutes();
+  assert.ok(Array.isArray(routes));
+  for (const route of routes) {
+    assert.match(route, /^\/contract\/[A-Za-z0-9_]+$/);
+  }
+});
+
+// ─── 6. negative — the extractor guards itself ───────────────────────────────
 
 test('parseSpec throws on a spec with no paths', () => {
   assert.throws(() => parseSpec('openapi: 3.0.3\ncomponents:\n  schemas:\n    Foo:\n      type: object\n'));

@@ -77,42 +77,68 @@ echo "==> Canary contract ID saved to canary-contract-id.txt"
 echo ""
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  Next steps"
+echo "  Automated smoke tests + promotion gate"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "1. Initialise the canary admin (same as stable):"
+echo "==> Running smoke tests via canary-health-check.sh..."
+echo "    Promotion to full production runs only if all smoke tests exit 0."
 echo ""
-echo "   stellar contract invoke \\"
-echo "     --id $CANARY_CONTRACT_ID \\"
-echo "     --source-account \$SOURCE_ACCOUNT \\"
-echo "     --network $NETWORK \\"
-echo "     -- set_admin --admin <ADMIN_ADDRESS>"
-echo ""
-echo "2. Update the router contract to point to this canary:"
-echo ""
-echo "   stellar contract invoke \\"
-echo "     --id \$ROUTER_CONTRACT_ID \\"
-echo "     --source-account \$SOURCE_ACCOUNT \\"
-echo "     --network $NETWORK \\"
-echo "     -- set_canary_contract --canary_id $CANARY_CONTRACT_ID"
-echo ""
-echo "   NOTE: 5% traffic routing to the canary requires the router contract"
-echo "   (contracts/router/) to be deployed and configured. The router reads"
-echo "   the CANARY_WEIGHT storage key (default: 5 = 5%) and uses the ledger"
-echo "   sequence number mod 100 to distribute calls between stable and canary."
-echo ""
-echo "3. Monitor error rates on both contracts via Horizon event streaming."
-echo "   See docs/monitoring.md for guidance."
-echo ""
-echo "4. Auto health-check + promote/rollback (recommended):"
-echo ""
-echo "   CANARY_WINDOW=10 ERROR_RATE_THRESHOLD=5 \\"
-echo "     ./scripts/canary-health-check.sh"
-echo ""
-echo "   This monitors the canary for CANARY_WINDOW minutes. If the error"
-echo "   rate stays below ERROR_RATE_THRESHOLD%, the canary is promoted"
-echo "   automatically. Otherwise rollback-canary.sh is triggered."
-echo ""
-echo "   To promote manually:   ./scripts/promote-canary.sh"
-echo "   To roll back manually: ./scripts/rollback-canary.sh"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+HEALTH_CHECK="$SCRIPT_DIR/canary-health-check.sh"
+ROLLBACK="$SCRIPT_DIR/rollback-canary.sh"
+
+notify_slack() {
+  local message="$1"
+  if [[ -n "${SLACK_DEPLOY_WEBHOOK:-}" ]]; then
+    local payload
+    payload=$(printf '{"text":"%s"}' "$(printf '%s' "$message" | sed 's/\\/\\\\/g; s/"/\\"/g')")
+    if curl -fsS -X POST -H 'Content-Type: application/json' \
+        --data "$payload" "$SLACK_DEPLOY_WEBHOOK" >/dev/null; then
+      echo "==> Slack alert sent."
+    else
+      echo "WARNING: Failed to send Slack alert to SLACK_DEPLOY_WEBHOOK." >&2
+    fi
+  else
+    echo "==> SLACK_DEPLOY_WEBHOOK not set; skipping Slack alert."
+  fi
+}
+
+if [[ ! -x "$HEALTH_CHECK" && ! -f "$HEALTH_CHECK" ]]; then
+  echo "ERROR: canary-health-check.sh not found at $HEALTH_CHECK" >&2
+  exit 1
+fi
+
+set +e
+CANARY_CONTRACT_ID="$CANARY_CONTRACT_ID" NETWORK="$NETWORK" \
+  bash "$HEALTH_CHECK"
+HEALTH_STATUS=$?
+set -e
+
+if [[ $HEALTH_STATUS -eq 0 ]]; then
+  echo ""
+  echo "✅ All smoke tests passed — canary promoted to full production."
+  echo ""
+  echo "   To roll back manually: ./scripts/rollback-canary.sh"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+else
+  echo ""
+  echo "❌ Smoke tests failed (exit $HEALTH_STATUS) — rolling back canary." >&2
+  echo ""
+
+  if [[ -f "$ROLLBACK" ]]; then
+    set +e
+    CANARY_CONTRACT_ID="$CANARY_CONTRACT_ID" NETWORK="$NETWORK" \
+      bash "$ROLLBACK"
+    ROLLBACK_STATUS=$?
+    set -e
+    if [[ $ROLLBACK_STATUS -ne 0 ]]; then
+      echo "ERROR: rollback-canary.sh failed (exit $ROLLBACK_STATUS)." >&2
+    fi
+  else
+    echo "ERROR: rollback-canary.sh not found at $ROLLBACK" >&2
+  fi
+
+  notify_slack ":rotating_light: Canary deployment auto-rolled back on ${NETWORK} (contract ${CANARY_CONTRACT_ID}): smoke tests failed with exit ${HEALTH_STATUS}."
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  exit "$HEALTH_STATUS"
+fi

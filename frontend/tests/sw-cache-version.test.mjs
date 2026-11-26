@@ -52,14 +52,15 @@ async function runActivateCleanup(cacheStorage, currentCacheName) {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('SW cache versioning (issue #1012)', () => {
-  const CURRENT_CACHE = 'lumenflow-v1.1.0';
+  const BUILD_HASH = 'a1b2c3d';
+  const CURRENT_CACHE = `lf-cache-v${BUILD_HASH}`;
 
-  it('CACHE_NAME follows the lumenflow-<version> pattern', () => {
-    assert.match(CURRENT_CACHE, /^lumenflow-v\d+\.\d+\.\d+$/);
+  it('CACHE_NAME follows the lf-cache-v<build-hash> pattern', () => {
+    assert.match(CURRENT_CACHE, /^lf-cache-v[0-9a-f]+$/);
   });
 
   it('activate event deletes all stale caches', async () => {
-    const staleNames = ['lumenflow-v1.0.0', 'lumenflow-v0.9.0', 'old-cache'];
+    const staleNames = ['lf-cache-vdeadbeef', 'lf-cache-v0f0f0f0', 'old-cache'];
     const storage = buildCacheStorage([...staleNames, CURRENT_CACHE]);
 
     await runActivateCleanup(storage, CURRENT_CACHE);
@@ -70,7 +71,7 @@ describe('SW cache versioning (issue #1012)', () => {
   });
 
   it('activate event preserves the current cache', async () => {
-    const storage = buildCacheStorage(['lumenflow-v1.0.0', CURRENT_CACHE]);
+    const storage = buildCacheStorage(['lf-cache-vdeadbeef', CURRENT_CACHE]);
 
     await runActivateCleanup(storage, CURRENT_CACHE);
 
@@ -83,7 +84,7 @@ describe('SW cache versioning (issue #1012)', () => {
   });
 
   it('activate removes multiple stale versions in one pass', async () => {
-    const stale = ['lumenflow-v0.1.0', 'lumenflow-v0.2.0', 'lumenflow-v0.3.0'];
+    const stale = ['lf-cache-v1111111', 'lf-cache-v2222222', 'lf-cache-v3333333'];
     const storage = buildCacheStorage([...stale, CURRENT_CACHE]);
 
     await runActivateCleanup(storage, CURRENT_CACHE);

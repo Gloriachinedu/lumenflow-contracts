@@ -2,6 +2,8 @@ import {
   buildRefundConfirmationPrompt,
   confirmRefundAction,
   formatStroops,
+  waitForRefundConfirmation,
+  TimeoutError,
 } from './refundConfirmation';
 
 describe('formatStroops', () => {
@@ -82,5 +84,91 @@ describe('confirmRefundAction', () => {
     if (!result.confirmed) {
       expect(result.reason).toBe('timeout');
     }
+  });
+});
+
+describe('waitForRefundConfirmation', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.clearAllTimers();
+    jest.useRealTimers();
+  });
+
+  const completedRecord = {
+    refundId: 'rfnd-100',
+    status: 'Completed' as const,
+    amountStroops: 10_000_000n,
+  };
+
+  it('resolves with the RefundRecord when status becomes Completed on the second poll', async () => {
+    const getRefundStatus = jest
+      .fn()
+      .mockResolvedValueOnce({ refundId: 'rfnd-100', status: 'Pending' })
+      .mockResolvedValueOnce(completedRecord);
+
+    const promise = waitForRefundConfirmation('rfnd-100', {
+      timeout: 30000,
+      interval: 2000,
+      getRefundStatus,
+    });
+
+    await jest.advanceTimersByTimeAsync(2000);
+    const result = await promise;
+
+    expect(result).toEqual(completedRecord);
+    expect(getRefundStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects with TimeoutError when status never reaches Completed within the timeout', async () => {
+    const getRefundStatus = jest
+      .fn()
+      .mockResolvedValue({ refundId: 'rfnd-100', status: 'Pending' });
+
+    const promise = waitForRefundConfirmation('rfnd-100', {
+      timeout: 30000,
+      interval: 2000,
+      getRefundStatus,
+    });
+    const assertion = expect(promise).rejects.toBeInstanceOf(TimeoutError);
+
+    await jest.advanceTimersByTimeAsync(30000);
+    await assertion;
+  });
+
+  it('surfaces a non-retryable error from getRefundStatus immediately', async () => {
+    const error = new Error('refund not found');
+    const getRefundStatus = jest.fn().mockRejectedValue(error);
+
+    const promise = waitForRefundConfirmation('rfnd-100', {
+      timeout: 30000,
+      interval: 2000,
+      getRefundStatus,
+    });
+    const assertion = expect(promise).rejects.toBe(error);
+
+    await jest.advanceTimersByTimeAsync(0);
+    await assertion;
+    expect(getRefundStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears pending timers after timing out', async () => {
+    const getRefundStatus = jest
+      .fn()
+      .mockResolvedValue({ refundId: 'rfnd-100', status: 'Pending' });
+
+    const promise = waitForRefundConfirmation('rfnd-100', {
+      timeout: 30000,
+      interval: 2000,
+      getRefundStatus,
+    });
+    const assertion = expect(promise).rejects.toBeInstanceOf(TimeoutError);
+
+    await jest.advanceTimersByTimeAsync(30000);
+    await assertion;
+
+    expect(jest.getTimerCount()).toBe(0);
   });
 });
