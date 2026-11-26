@@ -13,6 +13,32 @@ module updates the rule on its bucket, including buckets already in Terraform
 state. Objects outside the configured backup prefix are unaffected by this
 rule.
 
+## Restore Drill Results
+
+A monthly backup restore drill verifies that backups are actually recoverable,
+not just created. The drill is automated by
+`.github/workflows/backup-restore.yml`, which runs on the **first Monday of
+each month** (and can also be triggered manually via `workflow_dispatch`).
+
+Each drill:
+
+1. Provisions a fresh, isolated environment.
+2. Restores the latest backup into it.
+3. Runs smoke tests against the restored data.
+4. Measures the **Recovery Time Objective (RTO)** — the drill fails if the
+   restore takes **4 hours or more**.
+5. Sends an alert to the on-call team on any failure.
+
+### Recording results
+
+After every run the workflow appends a row to the table below (newest first)
+and commits the update to this file. Do not edit the table by hand; it is
+managed by the `backup-restore.yml` workflow.
+
+| Drill date | RTO | Outcome | Backup checksum |
+|---|---|---|---|
+| _No drills recorded yet_ | — | — | — |
+
 ## CI Artifact Retention
 
 The LumenFlow CI pipeline uploads the compiled WASM binary as a GitHub Actions artifact after every successful build.

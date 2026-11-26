@@ -207,6 +207,91 @@ describe("LumenFlowError", () => {
   });
 });
 
+// ── Structured logging ────────────────────────────────────────────────────────
+
+describe("LumenFlowClient — structured logging", () => {
+  let logSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetAccount.mockResolvedValue(makeAccount(TEST_MERCHANT));
+    mockSimulateTransaction.mockResolvedValue(
+      makeSuccessSimulation(nativeToScVal(true))
+    );
+    logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    logSpy.mockRestore();
+  });
+
+  function emittedLogLines(): any[] {
+    return logSpy.mock.calls
+      .map((call) => {
+        try {
+          return JSON.parse(call[0] as string);
+        } catch {
+          return null;
+        }
+      })
+      .filter((entry) => entry !== null);
+  }
+
+  test("emits a JSON log line with level, correlationId, operation and duration_ms", async () => {
+    const client = makeClient();
+    await client.isRegistered(TEST_MERCHANT);
+
+    const lines = emittedLogLines();
+    expect(lines.length).toBeGreaterThan(0);
+
+    const line = lines[lines.length - 1];
+    expect(line).toHaveProperty("level");
+    expect(line).toHaveProperty("correlationId");
+    expect(line).toHaveProperty("operation");
+    expect(line).toHaveProperty("duration_ms");
+    expect(typeof line.duration_ms).toBe("number");
+    expect(line.operation).toBe("isRegistered");
+  });
+
+  test("accepts a caller-supplied correlation ID", async () => {
+    const client = makeClient();
+    const correlationId = "caller-supplied-correlation-id";
+    await client.isRegistered(TEST_MERCHANT, { correlationId });
+
+    const lines = emittedLogLines();
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) {
+      expect(line.correlationId).toBe(correlationId);
+    }
+  });
+
+  test("auto-generates a UUID v4 correlation ID when none is supplied", async () => {
+    const client = makeClient();
+    await client.isRegistered(TEST_MERCHANT);
+
+    const lines = emittedLogLines();
+    expect(lines.length).toBeGreaterThan(0);
+    const uuidV4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    for (const line of lines) {
+      expect(line.correlationId).toMatch(uuidV4);
+    }
+  });
+
+  test("respects the logLevel constructor option", async () => {
+    const client = new LumenFlowClient({
+      contractId: TEST_CONTRACT_ID,
+      rpcUrl: NETWORKS.testnet.rpcUrl,
+      networkPassphrase: NETWORKS.testnet.networkPassphrase,
+      logLevel: "error",
+    });
+    await client.isRegistered(TEST_MERCHANT);
+
+    const lines = emittedLogLines();
+    // With logLevel "error", info-level operation logs must be suppressed.
+    expect(lines.every((line) => line.level === "error")).toBe(true);
+  });
+});
+
 describe("NETWORKS preset", () => {
   test("testnet preset has expected RPC url", () => {
     expect(NETWORKS.testnet.rpcUrl).toContain("testnet");

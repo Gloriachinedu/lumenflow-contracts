@@ -175,13 +175,29 @@ function renderProgress() {
   signers.forEach(addr => {
     const isSigned = signatures.has(addr);
     const li = document.createElement('li');
-    li.innerHTML = `
-      <span class="sig-icon">${isSigned ? '✅' : '⬜'}</span>
-      <span class="sig-addr">${addr}</span>
-      <span class="sig-status ${isSigned ? 'signed' : 'pending'}">${isSigned ? 'Signed' : 'Pending'}</span>
-      <button class="sign-btn" onclick="signPayment('${addr}')" ${isSigned ? 'disabled' : ''}>
-        ${isSigned ? 'Signed' : 'Sign'}
-      </button>`;
+
+    const icon = document.createElement('span');
+    icon.className = 'sig-icon';
+    icon.textContent = isSigned ? '✅' : '⬜';
+
+    const addrEl = document.createElement('span');
+    addrEl.className = 'sig-addr';
+    addrEl.textContent = addr;
+
+    const status = document.createElement('span');
+    status.className = 'sig-status ' + (isSigned ? 'signed' : 'pending');
+    status.textContent = isSigned ? 'Signed' : 'Pending';
+
+    const btn = document.createElement('button');
+    btn.className = 'sign-btn';
+    btn.textContent = isSigned ? 'Signed' : 'Sign';
+    btn.disabled = isSigned;
+    btn.addEventListener('click', () => signPayment(addr));
+
+    li.appendChild(icon);
+    li.appendChild(addrEl);
+    li.appendChild(status);
+    li.appendChild(btn);
     list.appendChild(li);
   });
 
@@ -226,6 +242,34 @@ function showExecuteAlert(msg, success) {
   el.textContent    = msg;
   el.className      = 'alert ' + (success ? 'alert-success' : 'alert-error');
   el.style.display  = 'block';
+}
+
+// ── Confirmation modal focus management ───────────────────────────────────────
+
+let confirmModalFocusHandle = null;
+
+function openConfirmModal(triggerEl) {
+  const dialogEl = document.getElementById('confirm-modal');
+  if (!dialogEl) return;
+  dialogEl.setAttribute('aria-modal', 'true');
+  dialogEl.style.display = 'block';
+  if (window.LumenFocus && typeof window.LumenFocus.trapModal === 'function') {
+    confirmModalFocusHandle = window.LumenFocus.trapModal(dialogEl, {
+      onEscape: closeConfirmModal,
+    });
+  }
+}
+
+function closeConfirmModal() {
+  const dialogEl = document.getElementById('confirm-modal');
+  if (dialogEl) {
+    dialogEl.style.display = 'none';
+    dialogEl.removeAttribute('aria-modal');
+  }
+  if (confirmModalFocusHandle && typeof confirmModalFocusHandle.deactivate === 'function') {
+    confirmModalFocusHandle.deactivate();
+  }
+  confirmModalFocusHandle = null;
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

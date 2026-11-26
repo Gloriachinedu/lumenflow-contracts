@@ -5,9 +5,21 @@
   "main": "webhook-server.js",
   "scripts": {
     "start": "node webhook-server.js",
-    "test": "jest --testPathPattern=webhook/ --no-coverage"
+    "pretest": "npm --prefix ../sdk run build --if-present",
+    "test": "jest --testPathPattern='webhook/.*\\.test\\.js$' --no-coverage"
+  },
+  "jest": {
+    "testEnvironment": "node"
   },
   "dependencies": {
+    "@opentelemetry/api": "1.9.0",
+    "@opentelemetry/exporter-jaeger": "1.30.1",
+    "@opentelemetry/exporter-trace-otlp-http": "0.57.2",
+    "@opentelemetry/instrumentation-fetch": "0.57.2",
+    "@opentelemetry/instrumentation-http": "0.57.2",
+    "@opentelemetry/resources": "1.30.1",
+    "@opentelemetry/sdk-node": "0.57.2",
+    "@opentelemetry/semantic-conventions": "1.28.0",
     "eventsource": "5.1.3",
     "node-fetch": "3.3.2"
   },

@@ -283,6 +283,60 @@ describe('Static audit – panel transitions move focus', () => {
   );
 });
 
+describe('multisig confirmation modal focus cycle', () => {
+  // Build a fake dialog with focusable children and a trigger button.
+  const trigger = makeFakeElement('button');
+  const dialog  = makeFakeElement('div', { role: 'dialog', 'aria-modal': 'true' });
+
+  const firstChild = makeFakeElement('button');
+  const lastChild  = makeFakeElement('button');
+  const focusables = [firstChild, lastChild];
+
+  // Simulate focusable descendants inside the dialog.
+  dialog.querySelectorAll = function () { return focusables; };
+
+  let escapeCalled = false;
+  let deactivated = false;
+
+  fakeDoc._activeElement = trigger;
+
+  const trap = LumenFocus.createFocusTrap(dialog, {
+    onEscape: function () {
+      escapeCalled = true;
+      trap.deactivate();
+      deactivated = true;
+    }
+  });
+
+  trap.activate();
+  assertEqual(trap.isActive(), true, 'trap active after opening confirmation modal');
+
+  // Tab from the last child should wrap to the first.
+  fakeDoc._activeElement = lastChild;
+  const tabEvt = fakeDoc._dispatchKeydown({ key: 'Tab', shiftKey: false });
+  assert(tabEvt._prevented, 'Tab from last child is preventDefault\'d (wraps)');
+  assertEqual(fakeDoc.activeElement, firstChild, 'Tab from last child wraps focus to first');
+
+  // Shift+Tab from the first child should wrap to the last.
+  fakeDoc._activeElement = firstChild;
+  const shiftTabEvt = fakeDoc._dispatchKeydown({ key: 'Tab', shiftKey: true });
+  assert(shiftTabEvt._prevented, 'Shift+Tab from first child is preventDefault\'d (wraps)');
+  assertEqual(fakeDoc.activeElement, lastChild, 'Shift+Tab from first child wraps focus to last');
+
+  // Escape closes the modal and fires the onEscape callback.
+  fakeDoc._activeElement = firstChild;
+  fakeDoc._dispatchKeydown({ key: 'Escape' });
+  assert(escapeCalled, 'onEscape callback fires when Escape pressed in modal');
+  assert(deactivated, 'trap deactivates when Escape closes the modal');
+  assertEqual(trap.isActive(), false, 'trap.isActive() is false after Escape closes modal');
+
+  // Focus returns to the trigger element.
+  assert(trigger._focused, 'focus restored to trigger after modal closes');
+
+  // Ensure no lingering trap state leaks into later tests.
+  trap.deactivate(true);
+});
+
 describe('Static audit – receipt.html moves focus after async load', () => {
   const receipt = readFile('receipt.html');
   assert(receipt.includes('heading.focus()'), 'receipt.html moves focus after async load');
@@ -294,6 +348,32 @@ describe('Static audit – paginated history announces page change', () => {
   assert(
     html.includes('firstCell.focus()') || html.includes('moveFocusTo'),
     'loadPage moves focus after pagination navigation'
+  );
+});
+
+describe('Static audit – multisig confirmation modal is a focus-trapped dialog', () => {
+  const multisig = readFile('multisig.html');
+  assert(
+    multisig.includes('aria-modal="true"'),
+    'multisig.html confirmation modal has aria-modal="true"'
+  );
+  assert(
+    multisig.includes('role="dialog"'),
+    'multisig.html confirmation modal has role="dialog"'
+  );
+
+  // The focus-trap helper must be referenced from the multisig page script.
+  let scriptSource = '';
+  ['multisig-page.js', 'multisig.js'].forEach(function (name) {
+    try {
+      scriptSource += readFile(name);
+    } catch (e) {
+      // File may not exist in this layout; ignore.
+    }
+  });
+  assert(
+    scriptSource.includes('createFocusTrap') || scriptSource.includes('focus-management'),
+    'multisig page script references the focus-trap helper'
   );
 });
 

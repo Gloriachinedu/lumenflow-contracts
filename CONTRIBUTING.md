@@ -98,15 +98,34 @@ SOURCE_ACCOUNT=<secret-key> ./scripts/local_up.sh
 
 Every pull request is automatically labeled by the CI workflow (`.github/workflows/pr-size-label.yml`) based on the total number of lines changed (additions + deletions):
 
-| Label    | Lines changed | Description                              |
-|----------|---------------|------------------------------------------|
-| `size/XS` | < 50          | Extra-small — trivial fix or tiny change |
-| `size/S`  | 50 – 200      | Small — focused, easy to review          |
-| `size/M`  | 200 – 500     | Medium — moderate scope                  |
-| `size/L`  | 500 – 1000    | Large — consider splitting if possible   |
-| `size/XL` | > 1000        | Extra-large — please split into smaller PRs |
+| Label     | Lines changed | Description                                        |
+|-----------|---------------|----------------------------------------------------|
+| `size/XS` | < 50          | Extra-small — trivial fix or tiny change           |
+| `size/S`  | 50 – 200      | Small — focused, easy to review                    |
+| `size/M`  | 200 – 500     | Medium — moderate scope                            |
+| `size/L`  | 500 – 800     | Large — consider splitting if possible             |
+| `size/XL` | > 800         | Extra-large — split requested, may be blocked      |
 
 Aim for `size/XS` or `size/S` whenever possible. Large PRs are harder to review thoroughly and more likely to introduce bugs. If your PR is labeled `size/L` or `size/XL`, consider breaking it into smaller, independent PRs — one per logical concern.
+
+#### Size enforcement
+
+The size label is not just informational — it gates review:
+
+- **Over 800 changed lines** — the PR is labeled `size/XL` and a bot posts a comment asking you to split the change into smaller, independent PRs.
+- **Over 1500 changed lines** — the PR is **blocked** until it receives review approval from **two maintainers**. Splitting the PR is strongly preferred over requesting the extra review.
+
+#### Exclusions
+
+Auto-generated files are **not** counted toward the line total, so regenerating a lockfile will not inflate your PR's size label. Excluded files include:
+
+- `Cargo.lock`
+- `package-lock.json`
+- `yarn.lock`
+- `pnpm-lock.yaml`
+- Other lockfiles and generated artifacts (e.g. `*.lock`, `bun.lockb`)
+
+If you believe a generated file is being counted incorrectly, open an issue against the DevOps team.
 
 ---
 
@@ -131,10 +150,31 @@ All `uses:` entries in workflow files **must** reference a full commit SHA, not 
 
 This prevents supply-chain attacks where a tag is silently moved to malicious code.
 
+#### CI enforcement
+
+Every pull request runs a dedicated CI step that scans all files under
+`.github/workflows/` and fails if any `uses:` entry references a mutable tag,
+branch, or `@latest`. **PRs that introduce or leave a mutable action reference
+will fail CI and cannot be merged.** The check is implemented by the custom
+linter at `scripts/check_action_pins.sh`, which is also runnable locally:
+
+```bash
+./scripts/check_action_pins.sh
+```
+
+The linter exits non-zero and prints the offending file, line number, and
+reference for each violation. Run it before pushing to catch problems early.
+
+#### Updating a pinned action
+
 To update a pinned action:
 1. Find the new commit SHA for the desired release on the action's GitHub releases page.
-2. Replace the SHA in the workflow file and update the version comment.
-3. Dependabot is configured to open PRs for these updates automatically (weekly).
+2. Replace the SHA in the workflow file and update the version comment (e.g. `# v4.1.7`).
+3. Run `./scripts/check_action_pins.sh` to confirm the pin is valid.
+4. Dependabot is configured to open PRs for these updates automatically (weekly).
+
+> **Note:** Dependabot PRs also go through the SHA-pinning check, so a
+> Dependabot bump that reintroduces a tag reference will be blocked until fixed.
 
 ### Container Image Scanning
 
@@ -152,6 +192,37 @@ To suppress a false-positive finding, add a `.trivyignore` file at the
 repository root with the CVE IDs to skip, one per line, and include a comment
 explaining why the finding is not applicable.
 
+## Secret Handling and Test Keys
+
+**Never commit real private keys, seed phrases, or mnemonics to this repository.**
+This applies to source files, test fixtures, documentation, CI configuration, and
+commit messages alike. Any key that has ever been pushed to a public branch must
+be treated as compromised and rotated immediately.
+
+### Test keys
+
+- Generate all test keypairs with `scripts/generate_smoke_keypair.sh`. The script
+  produces a fresh keypair for each environment (local, CI, testnet) — do not
+  reuse keys across environments or copy them between machines.
+- Documentation and examples must use obviously fake placeholders such as
+  `S_EXAMPLE...` (secret) and `G_EXAMPLE...` (public). Never paste a working key
+  into a doc, README, or code comment.
+- Previously published testnet keys used in older docs and fixtures are
+  **deprecated and unfunded**. They must not be reused; if you find one, replace
+  it with a placeholder and note the deprecation in your PR.
+
+### Enforcement
+
+The `pre-commit` hook runs [gitleaks](https://github.com/gitleaks/gitleaks) with
+`.gitleaks.toml` and blocks commits containing detected secrets. Install it with
+`./scripts/install_hooks.sh`. For emergencies only, `SKIP_SECRET_SCAN=1 git commit ...`
+skips the scan and prints a warning — use it solely to work around a broken hook
+configuration, never to bypass a real finding.
+
+If you believe a real key was committed, do not just delete it in a follow-up
+commit: rotate the key, report it per [SECURITY.md](SECURITY.md), and coordinate
+with maintainers to purge it from history.
+
 ## Development Setup
 
 ### Secret Scanning Hook
@@ -165,6 +236,53 @@ Install gitleaks, then enable the repository's pre-commit scan:
 The hook scans the repository with `.gitleaks.toml` before each commit. Add
 reviewed false-positive exceptions to that configuration. For emergencies only,
 `SKIP_SECRET_SCAN=1 git commit ...` skips the scan and prints a warning.
+
+### Credential Hygiene
+
+Never commit real credentials — private keys, API tokens, webhook secrets,
+seed phrases, or `.env` files — to the repository. Even if a secret is removed in
+a later commit, it remains in the git history and must be treated as compromised.
+
+- Keep secrets in environment variables or a local `.env` file (git-ignored),
+  never in source files, fixtures, or documentation examples.
+- Use obviously fake placeholder values in tests and docs (e.g.
+  `S...EXAMPLE...`), and add reviewed exceptions to `.gitleaks.toml` or
+  `.gitleaksignore` when a fixture trips the scanner.
+- GitHub Secret Scanning is enabled on the repository and alerts maintainers
+  when a known credential pattern is pushed. CI also runs gitleaks on every PR
+  diff, so a leaked secret blocks the merge.
+- If you accidentally commit a secret: **rotate/revoke it immediately**, then
+  notify a maintainer so the history can be cleaned up. Removing the commit is
+  not sufficient — assume the value is public.
+
+### Subresource Integrity (SRI) for CDN Resources
+
+All `<script src="...">` and `<link rel="stylesheet">` tags that load from an
+external origin **must** include `integrity` and `crossorigin="anonymous"`
+attributes. A CI step verifies this on every PR.
+
+```html
+<script
+  src="https://cdn.example.com/lib.min.js"
+  integrity="sha384-<base64-hash>"
+  crossorigin="anonymous"></script>
+```
+
+**When upgrading a CDN dependency**, regenerate the hashes:
+
+```bash
+# Generate an SRI hash for a single file
+openssl dgst -sha384 -binary lib.min.js | openssl base64 -A
+# or, for a remote URL
+curl -s https://cdn.example.com/lib.min.js \
+  | openssl dgst -sha384 -binary \
+  | openssl base64 -A
+```
+
+Prefix the output with `sha384-` and paste it into the `integrity` attribute.
+Commit the updated HTML together with the version bump, and confirm the CI
+integrity check passes. Never disable or weaken the check to work around a
+mismatch — a failing hash means the served file differs from what you reviewed.
 
 ```bash
 # Install Rust stable + WASM target
@@ -306,7 +424,32 @@ We aim to make LumenFlow accessible to a global audience, particularly the Latin
 
 When adding a new translation, please follow the naming convention `README.[lang].md` and add a link in the language selector at the top of the main `README.md`.
 
+#### Frontend UI Locales
+
+The frontend UI supports exactly three locales:
+
+| Locale | File |
+|--------|------|
+| English (base) | `frontend/locales/en.json` |
+| Spanish | `frontend/locales/es.json` |
+| Portuguese | `frontend/locales/pt.json` |
+
+**Every new translation key must be added to all three locale files in the same pull request.** English (`en.json`) is the base locale: any key present there must also exist in `es.json` and `pt.json`. Missing translations silently fall back to the English key string, which breaks the non-English UIs.
+
+Key parity is enforced by:
+
+```bash
+node scripts/check-i18n-locales.mjs
+```
+
+The script reports every key that is missing per locale, and CI fails if any locale is missing keys present in the base English locale. Run it locally before opening a PR:
+
+```bash
+node scripts/check-i18n-locales.mjs
+```
+
 ### Code Style
+=======
 
 - Follow standard Rust idioms (`rustfmt` enforced in CI).
 - No `unwrap()` in contract code — use `?` with typed errors.

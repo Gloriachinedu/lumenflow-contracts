@@ -41,13 +41,57 @@ redemption path, and no unresolved security findings.
 
 | Rank | Asset | Rationale | Blocking work |
 |---|---|---|---|
-| 1 | USDC (Stellar) | Highest merchant demand; deep liquidity; regulated issuer | Confirm clawback handling in refund flow |
+| 1 | USDC (Stellar) — **shipped** ([#1576](https://github.com/Gloriachinedu/lumenflow-contracts/issues/1576)) | Highest merchant demand; deep liquidity; regulated issuer | None — first supported non-native token; see [USDC rollout notes](#usdc-stellar--first-supported-non-native-token) |
 | 2 | EURC (Stellar) | EU merchant demand; same issuer profile as USDC | FX display in dashboard; rounding review |
 | 3 | Regional stablecoin (e.g. NGNC/ARST class) | Local-currency settlement for target markets | Issuer due diligence; volatility monitoring |
 | 4 | Yield-bearing stable (e.g. wrapped T-bill token) | Treasury interest for merchants holding balances | Legal review; accrual accounting in reporting |
 | 5 | Additional major stablecoin (second issuer) | Issuer diversification / redundancy | Duplicate-symbol disambiguation in UI and SDK |
 
 Ranks are reviewed monthly; new candidates enter the table scored, not appended.
+
+---
+
+## USDC (Stellar) — First Supported Non-Native Token
+
+USDC on Stellar is the first non-native asset enabled on the allowlist
+([#1576](https://github.com/Gloriachinedu/lumenflow-contracts/issues/1576)).
+It completed the rollout checklist below; the remaining backlog entries follow
+the same process.
+
+### Verified SAC addresses
+
+The Stellar Asset Contract (SAC) address for USDC is derived from the issuer
+account and asset code. Verified per network:
+
+| Network | Asset | Issuer | SAC address |
+|---|---|---|---|
+| Mainnet (Pubnet) | `USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN` | `GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN` (Circle) | `CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75` |
+| Testnet | `USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5` | `GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5` (Circle testnet) | `CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA` |
+
+Addresses are verified against the issuer's published asset metadata before
+being committed to config; re-verify whenever the issuer rotates accounts.
+
+### Decimals and display
+
+USDC uses **7 decimal places** on Stellar (matching the native asset precision),
+so amounts are stored and displayed with 7-decimal precision. The dashboard and
+SDK display the symbol `USDC` and disambiguate by issuer if another asset later
+reuses the code.
+
+### Clawback handling
+
+USDC is issued with clawback enabled and is flagged `clawback: true` in config.
+The refund flow takes the clawback-aware branch: a refund to a clawback-frozen
+address fails with the contract's clawback error rather than silently
+succeeding, and the failure is surfaced to the operator. This is covered by the
+clawback test in the suite.
+
+### Allowlisting and tests
+
+- `add_allowed_token(USDC_ADDRESS)` is called in the deploy script so the
+  contract accepts USDC on deployment.
+- An integration test exercises the full payment and refund cycle with USDC,
+  including the clawback-frozen refund failure case.
 
 ---
 
@@ -87,7 +131,10 @@ For the operator-facing steps and CLI commands behind items 3–4 below, see
 - Normal path: adding a scored, gated asset enables payments and payouts in that
   asset with existing scenarios passing.
 - Edge case: an asset flagged `clawback: true` triggers the clawback-aware branch
-  in the refund flow.
+  in the refund flow. For USDC this is verified by the clawback test: a refund to
+  a clawback-frozen address returns the correct error.
+- USDC integration test: full payment and refund cycle with USDC passes end to
+  end ([#1576](https://github.com/Gloriachinedu/lumenflow-contracts/issues/1576)).
 - Failure case: enabling an asset whose issuer config is incomplete is rejected at
   load time rather than accepting a payment that cannot settle.
 

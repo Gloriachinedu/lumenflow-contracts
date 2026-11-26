@@ -91,6 +91,52 @@ Soroban persistent storage entries are archived once their TTL expires, so Lumen
 
 ---
 
+## Storage TTL Extension Strategy
+
+Soroban persistent entries are archived once their TTL (time-to-live, measured in ledgers) expires. Archived entries must be restored before they can be read, which is expensive and disruptive. LumenFlow therefore extends the TTL of every persistent key it writes, and re-extends it on hot read/write paths.
+
+TTL values are expressed in **ledgers** (≈5 seconds per ledger on Stellar mainnet). The canonical constants live in `docs/storage-schema.md` (TTL constants table) and are mirrored in `contracts/lumenflow/src/storage.rs`. `extend_ttl(threshold, extend_to)` semantics:
+
+- **Initial TTL** — the `extend_to` value applied immediately after a key is first written (via `env.storage().persistent().extend_ttl(key, threshold, extend_to)` or the `set_*` helper).
+- **Extension threshold** — the first argument to `extend_ttl`. When the remaining TTL drops below this value, the entry is eligible for extension.
+- **Extension amount** — the second argument to `extend_ttl` (`extend_to`). The new TTL is set to this many ledgers from the current ledger.
+
+### Persistent key categories
+
+| Key category | Storage key | Initial TTL | Extension threshold | Extension amount (`extend_to`) | Extension trigger(s) in `lib.rs` |
+|---|---|---|---|---|---|
+| Merchant profiles | `Merchant(Address)` | `MERCHANT_TTL` | `MERCHANT_THRESHOLD` | `MERCHANT_TTL` | `register_merchant`, `update_merchant`, `process_payment_with_signature`, `process_payment_with_nonce` |
+| Payment records | `Payment(String)` | `PAYMENT_TTL` | `PAYMENT_THRESHOLD` | `PAYMENT_TTL` | `process_payment_with_signature`, `process_payment_with_nonce`, `initiate_refund`, `execute_refund`, `archive_payment_record` |
+| Refund records | `Refund(String)` | `REFUND_TTL` | `REFUND_THRESHOLD` | `REFUND_TTL` | `initiate_refund`, `approve_refund`, `reject_refund`, `execute_refund` |
+| Multisig payments | `Multisig(String)` | `MULTISIG_TTL` | `MULTISIG_THRESHOLD` | `MULTISIG_TTL` | `initiate_multisig_payment`, `sign_multisig_payment`, `execute_multisig_payment` |
+| Escrows | `Escrow(String)` | `ESCROW_TTL` | `ESCROW_THRESHOLD` | `ESCROW_TTL` | `create_escrow`, `release_escrow`, `refund_escrow` |
+| Subscriptions | `Subscription(String)` | `SUBSCRIPTION_TTL` | `SUBSCRIPTION_THRESHOLD` | `SUBSCRIPTION_TTL` | `create_subscription`, `charge_subscription`, `cancel_subscription` |
+| Subscription reserves | `SubscriptionReserve(String)` | `SUBSCRIPTION_TTL` | `SUBSCRIPTION_THRESHOLD` | `SUBSCRIPTION_TTL` | `charge_subscription`, `cancel_subscription` |
+| Payment requests | `PaymentRequest(String)` | `PAYMENT_REQUEST_TTL` | `PAYMENT_REQUEST_THRESHOLD` | `PAYMENT_REQUEST_TTL` | `create_payment_request`, `fulfill_payment_request`, `cancel_payment_request` |
+| Payer nonces | `PayerNonce(Address)` | `NONCE_TTL` | `NONCE_THRESHOLD` | `NONCE_TTL` | `process_payment_with_nonce` |
+| Merchant index | `MerchantIndex(Address)` | `INDEX_TTL` | `INDEX_THRESHOLD` | `INDEX_TTL` | `process_payment_with_signature`, `process_payment_with_nonce`, `archive_payment_record` |
+| Payer index | `PayerIndex(Address)` | `INDEX_TTL` | `INDEX_THRESHOLD` | `INDEX_TTL` | `process_payment_with_signature`, `process_payment_with_nonce`, `archive_payment_record` |
+| Audit entries | `AuditEntry(u64)` | `AUDIT_TTL` | `AUDIT_THRESHOLD` | `AUDIT_TTL` | `record_audit_entry` (append-only; extended on write) |
+| Disputes | `Dispute(String)` | `DISPUTE_TTL` | `DISPUTE_THRESHOLD` | `DISPUTE_TTL` | `open_dispute`, `resolve_dispute` |
+| Commitments | `Commitment(String)` | `COMMITMENT_TTL` | `COMMITMENT_THRESHOLD` | `COMMITMENT_TTL` | `create_commitment`, `settle_commitment` |
+| Allowed tokens | `AllowedToken(Address)` | `TOKEN_TTL` | `TOKEN_THRESHOLD` | `TOKEN_TTL` | `add_allowed_token`, `remove_allowed_token` |
+
+### Instance storage
+
+Instance storage shares the contract instance's TTL and is extended whenever the contract instance is bumped. Keys: `Admin`, `GlobalStats`, `MaxRefundsPerOrder`, `LargePaymentThreshold`, `PaymentCleanupPeriod`. These are extended implicitly by any state-changing entrypoint that writes instance storage; no per-key extension is required.
+
+### Known gaps
+
+The following persistent keys are written by `storage.rs` but currently have **no explicit `extend_ttl` call** in `lib.rs`. They must be fixed in the `storage.rs` step by adding extension inside the corresponding `set_*` helper:
+
+- `AuditEntry(u64)` — written by `record_audit_entry`; no extension on write.
+- `Commitment(String)` — written by `create_commitment`; extension only on `settle_commitment`.
+- `SubscriptionReserve(String)` — written by `charge_subscription`; no extension on write.
+
+Unit tests in `contracts/lumenflow/src/test.rs` assert that each category's TTL is extended after the triggering entrypoint runs (see `test_ttl_*` cases).
+
+---
+
 ## Auth Model
 
 See also [`docs/auth-model.md`](auth-model.md) for full details.
@@ -174,6 +220,43 @@ History queries are O(n) scans over in-contract index vectors:
 ## Event Emission
 
 Every state-changing operation emits a Soroban event with topic `["lumenflow", "<event_name>"]`. See [`docs/events-reference.md`](events-reference.md) for full payload schemas.
+
+---
+
+## Security: Checks-Effects-Interactions
+
+LumenFlow follows the checks-effects-interactions pattern adapted for Soroban (issue #1507). **All state writes and status flags must be committed before any external token transfer.** Token calls (SAC `transfer`/`transfer_from`) are treated as untrusted external interactions: they may re-enter, fail, or be observed by other contracts, so the contract must never leave state in a non-final form across a token call.
+
+Rule:
+1. **Checks** — validate auth, amounts, limits, and status transitions.
+2. **Effects** — write the payment/refund record, update status flags, indexes, and counters.
+3. **Interactions** — perform the token transfer last.
+
+If a token transfer fails after effects are written, the whole transaction reverts, so the committed state is never left inconsistent.
+
+Audited entrypoints (state-then-transfer ordering verified, violations corrected with code comments referencing #1507):
+- `process_payment` / `process_payment_with_nonce` / `process_payment_with_signature`
+- `create_escrow`
+- `execute_refund`
+- `execute_multisig_payment`
+- `batch_process_payments`
+
+Regression tests cover each corrected path, asserting that the payment/refund record and status are final before the token transfer is invoked and that a failing transfer reverts all state.
+
+### Per-merchant payment limit (issue #1592)
+
+`MerchantProfile.max_payment_amount` is an optional `i128` (`None` = no limit). It is set via the admin entrypoint `set_merchant_payment_limit(merchant, limit)`. During `process_payment`, after auth and amount validation and before any state write or token transfer, the contract returns `PaymentError::ExceedsMerchantLimit` if the payment amount exceeds the merchant's configured limit.
+
+### Supported non-native token: USDC (issue #1576)
+
+USDC on Stellar is the first supported non-native token. It is added to the allowlist via `add_allowed_token(USDC_ADDRESS)` in the deploy script. SAC addresses:
+
+| Network | USDC SAC address |
+|---|---|
+| Mainnet | `CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75` |
+| Testnet | `CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA` |
+
+Refunds to a clawback-frozen address are handled by the refund flow and surface the corresponding token error; this is covered by tests. The dashboard and UI display the USDC symbol with 7 decimal places.
 
 ---
 

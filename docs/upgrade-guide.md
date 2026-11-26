@@ -254,6 +254,129 @@ See the [Rollback Procedure](deployment-runbook.md#9-rollback-procedure) in the 
 
 ---
 
+## SDK Migration Guide
+
+The LumenFlow SDK (`sdk/`) follows semantic versioning independently of the contract. This
+section documents breaking changes between SDK minor versions and how to migrate client
+integrations. For the complete list of changes (including non-breaking ones), see
+[`sdk/CHANGELOG.md`](../sdk/CHANGELOG.md).
+
+### Migration Section Template
+
+Copy this template into a new section for every SDK release that contains breaking changes:
+
+```markdown
+### SDK vX.Y.0 → vX.Z.0
+
+**Release date:** YYYY-MM-DD
+**Breaking changes:** <one-line summary>
+
+#### Summary of Breaking Changes
+
+| Change | Old API | New API | Action required |
+|---|---|---|---|
+| <what changed> | `<old>` | `<new>` | <what consumers must do> |
+
+#### Prerequisites
+
+- SDK `<old version>` or later installed.
+- <any contract version requirement>
+- <any config/env changes>
+
+#### Step-by-step migration
+
+1. Upgrade the dependency:
+   ```bash
+   npm install @lumenflow/sdk@^X.Z.0
+   ```
+2. <replace usage of removed/renamed API — include before/after snippets>
+3. <update configuration / types>
+4. Run the test suite and the smoke test (`./scripts/smoke_test.sh`).
+
+#### Deprecation timeline
+
+| Version | Status |
+|---|---|
+| `X.Y.0` | Old API deprecated (warnings emitted) |
+| `X.Z.0` | Old API removed |
+
+#### Rollback notes
+
+- Pin back to `@lumenflow/sdk@X.Y.0` if migration fails.
+- <any state/config that must be reverted>
+```
+
+### SDK v1.0.0 → v1.1.0
+
+**Breaking changes:** `WalletAdapter` introduced; direct keypair signing helpers removed.
+
+#### Summary of Breaking Changes
+
+| Change | Old API | New API | Action required |
+|---|---|---|---|
+| Signing is now adapter-based | `sdk.signWithSecret(secret)` | `new WalletAdapter({ secret })` passed to `sdk.connect()` | Wrap existing signers in a `WalletAdapter` |
+| Removed `sdk.setSigner()` | `sdk.setSigner(keypair)` | `sdk.connect(adapter)` | Replace signer setup with `connect` |
+| Renamed `getMerchantIndex` | `sdk.getMerchantIndex(addr)` | `sdk.merchants.getIndex(addr)` | Update call sites |
+
+#### Prerequisites
+
+- SDK `1.0.x` installed.
+- Contract version `1.1.0` or later (adapter flow relies on `get_contract_version`).
+
+#### Step-by-step migration
+
+1. Upgrade the dependency:
+   ```bash
+   npm install @lumenflow/sdk@^1.1.0
+   ```
+2. Replace direct signer setup with a `WalletAdapter`:
+
+   Before:
+   ```ts
+   const sdk = new LumenFlow({ contractId });
+   sdk.setSigner(Keypair.fromSecret(secret));
+   ```
+
+   After:
+   ```ts
+   import { LumenFlow, WalletAdapter } from "@lumenflow/sdk";
+
+   const sdk = new LumenFlow({ contractId });
+   await sdk.connect(new WalletAdapter({ secret }));
+   ```
+3. Update renamed method calls:
+
+   Before:
+   ```ts
+   const ids = await sdk.getMerchantIndex(merchant);
+   ```
+
+   After:
+   ```ts
+   const ids = await sdk.merchants.getIndex(merchant);
+   ```
+4. Run the test suite and `./scripts/smoke_test.sh`.
+
+#### Deprecation timeline
+
+| Version | Status |
+|---|---|
+| `1.0.0` | `setSigner` / `getMerchantIndex` available |
+| `1.1.0` | Old APIs removed; `WalletAdapter` required |
+
+#### Rollback notes
+
+- Pin back to `@lumenflow/sdk@1.0.0` if migration fails; the contract remains compatible
+  with both SDK versions.
+- No on-chain state changes are required for rollback.
+
+### SDK v1.1.0 → v1.2.0
+
+**Breaking changes:** none. This release is additive (new `sdk.escrow` helpers); no
+migration steps are required. See [`sdk/CHANGELOG.md`](../sdk/CHANGELOG.md) for details.
+
+---
+
 ## Verifying the Deployed WASM
 
 Every release publishes a SHA-256 hash in [docs/release-hashes.md](release-hashes.md).
