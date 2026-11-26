@@ -19,6 +19,14 @@
     })();
   </script>
   <link rel="stylesheet" href="shared.css" />
+  <!--
+    SRI policy: any <script src> or <link rel="stylesheet"> pointing at an
+    external origin MUST include integrity="sha384-..." and
+    crossorigin="anonymous". Local assets (shared.css, etc.) are exempt.
+    To regenerate hashes after a CDN dependency upgrade:
+      curl -sSL <url> | openssl dgst -sha384 -binary | openssl base64 -A
+    then update the integrity attribute below and run the CI SRI check.
+  -->
   <style>
     body {
       background: var(--color-bg);

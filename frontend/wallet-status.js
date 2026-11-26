@@ -251,6 +251,7 @@ export function initWalletStatus(container) {
   chip.innerHTML = `
     <span class="wallet-chip__dot" aria-hidden="true"></span>
     <span class="wallet-chip__label">Disconnected</span>
+    <span class="wallet-chip__live" role="status" aria-live="polite" aria-atomic="true" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;"></span>
   `;
 
   container.appendChild(chip);
@@ -307,14 +308,17 @@ export function initWalletStatus(container) {
   // ── UI update ───────────────────────────────────────────────────────────────
   function updateChipUI(connected, publicKey) {
     const label = chip.querySelector('.wallet-chip__label');
+    const live = chip.querySelector('.wallet-chip__live');
     if (connected && publicKey) {
       chip.className = 'wallet-chip connected';
       chip.setAttribute('aria-label', `Wallet status: Connected`);
       label.textContent = `Connected: ${truncateKey(publicKey)}`;
+      if (live) live.textContent = `Wallet connected: ${truncateKey(publicKey)}`;
     } else {
       chip.className = 'wallet-chip disconnected';
       chip.setAttribute('aria-label', 'Wallet status: Disconnected');
       label.textContent = 'Disconnected';
+      if (live) live.textContent = 'Wallet disconnected';
     }
   }
 
@@ -386,4 +390,89 @@ export function initWalletStatus(container) {
       closeDropdown();
     }
   });
+}
+
+// ── Reusable status badge ─────────────────────────────────────────────────────
+
+/**
+ * Render a lightweight, read-only wallet status badge into `container`.
+ *
+ * The badge is announced to screen readers via `role="status"` +
+ * `aria-live="polite"` and stays in sync with wallet connect / disconnect /
+ * reconnect events by listening for the `lf:walletchange` CustomEvent and by
+ * polling Freighter (or the demo adapter) every 1 500 ms.
+ *
+ * @param {HTMLElement} container - The element that will receive the badge.
+ * @returns {{ destroy: () => void } | undefined}
+ */
+export function renderWalletStatusBadge(container) {
+  if (!container) return;
+
+  ensureStyles();
+
+  const adapter = window.freighter ? createFreighterAdapter() : createDemoAdapter();
+
+  const badge = document.createElement('div');
+  badge.className = 'wallet-chip disconnected';
+  badge.setAttribute('role', 'status');
+  badge.setAttribute('aria-live', 'polite');
+  badge.setAttribute('aria-atomic', 'true');
+  badge.setAttribute('aria-label', 'Wallet status: Disconnected');
+  badge.innerHTML = `
+    <span class="wallet-chip__dot" aria-hidden="true"></span>
+    <span class="wallet-chip__label">Disconnected</span>
+  `;
+
+  container.appendChild(badge);
+
+  let _isConnected = false;
+  let _publicKey = null;
+
+  function updateBadgeUI(connected, publicKey) {
+    const label = badge.querySelector('.wallet-chip__label');
+    if (connected && publicKey) {
+      badge.className = 'wallet-chip connected';
+      badge.setAttribute('aria-label', `Wallet status: Connected`);
+      label.textContent = `Connected: ${truncateKey(publicKey)}`;
+    } else {
+      badge.className = 'wallet-chip disconnected';
+      badge.setAttribute('aria-label', 'Wallet status: Disconnected');
+      label.textContent = 'Disconnected';
+    }
+  }
+
+  function applyState(connected, publicKey) {
+    if (connected === _isConnected && publicKey === _publicKey) return;
+    _isConnected = connected;
+    _publicKey = publicKey;
+    updateBadgeUI(connected, publicKey);
+  }
+
+  async function poll() {
+    try {
+      const connected = await adapter.isConnected();
+      const key = connected ? await adapter.getPublicKey() : null;
+      applyState(connected, key);
+    } catch {
+      // Silently ignore polling errors (e.g. extension not responding)
+    }
+  }
+
+  // React to wallet changes emitted by other chips on the page.
+  const onWalletChange = (e) => {
+    const detail = (e && e.detail) || {};
+    applyState(Boolean(detail.connected), detail.connected ? detail.publicKey : null);
+  };
+  window.addEventListener('lf:walletchange', onWalletChange);
+
+  poll();
+  const intervalId = setInterval(poll, 1500);
+
+  return {
+    destroy() {
+      clearInterval(intervalId);
+      window.removeEventListener('lf:walletchange', onWalletChange);
+      badge.remove();
+    },
+  };
 }

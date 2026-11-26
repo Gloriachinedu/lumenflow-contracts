@@ -42,6 +42,7 @@ const LOCALES_PATH = './locales';
 
 let _locale   = DEFAULT_LOCALE;  // current locale code
 let _messages = {};              // parsed JSON for the active locale
+let _defaultMessages = null;     // parsed JSON for the default locale (error fallbacks)
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -149,6 +150,18 @@ export const i18n = {
         // Graceful degradation: load the default locale instead
         _messages = await loadLocale(DEFAULT_LOCALE);
         _locale   = DEFAULT_LOCALE;
+      }
+    }
+
+    // Keep a copy of the default locale's messages so error lookups can fall
+    // back to it when a translation is missing in the active locale.
+    if (_locale === DEFAULT_LOCALE) {
+      _defaultMessages = _messages;
+    } else if (!_defaultMessages) {
+      try {
+        _defaultMessages = await loadLocale(DEFAULT_LOCALE);
+      } catch (err) {
+        console.error(err);
       }
     }
 
@@ -295,6 +308,54 @@ export const i18n = {
   getSupportedLocales() {
     return Object.keys(SUPPORTED_LOCALES);
   },
+
+  /**
+   * Resolve a localized error message for a contract error code.
+   *
+   * Looks up `errors.<code>.message` in the active locale. Falls back to
+   * `errors.<code>.message` in the default locale, then to
+   * `errors.unknown.message`, and finally to the provided fallback string.
+   *
+   * @param {string} code  Contract error code (e.g. "SIGNATURE_FAILED")
+   * @param {string} [fallback]  Text to return if no translation exists
+   * @returns {string}
+   */
+  tError(code, fallback) {
+    if (!code) return fallback || this.t('errors.unknown.message');
+
+    const key = `errors.${code}.message`;
+    const value = resolvePath(_messages, key);
+    if (typeof value === 'string') return value;
+
+    // Fall back to the default locale's messages if the active one is missing it
+    if (_locale !== DEFAULT_LOCALE && _defaultMessages) {
+      const fallbackValue = resolvePath(_defaultMessages, key);
+      if (typeof fallbackValue === 'string') return fallbackValue;
+    }
+
+    const unknown = resolvePath(_messages, 'errors.unknown.message');
+    if (typeof unknown === 'string') return unknown;
+
+    return fallback || code;
+  },
+
+  /**
+   * Returns whether a contract error code is marked as retryable in the
+   * active locale's translations (`errors.<code>.retryable`).
+   *
+   * @param {string} code
+   * @returns {boolean}
+   */
+  isErrorRetryable(code) {
+    if (!code) return false;
+    const value = resolvePath(_messages, `errors.${code}.retryable`);
+    if (typeof value === 'boolean') return value;
+    if (_defaultMessages) {
+      const fallbackValue = resolvePath(_defaultMessages, `errors.${code}.retryable`);
+      if (typeof fallbackValue === 'boolean') return fallbackValue;
+    }
+    return false;
+  },
 };
 
 // ── CSS for the language switcher ─────────────────────────────────────────────
@@ -338,3 +399,32 @@ export const i18n = {
   `;
   document.head.appendChild(style);
 })();
+
+// ── Error message translations ────────────────────────────────────────────────
+// Every contract error code must have a translation in all supported locales.
+// `errorMessages.js` resolves localized text via `i18n.tError(code)` and
+// checks retryability via `i18n.isErrorRetryable(code)`.
+//
+// The keys below are the canonical set; the locale JSON files under
+// ./locales must each contain an `errors` object with the same keys.
+
+/** Canonical contract error codes covered by the translations. */
+export const ERROR_CODES = [
+  'SIGNATURE_FAILED',
+  'INSUFFICIENT_FUNDS',
+  'INSUFFICIENT_ALLOWANCE',
+  'NETWORK_TIMEOUT',
+  'NETWORK_ERROR',
+  'RPC_UNAVAILABLE',
+  'TRANSACTION_REJECTED',
+  'TRANSACTION_REVERTED',
+  'TRANSACTION_EXPIRED',
+  'NONCE_TOO_LOW',
+  'GAS_ESTIMATION_FAILED',
+  'INVALID_ADDRESS',
+  'INVALID_AMOUNT',
+  'CONTRACT_NOT_FOUND',
+  'UNAUTHORIZED',
+  'RATE_LIMITED',
+  'UNKNOWN',
+];

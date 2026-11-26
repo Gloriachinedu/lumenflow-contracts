@@ -334,7 +334,7 @@ COVERAGE=1 ./scripts/test.sh
 # → writes lcov.info to the workspace root
 ```
 
-Coverage threshold: **80% line coverage** is enforced in CI. Install `cargo-llvm-cov` once with:
+Coverage thresholds are enforced in CI via Codecov: **80% minimum line coverage for contract code** and **85% minimum line coverage for SDK code**. PRs that drop coverage below these thresholds fail the coverage check. Install `cargo-llvm-cov` once with:
 
 ```bash
 cargo install cargo-llvm-cov --locked
@@ -373,7 +373,7 @@ COVERAGE=1 ./scripts/test.sh
 # lcov data: lcov.info
 ```
 
-CI enforces a minimum **80% line coverage** threshold and uploads both the HTML report and `lcov.info` as build artifacts.
+CI enforces minimum line coverage thresholds through Codecov — **80% for contract code** and **85% for SDK code** — and uploads both the HTML report and `lcov.info` as build artifacts. The Codecov status checks (`patch` and `project`) fail any PR that falls below these thresholds, and uncovered lines are annotated directly in the PR diff view.
 
 Test coverage includes:
 
