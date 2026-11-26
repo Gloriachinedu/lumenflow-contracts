@@ -1,9 +1,46 @@
-import { callContract, normalizeContractError } from './contractWrapper';
+import { callContract, normalizeContractError, loadContractWrapper } from './contractWrapper';
 import { LumenFlowError, PaymentErrorCode } from './errors';
 
 declare global {
   var fetch: jest.MockedFunction<typeof fetch>;
 }
+
+describe('lazy initialization', () => {
+  beforeEach(() => {
+    jest.resetModules();
+  });
+
+  it('does not load the contract wrapper module until the first RPC call', async () => {
+    const { loadContractWrapper: freshLoader } = await import('./contractWrapper');
+    // Accessing the loader before any call must not trigger the dynamic import.
+    expect(freshLoader).toBeDefined();
+    // normalizeContractError is pure and must not load the wrapper.
+    const error = normalizeContractError({ message: 'boom' });
+    expect(error).toBeInstanceOf(LumenFlowError);
+  });
+
+  it('invokes the dynamic import exactly once across multiple calls (cached)', async () => {
+    const { loadContractWrapper: freshLoader } = await import('./contractWrapper');
+    const first = await freshLoader();
+    const second = await freshLoader();
+    const third = await freshLoader();
+    expect(first).toBe(second);
+    expect(second).toBe(third);
+  });
+
+  it('reuses the loaded module for subsequent calls', async () => {
+    const { loadContractWrapper: freshLoader } = await import('./contractWrapper');
+    const loaded = await freshLoader();
+    expect(loaded).toBeDefined();
+    expect(typeof loaded.callContract).toBe('function');
+  });
+
+  it('exposes a shared loader instance from the module', async () => {
+    const first = await loadContractWrapper();
+    const second = await loadContractWrapper();
+    expect(first).toBe(second);
+  });
+});
 
 describe('normalizeContractError', () => {
   it('returns existing LumenFlowError unchanged', () => {

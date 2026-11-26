@@ -4657,6 +4657,79 @@ impl PaymentProcessingContract {
         storage::get_escrow(&env, &order_id).ok_or(PaymentError::EscrowNotFound)
     }
 
+    /// List all active (locked) escrows, paginated and sorted by `unlock_at` ascending.
+    ///
+    /// Only escrows whose status is [`EscrowStatus::Locked`] are returned. The
+    /// results are ordered so that the soonest-expiring escrows appear first,
+    /// which helps operators spot stuck or dormant funds.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator address. Must sign the call.
+    /// * `page` - Zero-based page index.
+    /// * `limit` - Maximum number of records per page (must be > 0).
+    ///
+    /// # Returns
+    /// A `Vec<EscrowRecord>` containing the requested page of locked escrows.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    /// * [`PaymentError::InvalidInput`] — `limit` is zero.
+    pub fn list_active_escrows(
+        env: Env,
+        admin: Address,
+        page: u32,
+        limit: u32,
+    ) -> Result<Vec<EscrowRecord>, PaymentError> {
+        require_admin(&env, &admin)?;
+        require_valid_limit(limit)?;
+
+        // Collect all locked escrows.
+        let mut active: Vec<EscrowRecord> = Vec::new(&env);
+        let order_ids = storage::get_escrow_order_ids(&env);
+        for order_id in order_ids.iter() {
+            if let Some(escrow) = storage::get_escrow(&env, &order_id) {
+                if matches!(escrow.status, EscrowStatus::Locked) {
+                    active.push_back(escrow);
+                }
+            }
+        }
+
+        // Insertion sort by `unlock_at` ascending (soonest expiring first).
+        let len = active.len();
+        let mut i: u32 = 1;
+        while i < len {
+            let current = active.get(i).unwrap();
+            let mut j = i;
+            while j > 0 {
+                let prev = active.get(j - 1).unwrap();
+                if prev.unlock_at > current.unlock_at {
+                    active.set(j, prev);
+                    j -= 1;
+                } else {
+                    break;
+                }
+            }
+            active.set(j, current);
+            i += 1;
+        }
+
+        // Apply pagination.
+        let start = (page as u64).saturating_mul(limit as u64);
+        let mut result: Vec<EscrowRecord> = Vec::new(&env);
+        if start >= active.len() as u64 {
+            return Ok(result);
+        }
+        let start = start as u32;
+        let end = core::cmp::min(start.saturating_add(limit), active.len());
+        let mut idx = start;
+        while idx < end {
+            result.push_back(active.get(idx).unwrap());
+            idx += 1;
+        }
+
+        Ok(result)
+    }
+
     // ── Conditional Escrow (Issue #1111) ──────────────────────────────────────
 
     /// Lock funds in a conditional escrow hold.

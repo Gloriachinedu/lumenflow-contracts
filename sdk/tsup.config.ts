@@ -34,6 +34,22 @@ export default defineConfig({
   dts: {
     resolve: true,
   },
+
+  /**
+   * Do not bundle dependencies — consumers install them via package.json.
+   * This keeps the output lean and avoids duplicate copies of stellar-sdk.
+   */
+  external: ['@stellar/stellar-sdk', 'tweetnacl'],
+  /**
+   * Issue #1619: Enable code splitting so dynamically imported modules
+   * (e.g. the lazy-loaded contract wrapper) are emitted as separate chunks
+   * instead of being inlined into the entry bundle. This keeps the initial
+   * SDK payload small; the contract wrapper chunk is fetched on first use.
+   *
+   * Code splitting is only supported for the ESM output; the CJS build
+   * inlines dynamic imports (Node.js require() consumers are unaffected).
+   */
+  splitting: true,
   /**
    * Do not bundle dependencies — consumers install them via package.json.
    * This keeps the output lean and avoids duplicate copies of stellar-sdk.

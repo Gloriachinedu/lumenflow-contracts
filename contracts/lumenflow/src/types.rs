@@ -303,6 +303,23 @@ pub struct EscrowRecord {
     pub created_at: u64,
 }
 
+/// Paginated result returned by `list_active_escrows`.
+///
+/// Contains only escrows whose status is `EscrowStatus::Locked`, sorted by
+/// `unlock_at` ascending (soonest expiring first).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaginatedEscrows {
+    /// The escrows on the requested page.
+    pub escrows: Vec<EscrowRecord>,
+    /// The 1-based page number that was requested.
+    pub page: u32,
+    /// The maximum number of records per page that was requested.
+    pub limit: u32,
+    /// Total number of active (locked) escrows before pagination is applied.
+    pub total: u32,
+}
+
 /// Escrow state for conditional (condition-hash) holds.
 ///
 /// Unlike time-locked escrows the funds here are held until an arbiter
