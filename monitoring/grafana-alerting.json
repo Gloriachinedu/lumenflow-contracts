@@ -1,0 +1,183 @@
+{
+  "apiVersion": 1,
+  "contactPoints": [
+    {
+      "orgId": 1,
+      "name": "pagerduty-oncall",
+      "receivers": [
+        {
+          "uid": "pd-oncall-receiver",
+          "type": "pagerduty",
+          "settings": {
+            "integrationKey": "$PAGERDUTY_INTEGRATION_KEY",
+            "severity": "critical",
+            "class": "lumenflow",
+            "component": "monitoring"
+          },
+          "disableResolveMessage": false
+        }
+      ]
+    },
+    {
+      "orgId": 1,
+      "name": "slack-alerts",
+      "receivers": [
+        {
+          "uid": "slack-alerts-receiver",
+          "type": "slack",
+          "settings": {
+            "url": "$SLACK_WEBHOOK_URL",
+            "recipient": "#lumenflow-alerts",
+            "username": "Grafana Alerts",
+            "icon_emoji": ":rotating_light:",
+            "title": "{{ .CommonLabels.alertname }}",
+            "text": "{{ range .Alerts }}{{ .Annotations.summary }}\n{{ .Annotations.description }}\n{{ end }}"
+          },
+          "disableResolveMessage": false
+        }
+      ]
+    }
+  ],
+  "policies": [
+    {
+      "orgId": 1,
+      "receiver": "pagerduty-oncall",
+      "group_by": ["alertname", "severity"],
+      "group_wait": "10s",
+      "group_interval": "1m",
+      "repeat_interval": "2h",
+      "routes": [
+        {
+          "receiver": "slack-alerts",
+          "object_matchers": [
+            ["alertname", "=~", "Payment Failure Rate High|Webhook Delivery Failure Rate High|RPC Error Rate High"]
+          ],
+          "group_wait": "10s",
+          "group_interval": "1m",
+          "repeat_interval": "2h"
+        }
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "orgId": 1,
+      "name": "lumenflow-payment-alerts",
+      "folder": "LumenFlow Alerts",
+      "interval": "1m",
+      "rules": [
+        {
+          "uid": "payment-failure-rate-high",
+          "title": "Payment Failure Rate High",
+          "condition": "A",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 300,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "editorMode": "code",
+                "expr": "sum(rate(lumenflow_errors_total[5m])) / clamp_min(sum(rate(lumenflow_payments_total[5m])), 0.001) * 100 > 5",
+                "instant": true,
+                "range": false,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            }
+          ],
+          "noDataState": "NoData",
+          "execErrState": "Error",
+          "for": "5m",
+          "annotations": {
+            "summary": "Payment failure rate is above 5%",
+            "description": "Payment failure rate has exceeded 5% over the last 5-minute window. Current value: {{ $value }}%. Investigate payment processing immediately."
+          },
+          "labels": {
+            "severity": "critical",
+            "team": "payments",
+            "service": "lumenflow"
+          },
+          "isPaused": false
+        },
+        {
+          "uid": "webhook-delivery-failure-rate-high",
+          "title": "Webhook Delivery Failure Rate High",
+          "condition": "A",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 300,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "editorMode": "code",
+                "expr": "sum(rate(lumenflow_webhook_delivery_failures_total[5m])) / clamp_min(sum(rate(lumenflow_webhook_deliveries_total[5m])), 0.001) * 100 > 1",
+                "instant": true,
+                "range": false,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            }
+          ],
+          "noDataState": "NoData",
+          "execErrState": "Error",
+          "for": "5m",
+          "annotations": {
+            "summary": "Webhook delivery failure rate is above 1%",
+            "description": "Webhook delivery failure rate has exceeded 1% over the last 5-minute window. Current value: {{ $value }}%. Check webhook delivery pipeline and downstream endpoints."
+          },
+          "labels": {
+            "severity": "critical",
+            "team": "platform",
+            "service": "lumenflow"
+          },
+          "isPaused": false
+        },
+        {
+          "uid": "rpc-error-rate-high",
+          "title": "RPC Error Rate High",
+          "condition": "A",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 120,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "editorMode": "code",
+                "expr": "sum(rate(lumenflow_rpc_errors_total[2m])) / clamp_min(sum(rate(lumenflow_rpc_requests_total[2m])), 0.001) * 100 > 2",
+                "instant": true,
+                "range": false,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            }
+          ],
+          "noDataState": "NoData",
+          "execErrState": "Error",
+          "for": "2m",
+          "annotations": {
+            "summary": "RPC error rate is above 2%",
+            "description": "RPC error rate has exceeded 2% over the last 2-minute window. Current value: {{ $value }}%. Check RPC dependencies and network connectivity."
+          },
+          "labels": {
+            "severity": "critical",
+            "team": "platform",
+            "service": "lumenflow"
+          },
+          "isPaused": false
+        }
+      ]
+    }
+  ]
+}

@@ -197,6 +197,53 @@ The hook scans the repository with `.gitleaks.toml` before each commit. Add
 reviewed false-positive exceptions to that configuration. For emergencies only,
 `SKIP_SECRET_SCAN=1 git commit ...` skips the scan and prints a warning.
 
+### Credential Hygiene
+
+Never commit real credentials — private keys, API tokens, webhook secrets,
+seed phrases, or `.env` files — to the repository. Even if a secret is removed in
+a later commit, it remains in the git history and must be treated as compromised.
+
+- Keep secrets in environment variables or a local `.env` file (git-ignored),
+  never in source files, fixtures, or documentation examples.
+- Use obviously fake placeholder values in tests and docs (e.g.
+  `S...EXAMPLE...`), and add reviewed exceptions to `.gitleaks.toml` or
+  `.gitleaksignore` when a fixture trips the scanner.
+- GitHub Secret Scanning is enabled on the repository and alerts maintainers
+  when a known credential pattern is pushed. CI also runs gitleaks on every PR
+  diff, so a leaked secret blocks the merge.
+- If you accidentally commit a secret: **rotate/revoke it immediately**, then
+  notify a maintainer so the history can be cleaned up. Removing the commit is
+  not sufficient — assume the value is public.
+
+### Subresource Integrity (SRI) for CDN Resources
+
+All `<script src="...">` and `<link rel="stylesheet">` tags that load from an
+external origin **must** include `integrity` and `crossorigin="anonymous"`
+attributes. A CI step verifies this on every PR.
+
+```html
+<script
+  src="https://cdn.example.com/lib.min.js"
+  integrity="sha384-<base64-hash>"
+  crossorigin="anonymous"></script>
+```
+
+**When upgrading a CDN dependency**, regenerate the hashes:
+
+```bash
+# Generate an SRI hash for a single file
+openssl dgst -sha384 -binary lib.min.js | openssl base64 -A
+# or, for a remote URL
+curl -s https://cdn.example.com/lib.min.js \
+  | openssl dgst -sha384 -binary \
+  | openssl base64 -A
+```
+
+Prefix the output with `sha384-` and paste it into the `integrity` attribute.
+Commit the updated HTML together with the version bump, and confirm the CI
+integrity check passes. Never disable or weaken the check to work around a
+mismatch — a failing hash means the served file differs from what you reviewed.
+
 ```bash
 # Install Rust stable + WASM target
 rustup target add wasm32-unknown-unknown
