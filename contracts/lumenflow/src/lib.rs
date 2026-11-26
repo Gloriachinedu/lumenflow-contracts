@@ -160,6 +160,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         require_admin_rate_limited(&env, &admin)?;
         storage::set_cleanup_period(&env, period);
+        Self::append_audit(&env, AdminActionType::SetPaymentCleanupPeriod, &admin, String::from_str(&env, ""));
         env.events().publish(
             ("lumenflow", "admin_action"),
             (
@@ -212,6 +213,7 @@ impl PaymentProcessingContract {
         require_admin_rate_limited(&env, &admin)?;
         require_positive(threshold)?;
         storage::set_large_payment_threshold(&env, threshold);
+        Self::append_audit(&env, AdminActionType::SetLargePaymentThreshold, &admin, String::from_str(&env, ""));
         env.events().publish(
             ("lumenflow", "admin_action"),
             (
@@ -234,6 +236,7 @@ impl PaymentProcessingContract {
             return Err(PaymentError::InvalidInput);
         }
         storage::set_multisig_expiry_duration(&env, duration);
+        Self::append_audit(&env, AdminActionType::SetMultisigExpiryDuration, &admin, String::from_str(&env, ""));
         Ok(())
     }
 
@@ -259,6 +262,7 @@ impl PaymentProcessingContract {
             return Err(PaymentError::InvalidInput);
         }
         storage::set_max_multisig_signers(&env, max_signers);
+        Self::append_audit(&env, AdminActionType::SetMaxSigners, &admin, String::from_str(&env, ""));
         env.events().publish(("lumenflow", "max_signers_updated"), max_signers);
         Ok(())
     }
@@ -274,8 +278,47 @@ impl PaymentProcessingContract {
             return Err(PaymentError::InvalidInput);
         }
         storage::set_refund_window(&env, window_secs);
+        Self::append_audit(&env, AdminActionType::SetRefundWindow, &admin, String::from_str(&env, ""));
         env.events()
             .publish(("lumenflow", "refund_window_set"), window_secs);
+        Ok(())
+    }
+
+    /// Set a merchant-specific refund window in seconds (issue #1517). Merchant only.
+    ///
+    /// Overrides the global refund window for payments to `merchant`. When unset,
+    /// `refund_payment` falls back to the global default configured via
+    /// [`set_refund_window`].
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant whose window is being configured. Must sign.
+    /// * `window_secs` - Refund window in seconds. Must be ≥ [`storage::MIN_REFUND_WINDOW_SECS`].
+    ///
+    /// # Errors
+    /// * [`PaymentError::MerchantNotFound`] — no merchant is registered at `merchant`.
+    /// * [`PaymentError::MerchantInactive`] — the merchant has been deactivated.
+    /// * [`PaymentError::InvalidInput`] — `window_secs` is below the minimum.
+    pub fn set_merchant_refund_window(
+        env: Env,
+        merchant: Address,
+        window_secs: u64,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        merchant.require_auth();
+        if window_secs < storage::MIN_REFUND_WINDOW_SECS {
+            return Err(PaymentError::InvalidInput);
+        }
+        let mut profile =
+            storage::get_merchant(&env, &merchant).ok_or(PaymentError::MerchantNotFound)?;
+        if !profile.active {
+            return Err(PaymentError::MerchantInactive);
+        }
+        profile.refund_window_secs = Some(window_secs);
+        storage::set_merchant(&env, &profile);
+        env.events().publish(
+            ("lumenflow", "merchant_refund_window_set"),
+            (merchant, window_secs),
+        );
         Ok(())
     }
 
@@ -332,6 +375,7 @@ impl PaymentProcessingContract {
         let lock_until = env.ledger().timestamp() + PAUSE_TIMELOCK_SECS;
         storage::set_unpause_lock_until(&env, lock_until);
         storage::clear_early_unpause_approvals(&env);
+        Self::append_audit(&env, AdminActionType::PauseWithReason, &admin, reason.clone());
         env.events()
             .publish(("lumenflow", "contract_paused"), (reason, lock_until));
         Ok(())
@@ -359,6 +403,7 @@ impl PaymentProcessingContract {
             return Err(PaymentError::InvalidInput);
         }
         storage::set_pause_guardians(&env, &guardians);
+        Self::append_audit(&env, AdminActionType::SetPauseGuardians, &admin, String::from_str(&env, ""));
         Ok(())
     }
 
@@ -423,6 +468,7 @@ impl PaymentProcessingContract {
         require_admin_rate_limited(&env, &admin)?;
         require_positive(amount)?;
         storage::set_min_refund_amount(&env, amount);
+        Self::append_audit(&env, AdminActionType::SetMinRefundAmount, &admin, String::from_str(&env, ""));
         Ok(())
     }
 
@@ -453,6 +499,7 @@ impl PaymentProcessingContract {
             return Err(PaymentError::InvalidInput);
         }
         storage::set_signature_expiry_window(&env, window_secs);
+        Self::append_audit(&env, AdminActionType::SetSignatureExpiryWindow, &admin, String::from_str(&env, ""));
         env.events()
             .publish(("lumenflow", "signature_expiry_window_set"), window_secs);
         Ok(())
@@ -492,6 +539,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         require_admin_rate_limited(&env, &admin)?;
         storage::clear_auth_lockout(&env, &address);
+        Self::append_audit(&env, AdminActionType::ResetAuthLockout, &admin, String::from_str(&env, ""));
         env.events()
             .publish(("lumenflow", "auth_lockout_reset"), address);
         Ok(())
@@ -520,6 +568,7 @@ impl PaymentProcessingContract {
             return Err(PaymentError::InvalidInput);
         }
         storage::set_rate_limit_per_window(&env, limit);
+        Self::append_audit(&env, AdminActionType::SetRateLimit, &admin, String::from_str(&env, ""));
         env.events().publish(("lumenflow", "rate_limit_set"), limit);
         Ok(())
     }
@@ -582,6 +631,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         require_admin(&env, &admin)?;
         storage::set_issuer_allowed(&env, &issuer, true);
+        Self::append_audit(&env, AdminActionType::AddAllowedIssuer, &admin, String::from_str(&env, ""));
         env.events()
             .publish(("lumenflow", "issuer_allowed"), issuer);
         Ok(())
@@ -595,6 +645,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         require_admin(&env, &admin)?;
         storage::set_issuer_allowed(&env, &issuer, false);
+        Self::append_audit(&env, AdminActionType::RemoveAllowedIssuer, &admin, String::from_str(&env, ""));
         env.events()
             .publish(("lumenflow", "issuer_disallowed"), issuer);
         Ok(())
@@ -612,6 +663,7 @@ impl PaymentProcessingContract {
             return Err(PaymentError::InvalidInput);
         }
         storage::set_payment_rate_limit(&env, limit);
+        Self::append_audit(&env, AdminActionType::SetPaymentRateLimit, &admin, String::from_str(&env, ""));
         Ok(())
     }
 
@@ -627,6 +679,7 @@ impl PaymentProcessingContract {
             return Err(PaymentError::InvalidInput);
         }
         storage::set_payment_rate_window(&env, window_secs);
+        Self::append_audit(&env, AdminActionType::SetPaymentRateWindow, &admin, String::from_str(&env, ""));
         Ok(())
     }
 
@@ -1041,6 +1094,7 @@ impl PaymentProcessingContract {
         }
         storage::set_global_stats(&env, &stats);
 
+        Self::append_audit(&env, AdminActionType::DeactivateMerchant, &admin, String::from_str(&env, ""));
         env.events()
             .publish(("lumenflow", "merchant_deactivated"), merchant_address);
         Ok(())
@@ -1066,6 +1120,7 @@ impl PaymentProcessingContract {
         stats.active_merchants += 1;
         storage::set_global_stats(&env, &stats);
 
+        Self::append_audit(&env, AdminActionType::ReactivateMerchant, &admin, String::from_str(&env, ""));
         env.events()
             .publish(("lumenflow", "merchant_reactivated"), merchant_address);
         Ok(())
@@ -1096,6 +1151,7 @@ impl PaymentProcessingContract {
             storage::get_merchant(&env, &merchant_address).ok_or(PaymentError::MerchantNotFound)?;
         merchant.verified = true;
         storage::set_merchant(&env, &merchant);
+        Self::append_audit(&env, AdminActionType::VerifyMerchant, &admin, String::from_str(&env, ""));
         env.events()
             .publish(("lumenflow", "merchant_verified"), merchant_address);
         Ok(())
@@ -1127,6 +1183,7 @@ impl PaymentProcessingContract {
             storage::get_merchant(&env, &merchant_address).ok_or(PaymentError::MerchantNotFound)?;
         merchant.verified = false;
         storage::set_merchant(&env, &merchant);
+        Self::append_audit(&env, AdminActionType::UnverifyMerchant, &admin, String::from_str(&env, ""));
         env.events()
             .publish(("lumenflow", "merchant_unverified"), merchant_address);
         Ok(())
@@ -1282,7 +1339,10 @@ impl PaymentProcessingContract {
         let token_client = token::Client::new(&env, &token_address);
         let fee_bps = storage::get_platform_fee_bps(&env);
         let platform_fee: i128 = if fee_bps > 0 {
-            amount * (fee_bps as i128) / 10_000
+            amount
+                .checked_mul(fee_bps as i128)
+                .and_then(|v| v.checked_div(10_000))
+                .ok_or(PaymentError::Overflow)?
         } else {
             0
         };
@@ -1422,7 +1482,10 @@ impl PaymentProcessingContract {
         let token_client = token::Client::new(&env, &token_address);
         let fee_bps = storage::get_platform_fee_bps(&env);
         let platform_fee: i128 = if fee_bps > 0 {
-            amount * (fee_bps as i128) / 10_000
+            amount
+                .checked_mul(fee_bps as i128)
+                .and_then(|v| v.checked_div(10_000))
+                .ok_or(PaymentError::Overflow)?
         } else {
             0
         };
@@ -4150,6 +4213,13 @@ impl PaymentProcessingContract {
             return Err(PaymentError::EscrowNotUnlocked);
         }
 
+        // Reentrancy guard
+        let lock_key = soroban_sdk::Symbol::new(&env, "reentrancy_lock");
+        if env.storage().instance().get::<_, bool>(&lock_key).unwrap_or(false) {
+            return Err(PaymentError::Reentrancy);
+        }
+        env.storage().instance().set(&lock_key, &true);
+
         // Effects before interaction
         escrow.status = EscrowStatus::Released;
         storage::set_escrow(&env, &escrow);
@@ -4162,6 +4232,7 @@ impl PaymentProcessingContract {
             &escrow.amount,
         );
 
+        env.storage().instance().set(&soroban_sdk::Symbol::new(&env, "reentrancy_lock"), &false);
         env.events()
             .publish(("lumenflow", "escrow_released"), (order_id, escrow.amount));
         Ok(())
@@ -4374,6 +4445,13 @@ impl PaymentProcessingContract {
             return Err(PaymentError::EscrowNotUnlocked);
         }
 
+        // Reentrancy guard
+        let lock_key = soroban_sdk::Symbol::new(&env, "reentrancy_lock");
+        if env.storage().instance().get::<_, bool>(&lock_key).unwrap_or(false) {
+            return Err(PaymentError::Reentrancy);
+        }
+        env.storage().instance().set(&lock_key, &true);
+
         // Effects before interactions.
         hold.status = EscrowHoldStatus::Released;
         storage::set_escrow_hold(&env, &hold);
@@ -4386,6 +4464,7 @@ impl PaymentProcessingContract {
             &hold.amount,
         );
 
+        env.storage().instance().set(&soroban_sdk::Symbol::new(&env, "reentrancy_lock"), &false);
         env.events().publish(
             ("lumenflow", "escrow_released"),
             (escrow_id, hold.merchant, hold.amount),
@@ -4463,6 +4542,166 @@ impl PaymentProcessingContract {
         storage::get_escrow_hold(&env, &escrow_id).ok_or(PaymentError::EscrowNotFound)
     }
 
+    // ── Emergency Escrow Withdrawal (Issue #1511) ─────────────────────────────
+
+    /// Set the governance treasury address for emergency withdrawals. Admin only.
+    ///
+    /// The treasury receives funds transferred via `emergency_withdraw`.  Must
+    /// be called once before any emergency withdrawal can be executed.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the contract administrator. Must sign the call.
+    /// * `treasury` - The governance-controlled treasury address.
+    pub fn set_treasury_address(
+        env: Env,
+        admin: Address,
+        treasury: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_treasury_address(&env, &treasury);
+        Ok(())
+    }
+
+    /// Set the emergency lock period in seconds (default 90 days). Admin only.
+    ///
+    /// Only escrows whose `created_at` is older than this period are eligible
+    /// for emergency withdrawal.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the contract administrator. Must sign the call.
+    /// * `secs` - New lock period in seconds. Must be greater than zero.
+    pub fn set_emergency_lock_period(
+        env: Env,
+        admin: Address,
+        secs: u64,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        if secs == 0 {
+            return Err(PaymentError::InvalidInput);
+        }
+        storage::set_emergency_lock_period(&env, secs);
+        Ok(())
+    }
+
+    /// Record one admin's approval for an emergency withdrawal of a stuck escrow.
+    ///
+    /// At least `EMERGENCY_WITHDRAWAL_REQUIRED_APPROVALS` (default 3) distinct
+    /// admins must approve before `emergency_withdraw` can execute. This
+    /// function is intentionally separate so that multiple admins can approve
+    /// asynchronously without coordinating a single transaction.
+    ///
+    /// # Arguments
+    /// * `admin` - A contract administrator approving the withdrawal. Must sign.
+    /// * `escrow_id` - The escrow order_id being approved for withdrawal.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — caller is not the admin.
+    /// * [`PaymentError::EscrowNotFound`] — no escrow with `escrow_id` exists.
+    /// * [`PaymentError::EscrowAlreadyFinalised`] — escrow is not in `Locked` state.
+    /// * [`PaymentError::EmergencyAlreadyApproved`] — this admin already approved.
+    pub fn approve_emergency_withdrawal(
+        env: Env,
+        admin: Address,
+        escrow_id: String,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+
+        let escrow =
+            storage::get_escrow(&env, &escrow_id).ok_or(PaymentError::EscrowNotFound)?;
+        if !matches!(escrow.status, EscrowStatus::Locked) {
+            return Err(PaymentError::EscrowAlreadyFinalised);
+        }
+
+        let mut approvals = storage::get_emergency_withdrawal_approvals(&env, &escrow_id);
+        for a in approvals.iter() {
+            if a == admin {
+                return Err(PaymentError::EmergencyAlreadyApproved);
+            }
+        }
+
+        approvals.push_back(admin);
+        storage::set_emergency_withdrawal_approvals(&env, &escrow_id, &approvals);
+        Ok(())
+    }
+
+    /// Emergency-withdraw stuck escrow funds to the governance treasury.
+    ///
+    /// Can only be called when ALL of the following conditions are met:
+    /// 1. Caller is the contract admin.
+    /// 2. The escrow is still in `Locked` status (not already released/cancelled).
+    /// 3. The escrow's `created_at` is older than `EMERGENCY_LOCK_PERIOD`
+    ///    (default 90 days).
+    /// 4. At least `EMERGENCY_WITHDRAWAL_REQUIRED_APPROVALS` (default 3) distinct
+    ///    admins have called `approve_emergency_withdrawal` for this escrow_id.
+    /// 5. A treasury address has been configured via `set_treasury_address`.
+    ///
+    /// On success the escrow status is set to `Cancelled` (funds are gone from
+    /// the contract), the approval set is cleared, and an
+    /// `EmergencyWithdrawalEvent` is emitted.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the contract administrator. Must sign the call.
+    /// * `escrow_id` - The escrow order_id to withdraw.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — caller is not the admin.
+    /// * [`PaymentError::EscrowNotFound`] — no escrow with `escrow_id` exists.
+    /// * [`PaymentError::EscrowAlreadyFinalised`] — escrow is not in `Locked` state.
+    /// * [`PaymentError::EmergencyLockPeriodNotMet`] — escrow is too recent.
+    /// * [`PaymentError::EmergencyMultisigNotMet`] — insufficient admin approvals.
+    /// * [`PaymentError::TreasuryNotSet`] — treasury address not configured.
+    pub fn emergency_withdraw(
+        env: Env,
+        admin: Address,
+        escrow_id: String,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+
+        let mut escrow =
+            storage::get_escrow(&env, &escrow_id).ok_or(PaymentError::EscrowNotFound)?;
+
+        if !matches!(escrow.status, EscrowStatus::Locked) {
+            return Err(PaymentError::EscrowAlreadyFinalised);
+        }
+
+        // Enforce minimum lock period before an emergency withdrawal is allowed.
+        let now = env.ledger().timestamp();
+        let lock_period = storage::get_emergency_lock_period(&env);
+        if now.saturating_sub(escrow.created_at) < lock_period {
+            return Err(PaymentError::EmergencyLockPeriodNotMet);
+        }
+
+        // Require sufficient multisig approvals from distinct admins.
+        let approvals = storage::get_emergency_withdrawal_approvals(&env, &escrow_id);
+        if approvals.len() < storage::EMERGENCY_WITHDRAWAL_REQUIRED_APPROVALS {
+            return Err(PaymentError::EmergencyMultisigNotMet);
+        }
+
+        // Treasury must be configured.
+        let treasury =
+            storage::get_treasury_address(&env).ok_or(PaymentError::TreasuryNotSet)?;
+
+        // Effects before interaction (checks-effects-interactions).
+        let amount = escrow.amount;
+        escrow.status = EscrowStatus::Cancelled;
+        storage::set_escrow(&env, &escrow);
+        storage::clear_emergency_withdrawal_approvals(&env, &escrow_id);
+
+        // Transfer funds from contract to treasury.
+        let token_client = token::Client::new(&env, &escrow.token);
+        token_client.transfer(&env.current_contract_address(), &treasury, &amount);
+
+        env.events().publish(
+            ("lumenflow", "emergency_withdrawal"),
+            crate::types::EmergencyWithdrawalEvent {
+                escrow_id,
+                amount,
+                recipient: treasury,
+            },
+        );
+        Ok(())
+    }
+
     // ── Admin Audit Log (Issue #1115) ─────────────────────────────────────────
 
     /// Query the admin audit log filtered by ledger range.
@@ -4497,5 +4736,36 @@ impl PaymentProcessingContract {
 
         let effective_limit = limit.min(100);
         Ok(storage::query_admin_audit_log(&env, from_ledger, to_ledger, effective_limit))
+    }
+
+    /// Paginated view of the admin audit log (issue #1520).
+    ///
+    /// Returns up to `limit` entries starting at absolute index `start`, in
+    /// ascending index order. Entries are append-only and can never be mutated
+    /// or deleted.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the contract administrator. Must sign the call.
+    /// * `start` - Absolute index of the first entry to return.
+    /// * `limit` - Maximum entries to return (capped at 100, must be > 0).
+    ///
+    /// # Returns
+    /// A `Vec<AdminAuditEntry>`.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — caller is not the admin.
+    /// * [`PaymentError::InvalidInput`] — `limit` is 0.
+    pub fn get_admin_audit_log_page(
+        env: Env,
+        admin: Address,
+        start: u32,
+        limit: u32,
+    ) -> Result<Vec<AdminAuditEntry>, PaymentError> {
+        require_admin(&env, &admin)?;
+        if limit == 0 {
+            return Err(PaymentError::InvalidInput);
+        }
+        let effective_limit = limit.min(100);
+        Ok(storage::get_admin_audit_page(&env, start, effective_limit))
     }
 }

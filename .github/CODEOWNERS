@@ -5,6 +5,10 @@
 
 # Path-specific owners
 /contracts/ @Gloriachinedu/smart-contract-team
-/scripts/ @Gloriachinedu/devops-team
-/docs/ @Gloriachinedu/documentation-team
 /sdk/ @Gloriachinedu/sdk-team
+/cli/ @Gloriachinedu/cli-team
+/frontend/ @Gloriachinedu/frontend-team
+/infra/terraform/ @Gloriachinedu/devops-team
+/docs/ @Gloriachinedu/documentation-team
+/monitoring/ @Gloriachinedu/devops-team
+/scripts/ @Gloriachinedu/devops-team

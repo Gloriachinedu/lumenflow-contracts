@@ -376,13 +376,13 @@
   <label for="search" class="sr-only">Search by order ID or merchant</label>
   <input type="search" id="search" placeholder="Search order ID…" oninput="applyFilters()" aria-label="Search by order ID or merchant" />
   <label for="status-filter" class="sr-only">Filter by status</label>
-  <select id="status-filter" onchange="applyFilters()" aria-label="Filter by payment status">
+  <select id="status-filter" onchange="applyFilters()" aria-label="Filter by payment status" aria-haspopup="listbox" aria-controls="status-filter" tabindex="0">
     <option value="">All statuses</option>
     <option value="Completed">Completed</option>
     <option value="PartiallyRefunded">Partially Refunded</option>
     <option value="FullyRefunded">Fully Refunded</option>
   </select>
-  <button class="btn btn-outline" onclick="resetFilters()">Reset filters</button>
+  <button class="btn btn-outline" id="reset-filters-btn" onclick="resetFilters()" tabindex="0">Reset filters</button>
 </div>
 
 <!-- Desktop table -->
@@ -425,13 +425,7 @@
 </main>
 
 <script src="payment-history.js"></script>
-<script type="module">
-  import { initWalletStatus } from './wallet-status.js';
-
-  initWalletStatus({
-    container: document.getElementById('wallet-status-container'),
-  });
-</script>
+<script src="filter-keyboard.js"></script>
 <script>
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
