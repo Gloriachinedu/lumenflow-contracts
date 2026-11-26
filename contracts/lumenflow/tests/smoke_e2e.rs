@@ -362,6 +362,197 @@ fn test_smoke_stats_update_across_full_cycle() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Flow 6: USDC (Stellar SAC) full payment + refund cycle — issue #1576
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Full payment + refund cycle using a USDC-like Stellar Asset Contract token.
+///
+/// The token is registered via `register_stellar_asset_contract_v2` with a
+/// dedicated issuer (mirroring the USDC SAC on mainnet/testnet) and must be
+/// explicitly allowlisted before it can be used for payments.
+#[test]
+fn test_smoke_usdc_payment_refund_cycle() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(PaymentProcessingContract, ());
+    let client = PaymentProcessingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let payer = Address::generate(&env);
+
+    // USDC-like SAC: dedicated issuer, 7 decimal places on Stellar.
+    let usdc_issuer = Address::generate(&env);
+    let usdc = env
+        .register_stellar_asset_contract_v2(usdc_issuer.clone())
+        .address();
+
+    client.set_admin(&admin);
+    // Issue #1576: USDC must be allowlisted before use.
+    client.add_allowed_token(&admin, &usdc);
+
+    client.register_merchant(
+        &merchant,
+        &str(&env, "USDC Store"),
+        &str(&env, "USDC integration merchant"),
+        &str(&env, "usdc@test.local"),
+        &MerchantCategory::Retail,
+    );
+
+    // 10 USDC (7 decimals) for the payer, 10 USDC for the merchant to refund.
+    let ten_usdc: i128 = 100_000_000;
+    mint(&env, &usdc, &payer, ten_usdc);
+    mint(&env, &usdc, &merchant, ten_usdc);
+
+    let usdc_client = StellarAssetClient::new(&env, &usdc);
+    assert_eq!(usdc_client.balance(&payer), ten_usdc);
+
+    // Payment of 2.5 USDC.
+    let payment_amount: i128 = 25_000_000;
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "USDC_ORDER_1"),
+        &merchant,
+        &usdc,
+        &payment_amount,
+        &str(&env, "USDC smoke payment"),
+        &None,
+        &1u64,
+        &zero_sig(&env),
+        &zero_key(&env),
+    );
+
+    // Balances moved: payer debited, merchant credited.
+    assert_eq!(usdc_client.balance(&payer), ten_usdc - payment_amount);
+    assert_eq!(usdc_client.balance(&merchant), ten_usdc + payment_amount);
+
+    let payment = client.get_payment_by_id(&payer, &str(&env, "USDC_ORDER_1"));
+    assert_eq!(payment.amount, payment_amount);
+    assert_eq!(payment.status, PaymentStatus::Completed);
+
+    // Full refund cycle in USDC.
+    client.initiate_refund(
+        &payer,
+        &str(&env, "USDC_REFUND_1"),
+        &str(&env, "USDC_ORDER_1"),
+        &payment_amount,
+        &str(&env, "USDC full refund"),
+    );
+    assert_eq!(
+        client.get_refund(&str(&env, "USDC_REFUND_1")).status,
+        RefundStatus::Pending
+    );
+
+    client.approve_refund(&merchant, &str(&env, "USDC_REFUND_1"));
+    assert_eq!(
+        client.get_refund(&str(&env, "USDC_REFUND_1")).status,
+        RefundStatus::Approved
+    );
+
+    client.execute_refund(&str(&env, "USDC_REFUND_1"));
+    assert_eq!(
+        client.get_refund(&str(&env, "USDC_REFUND_1")).status,
+        RefundStatus::Completed
+    );
+
+    // Balances restored to their pre-payment values.
+    assert_eq!(usdc_client.balance(&payer), ten_usdc);
+    assert_eq!(usdc_client.balance(&merchant), ten_usdc);
+
+    let final_payment = client.get_payment_by_id(&payer, &str(&env, "USDC_ORDER_1"));
+    assert_eq!(final_payment.status, PaymentStatus::FullyRefunded);
+    assert_eq!(final_payment.refunded_amount, payment_amount);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regression: state stays final when a token transfer fails — issue #1507
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Issue #1507: state must be marked final *before* the external token call
+/// (checks-effects-interactions). If the token transfer fails, the contract
+/// must not leave a half-written, non-final record behind.
+///
+/// The payer is funded with less than the payment amount, so the token
+/// transfer fails. The payment record must not be observable as `Completed`
+/// and no refund can be initiated against it.
+#[test]
+fn test_regression_state_final_before_transfer_on_failed_payment() {
+    let (env, client, _admin, merchant, payer, token) = setup_full_env();
+
+    // Drain the payer's balance so the transfer must fail.
+    let payer_balance = StellarAssetClient::new(&env, &token).balance(&payer);
+    StellarAssetClient::new(&env, &token).burn(&payer, &payer_balance);
+
+    let result = client.try_process_payment_with_signature(
+        &payer,
+        &str(&env, "FAILED_ORDER_1"),
+        &merchant,
+        &token,
+        &1_000,
+        &str(&env, "insufficient funds"),
+        &None,
+        &1u64,
+        &zero_sig(&env),
+        &zero_key(&env),
+    );
+    assert!(result.is_err(), "payment must fail without funds");
+
+    // No refund can be initiated against a payment that never completed.
+    let refund_result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "FAILED_REFUND_1"),
+        &str(&env, "FAILED_ORDER_1"),
+        &1_000,
+        &str(&env, "refund against failed payment"),
+    );
+    assert!(
+        refund_result.is_err(),
+        "refund must not be possible for a failed payment"
+    );
+}
+
+/// Issue #1507: a refund whose token transfer fails must not be left in a
+/// non-final state that allows double-spending of the refund amount.
+#[test]
+fn test_regression_state_final_before_transfer_on_failed_refund() {
+    let (env, client, _admin, merchant, payer, token) = setup_full_env();
+
+    client.process_payment_with_signature(
+        &payer,
+        &str(&env, "FAILED_REFUND_ORDER"),
+        &merchant,
+        &token,
+        &1_000,
+        &str(&env, "refund failure test"),
+        &None,
+        &1u64,
+        &zero_sig(&env),
+        &zero_key(&env),
+    );
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "FAILED_REFUND"),
+        &str(&env, "FAILED_REFUND_ORDER"),
+        &1_000,
+        &str(&env, "refund that will fail"),
+    );
+    client.approve_refund(&merchant, &str(&env, "FAILED_REFUND"));
+
+    // Drain the merchant so the refund transfer must fail.
+    let merchant_balance = StellarAssetClient::new(&env, &token).balance(&merchant);
+    StellarAssetClient::new(&env, &token).burn(&merchant, &merchant_balance);
+
+    let result = client.try_execute_refund(&str(&env, "FAILED_REFUND"));
+    assert!(result.is_err(), "refund must fail without merchant funds");
+
+    // The payment must not record the refunded amount.
+    let payment = client.get_payment_by_id(&payer, &str(&env, "FAILED_REFUND_ORDER"));
+    assert_eq!(payment.refunded_amount, 0);
+    assert_eq!(payment.status, PaymentStatus::Completed);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Boundary: refund exceeding original amount is blocked
 // ─────────────────────────────────────────────────────────────────────────────
 

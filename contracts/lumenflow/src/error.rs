@@ -88,6 +88,12 @@ pub enum PaymentError {
     /// The multi-signature payment has expired. Remediation: Create a new multisig payment.
     MultisigExpired = 46,
 
+    // Merchant limits
+    /// The payment amount exceeds the merchant's configured `max_payment_amount`.
+    /// Remediation: Use a smaller payment amount or ask an admin to raise the merchant's
+    /// payment limit via `set_merchant_payment_limit`.
+    ExceedsMerchantLimit = 76,
+
     // Contract state
     /// The contract is currently paused. Remediation: An admin must unpause the contract.
     ContractPaused = 70,

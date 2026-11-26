@@ -241,7 +241,11 @@ pub enum DataKey {
 /// Bump this constant whenever a `#[contracttype]` struct or enum is changed in
 /// a way that is not backwards-compatible (field added without `Option`, variant
 /// reordered, type changed, etc.).
-pub const CURRENT_STORAGE_VERSION: u32 = 1;
+///
+/// v2 (issue #1592): added `DataKey::MPL(Address)` for the per-merchant maximum
+/// payment amount.  This is a purely additive variant, so existing entries are
+/// unaffected and no data migration is required.
+pub const CURRENT_STORAGE_VERSION: u32 = 2;
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
 

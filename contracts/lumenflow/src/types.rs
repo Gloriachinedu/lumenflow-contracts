@@ -29,6 +29,9 @@ pub struct Merchant {
     pub total_received: i128,
     /// Number of merchants that registered using this merchant's referral address.
     pub referral_count: u32,
+    /// Optional maximum payment amount this merchant will accept. `None` means
+    /// no limit is enforced (issue #1592).
+    pub max_payment_amount: Option<i128>,
 }
 
 /// Per-merchant profile settings that can be configured by the merchant.

@@ -34,7 +34,17 @@
     </div>
   </header>
 
-  <main id="main-content" class="dashboard-main">
+  <!-- Operator authentication gate -->
+  <div id="auth-gate" class="auth-gate" role="region" aria-labelledby="auth-gate-title" hidden>
+    <div class="auth-gate-inner">
+      <h2 id="auth-gate-title" class="auth-gate-title">Operator sign-in required</h2>
+      <p class="auth-gate-msg">This dashboard is restricted to authenticated operators. Please sign in to continue.</p>
+      <p id="auth-gate-status" class="auth-gate-status" role="status" aria-live="polite"></p>
+      <button id="auth-signin-btn" class="btn" aria-label="Sign in as operator">Sign in</button>
+    </div>
+  </div>
+
+  <main id="main-content" class="dashboard-main" hidden>
 
     <!-- KPI summary row -->
     <section class="kpi-row" aria-label="Onboarding key metrics">
@@ -61,18 +71,19 @@
       <!-- Funnel chart -->
       <section class="panel panel-wide" aria-labelledby="panel-funnel-title">
         <div class="panel-header">
-          <h2 id="panel-funnel-title" class="panel-title">Registration Funnel</h2>
+          <h2 id="panel-funnel-title" class="panel-title">Activation Funnel</h2>
           <span class="panel-subtitle" id="funnel-date-label" aria-live="polite"></span>
         </div>
         <div class="panel-body">
           <div id="funnel-loading" class="loading-msg" role="status" aria-live="polite">Loading…</div>
           <div id="funnel-chart" class="funnel-chart" role="img" aria-label="Merchant registration funnel chart. Equivalent data is available in the funnel step completion table." hidden></div>
           <table id="funnel-table" class="data-table sr-only" aria-label="Funnel step completion data">
-            <caption>Merchant registration funnel — step completion counts and drop-off rates</caption>
+            <caption>Merchant activation funnel — step completion counts, conversion rates, and drop-off rates</caption>
             <thead>
               <tr>
                 <th scope="col">Step</th>
                 <th scope="col">Count</th>
+                <th scope="col">Conversion %</th>
                 <th scope="col">Drop-off %</th>
               </tr>
             </thead>
@@ -95,6 +106,7 @@
                 <th scope="col">Step</th>
                 <th scope="col">Stage</th>
                 <th scope="col">Completed</th>
+                <th scope="col">Conversion %</th>
                 <th scope="col">Drop-off</th>
                 <th scope="col">Completion %</th>
               </tr>
