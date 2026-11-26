@@ -103,10 +103,50 @@ mistake, rotate it immediately — do not simply allowlist it.
 
 ---
 
+## Runtime configuration injection (Issue #1550)
+
+Container images are **environment-agnostic**. No environment-specific value
+(RPC URL, contract ID, network passphrase, account addresses) is baked in at
+build time. Every such value is injected at container startup via environment
+variables, so the same image can be deployed to local, testnet, or mainnet
+without rebuilding.
+
+### Required environment variables
+
+The container entrypoint refuses to start unless all of the following are set
+(see `scripts/validate-secrets.sh`):
+
+| Variable              | Required | Description                                                        |
+| --------------------- | -------- | ------------------------------------------------------------------ |
+| `NETWORK`             | Yes      | `local` / `testnet` / `mainnet`. Selects the network config.       |
+| `RPC_URL`             | Yes      | Soroban RPC endpoint for the target network.                       |
+| `NETWORK_PASSPHRASE`  | Yes      | Stellar network passphrase (public, fixed per network).            |
+| `CONTRACT_ID`         | Yes      | Deployed contract ID (`C...`) for the target network.              |
+| `ADMIN_ADDRESS`       | Yes      | Admin public key (`G...`) for the target network.                  |
+| `SOURCE_ACCOUNT`      | Yes*     | Stellar secret key (`S...`). Required for deploy/upgrade jobs only. |
+
+\* `SOURCE_ACCOUNT` is only required when the container performs a deploy or
+upgrade. Read-only services may omit it.
+
+### Validating configuration before startup
+
+Run the validator before bringing the stack up. It checks that every required
+variable is present and non-empty, and that secret-shaped values are not
+obviously malformed:
+
+```bash
+./scripts/validate-secrets.sh          # validates the current environment
+docker compose up -d                   # only after validation passes
+```
+
+The validator exits non-zero with a list of missing variables if anything is
+unset, so it can be wired into CI or a startup wrapper.
+
 ## Environment files
 
 `.env.example` is the only environment file tracked in git. It documents every
-variable but contains no real values. Everything else is ignored:
+variable (including the runtime-injection variables above) but contains no real
+values. Everything else is ignored:
 
 ```gitignore
 .env
@@ -114,16 +154,18 @@ variable but contains no real values. Everything else is ignored:
 !.env.example
 ```
 
-To set up locally, copy the example to a network-specific file and fill it in:
+`docker-compose.yml` reads an uncommitted `.env` file for local overrides. Copy
+the example and fill it in:
 
 ```bash
+cp .env.example .env            # local overrides used by docker compose
 cp .env.example .env.local      # local quickstart
 cp .env.example .env.testnet    # testnet
 cp .env.example .env.mainnet    # mainnet
 ```
 
-Never commit `.env.local`, `.env.testnet`, or `.env.mainnet`. They are gitignored
-on purpose.
+Never commit `.env`, `.env.local`, `.env.testnet`, or `.env.mainnet`. They are
+gitignored on purpose.
 
 ## Which values are secret
 
@@ -173,8 +215,9 @@ docker compose up -d stellar # start the local Stellar quickstart node
 ```
 
 `docker compose config` resolves and type-checks `docker-compose.yml`. The
-committed compose file contains no secrets; it only sets the public `NETWORK`
-value for the local quickstart node, so it is safe to commit as-is.
+committed compose file contains no secrets or environment-specific values; it
+reads them from the uncommitted `.env` file (or the shell environment) and
+passes them to the container at startup, so it is safe to commit as-is.
 
 ## Frontend Content Security Policy (CSP)
 
