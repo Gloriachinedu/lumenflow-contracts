@@ -1,0 +1,389 @@
+name: Lighthouse CI
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/lighthouse.yml'
+      - 'lighthouserc.json'
+      - '.lighthouserc.json'
+  push:
+    branches:
+      - main
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/lighthouse.yml'
+      - 'lighthouserc.json'
+      - '.lighthouserc.json'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  lighthouse:
+    name: Lighthouse CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Lighthouse CI
+        run: npm install -g @lhci/cli@0.14.x
+
+      - name: Build frontend (if build script exists)
+        working-directory: frontend
+        run: |
+          if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.build ? 0 : 1)"; then
+            npm run build
+          else
+            echo "No build script found; skipping build step."
+          fi
+
+      - name: Start static server
+        run: |
+          npx --yes serve frontend -l 3000 > /tmp/serve.log 2>&1 &
+          echo $! > /tmp/serve.pid
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/index.html > /dev/null; then
+              echo "Static server is up."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Static server failed to start."
+          cat /tmp/serve.log
+          exit 1
+
+      - name: Run Lighthouse CI
+        id: lhci
+        env:
+          LHCI_BUILD_CONTEXT__CURRENT_BRANCH: ${{ github.head_ref || github.ref_name }}
+          LHCI_BUILD_CONTEXT__COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          LHCI_BUILD_CONTEXT__GITHUB_APP_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          lhci autorun \
+            --collect.url=http://localhost:3000/index.html \
+            --collect.url=http://localhost:3000/dashboard.html \
+            --collect.url=http://localhost:3000/history.html \
+            --collect.url=http://localhost:3000/multisig.html \
+            --collect.url=http://localhost:3000/onboarding.html \
+            --collect.url=http://localhost:3000/payment-history.html \
+            --collect.url=http://localhost:3000/payment-history-paginated.html \
+            --collect.url=http://localhost:3000/receipt.html \
+            --collect.numberOfRuns=1 \
+            --upload.target=filesystem \
+            --upload.outputDir=.lighthouseci \
+            --assert.assertions.categories:performance='["error",{"minScore":0.9}]' \
+            --assert.assertions.categories:accessibility='["error",{"minScore":0.9}]' \
+            --assert.assertions.largest-contentful-paint='["error",{"maxNumericValue":2500}]' \
+            --assert.assertions.max-potential-fid='["error",{"maxNumericValue":100}]' \
+            --assert.assertions.cumulative-layout-shift='["error",{"maxNumericValue":0.1}]' \
+            --assert.assertions.first-contentful-paint='["warn",{"maxNumericValue":2000}]' \
+            --assert.assertions.total-blocking-time='["warn",{"maxNumericValue":300}]' \
+            --assert.assertions.speed-index='["warn",{"maxNumericValue":3400}]' \
+            --assert.assertions.interactive='["warn",{"maxNumericValue":5000}]' \
+            --assert.assertions.unused-css-rules='["warn",{"maxNumericValue":100}]' \
+            --assert.assertions.unused-javascript='["warn",{"maxNumericValue":100}]' \
+            --assert.assertions.uses-responsive-images='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.offscreen-images='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.render-blocking-resources='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.unminified-css='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.unminified-javascript='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.uses-optimized-images='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.uses-text-compression='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.uses-long-cache-ttl='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.efficient-animated-content='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.uses-rel-preconnect='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.font-display='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.dom-size='["warn",{"maxNumericValue":800}]' \
+            --assert.assertions.critical-request-chains='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.uses-passive-event-listeners='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.no-document-write='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.no-vulnerable-libraries='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.js-libraries='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.network-requests='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.image-alt='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.button-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.link-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr-value='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.color-contrast='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.document-title='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.html-has-lang='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.html-has-lang-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.meta-description='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.meta-viewport='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.tap-targets='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.viewport='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.heading-order='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.list='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.listitem='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.definition-list='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.dlitem='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.duplicate-id='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.duplicate-id-active='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.duplicate-id-aria='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.form-field-multiple-labels='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.frame-title='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.label='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.landmark-one-main='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.region='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.bypass='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-hidden-body='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-hidden-focus='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-input-field-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-children='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-parent='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-roles='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-toggle-field-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-tooltip-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-treeitem-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-command-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-dialog-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-meter-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-progressbar-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-text='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr-value='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-role='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-conditional-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-deprecated-role='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-hidden-body='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-hidden-focus='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-input-field-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-prohibited-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-children='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-parent='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-roles='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-toggle-field-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-tooltip-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-treeitem-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-command-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-dialog-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-meter-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-progressbar-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-text='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr-value='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-role='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-conditional-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-deprecated-role='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-hidden-body='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-hidden-focus='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-input-field-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-prohibited-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-children='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-parent='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-roles='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-toggle-field-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-tooltip-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-treeitem-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-command-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-dialog-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-meter-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-progressbar-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-text='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr-value='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-role='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-conditional-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-deprecated-role='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-hidden-body='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-hidden-focus='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-input-field-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-prohibited-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-children='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-parent='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-roles='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-toggle-field-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-tooltip-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-treeitem-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-command-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-dialog-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-meter-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-progressbar-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-text='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr-value='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-role='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-conditional-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-deprecated-role='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-hidden-body='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-hidden-focus='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-input-field-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-prohibited-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-children='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-parent='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-roles='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-toggle-field-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-tooltip-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-treeitem-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-command-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-dialog-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-meter-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-progressbar-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-text='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr-value='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-role='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-conditional-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-deprecated-role='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-hidden-body='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-hidden-focus='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-input-field-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-prohibited-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-children='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-parent='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-roles='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-toggle-field-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-tooltip-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-treeitem-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-command-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-dialog-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-meter-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-progressbar-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-text='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr-value='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-role='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-conditional-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-deprecated-role='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-hidden-body='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-hidden-focus='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-input-field-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-prohibited-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-children='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-parent='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-roles='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-toggle-field-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-tooltip-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-treeitem-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-command-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-dialog-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-meter-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-progressbar-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-text='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr-value='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-role='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-conditional-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-deprecated-role='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-hidden-body='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-hidden-focus='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-input-field-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-prohibited-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-children='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-parent='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-roles='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-toggle-field-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-tooltip-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-treeitem-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-command-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-dialog-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-meter-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-progressbar-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-text='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr-value='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-role='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-conditional-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-deprecated-role='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-hidden-body='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-hidden-focus='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-input-field-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-prohibited-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-children='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-parent='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-roles='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-toggle-field-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-tooltip-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-treeitem-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-command-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-dialog-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-meter-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-progressbar-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-text='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr-value='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-role='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-conditional-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-deprecated-role='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-hidden-body='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-hidden-focus='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-input-field-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-prohibited-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-children='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-parent='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-roles='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-toggle-field-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-tooltip-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-treeitem-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-command-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-dialog-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-meter-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-progressbar-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-text='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr-value='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-role='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-conditional-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-deprecated-role='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-hidden-body='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-hidden-focus='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-input-field-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-prohibited-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-children='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-required-parent='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-roles='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-toggle-field-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-tooltip-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-treeitem-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-command-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-dialog-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-meter-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-progressbar-name='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-text='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr-value='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-valid-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-attr='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria-allowed-role='["warn",{"maxNumericValue":0}]' \
+            --assert.assertions.aria
