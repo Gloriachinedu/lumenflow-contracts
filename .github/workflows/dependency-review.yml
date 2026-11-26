@@ -30,7 +30,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run Dependency Review
-        uses: actions/dependency-review-action@v4
+        uses: actions/dependency-review-action@v5
         with:
           # Block merge for High and Critical vulnerabilities.
           # Set to 'critical' to only block on Critical, or 'moderate'/'low'
