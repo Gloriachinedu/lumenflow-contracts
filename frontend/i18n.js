@@ -42,6 +42,52 @@ const SUPPORTED_LOCALES = {
 const DEFAULT_LOCALE = 'en';
 const STORAGE_KEY    = 'lf-lang';
 
+/**
+ * Built-in fallback translations for the payment history empty state.
+ *
+ * These are merged underneath the locale JSON loaded from ./locales so that
+ * the empty-state keys always resolve through i18n.t() (and data-i18n
+ * attributes) even if a locale file has not yet been updated.
+ *
+ * Keys:
+ *   history.empty.title       → "No payments yet"
+ *   history.empty.description → supporting message
+ *   history.empty.cta         → "Create your first payment link"
+ *   history.empty.illustrationAlt → alt text for the illustration
+ */
+const EMPTY_STATE_MESSAGES = {
+  en: {
+    history: {
+      empty: {
+        title: 'No payments yet',
+        description: 'When you create a payment link, incoming payments will appear here.',
+        cta: 'Create your first payment link',
+        illustrationAlt: 'Illustration of an empty payment history',
+      },
+    },
+  },
+  es: {
+    history: {
+      empty: {
+        title: 'Aún no hay pagos',
+        description: 'Cuando crees un enlace de pago, los pagos recibidos aparecerán aquí.',
+        cta: 'Crea tu primer enlace de pago',
+        illustrationAlt: 'Ilustración de un historial de pagos vacío',
+      },
+    },
+  },
+  pt: {
+    history: {
+      empty: {
+        title: 'Ainda não há pagamentos',
+        description: 'Quando você criar um link de pagamento, os pagamentos recebidos aparecerão aqui.',
+        cta: 'Crie seu primeiro link de pagamento',
+        illustrationAlt: 'Ilustração de um histórico de pagamentos vazio',
+      },
+    },
+  },
+};
+
 /** Relative path from the frontend root to the locales directory. */
 const LOCALES_PATH = './locales';
 
@@ -143,6 +189,43 @@ function findMissingKeys(base, target, prefix = '') {
   return missing;
 }
 
+/**
+ * Deep-merge `source` into `target` without mutating either object.
+ * Values from `source` take precedence; nested plain objects are merged.
+ *
+ * @param {object} target
+ * @param {object} source
+ * @returns {object}
+ */
+function deepMerge(target, source) {
+  const out = { ...target };
+  Object.keys(source || {}).forEach((key) => {
+    const srcVal = source[key];
+    const tgtVal = out[key];
+    if (
+      srcVal && typeof srcVal === 'object' && !Array.isArray(srcVal) &&
+      tgtVal && typeof tgtVal === 'object' && !Array.isArray(tgtVal)
+    ) {
+      out[key] = deepMerge(tgtVal, srcVal);
+    } else {
+      out[key] = srcVal;
+    }
+  });
+  return out;
+}
+
+/**
+ * Load a locale and layer the built-in fallback messages underneath it,
+ * so missing keys (e.g. the payment history empty state) still resolve.
+ *
+ * @param {string} locale
+ * @returns {Promise<object>}
+ */
+async function loadLocaleWithFallbacks(locale) {
+  const messages = await loadLocale(locale);
+  return deepMerge(EMPTY_STATE_MESSAGES[locale] || {}, messages);
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export const i18n = {
@@ -193,14 +276,14 @@ export const i18n = {
     }
 
     try {
-      _messages = await loadLocale(locale);
+      _messages = await loadLocaleWithFallbacks(locale);
       _locale   = locale;
       localStorage.setItem(STORAGE_KEY, locale);
     } catch (err) {
       console.error(err);
       if (locale !== DEFAULT_LOCALE) {
         // Graceful degradation: load the default locale instead
-        _messages = await loadLocale(DEFAULT_LOCALE);
+        _messages = await loadLocaleWithFallbacks(DEFAULT_LOCALE);
         _locale   = DEFAULT_LOCALE;
       }
     }

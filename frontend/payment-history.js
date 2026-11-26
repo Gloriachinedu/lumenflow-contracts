@@ -259,6 +259,9 @@
       });
     }
 
+    // Empty state
+    toggleEmptyState(sorted.length === 0);
+
     // Pagination controls
     const pageInfo = document.getElementById('page-info');
     pageInfo.textContent = totalRecords === 0
@@ -271,6 +274,20 @@
     nextBtn.disabled = !hasNext;
     prevBtn.setAttribute('aria-disabled', String(!hasPrev));
     nextBtn.setAttribute('aria-disabled', String(!hasNext));
+  }
+
+  // ── Empty state ────────────────────────────────────────────────────────────
+  function toggleEmptyState(isEmpty) {
+    const emptyState = document.getElementById('empty-state');
+    const tableWrapper = document.getElementById('table-wrapper');
+    const cardsList = document.getElementById('cards-list');
+    const pagination = document.getElementById('pagination');
+    if (!emptyState) return;
+
+    emptyState.hidden = !isEmpty;
+    if (tableWrapper) tableWrapper.hidden = isEmpty;
+    if (cardsList) cardsList.hidden = isEmpty;
+    if (pagination) pagination.hidden = isEmpty;
   }
 
   // ── Pagination ─────────────────────────────────────────────────────────────
