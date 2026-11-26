@@ -68,6 +68,29 @@
       white-space: nowrap;
     }
 
+    /* Sortable header buttons */
+    .sort-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      background: none;
+      border: none;
+      padding: 0;
+      margin: 0;
+      font: inherit;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #555;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    .sort-btn:hover { color: #6c47ff; }
+    .sort-btn:focus-visible { outline: 2px solid #6c47ff; outline-offset: 2px; }
+    .sort-indicator { font-size: 0.7rem; color: #6c47ff; }
+    .sort-indicator[hidden] { display: none; }
+=======
+
     tbody tr { border-bottom: 1px solid #f4f4f4; transition: background 0.1s; }
     tbody tr:last-child { border-bottom: none; }
     tbody tr:hover { background: #faf8ff; }
@@ -123,12 +146,14 @@
       gap: 0.35rem;
     }
     .btn:hover:not(:disabled) { background: #f0ecff; }
+    .btn:focus-visible { outline: 2px solid #6c47ff; outline-offset: 2px; }
     .btn:disabled {
-      opacity: 0.35;
+      opacity: 0.6;
       cursor: not-allowed;
-      border-color: #ccc;
-      color: #999;
+      border-color: #767676;
+      color: #595959;
     }
+=======
 
     .page-size-wrap { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #555; }
     .page-size-wrap select {
@@ -138,7 +163,8 @@
       font-size: 0.85rem;
       outline: none;
     }
-    .page-size-wrap select:focus { border-color: #6c47ff; }
+    .page-size-wrap select:focus-visible { border-color: #6c47ff; outline: 2px solid #6c47ff; outline-offset: 2px; }
+=======
 
     /* ── Filter bar ────────────────────────────────────────────────────── */
     .filter-bar {
@@ -217,14 +243,35 @@
 <p class="subtitle">Browse paginated payment records.</p>
 
 <div class="table-wrap">
-  <table id="history-table">
+  <table id="history-table" aria-describedby="history-caption">
+    <caption id="history-caption" class="visually-hidden">Paginated payment history records</caption>
     <thead>
       <tr>
-        <th>Order ID</th>
-        <th>Merchant</th>
-        <th>Amount</th>
-        <th>Status</th>
-        <th>Date</th>
+        <th scope="col" aria-sort="none">
+          <button type="button" class="sort-btn" data-sort-key="order_id" aria-label="Sort by order ID">
+            Order ID <span class="sort-indicator" aria-hidden="true" hidden></span>
+          </button>
+        </th>
+        <th scope="col" aria-sort="none">
+          <button type="button" class="sort-btn" data-sort-key="merchant_address" aria-label="Sort by merchant">
+            Merchant <span class="sort-indicator" aria-hidden="true" hidden></span>
+          </button>
+        </th>
+        <th scope="col" aria-sort="none">
+          <button type="button" class="sort-btn" data-sort-key="amount" aria-label="Sort by amount">
+            Amount <span class="sort-indicator" aria-hidden="true" hidden></span>
+          </button>
+        </th>
+        <th scope="col" aria-sort="none">
+          <button type="button" class="sort-btn" data-sort-key="status" aria-label="Sort by status">
+            Status <span class="sort-indicator" aria-hidden="true" hidden></span>
+          </button>
+        </th>
+        <th scope="col" aria-sort="none">
+          <button type="button" class="sort-btn" data-sort-key="paid_at" aria-label="Sort by date">
+            Date <span class="sort-indicator" aria-hidden="true" hidden></span>
+          </button>
+        </th>
       </tr>
     </thead>
     <tbody id="table-body">
@@ -232,20 +279,27 @@
     </tbody>
   </table>
 </div>
+=======
 
 <!-- Pagination controls and infinite-scroll status -->
 <div class="pagination-bar" id="pagination-bar">
   <div class="page-meta" id="page-meta" aria-live="polite" aria-atomic="true"></div>
 
   <div class="page-controls">
-    <button class="btn load-more-btn" id="load-more-btn" type="button" onclick="loadNextPage()">
+    <button class="btn" id="prev-btn" type="button" aria-label="Go to previous page" disabled>
+      <span aria-hidden="true">←</span> Prev
+    </button>
+    <button class="btn" id="next-btn" type="button" aria-label="Go to next page" disabled>
+      Next <span aria-hidden="true">→</span>
+    </button>
+    <button class="btn load-more-btn" id="load-more-btn" type="button" aria-label="Load more payments" onclick="loadNextPage()">
       Load more
     </button>
   </div>
 
   <div class="page-size-wrap">
     <label for="page-size">Per page:</label>
-    <select id="page-size" onchange="changePageSize()">
+    <select id="page-size" aria-label="Payments per page" onchange="changePageSize()">
       <option value="5" selected>5</option>
       <option value="10">10</option>
       <option value="25">25</option>
@@ -392,6 +446,15 @@
     }
   }
 
+  // ── Screen-reader announcements ────────────────────────────────────────────
+  function announce(message) {
+    const el = document.getElementById('page-announcer');
+    if (!el) return;
+    el.textContent = '';
+    // Force a re-announcement even when the message is unchanged.
+    window.setTimeout(() => { el.textContent = message; }, 50);
+  }
+
   // ── Loading state ──────────────────────────────────────────────────────────
   function showLoadingState() {
     const tbody = document.getElementById('table-body');
@@ -402,10 +465,13 @@
           <span aria-live="polite" role="status">⏳ Loading page ${currentIdx + 1}…</span>
         </td>
       </tr>`;
-    document.getElementById('prev-btn').disabled = true;
-    document.getElementById('next-btn').disabled = true;
+    const prevBtn = document.getElementById('prev-btn');
+    const nextBtn = document.getElementById('next-btn');
+    if (prevBtn) prevBtn.disabled = true;
+    if (nextBtn) nextBtn.disabled = true;
     document.getElementById('page-meta').textContent = `Page ${currentIdx + 1} · loading…`;
   }
+=======
 
   // ── Main load ──────────────────────────────────────────────────────────────
   async function loadPage() {
@@ -445,20 +511,27 @@
 
     // Page indicator: "Page 2 · 5 records"
     const pageNum = currentIdx + 1;
-    document.getElementById('page-meta').textContent =
+    const metaText =
       loadedOrderIds.size === 0
         ? 'No records'
         : `Page ${pageNum} · ${payments.length} record${payments.length !== 1 ? 's' : ''}`;
+    document.getElementById('page-meta').textContent = metaText;
 
     // Update navigation button states
-    document.getElementById('prev-btn').disabled = currentIdx === 0;
-    document.getElementById('next-btn').disabled = !next_cursor;
+    const prevBtn = document.getElementById('prev-btn');
+    const nextBtn = document.getElementById('next-btn');
+    if (prevBtn) prevBtn.disabled = currentIdx === 0;
+    if (nextBtn) nextBtn.disabled = !next_cursor;
+
+    // Announce the page change to screen readers
+    announce(metaText);
 
     // Sync URL so the current page is bookmarkable
     syncUrl();
 
     isLoading = false;
   }
+=======
 
   // Track whether the initial load has completed (we don't move focus on first load)
   let _focusMgmtInitialized = false;
@@ -553,10 +626,13 @@
     initFromUrl();
     loadPage();
   });
+=======
 
   // ── Init ───────────────────────────────────────────────────────────────────
   initFromUrl();
+  updateSortHeaders();
   loadPage();
+=======
 </script>
 <script>
   if ('serviceWorker' in navigator) {

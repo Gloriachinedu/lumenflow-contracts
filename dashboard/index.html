@@ -56,6 +56,31 @@
       font-size: 0.875rem;
     }
 
+    /* Visible focus indicator for all interactive elements (WCAG 2.4.7). */
+    a:focus-visible,
+    button:focus-visible {
+      outline: 3px solid var(--color-accent);
+      outline-offset: 2px;
+    }
+
+    /* Skip link: hidden until focused, then visible at top-left (WCAG 2.4.1). */
+    .skip-link {
+      position: absolute;
+      left: 0.5rem;
+      top: -100%;
+      z-index: 100;
+      background: var(--color-surface);
+      color: var(--color-accent);
+      padding: 0.5rem 1rem;
+      border: 2px solid var(--color-accent);
+      border-radius: 0.375rem;
+      font-weight: 600;
+      text-decoration: none;
+    }
+    .skip-link:focus {
+      top: 0.5rem;
+    }
+
     main {
       padding: 2rem 1.5rem;
     }
@@ -82,11 +107,14 @@
   </style>
 </head>
 <body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
   <header>
     <h1>LumenFlow</h1>
-    <button id="theme-toggle">Toggle Dark Mode</button>
+    <button id="theme-toggle" type="button" aria-pressed="false" aria-label="Toggle dark mode">
+      Toggle Dark Mode
+    </button>
   </header>
-  <main>
+  <main id="main-content" tabindex="-1">
     <div class="card">
       <h2>Payments</h2>
       <p>View and manage your payment history.</p>
@@ -103,16 +131,29 @@
       <h2><a href="onboarding-analytics/index.html">Onboarding Analytics</a></h2>
       <p>Merchant registration funnel — step completion rates, drop-off analysis, and wallet connect outcomes.</p>
     </div>
+    <nav class="dashboard-nav" aria-label="Dashboard sections">
+      <a href="onboarding-analytics/index.html">Onboarding Analytics</a>
+    </nav>
   </main>
   <script>
     const toggle = document.getElementById('theme-toggle');
+
+    function syncToggleState() {
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      toggle.setAttribute('aria-pressed', String(isDark));
+      toggle.setAttribute('aria-label', isDark ? 'Switch to light mode' : 'Switch to dark mode');
+    }
+
     toggle.addEventListener('click', function () {
       const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
       const next = isDark ? 'light' : 'dark';
       document.documentElement.setAttribute('data-theme', next);
       // Use shared key so preference syncs with merchant-dashboard and fraud-analytics
       localStorage.setItem('lumenflow_theme', next);
+      syncToggleState();
     });
+
+    syncToggleState();
   </script>
 </body>
 </html>

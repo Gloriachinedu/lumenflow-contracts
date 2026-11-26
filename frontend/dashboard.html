@@ -76,6 +76,24 @@
     }
     nav a:hover { background: #6c47ff; color: #fff; }
 
+    /* ── Visible focus indicators (WCAG 2.4.7) ───────────────────────────────── */
+    a:focus-visible,
+    button:focus-visible,
+    input:focus-visible {
+      outline: 3px solid #4a2fd6;
+      outline-offset: 2px;
+    }
+
+    .visually-hidden {
+      position: absolute !important;
+      width: 1px; height: 1px;
+      padding: 0; margin: -1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
     /* ── Merchant selector ───────────────────────────────────────────────────── */
     .merchant-bar {
       background: #fff;
@@ -300,7 +318,7 @@
       <h1>Merchant Dashboard</h1>
       <p class="subtitle" id="merchant-subtitle">LumenFlow · Payment overview</p>
     </div>
-    <nav>
+    <nav aria-label="Primary">
       <a href="history.html">Payment History</a>
       <a href="receipt.html">View Receipt</a>
       <a href="multisig.html">Multisig</a>
@@ -309,60 +327,62 @@
 
   <div id="mode-banner"></div>
 
-  <!-- Merchant address input -->
-  <div class="merchant-bar">
-    <div class="field">
-      <label for="merchant-addr">Merchant Address</label>
-      <input id="merchant-addr" type="text" placeholder="G… (leave blank for demo)" aria-describedby="merchant-addr-err" />
-      <div class="err-msg" id="merchant-addr-err" role="alert" aria-live="polite"></div>
-    </div>
-    <button class="btn btn-primary" id="load-btn" onclick="loadDashboard()">Load</button>
-  </div>
+  <main id="main-content">
+    <!-- Merchant address input -->
+    <form class="merchant-bar" id="merchant-form" novalidate>
+      <div class="field">
+        <label for="merchant-addr">Merchant Address</label>
+        <input id="merchant-addr" type="text" placeholder="G… (leave blank for demo)" aria-describedby="merchant-addr-err" autocomplete="off" spellcheck="false" />
+        <div class="err-msg" id="merchant-addr-err" role="alert" aria-live="polite"></div>
+      </div>
+      <button type="submit" class="btn btn-primary" id="load-btn">Load</button>
+    </form>
 
-  <!-- Stats row -->
-  <div class="stats-grid">
-    <div class="stat-card">
-      <div class="stat-label">Total Volume</div>
-      <div class="stat-value" id="stat-volume">—</div>
-      <div class="stat-sub">XLM received</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Payments</div>
-      <div class="stat-value" id="stat-count">—</div>
-      <div class="stat-sub">completed</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Refunds Issued</div>
-      <div class="stat-value" id="stat-refunds">—</div>
-      <div class="stat-sub">total</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Avg Payment</div>
-      <div class="stat-value" id="stat-avg">—</div>
-      <div class="stat-sub">XLM per transaction</div>
-    </div>
-  </div>
+    <!-- Stats row -->
+    <section class="stats-grid" aria-label="Payment statistics">
+      <div class="stat-card">
+        <div class="stat-label" id="stat-volume-label">Total Volume</div>
+        <div class="stat-value" id="stat-volume" aria-labelledby="stat-volume-label">—</div>
+        <div class="stat-sub">XLM received</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label" id="stat-count-label">Payments</div>
+        <div class="stat-value" id="stat-count" aria-labelledby="stat-count-label">—</div>
+        <div class="stat-sub">completed</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label" id="stat-refunds-label">Refunds Issued</div>
+        <div class="stat-value" id="stat-refunds" aria-labelledby="stat-refunds-label">—</div>
+        <div class="stat-sub">total</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label" id="stat-avg-label">Avg Payment</div>
+        <div class="stat-value" id="stat-avg" aria-labelledby="stat-avg-label">—</div>
+        <div class="stat-sub">XLM per transaction</div>
+      </div>
+    </section>
 
-  <!-- Recent payments -->
-  <div class="panel">
-    <div class="panel-header">
-      <h2>Recent Payments</h2>
-      <a href="history.html" id="history-link">View full history →</a>
-    </div>
-    <div id="payments-container">
-      <div class="state-box"><div class="icon">⏳</div>Enter a merchant address and click Load.</div>
-    </div>
-  </div>
+    <!-- Recent payments -->
+    <section class="panel" aria-labelledby="payments-heading">
+      <div class="panel-header">
+        <h2 id="payments-heading">Recent Payments</h2>
+        <a href="history.html" id="history-link">View full history <span aria-hidden="true">→</span></a>
+      </div>
+      <div id="payments-container" aria-live="polite" aria-busy="false">
+        <div class="state-box"><div class="icon" aria-hidden="true">⏳</div>Enter a merchant address and click Load.</div>
+      </div>
+    </section>
 
-  <!-- Recent refunds -->
-  <div class="panel">
-    <div class="panel-header">
-      <h2>Recent Refunds</h2>
-    </div>
-    <div id="refunds-container">
-      <div class="state-box"><div class="icon">⏳</div>Enter a merchant address and click Load.</div>
-    </div>
-  </div>
+    <!-- Recent refunds -->
+    <section class="panel" aria-labelledby="refunds-heading">
+      <div class="panel-header">
+        <h2 id="refunds-heading">Recent Refunds</h2>
+      </div>
+      <div id="refunds-container" aria-live="polite" aria-busy="false">
+        <div class="state-box"><div class="icon" aria-hidden="true">⏳</div>Enter a merchant address and click Load.</div>
+      </div>
+    </section>
+  </main>
 </div>
 
 <script type="module">
@@ -419,12 +439,13 @@
         <td class="amount">${formatAmount(p.amount, 7, 'XLM')}</td>
         <td><span class="${badgeClass(p.status)}">${p.status}</span></td>
         <td>${p.memo || '—'}</td>
-        <td><a class="action-link" href="${receiptHref}">Receipt</a></td>
+        <td><a class="action-link" href="${receiptHref}" aria-label="View receipt for order ${p.order_id}">Receipt</a></td>
       </tr>`;
     }).join('');
     return `<table>
+      <caption class="visually-hidden">Recent payments</caption>
       <thead><tr>
-        <th>Order ID</th><th>Date</th><th>Amount</th><th>Status</th><th>Memo</th><th></th>
+        <th scope="col">Order ID</th><th scope="col">Date</th><th scope="col">Amount</th><th scope="col">Status</th><th scope="col">Memo</th><th scope="col"><span class="visually-hidden">Actions</span></th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
@@ -452,8 +473,9 @@
       <td>${formatDate(r.created_at)}</td>
     </tr>`).join('');
     return `<table>
+      <caption class="visually-hidden">Recent refunds</caption>
       <thead><tr>
-        <th>Refund ID</th><th>Order ID</th><th>Amount</th><th>Status</th><th>Reason</th><th>Date</th>
+        <th scope="col">Refund ID</th><th scope="col">Order ID</th><th scope="col">Amount</th><th scope="col">Status</th><th scope="col">Reason</th><th scope="col">Date</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
@@ -487,6 +509,10 @@
     return !message;
   }
   document.getElementById('merchant-addr').addEventListener('input', validateMerchantInput);
+  document.getElementById('merchant-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    loadDashboard();
+  });
 
   // ── Main loader ──────────────────────────────────────────────────────────────
   window.loadDashboard = async function() {
@@ -509,7 +535,7 @@
       hideLoadingOverlay();
       if (!live) {
         document.getElementById('payments-container').innerHTML =
-          '<div class="alert alert-error">Could not load live data. Check console for details.</div>';
+          '<div class="alert alert-error" role="alert">Could not load live data. Check console for details.</div>';
         document.getElementById('refunds-container').innerHTML = '';
         return;
       }
@@ -522,8 +548,12 @@
     document.getElementById('stat-refunds').textContent = stats.refunds;
     document.getElementById('stat-avg').textContent     = formatAmount(stats.avg, 7, 'XLM');
 
-    document.getElementById('payments-container').innerHTML = buildPaymentsTable(payments);
-    document.getElementById('refunds-container').innerHTML  = buildRefundsTable(refunds);
+    const paymentsContainer = document.getElementById('payments-container');
+    const refundsContainer  = document.getElementById('refunds-container');
+    paymentsContainer.setAttribute('aria-busy', 'false');
+    refundsContainer.setAttribute('aria-busy', 'false');
+    paymentsContainer.innerHTML = buildPaymentsTable(payments);
+    refundsContainer.innerHTML  = buildRefundsTable(refunds);
 
     // Activate copy buttons inserted into both tables
     attachCopyButtons(document.getElementById('payments-container'));
@@ -533,6 +563,14 @@
   // Auto-load in demo mode
   if (DEMO_MODE) loadDashboard();
   initCopyButtons(document.body);
+
+  // Ensure dynamically inserted copy buttons have accessible names (WCAG 4.1.2)
+  document.addEventListener('click', function(e) {
+    const btn = e.target.closest && e.target.closest('.lf-copy-btn');
+    if (btn && !btn.getAttribute('aria-label') && !btn.textContent.trim()) {
+      btn.setAttribute('aria-label', btn.getAttribute('title') || 'Copy to clipboard');
+    }
+  });
 </script>
 <!-- CSP violation reporter: logs policy violations to the console in development -->
 <script>

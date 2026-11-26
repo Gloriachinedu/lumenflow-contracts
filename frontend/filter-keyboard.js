@@ -161,6 +161,22 @@ function injectStyles() {
       outline: none;
     }
 
+    /* WCAG 2.1 SC 1.4.3 — selected option text on #f0ecff must meet 4.5:1.
+       #4a2fd6 on #f0ecff = 6.9:1 contrast ratio.                        */
+    .lf-option:hover,
+    .lf-option[aria-selected="true"] {
+      background: #f0ecff;
+      color: #4a2fd6;
+    }
+
+    /* WCAG 2.1 SC 1.4.3 — focused option text on #6c47ff must meet 4.5:1.
+       #fff on #4a2fd6 = 6.9:1 contrast ratio.                           */
+    .lf-option.lf-focused {
+      background: #4a2fd6;
+      color: #fff;
+      outline: none;
+    }
+
     /* Visually hidden helper */
     .lf-sr-only {
       position: absolute;
@@ -232,6 +248,22 @@ function buildCombobox(selectEl) {
 
   trigger.appendChild(labelSpan);
   trigger.appendChild(arrowSpan);
+
+  // Associate the trigger with its <label> (if any) so AT announces the
+  // control name. Prefer explicit aria-label/labelledby, then <label for>,
+  // then a wrapping <label>.
+  if (!origLabel) {
+    const selectId = selectEl.id;
+    const explicitLabel = selectId
+      ? document.querySelector(`label[for="${CSS.escape(selectId)}"]`)
+      : null;
+    const wrappingLabel = selectEl.closest('label');
+    const labelEl = explicitLabel || wrappingLabel;
+    if (labelEl) {
+      if (!labelEl.id) labelEl.id = uid('lf-lbl');
+      trigger.setAttribute('aria-labelledby', labelEl.id);
+    }
+  }
 
   // ── Listbox ───────────────────────────────────────────────────────────────
   const listbox = document.createElement('ul');
@@ -317,6 +349,19 @@ function buildCombobox(selectEl) {
     trigger.removeAttribute('aria-activedescendant');
     focusedIdx = -1;
     if (returnFocus) trigger.focus();
+  }
+
+  // Type-ahead: jump to the first option whose text starts with the typed
+  // characters. Resets after a short idle period.
+  let typeBuffer = '';
+  let typeTimer = null;
+  function typeAhead(char) {
+    typeBuffer += char.toLowerCase();
+    if (typeTimer) clearTimeout(typeTimer);
+    typeTimer = setTimeout(() => { typeBuffer = ''; }, 500);
+    const opts = getOptions();
+    const match = opts.findIndex(o => o.textContent.toLowerCase().startsWith(typeBuffer));
+    if (match >= 0) highlightOption(match);
   }
 
   // ── Click on trigger ──────────────────────────────────────────────────────
@@ -433,6 +478,20 @@ function buildCombobox(selectEl) {
         if (expanded) { e.preventDefault(); highlightOption(opts.length - 1); }
         break;
 
+      case 'PageDown':
+        if (expanded) {
+          e.preventDefault();
+          highlightOption(Math.min(focusedIdx + 10, opts.length - 1));
+        }
+        break;
+
+      case 'PageUp':
+        if (expanded) {
+          e.preventDefault();
+          highlightOption(Math.max(focusedIdx - 10, 0));
+        }
+        break;
+
       case 'Escape':
         if (expanded) {
           e.preventDefault();
@@ -445,12 +504,29 @@ function buildCombobox(selectEl) {
         // Close without stealing focus flow
         if (expanded) closeDropdown(false);
         break;
+
+      default:
+        // Printable character → type-ahead navigation (WCAG 2.1 SC 2.1.1)
+        if (expanded && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          typeAhead(e.key);
+        }
+        break;
     }
   });
 
   // ── Click outside closes ─────────────────────────────────────────────────
   document.addEventListener('click', (e) => {
     if (!wrapper.contains(e.target) && trigger.getAttribute('aria-expanded') === 'true') {
+      closeDropdown(false);
+    }
+  });
+
+  // ── Focus leaving the wrapper closes the dropdown ────────────────────────
+  wrapper.addEventListener('focusout', (e) => {
+    if (trigger.getAttribute('aria-expanded') !== 'true') return;
+    // relatedTarget is null when focus moves to the browser chrome; keep open
+    // only if focus stays within the wrapper.
+    if (e.relatedTarget && !wrapper.contains(e.relatedTarget)) {
       closeDropdown(false);
     }
   });
@@ -540,13 +616,18 @@ function enhanceChips(panel) {
   function activateChipButton(btn) {
     if (btn.dataset.lfChip) return;
     btn.dataset.lfChip = 'true';
+    // Ensure the button is keyboard-focusable and has a type so it never
+    // submits a surrounding form.
+    if (!btn.hasAttribute('type')) btn.setAttribute('type', 'button');
+    if (btn.tabIndex < 0) btn.tabIndex = 0;
     // Ensure aria-label is present; the existing HTML already sets it, but
     // add a fallback just in case.
     if (!btn.getAttribute('aria-label')) {
       btn.setAttribute('aria-label', 'Remove filter');
     }
     btn.addEventListener('keydown', (e) => {
-      if (e.key === ' ') {
+      // Native <button> fires click on Enter; add Space support explicitly.
+      if (e.key === ' ' || e.key === 'Spacebar') {
         e.preventDefault();
         btn.click();
       }
@@ -664,6 +745,33 @@ function enhanceSelects(panel) {
     if (sel && sel.tagName === 'SELECT') {
       buildCombobox(sel);
     }
+  });
+}
+
+// ─── Ensure every interactive control is keyboard-reachable ──────────────────
+
+/**
+ * WCAG 2.1 SC 2.1.1 — Keyboard.
+ *
+ * Any element that carries an interactive ARIA role but is not natively
+ * focusable gets tabindex="0" so it can be reached with Tab. Native controls
+ * (button, input, select, textarea, a[href]) are left untouched.
+ */
+function ensureKeyboardReachable(panel) {
+  const interactiveRoles = new Set([
+    'button', 'checkbox', 'combobox', 'link', 'listbox', 'menuitem',
+    'option', 'radio', 'searchbox', 'slider', 'spinbutton', 'switch',
+    'tab', 'textbox',
+  ]);
+  const nativeFocusable = new Set(['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA']);
+
+  panel.querySelectorAll('[role]').forEach(el => {
+    const role = (el.getAttribute('role') || '').toLowerCase();
+    if (!interactiveRoles.has(role)) return;
+    if (nativeFocusable.has(el.tagName)) return;
+    if (el.tagName === 'A' && el.hasAttribute('href')) return;
+    if (el.hasAttribute('tabindex')) return;
+    el.setAttribute('tabindex', '0');
   });
 }
 

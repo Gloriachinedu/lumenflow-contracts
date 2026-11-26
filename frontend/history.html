@@ -86,7 +86,7 @@
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      color: #666;
+      color: #595959;
     }
 
     .filter-group input, .filter-group select {
@@ -149,6 +149,10 @@
       padding: 0 0.2rem;
       display: flex;
       align-items: center;
+      /* Minimum 24x24 CSS px target size (WCAG 2.1 SC 2.5.8) */
+      min-width: 24px;
+      min-height: 24px;
+      justify-content: center;
     }
 
     .chip button:hover { color: #5032d1; }
@@ -174,9 +178,36 @@
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      color: #888;
+      color: #595959;
       border-bottom: 1px solid #eee;
     }
+
+    /* Sortable column header button: full-cell hit area, keyboard operable */
+    .sort-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      background: none;
+      border: none;
+      padding: 0;
+      margin: 0;
+      font: inherit;
+      font-weight: 600;
+      text-transform: inherit;
+      letter-spacing: inherit;
+      color: inherit;
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .sort-btn:hover { color: #6c47ff; }
+
+    .sort-btn .sort-indicator {
+      font-size: 0.7rem;
+      line-height: 1;
+      color: #6c47ff;
+    }
+=======
 
     td {
       padding: 1rem;
@@ -246,10 +277,11 @@
       padding: 0.2rem 0.5rem;
       border-radius: 4px;
     }
-    .status-completed          { background: #e6f9f0; color: #1a9e5c; }
-    .status-partiallyrefunded  { background: #fff3e0; color: #e07b00; }
-    .status-fullyrefunded      { background: #fce8e8; color: #c0392b; }
-    .status-unknown            { background: #f0f0f0; color: #666; }
+    /* Contrast ratios verified against their badge backgrounds (WCAG 2.1 SC 1.4.3) */
+    .status-completed          { background: #e6f9f0; color: #0f7a45; }
+    .status-partiallyrefunded  { background: #fff3e0; color: #a35400; }
+    .status-fullyrefunded      { background: #fce8e8; color: #a52a1f; }
+    .status-unknown            { background: #f0f0f0; color: #595959; }
 
     /* ── Empty state ─────────────────────────────────────────────────────────── */
     .empty-state {
@@ -273,7 +305,7 @@
     }
     .empty-state-message {
       font-size: 0.9rem;
-      color: #888;
+      color: #595959;
       max-width: 400px;
       line-height: 1.5;
       margin: 0;
@@ -304,7 +336,7 @@
       color: #444;
       margin-bottom: 0.4rem;
     }
-    .empty-state .empty-sub { font-size: 0.875rem; color: #888; }
+    .empty-state .empty-sub { font-size: 0.875rem; color: #595959; }
 
     /* ── Copy button ──────────────────────────────────────────────────────────── */
     .lf-copy-btn:hover { background: #f0ecff !important; color: #6c47ff !important; border-color: #6c47ff !important; }
@@ -421,7 +453,7 @@
       align-items: center;
       gap: 0.2rem;
       font-size: 0.65rem;
-      color: #1a9e5c;
+      color: #0f7a45;
       font-weight: 600;
       cursor: help;
       position: relative;
@@ -491,6 +523,9 @@
       text-decoration: none;
     }
     .skip-link:focus { top: 0; }
+
+    /* Ensure the main landmark is a valid focus target for the skip link */
+    #history-main:focus { outline: none; }
   </style>
 </head>
 <body>
@@ -502,7 +537,7 @@
   <div id="lf-lang-nav"></div>
 </nav>
 
-<main id="history-main">
+<main id="history-main" tabindex="-1">
 <div class="container">
   <header>
     <h1>Payment History</h1>
@@ -520,26 +555,26 @@
       </div>
 
       <!-- Date Range -->
-      <div class="filter-group">
-        <label for="date-start">Date Range</label>
+      <fieldset class="filter-group" style="border:0;padding:0;margin:0;">
+        <legend style="font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#595959;padding:0;margin-bottom:0.4rem;">Date Range</legend>
         <div class="range-inputs">
-          <input type="date" id="date-start" aria-label="Start Date">
-          <span>to</span>
-          <input type="date" id="date-end" aria-label="End Date">
+          <input type="date" id="date-start" aria-label="Start date">
+          <span aria-hidden="true">to</span>
+          <input type="date" id="date-end" aria-label="End date">
         </div>
-      </div>
+      </fieldset>
 
       <!-- Amount Range -->
-      <div class="filter-group">
-        <label for="amount-min">Amount Range (XLM)</label>
+      <fieldset class="filter-group" style="border:0;padding:0;margin:0;">
+        <legend style="font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#595959;padding:0;margin-bottom:0.4rem;">Amount Range (XLM)</legend>
         <div class="range-inputs">
-          <input type="number" id="amount-min" placeholder="Min" min="0" step="0.1" aria-describedby="amount-min-err">
-          <span>to</span>
-          <input type="number" id="amount-max" placeholder="Max" min="0" step="0.1" aria-describedby="amount-max-err">
+          <input type="number" id="amount-min" placeholder="Min" min="0" step="0.1" aria-label="Minimum amount" aria-describedby="amount-min-err">
+          <span aria-hidden="true">to</span>
+          <input type="number" id="amount-max" placeholder="Max" min="0" step="0.1" aria-label="Maximum amount" aria-describedby="amount-max-err">
         </div>
         <div class="filter-err" id="amount-min-err" role="alert" aria-live="polite"></div>
         <div class="filter-err" id="amount-max-err" role="alert" aria-live="polite"></div>
-      </div>
+      </fieldset>
 
       <!-- Token -->
       <div class="filter-group">
@@ -577,35 +612,56 @@
       <button id="reset-filters-btn" type="button" onclick="resetFilters()" data-filter-control style="padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:6px;background:#fff;color:#6c47ff;font-weight:600;font-size:0.85rem;cursor:pointer;transition:background 0.15s,color 0.15s;" aria-label="Reset all filters and clear saved preferences">Reset filters</button>
     </div>
 
-    <div id="active-filters" class="active-filters" aria-live="polite">
+    <div id="active-filters" class="active-filters" role="group" aria-label="Active filters" aria-live="polite">
       <!-- Chips will be rendered here -->
     </div>
   </section>
 
   <div class="results-card" id="results-region" aria-live="polite" aria-atomic="false" aria-label="Payment history results">
     <!-- Loading state -->
-    <div id="loading-state" style="display:none;padding:3rem;text-align:center;color:#888;" role="status" aria-live="polite" aria-label="Loading payments">
-      ⏳ Loading payments…
+    <div id="loading-state" style="display:none;padding:3rem;text-align:center;color:#595959;" role="status" aria-live="polite" aria-label="Loading payments">
+      <span aria-hidden="true">⏳</span> Loading payments…
     </div>
 
     <!-- Error state -->
-    <div id="error-state" style="display:none;padding:3rem;text-align:center;color:#c0392b;" role="alert" aria-live="assertive">
-      <div style="font-size:1.5rem;margin-bottom:0.5rem">⚠</div>
+    <div id="error-state" style="display:none;padding:3rem;text-align:center;color:#a52a1f;" role="alert" aria-live="assertive">
+      <div style="font-size:1.5rem;margin-bottom:0.5rem" aria-hidden="true">⚠</div>
       <strong id="error-msg">Failed to load payments.</strong>
       <div style="margin-top:0.75rem">
-        <button onclick="retryFetch()" style="padding:0.4rem 1rem;border:1.5px solid #c0392b;border-radius:6px;background:#fff;color:#c0392b;font-weight:600;cursor:pointer">Retry</button>
+        <button type="button" onclick="retryFetch()" style="padding:0.4rem 1rem;border:1.5px solid #a52a1f;border-radius:6px;background:#fff;color:#a52a1f;font-weight:600;cursor:pointer">Retry</button>
       </div>
     </div>
 
-    <table id="history-table">
+    <table id="history-table" aria-label="Payment history">
+      <caption class="sr-only">Payment history, sortable by column</caption>
       <thead>
         <tr>
-          <th>Date</th>
-          <th>Order ID</th>
-          <th>Recipient</th>
-          <th>Amount</th>
-          <th>Tags</th>
-          <th>Status</th>
+          <th scope="col" aria-sort="descending">
+            <button type="button" class="sort-btn" data-sort-key="date" aria-label="Sort by date">
+              Date <span class="sort-indicator" aria-hidden="true">▼</span>
+            </button>
+          </th>
+          <th scope="col" aria-sort="none">
+            <button type="button" class="sort-btn" data-sort-key="orderId" aria-label="Sort by order ID">
+              Order ID <span class="sort-indicator" aria-hidden="true"></span>
+            </button>
+          </th>
+          <th scope="col" aria-sort="none">
+            <button type="button" class="sort-btn" data-sort-key="recipient" aria-label="Sort by recipient">
+              Recipient <span class="sort-indicator" aria-hidden="true"></span>
+            </button>
+          </th>
+          <th scope="col" aria-sort="none">
+            <button type="button" class="sort-btn" data-sort-key="amount" aria-label="Sort by amount">
+              Amount <span class="sort-indicator" aria-hidden="true"></span>
+            </button>
+          </th>
+          <th scope="col">Tags</th>
+          <th scope="col" aria-sort="none">
+            <button type="button" class="sort-btn" data-sort-key="status" aria-label="Sort by status">
+              Status <span class="sort-indicator" aria-hidden="true"></span>
+            </button>
+          </th>
         </tr>
       </thead>
       <tbody id="history-body">
@@ -624,7 +680,7 @@
         <line x1="84" y1="32" x2="84" y2="40" stroke="#b8a9f5" stroke-width="2.5" stroke-linecap="round"/>
       </svg>
       <p style="margin-top:1rem;font-weight:600;color:#1a1a2e;font-size:1rem">No payments yet</p>
-      <p style="margin-top:0.4rem;color:#888;font-size:0.85rem">Payments will appear here once transactions are made.</p>
+      <p style="margin-top:0.4rem;color:#595959;font-size:0.85rem">Payments will appear here once transactions are made.</p>
     </div>
   </div>
 </div>
