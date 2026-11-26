@@ -23,7 +23,8 @@ and co-signed by a second authorized operator before execution.**
 9. [Post-Rotation Verification](#9-post-rotation-verification)
 10. [Boundary Cases and Error Reference](#10-boundary-cases-and-error-reference)
 11. [Two-Person Integrity Checklist](#11-two-person-integrity-checklist)
-12. [Record Keeping](#12-record-keeping)
+12. [Admin API IP Allowlisting](#12-admin-api-ip-allowlisting)
+13. [Record Keeping](#13-record-keeping)
 
 ---
 
@@ -686,7 +687,104 @@ Store the completed log in your organization's secure audit trail system.
 
 ---
 
-## 12. Record Keeping
+## 12. Admin API IP Allowlisting
+
+Admin API endpoints (contract pause, emergency withdrawal, merchant
+suspension, and the other privileged operations listed in section 3) are
+protected by an IP allowlist middleware. Requests that do not originate from
+an allowlisted CIDR are rejected with **HTTP 403 Forbidden** before any
+authentication check runs — a non-allowlisted caller never receives `401`, so
+no information about credential validity is leaked.
+
+### Configuration
+
+The allowlist is configured with a single environment variable holding a
+comma-separated list of CIDR ranges:
+
+| Variable | Format | Example |
+|----------|--------|---------|
+| `ADMIN_API_IP_ALLOWLIST` | Comma-separated IPv4/IPv6 CIDRs | `10.0.0.0/8,192.168.10.0/24,203.0.113.7/32` |
+
+Notes:
+
+- A bare address without a prefix is treated as a single-host range
+  (`203.0.113.7` ≡ `203.0.113.7/32`).
+- Whitespace around entries is ignored.
+- If the variable is **unset or empty**, the middleware fails closed: all
+  admin API requests are rejected with `403`. Never deploy admin endpoints
+  without an explicit allowlist.
+- Changes take effect on service restart (or config reload, where supported);
+  the allowlist is not hot-reloaded from the environment.
+
+Example deployment configuration:
+
+```bash
+# .env / secrets manager entry
+ADMIN_API_IP_ALLOWLIST="10.0.0.0/8,192.168.10.0/24,203.0.113.7/32"
+```
+
+### Expected behaviour
+
+| Caller IP | Result |
+|-----------|--------|
+| Inside an allowlisted CIDR, valid credentials | Request processed normally |
+| Inside an allowlisted CIDR, invalid credentials | `401 Unauthorized` |
+| Outside every allowlisted CIDR | `403 Forbidden` (regardless of credentials) |
+| Allowlist unset/empty | `403 Forbidden` for all callers |
+
+### Adding an operator IP range
+
+1. Obtain the new operator's egress IP or VPN range from the operator and
+   confirm it is a static, dedicated range (not a shared consumer ISP pool).
+2. Add the CIDR to `ADMIN_API_IP_ALLOWLIST` in the secrets manager — never
+   commit it to the repository.
+3. Roll the service so the new value is loaded.
+4. Verify from the new range:
+
+   ```bash
+   curl -s -o /dev/null -w "%{http_code}\n" \
+     -H "Authorization: Bearer $ADMIN_TOKEN" \
+     https://api.example.com/admin/health
+   # Expected: 200
+   ```
+
+5. Verify a non-allowlisted source is still blocked (see below).
+
+### Removing an operator IP range
+
+1. Remove the CIDR from `ADMIN_API_IP_ALLOWLIST` and roll the service.
+2. Confirm the removed range now receives `403`:
+
+   ```bash
+   curl -s -o /dev/null -w "%{http_code}\n" \
+     -H "Authorization: Bearer $ADMIN_TOKEN" \
+     https://api.example.com/admin/health
+   # Expected: 403
+   ```
+
+3. Record the removal in the rotation log (section 11) with the operator name
+   and reason (departure, device change, VPN re-IP, etc.).
+
+### Rotating the allowlist
+
+Treat allowlist changes like key rotation: two-person review, logged, and
+verified from both an allowed and a denied source.
+
+- [ ] Change reviewed by a second operator
+- [ ] Updated in the secrets manager (not in source control)
+- [ ] Service rolled and healthy
+- [ ] Allowed source returns `200`/`401` (not `403`)
+- [ ] Denied source returns `403`
+- [ ] Change recorded in the rotation log
+
+> **Tip:** When migrating between operator ranges, add the new range first,
+> verify access, then remove the old range in a separate change. This avoids
+> locking all operators out if a CIDR is mistyped.
+
+---
+
+## 13. Record Keeping
+=======
 
 - All key rotation events must be logged with date, operator, witness,
   transaction hash, and reason.
@@ -703,6 +801,314 @@ Store the completed log in your organization's secure audit trail system.
 
 ---
 
+## 13. Automated Multi-Environment Secret Rotation (Zero-Downtime)
+
+This section covers **automated rotation of application secrets** — RPC API
+keys, webhook signing secrets, and service credentials — as opposed to the
+on-chain contract admin key covered in sections 1–12. Rotation is performed by
+a secret manager with **dual-active** support so there is never a window where
+only an invalid secret exists.
+
+> **Scope:** Secrets stored in AWS Secrets Manager (or HashiCorp Vault) and
+> consumed by the backend, webhook workers, and RPC clients. The contract admin
+> key remains HSM-backed and is rotated manually per sections 5–6.
+
+### 13.1 Architecture overview
+
+```
+┌──────────────────┐   1. rotate (scheduled)   ┌───────────────────────┐
+│ EventBridge /    │ ────────────────────────► │ Rotation Lambda / Job │
+│ Vault scheduler  │                           │ (creates vN+1)        │
+└──────────────────┘                           └──────────┬────────────┘
+                                                          │ 2. put_secret_value
+                                                          ▼
+                                               ┌───────────────────────┐
+                                               │ Secret (vN, vN+1 both │
+                                               │ AWSCURRENT/AWSPREVIOUS│
+                                               │ for 15 min overlap)   │
+                                               └──────────┬────────────┘
+                                                          │ 3. poll (≤60s)
+                                                          ▼
+                                               ┌───────────────────────┐
+                                               │ Application (no       │
+                                               │ restart; hot reload)  │
+                                               └───────────────────────┘
+```
+
+Key properties:
+
+- **Dual-active:** the old version stays valid (`AWSPREVIOUS`) while the new
+  version (`AWSCURRENT`) is rolled out. Both are accepted by verifiers during
+  the overlap.
+- **No restart:** applications poll the secret manager and swap credentials in
+  memory.
+- **15-minute overlap:** after the overlap window, the old version is
+  deactivated (stages removed / version destroyed per retention policy).
+
+### 13.2 Secret inventory and naming
+
+| Secret | Environments | Rotation period | Consumers |
+|--------|--------------|-----------------|-----------|
+| `lumenflow/<env>/rpc-api-key` | testnet, mainnet | 30 days | Backend RPC client, indexer |
+| `lumenflow/<env>/webhook-signing-secret` | testnet, mainnet | 30 days | Webhook dispatcher, merchant verifiers |
+| `lumenflow/<env>/admin-key-ref` | testnet, mainnet | 90 days (manual, see §5) | Deploy tooling |
+| `lumenflow/<env>/monitoring-token` | testnet, mainnet | 90 days | Prometheus scrape, alerting |
+
+`<env>` is `testnet` or `mainnet`. Secrets are **never** shared across
+environments; see [secrets-and-local-env.md](secrets-and-local-env.md) for the
+environment isolation policy.
+
+### 13.3 Provisioning (Terraform)
+
+All secret manager resources are declared in `infra/terraform/`. See
+[infra/terraform/README.md](../infra/terraform/README.md) for module inputs and
+state layout.
+
+```hcl
+# infra/terraform/secrets.tf (excerpt)
+resource "aws_secretsmanager_secret" "rpc_api_key" {
+  for_each = toset(["testnet", "mainnet"])
+  name     = "lumenflow/${each.key}/rpc-api-key"
+  kms_key_id = aws_kms_key.secrets.arn
+
+  # Keep old versions for the overlap window + audit
+  recovery_window_in_days = 7
+}
+
+resource "aws_secretsmanager_secret_rotation" "rpc_api_key" {
+  for_each            = aws_secretsmanager_secret.rpc_api_key
+  secret_id           = each.value.id
+  rotation_lambda_arn = aws_lambda_function.rotate_secret.arn
+
+  rotation_rules {
+    automatically_after_days = 30
+  }
+}
+```
+
+Apply per environment:
+
+```bash
+cd infra/terraform
+terraform workspace select testnet   # or mainnet
+terraform apply -var-file=env/testnet.tfvars
+```
+
+For HashiCorp Vault, the equivalent is a KV v2 mount plus a rotation job:
+
+```bash
+vault secrets enable -path=lumenflow kv-v2
+vault kv put lumenflow/testnet/rpc-api-key value=@- <<< "$INITIAL_KEY"
+vault write lumenflow/rotate/rpc-api-key \
+  rotation_period=720h \
+  rotation_lambda="vault-rotation-job"
+```
+
+### 13.4 Rotation lambda / job
+
+The rotation job **must** create a new version without deleting the old one.
+The AWS Secrets Manager rotation contract uses four steps:
+
+| Step | Action |
+|------|--------|
+| `createSecret` | Generate a new credential, store it as `AWSPENDING` on the new version. |
+| `setSecret` | Push the new credential to the upstream provider (e.g. issue a new RPC key). |
+| `testSecret` | Validate the new credential against the provider (a read-only call). |
+| `finishSecret` | Move `AWSCURRENT` to the new version; the old version becomes `AWSPREVIOUS` and **remains active**. |
+
+```python
+# lambda/rotate_secret.py (excerpt)
+def finish_secret(service_client, arn, token):
+    metadata = service_client.describe_secret(SecretId=arn)
+    current = next(v for v, m in metadata["VersionIdsToStages"].items()
+                   if "AWSCURRENT" in m)
+    if token == current:
+        return  # already rotated by a concurrent invocation
+    service_client.update_secret_version_stage(
+        SecretId=arn,
+        VersionStage="AWSCURRENT",
+        MoveToVersionId=token,
+        RemoveFromVersionId=current,   # old version keeps AWSPREVIOUS
+    )
+    # Schedule deactivation of the previous version after the overlap window
+    schedule_previous_version_deactivation(arn, previous_version_id=current,
+                                           delay_minutes=15)
+```
+
+> **Do not** call `delete_secret` or `remove_secret_version` inside the
+> rotation job. Deactivation is a separate, delayed step (§13.6).
+
+### 13.5 Application hot-reload (no restart)
+
+Applications must read the **latest** version at runtime and refresh it
+periodically. Never cache a secret for the process lifetime.
+
+```python
+# app/secrets.py (excerpt)
+import os, threading, time
+import boto3
+
+CACHE_TTL_SECONDS = 60          # poll at most once per minute
+_secret_cache: dict[str, tuple[str, float]] = {}
+_lock = threading.Lock()
+
+def get_secret(name: str) -> str:
+    now = time.monotonic()
+    with _lock:
+        cached = _secret_cache.get(name)
+        if cached and now - cached[1] < CACHE_TTL_SECONDS:
+            return cached[0]
+
+    client = boto3.client("secretsmanager")
+    # AWSCURRENT is the latest active version
+    resp = client.get_secret_value(SecretId=name, VersionStage="AWSCURRENT")
+    value = resp["SecretString"]
+    with _lock:
+        _secret_cache[name] = (value, now)
+    return value
+```
+
+Verification code (webhook signature checks, RPC auth) must accept **both**
+`AWSCURRENT` and `AWSPREVIOUS` during the overlap window:
+
+```python
+def valid_webhook_signatures(secret_name: str) -> list[str]:
+    client = boto3.client("secretsmanager")
+    versions = client.list_secret_version_ids(SecretId=secret_name)
+    out = []
+    for vid, meta in versions["Versions"].items():
+        stages = meta["VersionStages"]
+        if "AWSCURRENT" in stages or "AWSPREVIOUS" in stages:
+            out.append(client.get_secret_value(
+                SecretId=secret_name, VersionId=vid)["SecretString"])
+    return out
+```
+
+Operational notes:
+
+- The poll interval (60 s) is well inside the 15-minute overlap, so every
+  instance picks up the new secret before the old one is deactivated.
+- On cache miss or provider error, fall back to the last known good value and
+  emit a `lumenflow/secret_refresh_failed` metric (see
+  [monitoring.md](monitoring.md)).
+- Do **not** log secret values; log only the version ID and stage.
+
+### 13.6 15-minute dual-active overlap and deactivation
+
+Timeline for a single rotation:
+
+| T+ | Event |
+|----|-------|
+| 0 min | Rotation job runs; new version created as `AWSPENDING`. |
+| ~1 min | `testSecret` passes; `finishSecret` promotes new version to `AWSCURRENT`. Old version becomes `AWSPREVIOUS` and **stays valid**. |
+| 1–16 min | **Dual-active window.** Both versions accepted by all consumers. Applications poll and swap within ≤60 s. |
+| 16 min | Scheduled deactivation removes `AWSPREVIOUS` stage from the old version (or destroys it per retention policy). |
+| 16 min+ | Only the new version is active. |
+
+Deactivation job (EventBridge rule, `rate(1 minute)` scanning for due
+deactivations, or a delayed task):
+
+```python
+def deactivate_previous_version(arn: str, version_id: str):
+    client = boto3.client("secretsmanager")
+    client.update_secret_version_stage(
+        SecretId=arn,
+        VersionStage="AWSPREVIOUS",
+        RemoveFromVersionId=version_id,
+        MoveToVersionId="",   # no promotion; just drop the stage
+    )
+```
+
+> **Guardrail:** the deactivation job must refuse to run if fewer than 15
+> minutes have elapsed since promotion, and must abort if any consumer still
+> reports using the old version (check the `secret_version_in_use` gauge).
+
+### 13.7 Per-environment procedures
+
+#### Testnet
+
+1. Rotation is fully automated (`automatically_after_days = 30`).
+2. Overlap window may be shortened to 5 minutes in testnet tfvars, but never
+   below the 60 s poll interval × 2.
+3. Verify after each rotation:
+
+   ```bash
+   aws secretsmanager describe-secret \
+     --secret-id lumenflow/testnet/rpc-api-key \
+     --query 'VersionIdsToStages'
+   # Expect exactly one AWSCURRENT; AWSPREVIOUS absent after overlap
+   ```
+
+#### Mainnet
+
+1. Rotation is scheduled but **requires a change ticket**; the EventBridge
+   rule is enabled only during the approved window.
+2. Overlap window is fixed at **15 minutes** (do not shorten).
+3. Two-person integrity applies: one operator triggers, one witnesses the
+   `VersionIdsToStages` transition and the application `secret_version_in_use`
+   metric.
+4. Verify:
+
+   ```bash
+   # Confirm dual-active during the window
+   aws secretsmanager describe-secret \
+     --secret-id lumenflow/mainnet/webhook-signing-secret \
+     --query 'VersionIdsToStages'
+
+   # Confirm consumers switched (Grafana / Prometheus)
+   # secret_version_in_use{env="mainnet",stage="AWSCURRENT"} == instance count
+   # secret_version_in_use{env="mainnet",stage="AWSPREVIOUS"} == 0 after T+16m
+   ```
+5. Record the rotation in the audit log (same template as §11).
+
+### 13.8 Rollback
+
+If the new secret is faulty, roll back **before** the overlap window closes:
+
+```bash
+# 1. Find the previous version ID
+PREV=$(aws secretsmanager describe-secret \
+  --secret-id lumenflow/mainnet/rpc-api-key \
+  --query 'VersionIdsToStages' --output json \
+  | jq -r 'to_entries[] | select(.value[]=="AWSPREVIOUS") | .key')
+
+# 2. Promote the previous version back to AWSCURRENT
+aws secretsmanager update-secret-version-stage \
+  --secret-id lumenflow/mainnet/rpc-api-key \
+  --version-stage AWSCURRENT \
+  --move-to-version-id "$PREV" \
+  --remove-from-version-id "$(aws secretsmanager describe-secret \
+      --secret-id lumenflow/mainnet/rpc-api-key \
+      --query 'VersionIdsToStages' --output json \
+      | jq -r 'to_entries[] | select(.value[]=="AWSCURRENT") | .key')"
+```
+
+Applications pick up the rollback within one poll interval (≤60 s) with no
+restart. After the overlap window has closed and the old version has been
+deactivated, rollback requires re-issuing a fresh credential from the provider
+and running a new rotation.
+
+### 13.9 Failure modes
+
+| Failure | Detection | Response |
+|---------|-----------|----------|
+| Rotation job fails mid-way | CloudWatch alarm on lambda errors | Old version remains `AWSCURRENT`; no impact. Investigate and re-run. |
+| New secret invalid at provider | `testSecret` fails | Rotation aborts before promotion; old version stays active. |
+| Consumer fails to refresh | `secret_version_in_use{stage="AWSPREVIOUS"} > 0` at T+16m | Deactivation job aborts; page on-call; restart the affected consumer. |
+| Deactivation job runs early | Guardrail check | Job refuses; alert fires. |
+| Secret leaked | Security alert | Rotate immediately (out-of-band), then follow §6 containment. |
+
+### 13.10 Related documents
+
+- [secrets-and-local-env.md](secrets-and-local-env.md) — secrets management
+  policy, local credential handling, and environment isolation.
+- [infra/terraform/README.md](../infra/terraform/README.md) — Terraform module
+  layout, workspace/state conventions, and how to apply secret resources.
+- [monitoring.md](monitoring.md) — `secret_version_in_use` and
+  `secret_refresh_failed` metrics and alerts.
+
+---
+
 ## Related Documents
 
 | Document | Purpose |
@@ -714,3 +1120,4 @@ Store the completed log in your organization's secure audit trail system.
 | [docs/deployment-runbook.md](deployment-runbook.md) | Step-by-step deployment and verification runbook |
 | [docs/secrets-and-local-env.md](secrets-and-local-env.md) | Secrets management and local credentials policy |
 | [docs/monitoring.md](monitoring.md) | Horizon SSE, Prometheus, suspicious_activity alert setup |
+| [infra/terraform/README.md](../infra/terraform/README.md) | Terraform infrastructure, including secret manager provisioning |

@@ -22,12 +22,37 @@
 #   NETWORK              — Stellar network: local | testnet | mainnet  (default: testnet)
 #   CANARY_CONTRACT_ID   — Optional: override canary ID (default: read from canary-contract-id.txt)
 #   STABLE_CONTRACT_ID   — Optional: override stable ID (default: read from network file)
+#   SMOKE_TESTS_PASSED   — Must be "1" to allow promotion. Set by
+#                          canary-health-check.sh after all smoke tests pass.
+#                          If unset, the smoke test suite is run here and
+#                          promotion is aborted on any failure.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 NETWORK="${NETWORK:-testnet}"
+
+# ── Smoke test gate ──────────────────────────────────────────────────────────
+# Promotion is only allowed when the smoke test suite has passed. The canary
+# health check sets SMOKE_TESTS_PASSED=1 on success; otherwise we run the
+# smoke tests ourselves and refuse to promote if they fail.
+if [[ "${SMOKE_TESTS_PASSED:-}" != "1" ]]; then
+  echo "==> SMOKE_TESTS_PASSED is not set — running smoke tests before promotion..."
+  SMOKE_TEST_SCRIPT="$SCRIPT_DIR/smoke_test.sh"
+  if [[ ! -x "$SMOKE_TEST_SCRIPT" && ! -f "$SMOKE_TEST_SCRIPT" ]]; then
+    echo "ERROR: smoke test suite not found at $SMOKE_TEST_SCRIPT."
+    echo "       Refusing to promote without passing smoke tests."
+    exit 1
+  fi
+  if ! bash "$SMOKE_TEST_SCRIPT"; then
+    echo ""
+    echo "ERROR: Smoke tests failed. Refusing to promote canary to stable."
+    echo "       Run ./scripts/rollback-canary.sh to roll back the canary."
+    exit 1
+  fi
+  echo "==> Smoke tests passed."
+fi
 
 # Determine the canonical contract ID file for this network
 case "$NETWORK" in

@@ -62,16 +62,56 @@ export class RetryExhaustedError extends Error {
 const TRANSIENT_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
 
 /**
+ * Error codes that indicate a transient network-level failure (e.g. an RPC
+ * node that is unreachable or that timed out mid-request).
+ */
+const TRANSIENT_ERROR_CODES = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ECONNABORTED',
+  'ETIMEDOUT',
+  'ESOCKETTIMEDOUT',
+  'EPIPE',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT',
+  'UND_ERR_SOCKET',
+]);
+
+/** Error names that indicate a transient timeout / abort. */
+const TRANSIENT_ERROR_NAMES = new Set([
+  'TimeoutError',
+  'AbortError',
+  'NetworkError',
+]);
+
+/**
  * Returns true for errors that are safe to retry.
  *
  * An error is retryable when:
  *  - It has a `status` property whose value is in TRANSIENT_STATUS_CODES, or
  *  - It is a network-level error with no `status` property (e.g. ECONNRESET,
- *    timeout, TypeError from fetch).
+ *    timeout, TypeError from fetch), or
+ *  - It carries a transient `code` / `name` (e.g. ETIMEDOUT, TimeoutError).
  */
 export function isRetryable(err: unknown): boolean {
-  if (err !== null && typeof err === 'object' && 'status' in err) {
-    return TRANSIENT_STATUS_CODES.has((err as { status: number }).status);
+  if (err !== null && typeof err === 'object') {
+    const e = err as Record<string, unknown>;
+
+    if ('status' in e) {
+      return TRANSIENT_STATUS_CODES.has(e['status'] as number);
+    }
+
+    // Network-level errors (no status property) are retryable unless they
+    // explicitly carry a non-transient code/name.
+    if (typeof e['code'] === 'string' && !TRANSIENT_ERROR_CODES.has(e['code'])) {
+      return false;
+    }
+    if (typeof e['name'] === 'string' && TRANSIENT_ERROR_NAMES.has(e['name'])) {
+      return true;
+    }
   }
   // Network-level errors (no status property) are always retryable
   return true;
@@ -194,6 +234,8 @@ export async function withRetry<T>(
 
   for (let attempt = 0; attempt <= effectiveMaxRetries; attempt++) {
     try {
+      // The result of the successful attempt is returned directly so callers
+      // observe the value produced once the RPC node recovers.
       return await fn();
     } catch (err) {
       lastError = err;

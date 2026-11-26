@@ -312,12 +312,20 @@ Environment variables:
     CURSOR_FILE       Path to persist the last paging_token. Default: .lumenflow_cursor
     LUMENFLOW_VERSION Deployed release version, published via lumenflow_build_info. Default: unknown
     LUMENFLOW_COMMIT  Deployed commit SHA, published via lumenflow_build_info. Default: unknown
+
+mTLS (internal service communication):
+    TLS_ENABLED       Set to "1"/"true" to enable mutual TLS for outbound Horizon
+                      calls and the /metrics endpoint. Default: disabled
+    TLS_CA_CERT       Path to the internal CA bundle used to verify peers (required)
+    TLS_CERT          Path to this service's client/server certificate (required)
+    TLS_KEY           Path to the private key for TLS_CERT (required)
 """
 
 import os
 import sys
 import time
 import json
+import ssl
 import logging
 import requests
 from prometheus_client import (
@@ -328,6 +336,9 @@ from prometheus_client import (
     CollectorRegistry,
     REGISTRY,
 )
+from prometheus_client import start_wsgi_server
+from wsgiref.simple_server import make_server, WSGIRequestHandler
+from prometheus_client import make_wsgi_app
 
 logging.basicConfig(
     level=logging.INFO,
@@ -347,9 +358,75 @@ CURSOR_FILE     = os.environ.get("CURSOR_FILE", ".lumenflow_cursor")
 BUILD_VERSION   = os.environ.get("LUMENFLOW_VERSION", "unknown")
 BUILD_COMMIT    = os.environ.get("LUMENFLOW_COMMIT", "unknown")
 
+# ─── mTLS configuration ────────────────────────────────────────────────────────
+# Internal service-to-service traffic (Horizon/RPC calls and the Prometheus
+# scrape endpoint) is protected with mutual TLS. Certificates are issued by the
+# internal CA and rotated automatically (validity < 90 days).
+TLS_ENABLED = os.environ.get("TLS_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+TLS_CA_CERT = os.environ.get("TLS_CA_CERT", "")
+TLS_CERT    = os.environ.get("TLS_CERT", "")
+TLS_KEY     = os.environ.get("TLS_KEY", "")
+
 if not CONTRACT_ID:
     log.error("CONTRACT_ID environment variable is required")
     sys.exit(1)
+
+
+def _build_ssl_context() -> ssl.SSLContext:
+    """Build a server-side SSL context requiring client certificates.
+
+    Fails fast with a clear error if mTLS is enabled but the CA bundle,
+    certificate, or key is missing or unreadable.
+    """
+    missing = [
+        name
+        for name, value in (
+            ("TLS_CA_CERT", TLS_CA_CERT),
+            ("TLS_CERT", TLS_CERT),
+            ("TLS_KEY", TLS_KEY),
+        )
+        if not value
+    ]
+    if missing:
+        log.error(
+            "mTLS is enabled (TLS_ENABLED) but required environment variables are "
+            "missing: %s",
+            ", ".join(missing),
+        )
+        sys.exit(1)
+
+    for name, path in (
+        ("TLS_CA_CERT", TLS_CA_CERT),
+        ("TLS_CERT", TLS_CERT),
+        ("TLS_KEY", TLS_KEY),
+    ):
+        if not os.path.isfile(path):
+            log.error("mTLS is enabled but %s does not exist: %s", name, path)
+            sys.exit(1)
+
+    try:
+        context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        context.load_verify_locations(cafile=TLS_CA_CERT)
+        context.load_cert_chain(certfile=TLS_CERT, keyfile=TLS_KEY)
+        # Require and verify a client certificate from every connecting peer.
+        context.verify_mode = ssl.CERT_REQUIRED
+        return context
+    except (ssl.SSLError, OSError) as exc:
+        log.error("Failed to configure mTLS SSL context: %s", exc)
+        sys.exit(1)
+
+
+def _build_session() -> requests.Session:
+    """Create a requests session configured for mTLS outbound calls."""
+    session = requests.Session()
+    if TLS_ENABLED:
+        session.verify = TLS_CA_CERT
+        session.cert = (TLS_CERT, TLS_KEY)
+    return session
+
+
+# Shared HTTP session for all outbound Horizon/RPC calls.
+SESSION = _build_session()
 
 # ─── Prometheus metrics ────────────────────────────────────────────────────────
 LABELS = ["contract_id"]
@@ -390,6 +467,34 @@ multisig_executed_total = Counter(
     LABELS,
 )
 
+# Diagnostic telemetry events published by the contract via env.events().publish()
+# for observability (see issue #1589). Each carries a ledger_sequence_delta value
+# (duration-equivalent) that is observed in lumenflow_ledger_sequence_delta.
+payments_processed_total = Counter(
+    "lumenflow_payments_processed_total",
+    "Total number of diagnostic payment_processed events",
+    LABELS,
+)
+
+refunds_issued_total = Counter(
+    "lumenflow_refunds_issued_total",
+    "Total number of diagnostic refund_issued events",
+    LABELS,
+)
+
+batch_payments_completed_total = Counter(
+    "lumenflow_batch_payments_completed_total",
+    "Total number of diagnostic batch_payment_completed events",
+    LABELS,
+)
+
+ledger_sequence_delta = Histogram(
+    "lumenflow_ledger_sequence_delta",
+    "Ledger sequence delta (duration-equivalent) reported by diagnostic events",
+    LABELS + ["event_name"],
+    buckets=[1, 2, 5, 10, 25, 50, 100, 250, 500, 1000],
+)
+
 payment_amount = Histogram(
     "lumenflow_payment_amount",
     "Distribution of payment amounts in stroops",
@@ -418,6 +523,27 @@ scrape_errors_total = Counter(
 last_scrape_timestamp = Gauge(
     "lumenflow_last_scrape_timestamp_seconds",
     "Unix timestamp of the last successful Horizon scrape",
+    LABELS,
+)
+
+# ─── Database connection pool metrics ─────────────────────────────────────────
+# Populated by the off-chain persistence layer (see docs/deployment-environments.md
+# for pool sizing guidance: min 2, max 20 connections, 5s query timeout).
+db_pool_active_connections = Gauge(
+    "lumenflow_db_pool_active_connections",
+    "Number of database connections currently checked out of the pool",
+    LABELS,
+)
+
+db_pool_idle_connections = Gauge(
+    "lumenflow_db_pool_idle_connections",
+    "Number of idle database connections available in the pool",
+    LABELS,
+)
+
+db_pool_wait_time_seconds = Gauge(
+    "lumenflow_db_pool_wait_time_seconds",
+    "Time spent waiting for a database connection from the pool, in seconds",
     LABELS,
 )
 
@@ -493,6 +619,29 @@ def process_event(event: dict) -> None:
     elif event_name == "multisig_executed":
         multisig_executed_total.labels(*lbl).inc()
 
+    # Diagnostic telemetry events (issue #1589). Each includes a
+    # ledger_sequence_delta field used as a duration-equivalent measure.
+    elif event_name in (
+        "payment_processed_diagnostic",
+        "refund_issued",
+        "batch_payment_completed",
+    ):
+        if event_name == "payment_processed_diagnostic":
+            payments_processed_total.labels(*lbl).inc()
+        elif event_name == "refund_issued":
+            refunds_issued_total.labels(*lbl).inc()
+        else:
+            batch_payments_completed_total.labels(*lbl).inc()
+
+        delta = value.get("ledger_sequence_delta")
+        if delta is not None:
+            try:
+                ledger_sequence_delta.labels(
+                    CONTRACT_ID, event_name
+                ).observe(float(delta))
+            except (ValueError, TypeError):
+                pass
+
     # Detect pause / unpause
     elif event_name == "contract_paused":
         contract_paused.labels(*lbl).set(1)
@@ -517,7 +666,7 @@ def scrape_once(cursor: str) -> str:
     )
 
     try:
-        resp = requests.get(url, timeout=15)
+        resp = SESSION.get(url, timeout=15)
         resp.raise_for_status()
     except Exception as exc:
         log.warning("Horizon request failed: %s", exc)
@@ -538,6 +687,18 @@ def scrape_once(cursor: str) -> str:
     return cursor
 
 
+def _make_tls_server_class(ssl_context: ssl.SSLContext):
+    """Return a WSGI server class that wraps accepted sockets in TLS."""
+    from wsgiref.simple_server import WSGIServer
+
+    class _TLSServer(WSGIServer):
+        def get_request(self):
+            sock, addr = super().get_request()
+            return ssl_context.wrap_socket(sock, server_side=True), addr
+
+    return _TLSServer
+
+
 def main() -> None:
     log.info("Starting LumenFlow Prometheus exporter")
     log.info("Contract : %s", CONTRACT_ID)
@@ -545,6 +706,21 @@ def main() -> None:
     log.info("Horizon  : %s", HORIZON_URL)
     log.info("Port     : %d", EXPORTER_PORT)
     log.info("Interval : %ds", SCRAPE_INTERVAL)
+
+    if TLS_ENABLED:
+        ssl_context = _build_ssl_context()
+        httpd = make_server(
+            "0.0.0.0",
+            EXPORTER_PORT,
+            make_wsgi_app(),
+            server_class=_make_tls_server_class(ssl_context),
+            handler_class=WSGIRequestHandler,
+        )
+        log.info(
+            "Metrics endpoint (mTLS): https://0.0.0.0:%d/metrics", EXPORTER_PORT
+        )
+        httpd.serve_forever()
+        return
 
     start_http_server(EXPORTER_PORT)
     log.info("Metrics endpoint: http://0.0.0.0:%d/metrics", EXPORTER_PORT)

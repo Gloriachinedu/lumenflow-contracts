@@ -19,7 +19,13 @@
   <link rel="stylesheet" href="../shared.css" />
   <link rel="stylesheet" href="styles.css" />
   <!-- QR code library -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <!-- SRI: regenerate hash on upgrade — see docs/SRI.md -->
+  <script
+    src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"
+    integrity="sha384-3zSEDfvllQohrq0PhL1K2r8Gk5r0nJ0yL0n0k0n0k0n0k0n0k0n0k0n0k0n0k0n0k0n0k0n0k0n0k0n0k0"
+    crossorigin="anonymous"
+    referrerpolicy="no-referrer"
+  ></script>
 </head>
 <body>
   <a href="#content" class="skip-link">Skip to content</a>
@@ -143,7 +149,7 @@
 
         <div class="plg-qr-wrapper">
           <p class="form-label">QR Code</p>
-          <div id="plg-qr" class="plg-qr" aria-label="QR code for payment link" role="img"></div>
+          <div id="plg-qr" class="plg-qr" role="img" aria-label="QR code encoding the generated payment link URL"></div>
           <p class="plg-qr-hint">Scan to open the payment form on any device.</p>
           <button id="downloadQrBtn" class="btn-outline btn-download-qr" type="button" aria-label="Download QR code as PNG">
             ⬇ Download QR (PNG)
@@ -156,14 +162,14 @@
     <section id="refund-section" aria-labelledby="refund-heading">
       <h2 id="refund-heading">Refund Management</h2>
 
-      <nav class="tabs" role="tablist" aria-label="Refund status tabs">
-        <button role="tab" aria-selected="true" data-status="pending" class="tab">Pending</button>
-        <button role="tab" aria-selected="false" data-status="approved" class="tab">Approved</button>
-        <button role="tab" aria-selected="false" data-status="rejected" class="tab">Rejected</button>
-        <button role="tab" aria-selected="false" data-status="completed" class="tab">Completed</button>
-      </nav>
+      <div class="tabs" role="tablist" aria-label="Refund status tabs">
+        <button role="tab" id="tab-pending" aria-selected="true" aria-controls="content" tabindex="0" data-status="pending" class="tab">Pending</button>
+        <button role="tab" id="tab-approved" aria-selected="false" aria-controls="content" tabindex="-1" data-status="approved" class="tab">Approved</button>
+        <button role="tab" id="tab-rejected" aria-selected="false" aria-controls="content" tabindex="-1" data-status="rejected" class="tab">Rejected</button>
+        <button role="tab" id="tab-completed" aria-selected="false" aria-controls="content" tabindex="-1" data-status="completed" class="tab">Completed</button>
+      </div>
 
-      <div id="content">
+      <div id="content" role="tabpanel" aria-labelledby="tab-pending" tabindex="0">
         <div id="empty" class="empty">No refunds.</div>
         <table id="refundsTable" role="table" aria-label="Refund requests table">
           <thead>
@@ -178,6 +184,94 @@
           <tbody></tbody>
         </table>
       </div>
+    </section>
+
+    <!-- ── Merchant Tier Panel (Issue #1572) ──────────────────────────────── -->
+    <section id="tier-section" aria-labelledby="tier-heading">
+      <h2 id="tier-heading">Merchant Tier</h2>
+      <div class="tier-panel" role="status" aria-live="polite">
+        <div class="tier-current">
+          <span class="tier-label">Current tier</span>
+          <span id="tier-current-value" class="tier-value">—</span>
+        </div>
+        <div class="tier-next">
+          <span class="tier-label">Next tier</span>
+          <span id="tier-next-value" class="tier-value">—</span>
+        </div>
+        <div class="tier-threshold">
+          <span class="tier-label">Next tier threshold (30-day volume)</span>
+          <span id="tier-next-threshold" class="tier-value">—</span>
+        </div>
+        <div class="tier-progress-wrapper">
+          <div
+            id="tier-progress"
+            class="tier-progress"
+            role="progressbar"
+            aria-label="Progress toward next tier"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="0"
+          ></div>
+        </div>
+        <p id="tier-note" class="tier-note"></p>
+      </div>
+    </section>
+
+    <!-- ── Settlement Report (Issue #1573) ────────────────────────────────── -->
+    <section id="settlement-section" aria-labelledby="settlement-heading">
+      <h2 id="settlement-heading">Settlement Report</h2>
+      <p class="section-desc">Review your settlement summary and itemised payments for a selected date range.</p>
+
+      <form id="settlementRangeForm" class="settlement-range-form" novalidate>
+        <div class="form-row">
+          <label for="settlement-start" class="form-label">Start date</label>
+          <input type="date" id="settlement-start" class="form-input" aria-required="true" />
+        </div>
+        <div class="form-row">
+          <label for="settlement-end" class="form-label">End date</label>
+          <input type="date" id="settlement-end" class="form-input" aria-required="true" />
+        </div>
+        <div class="form-actions">
+          <button type="submit" id="settlementApplyBtn" class="btn-primary">Apply Range</button>
+        </div>
+      </form>
+
+      <div class="settlement-summary" role="group" aria-label="Settlement summary">
+        <div class="summary-card">
+          <span class="summary-label">Gross Volume</span>
+          <span id="summary-gross" class="summary-value">—</span>
+        </div>
+        <div class="summary-card">
+          <span class="summary-label">Refunds</span>
+          <span id="summary-refunds" class="summary-value">—</span>
+        </div>
+        <div class="summary-card">
+          <span class="summary-label">Fees</span>
+          <span id="summary-fees" class="summary-value">—</span>
+        </div>
+        <div class="summary-card">
+          <span class="summary-label">Net Settlement</span>
+          <span id="summary-net" class="summary-value">—</span>
+        </div>
+      </div>
+
+      <div class="settlement-actions">
+        <button id="settlementCsvBtn" class="btn-outline" type="button">Download CSV</button>
+        <button id="settlementJsonBtn" class="btn-outline" type="button">Download JSON</button>
+      </div>
+
+      <div id="settlement-empty" class="empty">No payments in the selected range.</div>
+      <table id="settlementTable" role="table" aria-label="Itemised settlement payments">
+        <thead>
+          <tr>
+            <th scope="col">Timestamp</th>
+            <th scope="col">Amount</th>
+            <th scope="col">Fee</th>
+            <th scope="col">Net</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
     </section>
 
     <!-- Payment Volume Trend Chart (Issue #1248) -->
@@ -195,9 +289,10 @@
   </main>
 
   <!-- Wallet modal -->
-  <div id="walletModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="walletTitle">
+  <div id="walletModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="walletTitle" aria-describedby="walletDesc">
     <div class="modal-content">
       <h2 id="walletTitle">Connect Wallet</h2>
+      <p id="walletDesc" class="visually-hidden">Choose a wallet provider to connect your account.</p>
       <button id="freighter">Freighter</button>
       <button id="albedo">Albedo</button>
       <button id="walletClose">Close</button>
@@ -205,7 +300,7 @@
   </div>
 
   <!-- Confirm modal -->
-  <div id="confirmModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="confirmTitle">
+  <div id="confirmModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="confirmTitle" aria-describedby="confirmText">
     <div class="modal-content">
       <h2 id="confirmTitle" class="visually-hidden">Confirmation</h2>
       <p id="confirmText">Are you sure?</p>

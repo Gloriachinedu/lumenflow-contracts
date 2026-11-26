@@ -105,3 +105,17 @@ echo "     on-chain and can be queried for diagnostic purposes."
 echo ""
 echo "  4. Do NOT re-use the abandoned canary contract ID in production."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Emit a Slack alert for the rollback (best-effort; never fails the rollback)
+if [[ -n "${SLACK_DEPLOY_WEBHOOK:-}" ]]; then
+  SLACK_TEXT=":rotating_light: *Canary auto-rollback* on \`$NETWORK\`\n• Abandoned canary: \`${CANARY_CONTRACT_ID:-(none recorded)}\`\n• Restored stable: \`$RESTORE_ID\`"
+  SLACK_PAYLOAD="$(printf '{"text":"%s"}' "$SLACK_TEXT")"
+  if curl -fsS -X POST -H 'Content-Type: application/json' \
+       --data "$SLACK_PAYLOAD" "$SLACK_DEPLOY_WEBHOOK" >/dev/null; then
+    echo "==> Slack alert sent to SLACK_DEPLOY_WEBHOOK"
+  else
+    echo "WARNING: Failed to send Slack alert to SLACK_DEPLOY_WEBHOOK (rollback still complete)."
+  fi
+else
+  echo "==> SLACK_DEPLOY_WEBHOOK not set; skipping Slack alert."
+fi

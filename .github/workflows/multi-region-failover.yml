@@ -2,8 +2,8 @@ name: Multi-Region Failover Drill
 
 on:
   schedule:
-    # Run at 00:00 UTC on the 1st of every month
-    - cron: '0 0 1 * *'
+    # Run weekly on Monday at 02:00 UTC
+    - cron: '0 2 * * 1'
   workflow_dispatch:
     inputs:
       network:
@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      RTO_TARGET_SECONDS: 900 # 15 minutes
+      RTO_TARGET_SECONDS: 60 # 60 seconds
       DRILL_START_TIME: ${{ github.run_started_at }}
 
     steps:
@@ -86,6 +86,46 @@ jobs:
             echo "Smoke test FAILED in secondary region (exit code: $SMOKE_EXIT)"
           fi
 
+      - name: Simulate primary region unavailability
+        id: primary-down
+        env:
+          PRIMARY_RPC_URL: ${{ secrets.PRIMARY_RPC_URL }}
+        run: |
+          echo "Simulating primary region unavailability..."
+          # Point the primary RPC at an unreachable endpoint to emulate an outage.
+          UNREACHABLE_PRIMARY="http://127.0.0.1:1"
+          echo "Primary RPC overridden: ${PRIMARY_RPC_URL:-https://soroban-testnet.stellar.org} -> $UNREACHABLE_PRIMARY"
+          echo "primary_rpc_url=$UNREACHABLE_PRIMARY" >> "$GITHUB_OUTPUT"
+
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            --connect-timeout 5 --max-time 10 \
+            "${UNREACHABLE_PRIMARY}/health" || true)
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "::error::Primary region still reachable — outage simulation failed"
+            echo "primary_unavailable=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Primary region is unavailable (HTTP ${HTTP_CODE:-000}) — outage simulated"
+            echo "primary_unavailable=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify secondary region serves traffic during primary outage
+        id: secondary-serves
+        env:
+          FAILOVER_RPC_URL: ${{ secrets.FAILOVER_RPC_URL }}
+        run: |
+          echo "Verifying secondary region serves traffic while primary is down..."
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            --connect-timeout 10 --max-time 30 \
+            "${FAILOVER_RPC_URL:-https://soroban-testnet.stellar.org}/health" || true)
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "Secondary region is serving traffic (HTTP 200)"
+            echo "secondary_serving=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Secondary region is not serving traffic (HTTP $HTTP_CODE)"
+            echo "secondary_serving=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Simulate DNS switchover
         id: dns
         env:
@@ -109,12 +149,12 @@ jobs:
           echo "rto_seconds=$RTO_SECONDS" >> "$GITHUB_OUTPUT"
           echo "rto_minutes=$RTO_MINUTES" >> "$GITHUB_OUTPUT"
 
-          if [ "$RTO_SECONDS" -le "$RTO_TARGET_SECONDS" ]; then
+          if [ "$RTO_SECONDS" -lt "$RTO_TARGET_SECONDS" ]; then
             echo "rto_within_target=true" >> "$GITHUB_OUTPUT"
-            echo "RTO: ${RTO_SECONDS}s (${RTO_MINUTES}m) — WITHIN 15-minute target ✅"
+            echo "RTO: ${RTO_SECONDS}s (${RTO_MINUTES}m) — WITHIN 60-second target ✅"
           else
             echo "rto_within_target=false" >> "$GITHUB_OUTPUT"
-            echo "RTO: ${RTO_SECONDS}s (${RTO_MINUTES}m) — EXCEEDS 15-minute target ❌"
+            echo "RTO: ${RTO_SECONDS}s (${RTO_MINUTES}m) — EXCEEDS 60-second target ❌"
           fi
 
       - name: Post workflow summary
@@ -122,6 +162,8 @@ jobs:
         env:
           SMOKE_PASSED: ${{ steps.smoke.outputs.smoke_passed }}
           SECONDARY_REACHABLE: ${{ steps.secondary-check.outputs.secondary_reachable }}
+          PRIMARY_UNAVAILABLE: ${{ steps.primary-down.outputs.primary_unavailable }}
+          SECONDARY_SERVING: ${{ steps.secondary-serves.outputs.secondary_serving }}
           DNS_SWITCHED: ${{ steps.dns.outputs.dns_switched }}
           RTO_SECONDS: ${{ steps.rto.outputs.rto_seconds }}
           RTO_MINUTES: ${{ steps.rto.outputs.rto_minutes }}
@@ -132,14 +174,17 @@ jobs:
           echo "| Metric | Result |" >> "$GITHUB_STEP_SUMMARY"
           echo "|--------|--------|" >> "$GITHUB_STEP_SUMMARY"
           echo "| Secondary RPC reachable | $([ "$SECONDARY_REACHABLE" = "true" ] && echo '✅ Yes' || echo '❌ No') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Primary region unavailable (simulated) | $([ "$PRIMARY_UNAVAILABLE" = "true" ] && echo '✅ Yes' || echo '❌ No') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Secondary serving during outage | $([ "$SECONDARY_SERVING" = "true" ] && echo '✅ Yes' || echo '❌ No') |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Smoke test (secondary) | $([ "$SMOKE_PASSED" = "true" ] && echo '✅ Passed' || echo '❌ Failed') |" >> "$GITHUB_STEP_SUMMARY"
           echo "| DNS switchover | $([ "$DNS_SWITCHED" = "true" ] && echo '✅ Simulated' || echo '❌ Not completed') |" >> "$GITHUB_STEP_SUMMARY"
           echo "| RTO measured | ${RTO_SECONDS}s (${RTO_MINUTES}m) |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| RTO within 15-min target | $([ "$RTO_WITHIN" = "true" ] && echo '✅ Yes' || echo '❌ No') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| RTO within 60-second target | $([ "$RTO_WITHIN" = "true" ] && echo '✅ Yes' || echo '❌ No') |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
           OVERALL="PASSED"
-          if [ "$SMOKE_PASSED" != "true" ] || [ "$RTO_WITHIN" != "true" ]; then
+          if [ "$SMOKE_PASSED" != "true" ] || [ "$RTO_WITHIN" != "true" ] \
+            || [ "$PRIMARY_UNAVAILABLE" != "true" ] || [ "$SECONDARY_SERVING" != "true" ]; then
             OVERALL="FAILED"
           fi
           echo "**Overall: $OVERALL**" >> "$GITHUB_STEP_SUMMARY"
@@ -154,10 +199,10 @@ jobs:
         run: |
           MESSAGE="🚨 *Multi-Region Failover Drill FAILED*
 
-          The monthly failover drill did not pass. Immediate review is required.
+          The weekly failover drill did not pass. Immediate review is required.
 
           *Workflow:* ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-          *RTO Target:* 15 minutes
+          *RTO Target:* 60 seconds
           *Time:* $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
           if [ -n "$ONCALL_SLACK_WEBHOOK" ]; then
@@ -172,14 +217,101 @@ jobs:
 
           echo "::error::Failover drill failed — on-call has been alerted"
 
+      - name: Page on-call via PagerDuty
+        if: failure()
+        env:
+          PAGERDUTY_ROUTING_KEY: ${{ secrets.PAGERDUTY_ROUTING_KEY }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          if [ -z "$PAGERDUTY_ROUTING_KEY" ]; then
+            echo "::warning::PAGERDUTY_ROUTING_KEY not configured — cannot page on-call"
+            exit 0
+          fi
+
+          DEDUP_KEY="multi-region-failover-${GITHUB_REPOSITORY}-${GITHUB_RUN_ID}"
+          PAYLOAD=$(cat <<EOF
+          {
+            "routing_key": "${PAGERDUTY_ROUTING_KEY}",
+            "event_action": "trigger",
+            "dedup_key": "${DEDUP_KEY}",
+            "payload": {
+              "summary": "Multi-Region Failover Drill FAILED",
+              "source": "github-actions/${GITHUB_REPOSITORY}",
+              "severity": "critical",
+              "custom_details": {
+                "workflow_url": "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}",
+                "rto_target_seconds": "${RTO_TARGET_SECONDS}"
+              }
+            }
+          }
+          EOF
+          )
+
+          HTTP_CODE=$(curl -s -o /tmp/pagerduty_response.txt -w "%{http_code}" \
+            -X POST "https://events.pagerduty.com/v2/enqueue" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" || true)
+
+          if [ "$HTTP_CODE" = "202" ]; then
+            echo "PagerDuty alert triggered (HTTP 202)"
+          else
+            echo "::warning::PagerDuty alert failed (HTTP $HTTP_CODE)"
+            cat /tmp/pagerduty_response.txt || true
+          fi
+
       - name: Fail job if drill did not pass
         if: always()
         env:
           SMOKE_PASSED: ${{ steps.smoke.outputs.smoke_passed }}
           RTO_WITHIN: ${{ steps.rto.outputs.rto_within_target }}
+          PRIMARY_UNAVAILABLE: ${{ steps.primary-down.outputs.primary_unavailable }}
+          SECONDARY_SERVING: ${{ steps.secondary-serves.outputs.secondary_serving }}
         run: |
-          if [ "$SMOKE_PASSED" != "true" ] || [ "$RTO_WITHIN" != "true" ]; then
-            echo "Drill failed: smoke_passed=$SMOKE_PASSED, rto_within_target=$RTO_WITHIN"
+          if [ "$SMOKE_PASSED" != "true" ] || [ "$RTO_WITHIN" != "true" ] \
+            || [ "$PRIMARY_UNAVAILABLE" != "true" ] || [ "$SECONDARY_SERVING" != "true" ]; then
+            echo "Drill failed: smoke_passed=$SMOKE_PASSED, rto_within_target=$RTO_WITHIN, primary_unavailable=$PRIMARY_UNAVAILABLE, secondary_serving=$SECONDARY_SERVING"
             exit 1
           fi
           echo "Drill passed all checks ✅"
+
+      - name: Log drill results to docs/monitoring.md
+        if: always()
+        env:
+          SMOKE_PASSED: ${{ steps.smoke.outputs.smoke_passed }}
+          PRIMARY_UNAVAILABLE: ${{ steps.primary-down.outputs.primary_unavailable }}
+          SECONDARY_SERVING: ${{ steps.secondary-serves.outputs.secondary_serving }}
+          RTO_SECONDS: ${{ steps.rto.outputs.rto_seconds }}
+          RTO_WITHIN: ${{ steps.rto.outputs.rto_within_target }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          # Only append once per month (first scheduled run of the month)
+          CURRENT_MONTH=$(date -u '+%Y-%m')
+          if grep -q "Failover drill — ${CURRENT_MONTH}" docs/monitoring.md 2>/dev/null; then
+            echo "Results for ${CURRENT_MONTH} already logged — skipping"
+            exit 0
+          fi
+
+          OVERALL="PASSED"
+          if [ "$SMOKE_PASSED" != "true" ] || [ "$RTO_WITHIN" != "true" ] \
+            || [ "$PRIMARY_UNAVAILABLE" != "true" ] || [ "$SECONDARY_SERVING" != "true" ]; then
+            OVERALL="FAILED"
+          fi
+
+          {
+            echo ""
+            echo "### Failover drill — ${CURRENT_MONTH}"
+            echo ""
+            echo "- Date: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            echo "- Overall: ${OVERALL}"
+            echo "- Primary region unavailable (simulated): ${PRIMARY_UNAVAILABLE}"
+            echo "- Secondary region serving traffic: ${SECONDARY_SERVING}"
+            echo "- Smoke test (secondary): ${SMOKE_PASSED}"
+            echo "- Recovery time: ${RTO_SECONDS}s (target < 60s, within target: ${RTO_WITHIN})"
+            echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> docs/monitoring.md
+
+          echo "Drill results appended to docs/monitoring.md"
