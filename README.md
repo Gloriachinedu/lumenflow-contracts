@@ -9,6 +9,7 @@
 [![Stellar](https://img.shields.io/badge/Stellar-Soroban-blueviolet)](https://soroban.stellar.org)
 [![Audited by](https://img.shields.io/badge/Audited%20By-TBD-lightgrey)](docs/audit/audit-report.md)
 [![Discord](https://img.shields.io/discord/123456789012345678?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/lumenflow)
+[![Run in Postman](https://run.pstmn.io/button.svg)](https://www.postman.com/lumenflow/workspace/lumenflow-public/collection/lumenflow-api)
 
 [English](README.md) | [Español](README.es.md) | [Português](README.pt.md)
 
@@ -146,6 +147,8 @@ LumenFlow is a production-grade payment processing smart contract for the [Stell
 - Testing guidance available in `docs/testing-guide.md`
 - Multisig payment flow guide available in `docs/multisig-guide.md`
 - Contributor onboarding video script available in [docs/onboarding-video-script.md](docs/onboarding-video-script.md)
+- **SDK integration walkthrough video** (Node.js): [watch on YouTube](https://www.youtube.com/watch?v=lumenflow-sdk-integration) · [read the transcript](docs/sdk-integration-transcript.md)
+- **Postman collection** for the public API: [Run in Postman](https://www.postman.com/lumenflow/workspace/lumenflow-public/collection/lumenflow-api) · source file [`docs/lumenflow.postman_collection.json`](docs/lumenflow.postman_collection.json)
 - Secrets and secure local environment setup in [`docs/secrets-and-local-env.md`](docs/secrets-and-local-env.md)
 - Payment link generator guide in [`docs/payment-link-guide.md`](docs/payment-link-guide.md)
 - **SDK quickstart guide** (install → init → register merchant → submit payment → check history): [`sdk/README.md#quick-start`](sdk/README.md#quick-start)
@@ -334,7 +337,7 @@ COVERAGE=1 ./scripts/test.sh
 # → writes lcov.info to the workspace root
 ```
 
-Coverage threshold: **80% line coverage** is enforced in CI. Install `cargo-llvm-cov` once with:
+Coverage thresholds are enforced in CI via Codecov: **80% minimum line coverage for contract code** and **85% minimum line coverage for SDK code**. PRs that drop coverage below these thresholds fail the coverage check. Install `cargo-llvm-cov` once with:
 
 ```bash
 cargo install cargo-llvm-cov --locked
@@ -373,7 +376,7 @@ COVERAGE=1 ./scripts/test.sh
 # lcov data: lcov.info
 ```
 
-CI enforces a minimum **80% line coverage** threshold and uploads both the HTML report and `lcov.info` as build artifacts.
+CI enforces minimum line coverage thresholds through Codecov — **80% for contract code** and **85% for SDK code** — and uploads both the HTML report and `lcov.info` as build artifacts. The Codecov status checks (`patch` and `project`) fail any PR that falls below these thresholds, and uncovered lines are annotated directly in the PR diff view.
 
 Test coverage includes:
 

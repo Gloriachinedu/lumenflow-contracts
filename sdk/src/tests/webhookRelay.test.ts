@@ -24,6 +24,8 @@ import {
   RelayEvent,
   idempotencyKey,
 } from '../webhookRelay';
+import { Logger, LogLevel } from '../logging';
+import { redact } from '../logRedaction';
 
 const noSleep = () => Promise.resolve();
 
@@ -263,6 +265,104 @@ describe('WebhookRelay — boundary conditions', () => {
   });
 });
 
+/** Captures structured log lines emitted by the relay. */
+function captureLogger() {
+  const lines: Array<Record<string, unknown>> = [];
+  const logger: Logger = {
+    log: (line) => {
+      lines.push(line as unknown as Record<string, unknown>);
+    },
+  };
+  return { logger, lines };
+}
+
+describe('WebhookRelay — structured logging', () => {
+  it('emits a JSON log line with level, correlationId, operation and duration_ms', async () => {
+    const { fn } = scriptedWebhook([], 200);
+    const { logger, lines } = captureLogger();
+    const relay = new WebhookRelay({ deliver: fn, sleep: noSleep, logger });
+
+    await relay.relay(event(), { correlationId: 'corr-123' });
+
+    expect(lines).toHaveLength(1);
+    const line = lines[0];
+    expect(line.level).toBe('info');
+    expect(line.correlationId).toBe('corr-123');
+    expect(line.operation).toBe('webhook.relay');
+    expect(typeof line.duration_ms).toBe('number');
+    expect(line.duration_ms as number).toBeGreaterThanOrEqual(0);
+    // The line must be JSON-serialisable.
+    expect(() => JSON.stringify(line)).not.toThrow();
+  });
+
+  it('auto-generates a UUID v4 correlation ID when the caller does not supply one', async () => {
+    const { fn } = scriptedWebhook([], 200);
+    const { logger, lines } = captureLogger();
+    const relay = new WebhookRelay({ deliver: fn, sleep: noSleep, logger });
+
+    await relay.relay(event());
+
+    const uuidV4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    expect(lines[0].correlationId).toMatch(uuidV4);
+  });
+
+  it('propagates the correlation ID across every attempt of a retried delivery', async () => {
+    const { fn } = scriptedWebhook([503, 503], 200);
+    const { logger, lines } = captureLogger();
+    const relay = new WebhookRelay({ deliver: fn, sleep: noSleep, logger });
+
+    await relay.relay(event(), { correlationId: 'corr-retry' });
+
+    expect(lines.length).toBeGreaterThanOrEqual(1);
+    for (const line of lines) {
+      expect(line.correlationId).toBe('corr-retry');
+    }
+  });
+
+  it('logs at the configured level', async () => {
+    const { fn } = scriptedWebhook([], 200);
+    const { logger, lines } = captureLogger();
+    const relay = new WebhookRelay({ deliver: fn, sleep: noSleep, logger, logLevel: LogLevel.DEBUG });
+
+    await relay.relay(event(), { correlationId: 'corr-debug' });
+
+    expect(lines.length).toBeGreaterThanOrEqual(1);
+    expect(lines[0].level).toBe('debug');
+  });
+
+  it('redacts sensitive fields in logged payloads', async () => {
+    const { fn } = scriptedWebhook([], 200);
+    const { logger, lines } = captureLogger();
+    const relay = new WebhookRelay({ deliver: fn, sleep: noSleep, logger });
+
+    await relay.relay(
+      event({
+        value: {
+          order_id: 'ORDER-1',
+          private_key: 'SABCDEFGHIJKLMNOPQRSTUVWXYZ234567',
+          secret: 'super-secret',
+        },
+      }),
+      { correlationId: 'corr-redact' },
+    );
+
+    const serialised = JSON.stringify(lines);
+    expect(serialised).not.toContain('SABCDEFGHIJKLMNOPQRSTUVWXYZ234567');
+    expect(serialised).not.toContain('super-secret');
+    expect(serialised).toContain('[REDACTED]');
+  });
+
+  it('uses logRedaction to redact raw payloads before logging', () => {
+    const redacted = redact({
+      private_key: 'SABCDEFGHIJKLMNOPQRSTUVWXYZ234567',
+      payload: { amount: 1000 },
+    }) as Record<string, unknown>;
+
+    expect(redacted.private_key).toBe('[REDACTED]');
+    expect(JSON.stringify(redacted)).not.toContain('SABCDEFGHIJKLMNOPQRSTUVWXYZ234567');
+  });
+});
+
 describe('WebhookRelay — ordered batch delivery', () => {
   it('delivers a batch in order and returns per-event outcomes', async () => {
     const { fn, calls } = scriptedWebhook([], 200);
@@ -291,5 +391,88 @@ describe('WebhookRelay — ordered batch delivery', () => {
     await expect(relay.relayBatch(batch)).rejects.toBeInstanceOf(WebhookDeliveryError);
     // t1 delivered, t2 failed hard, t3 never attempted.
     expect(fn).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('WebhookRelay — optional CSRF token propagation', () => {
+  it('passes the CSRF token to the deliver callback when csrf is configured', async () => {
+    const seen: Array<{ event: RelayEvent; headers?: Record<string, string> }> = [];
+    const deliver = jest.fn(
+      async (e: RelayEvent, headers?: Record<string, string>) => {
+        seen.push({ event: e, headers });
+        return { status: 200 };
+      },
+    );
+    const relay = new WebhookRelay({
+      deliver,
+      sleep: noSleep,
+      csrf: { token: 'csrf-token-abc', headerName: 'x-csrf-token' },
+    });
+
+    const outcome = await relay.relay(event());
+
+    expect(outcome.status).toBe('delivered');
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(seen).toHaveLength(1);
+    expect(seen[0].headers).toBeDefined();
+    expect(seen[0].headers?.['x-csrf-token']).toBe('csrf-token-abc');
+  });
+
+  it('uses the default CSRF header name when none is supplied', async () => {
+    const seen: Array<Record<string, string> | undefined> = [];
+    const deliver = jest.fn(async (_e: RelayEvent, headers?: Record<string, string>) => {
+      seen.push(headers);
+      return { status: 200 };
+    });
+    const relay = new WebhookRelay({
+      deliver,
+      sleep: noSleep,
+      csrf: { token: 'csrf-token-xyz' },
+    });
+
+    await relay.relay(event());
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.['x-csrf-token']).toBe('csrf-token-xyz');
+  });
+
+  it('preserves existing behavior when csrf is omitted', async () => {
+    const seen: Array<Record<string, string> | undefined> = [];
+    const deliver = jest.fn(async (_e: RelayEvent, headers?: Record<string, string>) => {
+      seen.push(headers);
+      return { status: 200 };
+    });
+    const relay = new WebhookRelay({ deliver, sleep: noSleep });
+
+    const outcome = await relay.relay(event());
+
+    expect(outcome).toEqual({ status: 'delivered', key: 'token-1', attempts: 1 });
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(seen).toHaveLength(1);
+    // No CSRF header injected when the option is not configured.
+    expect(seen[0]?.['x-csrf-token']).toBeUndefined();
+  });
+
+  it('propagates the CSRF token on every attempt during a retry', async () => {
+    const headersPerCall: Array<Record<string, string> | undefined> = [];
+    let i = 0;
+    const deliver = jest.fn(async (_e: RelayEvent, headers?: Record<string, string>) => {
+      headersPerCall.push(headers);
+      const status = i++ < 2 ? 503 : 200;
+      return { status };
+    });
+    const relay = new WebhookRelay({
+      deliver,
+      sleep: noSleep,
+      csrf: { token: 'csrf-token-retry', headerName: 'x-csrf-token' },
+    });
+
+    const outcome = await relay.relay(event());
+
+    expect(outcome.attempts).toBe(3);
+    expect(headersPerCall).toHaveLength(3);
+    for (const headers of headersPerCall) {
+      expect(headers?.['x-csrf-token']).toBe('csrf-token-retry');
+    }
   });
 });
