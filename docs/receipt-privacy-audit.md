@@ -109,6 +109,27 @@ These URLs contain only the order ID. No session tokens, wallet addresses, or
 authentication material appear in the URL, making them safe to share via email
 or messaging apps.
 
+### 6. GDPR right-to-erasure and receipt data
+
+Receipt records are classified as **off-chain erasable data** wherever they are
+stored outside the Soroban ledger (e.g. cached receipt snapshots, receipt lookup
+logs, support exports). The payer address, when persisted off-chain alongside a
+receipt, is likewise erasable.
+
+- **Erasure workflow:** Off-chain receipt records and payer data are included in
+  the automated 30-day erasure workflow implemented in
+  `sdk/src/security/dataDeletion.ts`. A valid right-to-erasure request triggers
+  deletion of all matching off-chain records within 30 days.
+- **Confirmation:** Each completed deletion is confirmed by an audit log entry
+  written by `dataDeletion.ts`, recording the request reference, the data
+  categories erased, and the completion timestamp.
+- **Immutable data excluded:** On-chain payer identifiers (payer address, payer
+  index, nonces) and on-chain event logs are immutable and **cannot** be deleted
+  from the Soroban ledger. They are explicitly excluded from the deletion scope
+  and are documented as on-chain data in `docs/PRIVACY.md`.
+
+See `docs/PRIVACY.md` for the full on-chain vs. off-chain data table.
+
 ---
 
 ## Recommended Hardening
@@ -120,6 +141,7 @@ or messaging apps.
 | Low | Truncate or omit the `token` contract address for non-technical audiences (show asset code instead, e.g. "USDC") |
 | Low | Add rate-limiting or CAPTCHA on the public receipt lookup to prevent order ID enumeration |
 | Low | Audit `memo` field — if exposed via `get_payment_summary` in future, add an explicit omission in `renderReceipt()` |
+| High | Ensure any off-chain receipt cache or lookup log is registered with the erasure workflow in `sdk/src/security/dataDeletion.ts` so receipt data is purged within 30 days of a valid erasure request |
 
 ---
 
@@ -130,3 +152,9 @@ The payer address, raw memo, and internal tags are not rendered. The not-found
 fallback is safe against enumeration and XSS. The primary hardening opportunity is
 migrating the live-mode data fetch to `get_payment_summary` to enforce field-level
 data minimisation at the API call layer.
+
+For GDPR purposes, off-chain receipt records and payer data are erasable and are
+covered by the automated 30-day deletion workflow in
+`sdk/src/security/dataDeletion.ts`, with completion confirmed by an audit log
+entry. On-chain payer identifiers and event logs remain immutable and are excluded
+from deletion; the on-chain vs. off-chain split is documented in `docs/PRIVACY.md`.
