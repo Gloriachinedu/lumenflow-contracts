@@ -480,7 +480,7 @@ jobs:
         run: npm test -- --coverage
 
       - name: Upload SDK coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: sdk/coverage/lcov.info
           flags: sdk
