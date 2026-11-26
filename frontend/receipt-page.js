@@ -1,5 +1,6 @@
   import { CONTRACT_ID, RPC_URL, formatAmount, formatDate, renderModeBanner, formatTokenAmount, convertToXlm, getTokenMetadata, copyButtonHtml, initCopyButtons } from './lumenflow-shared.js';
   import { validateOrderId } from './validation.js';
+  import { receiptCache } from './receipt-cache.js';
 
   // ── Routing ────────────────────────────────────────────────────────────────
   // Supports both:
@@ -383,11 +384,46 @@
     document.title = `Receipt ${orderId} – LumenFlow`;
     document.getElementById('loading').style.display = 'block';
 
-    const data = await fetchPayment(orderId);
+    // Invalidate cached receipts whenever a refund is processed for this order.
+    if (typeof receiptCache.initRefundInvalidation === 'function') {
+      receiptCache.initRefundInvalidation();
+    } else if (typeof receiptCache.subscribeToRefunds === 'function') {
+      receiptCache.subscribeToRefunds();
+    }
+
+    const refreshingEl = document.getElementById('refreshing-indicator');
+    const showRefreshing = () => { if (refreshingEl) refreshingEl.style.display = 'inline'; };
+    const hideRefreshing = () => { if (refreshingEl) refreshingEl.style.display = 'none'; };
+
+    let data;
+    try {
+      const entry = await receiptCache.getWithRevalidate(
+        orderId,
+        () => fetchPayment(orderId),
+        {
+          onRevalidated: (fresh) => {
+            hideRefreshing();
+            if (fresh) renderReceipt(fresh);
+          },
+        }
+      );
+
+      // Support both a bare value and a { data, stale } cache entry shape.
+      if (entry && typeof entry === 'object' && 'data' in entry) {
+        data = entry.data;
+        if (entry.stale) showRefreshing();
+      } else {
+        data = entry;
+      }
+    } catch (err) {
+      hideRefreshing();
+      data = null;
+    }
 
     document.getElementById('loading').style.display = 'none';
 
     if (!data) {
+      hideRefreshing();
       document.getElementById('missing-id').textContent = orderId;
       document.getElementById('not-found').style.display = 'block';
     } else {
