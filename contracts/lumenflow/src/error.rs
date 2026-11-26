@@ -25,6 +25,8 @@ pub enum PaymentError {
     MerchantAlreadyRegistered = 11,
     /// The merchant profile is deactivated. Remediation: An admin must reactivate the merchant profile to resume operations.
     MerchantInactive = 12,
+    /// The maximum number of registered merchants has been reached. Remediation: An admin can raise the cap via `set_merchant_cap`.
+    MerchantLimitExceeded = 13,
 
     // Payment
     /// The specified payment was not found. Remediation: Verify the payment ID or order ID.

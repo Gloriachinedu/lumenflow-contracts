@@ -37,6 +37,8 @@ pub const MIN_REFUND_WINDOW_SECS: u64 = 3600;
 pub const DEFAULT_CLEANUP_PERIOD_SECS: u64 = 30 * 24 * 3600;
 /// Default large-payment threshold in stroops (10 XLM equivalent).
 pub const DEFAULT_LARGE_PAYMENT_THRESHOLD: i128 = 10_000_000;
+/// Default maximum number of registered merchants (storage DoS guard).
+pub const DEFAULT_MAX_MERCHANTS: u32 = 10_000;
 
 // Approximate ledger-count equivalents (5-second ledgers):
 //   1 year  ≈ 6_307_200 ledgers
