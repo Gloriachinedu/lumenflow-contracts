@@ -327,6 +327,84 @@ Unpause the contract. Admin only.
 
 ---
 
+### `assign_arbiter`
+
+> **Issue #1575** — Decentralized dispute resolution v1.
+
+```rust
+pub fn assign_arbiter(
+    env: Env,
+    admin: Address,
+    dispute_id: String,
+    arbiter: Address,
+) -> Result<(), PaymentError>
+```
+
+Designate a third-party arbiter for an open dispute. The assigned arbiter is the only address permitted to call [`arbiter_vote`](#arbiter_vote) for that dispute. Admin only. Emits `lumenflow/arbiter_assigned` and appends an `AssignArbiter` entry to the admin audit log.
+
+| Parameter    | Type      | Required | Constraints | Example |
+|--------------|-----------|----------|-------------|---------|
+| `admin`      | `Address` | Yes      | Must be the configured administrator; must sign | `GABC…` |
+| `dispute_id` | `String`  | Yes      | Non-empty; must reference an open dispute | `"DISPUTE-001"` |
+| `arbiter`    | `Address` | Yes      | Must not be a contract address; must not be the payer or merchant of the disputed payment | `GARBITER…` |
+
+**Returns:** `()` on success.
+
+**Events:** `lumenflow/arbiter_assigned` — topics `(symbol_short!("arbiter"), symbol_short!("assigned"))`, data `(dispute_id, arbiter, admin)`.
+
+**Errors:**
+
+| Code | Name | Condition |
+|------|------|-----------|
+| 1 | [`Unauthorized`](errors.md#auth-errors) | `admin` is not the configured administrator. |
+| 3 | [`InvalidAdminAddress`](errors.md#auth-errors) | `arbiter` is a contract address. |
+| 50 | [`InvalidInput`](errors.md#general-errors) | `dispute_id` is empty or does not reference an open dispute. |
+| 51 | [`ArbiterAlreadyAssigned`](errors.md#dispute-errors) | An arbiter is already assigned to `dispute_id`. |
+| 70 | [`ContractPaused`](errors.md#general-errors) | Contract is paused. |
+
+---
+
+### `arbiter_vote`
+
+> **Issue #1575** — Decentralized dispute resolution v1.
+
+```rust
+pub fn arbiter_vote(
+    env: Env,
+    arbiter: Address,
+    dispute_id: String,
+    release_to_merchant: bool,
+) -> Result<(), PaymentError>
+```
+
+Cast the assigned arbiter's binding vote on a dispute. The vote is final and immediately settles the dispute: `release_to_merchant = true` releases the escrowed funds to the merchant, `false` refunds the payer. Only the arbiter assigned via [`assign_arbiter`](#assign_arbiter) may call this, and only once per dispute. Emits `lumenflow/arbiter_voted` followed by `lumenflow/dispute_resolved`.
+
+| Parameter             | Type      | Required | Constraints | Example |
+|-----------------------|-----------|----------|-------------|---------|
+| `arbiter`             | `Address` | Yes      | Must be the arbiter assigned to `dispute_id`; must sign | `GARBITER…` |
+| `dispute_id`          | `String`  | Yes      | Non-empty; must reference an open dispute with an assigned arbiter | `"DISPUTE-001"` |
+| `release_to_merchant` | `bool`    | Yes      | `true` = release to merchant, `false` = refund payer | `true` |
+
+**Returns:** `()` on success.
+
+**Events:**
+
+- `lumenflow/arbiter_voted` — topics `(symbol_short!("arbiter"), symbol_short!("voted"))`, data `(dispute_id, arbiter, release_to_merchant)`.
+- `lumenflow/dispute_resolved` — topics `(symbol_short!("dispute"), symbol_short!("resolved"))`, data `(dispute_id, release_to_merchant, amount)`.
+
+**Errors:**
+
+| Code | Name | Condition |
+|------|------|-----------|
+| 1 | [`Unauthorized`](errors.md#auth-errors) | `arbiter` is not the arbiter assigned to `dispute_id`. |
+| 50 | [`InvalidInput`](errors.md#general-errors) | `dispute_id` is empty or does not reference an open dispute. |
+| 52 | [`ArbiterNotAssigned`](errors.md#dispute-errors) | No arbiter has been assigned to `dispute_id`. |
+| 53 | [`DisputeAlreadyResolved`](errors.md#dispute-errors) | The dispute has already been resolved. |
+| 20 | [`PaymentNotFound`](errors.md#payment-errors) | The disputed payment no longer exists. |
+| 70 | [`ContractPaused`](errors.md#general-errors) | Contract is paused. |
+
+---
+
 ### `get_admin_audit_log`
 
 > **Issue #1115** — Structured audit log for all admin actions.
@@ -401,6 +479,8 @@ The audit log captures every privileged admin action with a tamper-evident on-ch
 | `SetPauseGuardians` | `set_pause_guardians` |
 | `UpgradeContract` | `upgrade` |
 | `ConfirmMerchantDataDeletion` | `confirm_merchant_data_deletion` |
+| `AssignArbiter` | `assign_arbiter` |
+| `RemoveArbiter` | `remove_arbiter` |
 | `Other` | Any admin action not listed above. |
 
 #### Access control
@@ -1806,6 +1886,43 @@ number of requests removed.
 | `initiator`           | `Address`         | Address that created the payment. |
 | `created_at`          | `u64`             | Unix timestamp of creation. |
 | `expires_at`          | `Option<u64>`     | Unix timestamp of expiry. |
+
+---
+
+### `Dispute`
+
+| Field              | Type            | Description |
+|--------------------|-----------------|-------------|
+| `dispute_id`       | `String`        | Unique dispute identifier. |
+| `order_id`         | `String`        | Associated payment order. |
+| `payer`            | `Address`       | Payer of the disputed payment. |
+| `merchant_address` | `Address`       | Merchant of the disputed payment. |
+| `amount`           | `i128`          | Disputed amount held in escrow. |
+| `token`            | `Address`       | Token contract used. |
+| `status`           | `DisputeStatus` | Current dispute state. |
+| `arbiter`          | `Option<Address>` | Arbiter assigned via `assign_arbiter`; `null` until assigned. |
+| `created_at`       | `u64`           | Unix timestamp of dispute creation. |
+| `resolved_at`      | `Option<u64>`   | Unix timestamp of resolution; `null` while open. |
+
+---
+
+### `DisputeStatus`
+
+| Variant      | Description |
+|--------------|-------------|
+| `Open`       | Dispute raised; awaiting arbiter assignment or vote. |
+| `Resolved`   | Arbiter has voted; funds released to merchant or refunded to payer. |
+
+---
+
+### `ArbiterVote`
+
+| Field                 | Type      | Description |
+|-----------------------|-----------|-------------|
+| `dispute_id`          | `String`  | Dispute the vote applies to. |
+| `arbiter`             | `Address` | Arbiter that cast the vote. |
+| `release_to_merchant` | `bool`    | `true` = released to merchant, `false` = refunded payer. |
+| `voted_at`            | `u64`     | Unix timestamp of the vote. |
 
 ---
 

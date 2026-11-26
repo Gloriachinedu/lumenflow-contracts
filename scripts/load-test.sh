@@ -39,6 +39,13 @@
 #   p99 latency < 5 000 ms
 #   error rate  < 1 %
 #
+# Issue #1578: when WEBHOOK_RELAY_URL is provided, a "webhook_relay" scenario
+# drives WEBHOOK_EVENTS_PER_MIN events/minute for WEBHOOK_DURATION, measures
+# P99 delivery latency and dropped events, and fails if P99 >= 2 000 ms, any
+# event is dropped, or P99 regresses more than 20% over WEBHOOK_BASELINE_P99_MS.
+# The JSON report includes webhook_relay.latency_p99_ms for baseline comparison.
+=======
+#
 # Issue #1084: a second scenario ("concurrent_batch_payments") simulates
 # BATCH_CLIENTS concurrent clients each submitting a single batch_payment
 # call containing BATCH_ITEMS entries. It reports throughput (payments/sec),
@@ -129,7 +136,7 @@ cat > "$K6_SCRIPT" <<'K6_EOF'
 
 import http from 'k6/http';
 import { check, sleep } from 'k6';
-import { Trend, Rate } from 'k6/metrics';
+import { Trend, Rate, Counter } from 'k6/metrics';
 
 // ── Custom metrics ──────────────────────────────────────────────────────────
 const paymentDuration = new Trend('lumenflow_payment_duration', true);

@@ -3056,6 +3056,172 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
+    /// Admin: assign a third-party arbiter to a dispute (decentralized dispute resolution v1).
+    ///
+    /// The assigned arbiter is the only address allowed to call [`arbiter_vote`] for
+    /// this dispute. Assignment is recorded in the admin audit log and emits a
+    /// `lumenflow/arbiter_assigned` event.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the configured administrator. Must sign the call.
+    /// * `dispute_id` - The dispute to assign an arbiter to.
+    /// * `arbiter` - The address authorised to cast the binding vote.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — `admin` is not the configured administrator.
+    /// * [`PaymentError::DisputeNotFound`] — no dispute exists with `dispute_id`.
+    /// * [`PaymentError::DisputeAlreadyResolved`] — the dispute is already resolved.
+    pub fn assign_arbiter(
+        env: Env,
+        admin: Address,
+        dispute_id: String,
+        arbiter: Address,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        require_admin_rate_limited(&env, &admin)?;
+
+        let mut dispute =
+            storage::get_dispute(&env, &dispute_id).ok_or(PaymentError::DisputeNotFound)?;
+
+        if matches!(dispute.status, DisputeStatus::Resolved) {
+            return Err(PaymentError::DisputeAlreadyResolved);
+        }
+
+        dispute.arbiter = Some(arbiter.clone());
+        storage::set_dispute(&env, &dispute);
+
+        Self::append_audit(
+            &env,
+            AdminActionType::AssignArbiter,
+            &admin,
+            dispute_id.clone(),
+        );
+
+        env.events().publish(
+            ("lumenflow", "arbiter_assigned"),
+            (dispute_id, arbiter, admin),
+        );
+        Ok(())
+    }
+
+    /// Arbiter: cast a binding vote resolving a dispute (decentralized dispute resolution v1).
+    ///
+    /// Only the arbiter assigned via [`assign_arbiter`] may call this. The vote is
+    /// binding: `payer_favor = true` immediately refunds the payer, otherwise the
+    /// funds are released to the merchant. The dispute is marked `Resolved` and the
+    /// outcome recorded.
+    ///
+    /// # Arguments
+    /// * `arbiter` - Must be the arbiter assigned to this dispute. Must sign the call.
+    /// * `dispute_id` - The dispute being resolved.
+    /// * `payer_favor` - `true` to refund the payer, `false` to release to the merchant.
+    /// * `resolution` - Arbiter's resolution notes (1–256 characters, required).
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// * [`PaymentError::DisputeNotFound`] — no dispute exists with `dispute_id`.
+    /// * [`PaymentError::Unauthorized`] — caller is not the assigned arbiter.
+    /// * [`PaymentError::DisputeAlreadyResolved`] — the dispute is already resolved.
+    /// * [`PaymentError::InvalidInput`] — `resolution` is empty or exceeds 256 chars.
+    /// * [`PaymentError::PaymentNotFound`] — the referenced payment no longer exists.
+    pub fn arbiter_vote(
+        env: Env,
+        arbiter: Address,
+        dispute_id: String,
+        payer_favor: bool,
+        resolution: String,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        arbiter.require_auth();
+
+        if resolution.len() == 0 || resolution.len() > 256 {
+            return Err(PaymentError::InvalidInput);
+        }
+
+        let mut dispute =
+            storage::get_dispute(&env, &dispute_id).ok_or(PaymentError::DisputeNotFound)?;
+
+        if matches!(dispute.status, DisputeStatus::Resolved) {
+            return Err(PaymentError::DisputeAlreadyResolved);
+        }
+
+        match dispute.arbiter.clone() {
+            Some(assigned) if assigned == arbiter => {}
+            _ => return Err(PaymentError::Unauthorized),
+        }
+
+        let mut payment = storage::get_payment(&env, &dispute.order_id)
+            .ok_or(PaymentError::PaymentNotFound)?;
+
+        // Effects: record the binding vote before any external interaction.
+        dispute.status = DisputeStatus::Resolved;
+        dispute.outcome = Some(if payer_favor {
+            DisputeOutcome::PayerFavor
+        } else {
+            DisputeOutcome::MerchantFavor
+        });
+        dispute.resolution = Some(resolution.clone());
+        storage::set_dispute(&env, &dispute);
+
+        let token_client = token::Client::new(&env, &payment.token);
+
+        if payer_favor {
+            // Refund the payer for any amount not yet refunded.
+            let refund_amount = payment.amount.saturating_sub(payment.refunded_amount);
+            if refund_amount > 0 {
+                payment.refunded_amount = payment.amount;
+                payment.status = PaymentStatus::FullyRefunded;
+                payment.version += 1;
+                storage::set_payment(&env, &payment);
+
+                let mut stats = storage::get_global_stats(&env);
+                stats.total_refunds += 1;
+                stats.total_refund_volume =
+                    stats.total_refund_volume.saturating_add(refund_amount);
+                storage::set_global_stats(&env, &stats);
+
+                let mut merchant_stats =
+                    storage::get_merchant_stats(&env, &payment.merchant_address);
+                merchant_stats.total_refunds += 1;
+                merchant_stats.total_refund_volume = merchant_stats
+                    .total_refund_volume
+                    .saturating_add(refund_amount);
+                storage::set_merchant_stats(&env, &payment.merchant_address, &merchant_stats);
+
+                token_client.transfer(&payment.merchant_address, &payment.payer, &refund_amount);
+            }
+        } else {
+            // Release the remaining funds to the merchant.
+            let release_amount = payment.amount.saturating_sub(payment.refunded_amount);
+            if release_amount > 0 {
+                payment.status = PaymentStatus::Completed;
+                payment.version += 1;
+                storage::set_payment(&env, &payment);
+
+                token_client.transfer(
+                    &env.current_contract_address(),
+                    &payment.merchant_address,
+                    &release_amount,
+                );
+            }
+        }
+
+        env.events().publish(
+            ("lumenflow", "arbiter_vote_cast"),
+            (dispute_id.clone(), arbiter, payer_favor),
+        );
+        env.events().publish(
+            ("lumenflow", "dispute_resolved"),
+            (dispute_id, resolution, payer_favor),
+        );
+        Ok(())
+    }
+
     /// Get a dispute record by ID.
     ///
     /// # Arguments

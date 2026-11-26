@@ -714,6 +714,59 @@ pub fn remove_refund(env: &Env, refund_id: &String) {
         .remove(&DataKey::Refund(refund_id.clone()));
 }
 
+// ── Dispute arbiter (Issue #1575) ─────────────────────────────────────────────
+
+/// TTL for arbiter assignment and vote records — 1 year, matching dispute
+/// records so the resolution trail outlives the refund window.
+pub const ARBITER_TTL_LEDGERS: u32 = REFUND_TTL_LEDGERS;
+
+const _ARBITER_TTL_CHECK: () = assert!(
+    ARBITER_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
+    "ARBITER_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
+);
+
+/// Return the arbiter currently assigned to `dispute_id`, if any.
+pub fn get_arbiter(env: &Env, dispute_id: &String) -> Option<Address> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Arbiter(dispute_id.clone()))
+}
+
+/// Assign (or replace) the arbiter for `dispute_id`.
+///
+/// Callers are responsible for authorization and for recording the change in
+/// the admin audit log via [`append_admin_audit_entry`].
+pub fn set_arbiter(env: &Env, dispute_id: &String, arbiter: &Address) {
+    let key = DataKey::Arbiter(dispute_id.clone());
+    env.storage().persistent().set(&key, arbiter);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, ARBITER_TTL_LEDGERS, ARBITER_TTL_LEDGERS);
+}
+
+/// Remove the arbiter assignment for `dispute_id`, if present.
+pub fn remove_arbiter(env: &Env, dispute_id: &String) {
+    env.storage()
+        .persistent()
+        .remove(&DataKey::Arbiter(dispute_id.clone()));
+}
+
+/// Return the recorded arbiter vote for `dispute_id`, if any.
+pub fn get_arbiter_vote(env: &Env, dispute_id: &String) -> Option<crate::types::ArbiterVote> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::ArbiterVote(dispute_id.clone()))
+}
+
+/// Persist the binding arbiter vote for `dispute_id`.
+pub fn set_arbiter_vote(env: &Env, vote: &crate::types::ArbiterVote) {
+    let key = DataKey::ArbiterVote(vote.dispute_id.clone());
+    env.storage().persistent().set(&key, vote);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, ARBITER_TTL_LEDGERS, ARBITER_TTL_LEDGERS);
+}
+
 // ── Multisig ──────────────────────────────────────────────────────────────────
 
 pub fn get_multisig(env: &Env, payment_id: &String) -> Option<MultisigPayment> {
@@ -1597,6 +1650,28 @@ pub fn append_admin_audit_entry(env: &Env, entry: &AdminAuditEntry) {
         .extend_ttl(&key, ADMIN_AUDIT_TTL_LEDGERS, ADMIN_AUDIT_TTL_LEDGERS);
 
     set_admin_audit_count(env, count + 1);
+}
+
+/// Record an arbiter selection or removal in the admin audit log (Issue #1575).
+///
+/// `action` should be a short, stable identifier such as `"assign_arbiter"` or
+/// `"remove_arbiter"`; `details` carries the dispute id and arbiter address so
+/// the change can be reconstructed from the audit trail alone.
+pub fn log_arbiter_audit(
+    env: &Env,
+    admin: &Address,
+    action: &String,
+    details: &String,
+) {
+    let index = get_admin_audit_count(env);
+    let entry = AdminAuditEntry {
+        index,
+        admin: admin.clone(),
+        action: action.clone(),
+        details: details.clone(),
+        ledger_sequence: env.ledger().sequence(),
+    };
+    append_admin_audit_entry(env, &entry);
 }
 
 // ── Signature expiry window (Issue #1350) ─────────────────────────────────────

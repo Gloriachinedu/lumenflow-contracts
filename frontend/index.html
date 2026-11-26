@@ -34,6 +34,37 @@
         <a href="receipt.html"   class="nav-link">View Receipt</a>
         <a href="multisig.html"  class="nav-link">Multisig Payment</a>
       </nav>
+
+      <section id="payment-link-section" style="margin-top:2rem;max-width:32rem;" aria-labelledby="payment-link-heading">
+        <h2 id="payment-link-heading" style="font-size:1.15rem;">Pay via Link</h2>
+        <div id="payment-link-error" role="alert" aria-live="assertive" hidden
+             style="margin-bottom:1rem;padding:0.75rem 1rem;border:1.5px solid #c0392b;border-radius:8px;background:#fdecea;color:#922b21;font-weight:600;"></div>
+        <form id="payment-link-form" novalidate>
+          <div style="margin-bottom:0.75rem;">
+            <label for="pay-merchant" style="display:block;font-weight:600;margin-bottom:0.25rem;">Merchant address</label>
+            <input id="pay-merchant" name="merchant" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="G…" aria-describedby="pay-merchant-hint"
+                   style="width:100%;padding:0.5rem;border:1.5px solid #ccc;border-radius:8px;box-sizing:border-box;" />
+            <small id="pay-merchant-hint" style="color:#666;">Stellar account address starting with G.</small>
+          </div>
+          <div style="margin-bottom:0.75rem;">
+            <label for="pay-amount" style="display:block;font-weight:600;margin-bottom:0.25rem;">Amount (optional)</label>
+            <input id="pay-amount" name="amount" type="text" inputmode="decimal" autocomplete="off"
+                   placeholder="0.00"
+                   style="width:100%;padding:0.5rem;border:1.5px solid #ccc;border-radius:8px;box-sizing:border-box;" />
+          </div>
+          <div style="margin-bottom:0.75rem;">
+            <label for="pay-memo" style="display:block;font-weight:600;margin-bottom:0.25rem;">Memo (optional)</label>
+            <input id="pay-memo" name="memo" type="text" autocomplete="off" maxlength="28"
+                   placeholder="Payment reference"
+                   style="width:100%;padding:0.5rem;border:1.5px solid #ccc;border-radius:8px;box-sizing:border-box;" />
+          </div>
+          <button id="pay-submit" type="submit"
+                  style="font-weight:600;color:#fff;background:#6c47ff;border:none;border-radius:8px;padding:0.55rem 1.25rem;cursor:pointer;">
+            Pay
+          </button>
+        </form>
+      </section>
     </main>
     <script src="sw-register.js"></script>
   </body>

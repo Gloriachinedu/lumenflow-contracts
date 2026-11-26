@@ -33,7 +33,7 @@ extern crate alloc;
 use soroban_sdk::{
     testutils::{Address as _, Ledger, LedgerInfo},
     token::StellarAssetClient,
-    Address, Bytes, Env, String,
+    Address, Bytes, Env, String, Val, Vec,
 };
 
 use lumenflow::{
@@ -71,6 +71,97 @@ fn advance_time(env: &Env, secs: u64) {
         sequence_number: info.sequence_number + (secs / 5) as u32 + 1,
         ..info
     });
+}
+
+// ── Storage snapshot helpers ──────────────────────────────────────────────────
+//
+// Snapshot tests serialize the contract's full persistent storage layout after
+// key operations and compare it against committed snapshot files under
+// `contracts/lumenflow/test_snapshots/`. Any unintended change to the storage
+// schema (key layout, record fields, ordering) will surface as a diff.
+//
+// To intentionally update the committed snapshots after a schema change, run:
+//
+//   cargo test --package lumenflow --test escrow_hold_lifecycle -- --update-snapshots
+//
+// The `--update-snapshots` flag is consumed by the harness below; it rewrites
+// the snapshot files in place. Review the resulting diff before committing.
+
+/// Directory (relative to the crate root) holding committed snapshot files.
+const SNAPSHOT_DIR: &str = "test_snapshots";
+
+/// Returns true when the test binary was invoked with `--update-snapshots`.
+fn update_snapshots_requested() -> bool {
+    std::env::args().any(|a| a == "--update-snapshots")
+}
+
+/// Serialize every persistent storage entry of the contract into a stable,
+/// human-readable text form. Entries are sorted by their raw key bytes so the
+/// output is deterministic regardless of iteration order.
+fn serialize_storage(env: &Env, contract_id: &Address) -> String {
+    let mut entries: Vec<(String, String)> = Vec::new();
+
+    env.storage().persistent().for_each(|key: Val, _value: Val| {
+        let key_str = format!("{:?}", key);
+        let val_str = format!("{:?}", _value);
+        entries.push((key_str, val_str));
+    });
+
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut out = String::new();
+    out.push_str("# LumenFlow storage snapshot\n");
+    out.push_str(&format!("# entries: {}\n", entries.len()));
+    for (k, v) in entries.iter() {
+        out.push_str(&format!("{k} => {v}\n"));
+    }
+    out
+}
+
+/// Compare `actual` against the committed snapshot named `name`, printing a
+/// readable line-by-line diff on mismatch. When `--update-snapshots` is passed
+/// the snapshot file is (re)written instead of asserted against.
+fn assert_snapshot(name: &str, actual: &str) {
+    let path = std::path::Path::new(SNAPSHOT_DIR).join(format!("{name}.snap"));
+
+    if update_snapshots_requested() {
+        std::fs::create_dir_all(SNAPSHOT_DIR).expect("create snapshot dir");
+        std::fs::write(&path, actual).expect("write snapshot file");
+        return;
+    }
+
+    let expected = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) => panic!(
+            "missing snapshot file {}: {e}\n\
+             Run `cargo test -- --update-snapshots` to create it.",
+            path.display()
+        ),
+    };
+
+    if expected == actual {
+        return;
+    }
+
+    // Build a readable diff for CI output.
+    let mut diff = String::new();
+    diff.push_str(&format!("\n--- snapshot mismatch: {}\n", path.display()));
+    diff.push_str("--- expected (committed)\n+++ actual (current run)\n");
+    let expected_lines: Vec<&str> = expected.lines().collect();
+    let actual_lines: Vec<&str> = actual.lines().collect();
+    let max = expected_lines.len().max(actual_lines.len());
+    for i in 0..max {
+        let e = expected_lines.get(i).copied().unwrap_or("<missing>");
+        let a = actual_lines.get(i).copied().unwrap_or("<missing>");
+        if e != a {
+            diff.push_str(&format!("- {e}\n+ {a}\n"));
+        }
+    }
+    diff.push_str(
+        "\nIf this change is intentional, update snapshots with:\n\
+         \x20 cargo test -- --update-snapshots\n",
+    );
+    panic!("{diff}");
 }
 
 /// Bootstrap a fully configured environment with admin, merchant, payer, and
@@ -126,6 +217,13 @@ fn setup() -> World {
     mint(&env, &token, &payer, 1_000_000);
 
     World { env, client, admin, merchant, payer, arbiter, token }
+}
+
+impl World {
+    /// The contract address backing this world's client.
+    fn contract_id(&self) -> Address {
+        self.client.address.clone()
+    }
 }
 
 // ── 1. Hold ───────────────────────────────────────────────────────────────────
@@ -230,6 +328,30 @@ fn test_escrow_hold_past_timeout_fails() {
     assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
 }
 
+// ── 1b. Storage snapshot after create_escrow ─────────────────────────────────
+
+/// Snapshot the full storage layout immediately after `escrow_hold` creates
+/// an escrow record. Catches unintended schema changes to `EscrowHold`.
+#[test]
+fn test_snapshot_escrow_after_create_escrow() {
+    let w = setup();
+    let timeout_at: u64 = 1_003_600;
+
+    w.client.escrow_hold(
+        &w.payer,
+        &str(&w.env, "HOLD_SNAP"),
+        &w.merchant,
+        &w.token,
+        &5_000i128,
+        &condition_hash(&w.env),
+        &w.arbiter,
+        &timeout_at,
+    );
+
+    let snapshot = serialize_storage(&w.env, &w.contract_id());
+    assert_snapshot("escrow_after_create_escrow", &snapshot);
+}
+
 // ── 2. Release by arbiter ─────────────────────────────────────────────────────
 
 /// The arbiter can call escrow_release before timeout_at; funds move to merchant.
@@ -258,6 +380,29 @@ fn test_escrow_release_by_arbiter_before_timeout() {
     let hold = w.client.get_escrow_hold(&str(&w.env, "HOLD_ARB"));
     use lumenflow::types::EscrowHoldStatus;
     assert_eq!(hold.status, EscrowHoldStatus::Released);
+}
+
+/// Snapshot the storage layout after an escrow is released, ensuring the
+/// post-release record shape stays stable.
+#[test]
+fn test_snapshot_escrow_after_release() {
+    let w = setup();
+    let timeout_at: u64 = 1_003_600;
+
+    w.client.escrow_hold(
+        &w.payer,
+        &str(&w.env, "HOLD_SNAP_REL"),
+        &w.merchant,
+        &w.token,
+        &5_000i128,
+        &condition_hash(&w.env),
+        &w.arbiter,
+        &timeout_at,
+    );
+    w.client.escrow_release(&w.arbiter, &str(&w.env, "HOLD_SNAP_REL"));
+
+    let snapshot = serialize_storage(&w.env, &w.contract_id());
+    assert_snapshot("escrow_after_release", &snapshot);
 }
 
 // ── 3. Release by non-arbiter (before timeout) — must fail ───────────────────
@@ -405,6 +550,29 @@ fn test_escrow_cancel_by_payer_emits_cancelled_status() {
             && b == soroban_sdk::Symbol::new(&w.env, "escrow_cancelled"))
     });
     assert!(cancelled_event, "lumenflow/escrow_cancelled event was not emitted");
+}
+
+/// Snapshot the storage layout after an escrow is cancelled, ensuring the
+/// cancelled record shape stays stable.
+#[test]
+fn test_snapshot_escrow_after_cancel() {
+    let w = setup();
+    let timeout_at: u64 = 1_003_600;
+
+    w.client.escrow_hold(
+        &w.payer,
+        &str(&w.env, "HOLD_SNAP_CANCEL"),
+        &w.merchant,
+        &w.token,
+        &4_000i128,
+        &condition_hash(&w.env),
+        &w.arbiter,
+        &timeout_at,
+    );
+    w.client.escrow_cancel(&w.payer, &str(&w.env, "HOLD_SNAP_CANCEL"));
+
+    let snapshot = serialize_storage(&w.env, &w.contract_id());
+    assert_snapshot("escrow_after_cancel", &snapshot);
 }
 
 // ── 6. Double release ─────────────────────────────────────────────────────────

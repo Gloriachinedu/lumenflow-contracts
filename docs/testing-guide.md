@@ -296,6 +296,52 @@ the event stream reconnects with capped exponential backoff, stops cleanly when
 unsubscribed mid-outage, resumes delivery once the outage clears, and that
 `withRetry` retries transient errors but surfaces permanent ones immediately.
 
+## Contract storage snapshot tests
+
+`contracts/lumenflow/test_snapshots/` holds committed snapshot files that
+serialize the full contract storage layout after key operations. They catch
+unintended breaking storage schema changes (renamed keys, changed value types,
+reordered struct fields) that would otherwise slip through PRs.
+
+### Covered operations
+
+| Operation | Snapshot |
+|---|---|
+| `process_payment` | Payment record storage after a successful payment |
+| `refund_payment` | Refund record storage after a refund |
+| `create_escrow` | Escrow storage after creation |
+
+### Running
+
+```bash
+cargo test --manifest-path contracts/lumenflow/Cargo.toml
+```
+
+### Failing diffs in CI
+
+When storage layout changes, the snapshot assertion fails and CI prints a diff
+of the expected vs. actual serialized storage, e.g.:
+
+```text
+snapshot assertion for 'payment_record_after_process_payment' failed
+--- expected
++++ actual
+- Payment { id: 1, amount: 1000, status: Completed }
++ Payment { id: 1, amount: 1000, status: Pending }
+```
+
+Review the diff carefully: if the change is intentional, update the snapshots;
+if not, fix the regression.
+
+### Updating snapshots intentionally
+
+```bash
+cargo test --manifest-path contracts/lumenflow/Cargo.toml -- --update-snapshots
+```
+
+Commit the regenerated files under `contracts/lumenflow/test_snapshots/`
+alongside the code change so reviewers can see the storage change in the diff.
+
 ## Restore drills
 
 A backup that has never been restored is untested. `scripts/restore-drill.mjs`
