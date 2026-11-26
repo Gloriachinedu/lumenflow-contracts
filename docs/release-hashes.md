@@ -35,6 +35,51 @@ The script will:
 > and add a row to the table above **before** publishing the GitHub Release.
 > The `release.yml` workflow does this automatically as part of the release job.
 
+## Pre-built CLI Binary Hashes
+
+In addition to the WASM artifact, each GitHub Release ships pre-built `lumenflow`
+CLI binaries for the following targets:
+
+| Target triple | Archive name | Platform |
+|---------------|--------------|----------|
+| `x86_64-unknown-linux-gnu` | `lumenflow-<version>-x86_64-unknown-linux-gnu.tar.gz` | Linux x86_64 |
+| `aarch64-unknown-linux-gnu` | `lumenflow-<version>-aarch64-unknown-linux-gnu.tar.gz` | Linux ARM64 |
+| `x86_64-pc-windows-msvc` | `lumenflow-<version>-x86_64-pc-windows-msvc.zip` | Windows x86_64 (`.exe`) |
+
+The SHA-256 checksums of these archives are recorded below. The Windows archive
+contains `lumenflow.exe`.
+
+| Version | Target | SHA-256 Hash |
+|---------|--------|--------------|
+| `v1.0.0` | `x86_64-unknown-linux-gnu` | `placeholder_hash_update_on_first_release_build` |
+| `v1.0.0` | `aarch64-unknown-linux-gnu` | `placeholder_hash_update_on_first_release_build` |
+| `v1.0.0` | `x86_64-pc-windows-msvc` | `placeholder_hash_update_on_first_release_build` |
+
+> **Note for maintainers:** The `release.yml` workflow computes these checksums
+> from the built archives and appends them to the GitHub Release notes. Update
+> the table above with the published values before announcing the release.
+
+### Verifying a downloaded CLI archive
+
+**Linux / macOS:**
+
+```bash
+# Download the archive and its checksum, then verify
+sha256sum lumenflow-v1.0.0-x86_64-unknown-linux-gnu.tar.gz
+# Compare the output against the matching row in the table above.
+```
+
+On macOS, `shasum -a 256 <file>` is equivalent if `sha256sum` is unavailable.
+
+**Windows (PowerShell):**
+
+```powershell
+Get-FileHash .\lumenflow-v1.0.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256
+```
+
+Compare the resulting `Hash` value (case-insensitive) against the
+`x86_64-pc-windows-msvc` row for the release version in the table above.
+
 ## Ensuring a reproducible build
 
 The following factors are pinned to guarantee byte-for-byte identical output

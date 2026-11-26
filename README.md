@@ -117,7 +117,23 @@ Invoke-WebRequest -Uri "https://github.com/Gloriachinedu/lumenflow-contracts/rel
 Expand-Archive lumenflow-cli.zip -DestinationPath $env:USERPROFILE\bin
 ```
 
-Replace `<VERSION>` with the desired release tag (e.g. `1.0.0`). Checksums for each archive are published as `.sha256` files alongside the binaries on the release page.
+> **No linker toolchain required.** The Windows archive ships a pre-built
+> `lumenflow-cli.exe` compiled for the `x86_64-pc-windows-msvc` target, so you
+> no longer need Visual Studio Build Tools, the MSVC linker, or a full Rust
+> toolchain to install the CLI on Windows. Just download, extract, and run.
+
+**Verify the Windows download (PowerShell)**
+```powershell
+# Download the published checksum alongside the archive
+Invoke-WebRequest -Uri "https://github.com/Gloriachinedu/lumenflow-contracts/releases/latest/download/lumenflow-cli-v<VERSION>-x86_64-pc-windows-msvc.zip.sha256" -OutFile lumenflow-cli.zip.sha256
+
+# Compare the archive hash against the published value
+$expected = (Get-Content lumenflow-cli.zip.sha256 -Raw).Split()[0].ToLower()
+$actual   = (Get-FileHash lumenflow-cli.zip -Algorithm SHA256).Hash.ToLower()
+if ($actual -eq $expected) { "✅ Checksum OK" } else { throw "❌ Checksum mismatch" }
+```
+
+Replace `<VERSION>` with the desired release tag (e.g. `1.0.0`). Checksums for each archive are published as `.sha256` files alongside the binaries on the release page and are also listed in [`docs/release-hashes.md`](docs/release-hashes.md).
 
 **Install from source**
 ```bash
