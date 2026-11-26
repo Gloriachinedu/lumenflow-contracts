@@ -323,6 +323,77 @@ lumenflow history --merchant GBUYUAI75XXWDZEKLY66CFYKQPET5JR4EAPL7STQKQCRLKJ74SC
 
 ---
 
+### `merchant register` — Register a merchant
+
+#### Interactive mode (guided)
+
+Pass `--interactive` to be prompted for each field one at a time, with
+real-time validation and a confirmation step before submission:
+
+```
+$ lumenflow merchant register --interactive
+
+🌟  LumenFlow Merchant Registration — network: testnet
+(Press Ctrl-C at any time to cancel)
+
+? Merchant address (G…)  GBUYUAI75XXWDZEKLY66CFYKQPET5JR4EAPL7STQKQCRLKJ74SC65VU
+? Merchant name  Acme Coffee
+? Category  food-and-beverage
+? Website (optional, press Enter to skip)  https://acme.example
+
+┌──────────────────────────────────────────────────────────┐
+│                  Merchant Summary                        │
+├──────────────────────────────────────────────────────────┤
+│  Address:  GBUYUAI75XXWDZEKLY66CFYKQPET5JR4EAPL7...    │
+│  Name:     Acme Coffee                                   │
+│  Category: food-and-beverage                             │
+│  Website:  https://acme.example                          │
+│  Network:  testnet                                       │
+└──────────────────────────────────────────────────────────┘
+
+? Submit this registration? (y/N)
+```
+
+**To exit interactive mode:** press `Ctrl-C` at any prompt, or answer `N`
+at the confirmation step (nothing is submitted).
+
+**Validation rules applied in real time** — an invalid entry prints an
+error and re-prompts for the same field:
+
+```
+? Merchant address (G…)  not-an-address
+✗ Invalid merchant address: must be a 56-character Stellar address starting with G
+? Merchant address (G…)  GBUYUAI75XXWDZEKLY66CFYKQPET5JR4EAPL7STQKQCRLKJ74SC65VU
+```
+
+- Merchant address: 56-character Stellar address starting with `G`
+- Merchant name: non-empty
+- Category: non-empty
+- Website: optional; if provided, must be a valid URL
+
+#### Non-interactive (flag-based) mode
+
+Flag-based registration is **unchanged and fully backwards-compatible** —
+existing scripts are unaffected.
+
+```bash
+lumenflow merchant register \
+  --merchant GBUYUAI75XXWDZEKLY66CFYKQPET5JR4EAPL7STQKQCRLKJ74SC65VU \
+  --name "Acme Coffee" \
+  --category food-and-beverage \
+  --website https://acme.example
+```
+
+| Flag          | Short | Required | Description                          |
+|---------------|-------|----------|--------------------------------------|
+| `--merchant`  | `-m`  | Yes      | Merchant Stellar address (G…)        |
+| `--name`      | `-n`  | Yes      | Merchant display name                |
+| `--category`  | `-c`  | Yes      | Merchant category                    |
+| `--website`   |       | No       | Merchant website URL                 |
+| `--interactive` |     | No       | Prompt for each field interactively  |
+
+---
+
 ### `merchant list` — List registered merchants (admin only)
 
 Lists all registered merchants with cursor-based pagination. Requires an admin key.

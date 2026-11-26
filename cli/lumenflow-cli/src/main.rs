@@ -219,6 +219,31 @@ enum MerchantCommands {
         #[arg(long)]
         category: Option<String>,
     },
+    /// Register a new merchant.
+    ///
+    /// Pass `--interactive` to be prompted for each field with real-time
+    /// validation and a confirmation summary before submission. Otherwise all
+    /// flags are required and the merchant is submitted directly.
+    Register {
+        /// Merchant Stellar address (required unless --interactive)
+        #[arg(long)]
+        address: Option<String>,
+        /// Merchant name (required unless --interactive)
+        #[arg(long)]
+        name: Option<String>,
+        /// Merchant description (required unless --interactive)
+        #[arg(long)]
+        description: Option<String>,
+        /// Merchant contact information (required unless --interactive)
+        #[arg(long)]
+        contact_info: Option<String>,
+        /// Merchant category (required unless --interactive)
+        #[arg(long)]
+        category: Option<String>,
+        /// Prompt for each field interactively with validation and confirmation
+        #[arg(long, default_value_t = false)]
+        interactive: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1341,6 +1366,33 @@ fn main() -> Result<()> {
                 }
 
                 println!("\nSuccess! Merchant profile updated for {}.", address);
+            }
+            MerchantCommands::Register {
+                address,
+                name,
+                description,
+                contact_info,
+                category,
+                interactive,
+            } => {
+                let contract_id = config.contract_id.as_deref().unwrap_or("N/A");
+
+                let registration = if *interactive {
+                    match prompt_merchant_registration()? {
+                        Some(r) => r,
+                        None => return Ok(()),
+                    }
+                } else {
+                    registration_from_flags(
+                        address.clone(),
+                        name.clone(),
+                        description.clone(),
+                        contact_info.clone(),
+                        category.clone(),
+                    )?
+                };
+
+                submit_merchant_registration(&registration, contract_id);
             }
         },
         Commands::Refund { action } => {
