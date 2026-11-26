@@ -187,6 +187,58 @@ describe('pollContractEvents', () => {
     expect(callback).toHaveBeenCalled();
     stop();
   });
+
+  it('recovers and delivers events after a 30-second RPC outage', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation();
+    const event = { id: '1', type: 'contract', contractId: 'CONTRACT_ID', ledger: 42, topic: ['lumenflow', 'payment_processed', 'GMerchant'], value: ['ORDER_1', 'GPayer', 100] };
+
+    let outageOver = false;
+    global.fetch = jest.fn().mockImplementation(async () => {
+      if (!outageOver) {
+        throw new Error('RPC unavailable');
+      }
+      return { json: async () => ({ result: { events: [event] } }) } as unknown as Response;
+    });
+
+    const callback = jest.fn();
+    const stop = pollContractEvents({ rpcUrl: 'https://rpc.example.com', contractId: 'CONTRACT_ID' }, 1000, callback);
+
+    // Simulate a 30-second outage: every poll during this window fails.
+    await jest.advanceTimersByTimeAsync(30_000);
+    expect(callback).not.toHaveBeenCalled();
+    expect(global.fetch).toHaveBeenCalledTimes(30);
+
+    // RPC comes back online; the next poll should succeed and deliver events.
+    outageOver = true;
+    await jest.advanceTimersByTimeAsync(1000);
+    await Promise.resolve();
+
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(callback).toHaveBeenCalledWith([event]);
+
+    // Polling continues to run after recovery.
+    await jest.advanceTimersByTimeAsync(1000);
+    await Promise.resolve();
+    expect(callback).toHaveBeenCalledTimes(2);
+
+    stop();
+    errorSpy.mockRestore();
+  });
+
+  it('keeps polling after an RPC outage without stopping the interval', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation();
+    global.fetch = jest.fn().mockRejectedValue(new Error('RPC unavailable'));
+
+    const callback = jest.fn();
+    const stop = pollContractEvents({ rpcUrl: 'https://rpc.example.com', contractId: 'CONTRACT_ID' }, 1000, callback);
+
+    await jest.advanceTimersByTimeAsync(30_000);
+    expect(global.fetch).toHaveBeenCalledTimes(30);
+    expect(callback).not.toHaveBeenCalled();
+
+    stop();
+    errorSpy.mockRestore();
+  });
 });
 
 describe('pollContractEvents structured logging', () => {

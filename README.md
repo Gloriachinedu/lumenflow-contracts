@@ -71,6 +71,19 @@ import { LumenFlowClient } from '@lumenflow/sdk';
 
 See the [SDK quickstart guide](sdk/README.md#quick-start) for full usage.
 
+### Upcoming: Python SDK
+
+A Python SDK is on the roadmap. The proposed API surface is:
+
+- `LumenFlowClient` — client entry point (network, contract ID, signer configuration)
+- `process_payment` — submit a signed payment
+- `get_payment` — fetch a single payment by order ID
+- `list_payments` — paginated payment history queries
+
+The API shape is still open for discussion — see the stub reference at
+[`docs/api-reference/python-sdk.md`](docs/api-reference/python-sdk.md) and share
+feedback in the [Python SDK GitHub Discussion](https://github.com/Gloriachinedu/lumenflow-contracts/discussions).
+
 ### CLI (Rust / crates.io)
 
 ```bash

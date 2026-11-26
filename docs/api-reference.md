@@ -9,6 +9,8 @@ Each entry includes the function signature, a description, a parameter table, re
 > cargo doc --package lumenflow --open
 > ```
 
+> **Upcoming: Python SDK** — A Python SDK is on the roadmap. The proposed API surface (`LumenFlowClient`, `process_payment`, `get_payment`, `list_payments`) is documented in the [Python SDK reference stub](python-sdk.md). The SDK is not yet implemented; we welcome feedback on the desired API shape in the linked GitHub Discussion.
+
 ---
 
 ## Table of Contents

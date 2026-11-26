@@ -60,12 +60,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: "20"
 
@@ -355,7 +355,7 @@ jobs:
       # ── Upload backup artifact ─────────────────────────────────────────────
       - name: Upload backup artifact
         if: ${{ github.event.inputs.dry_run != 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
           name: production-backup-${{ steps.backup.outputs.backup_timestamp }}-${{ github.run_id }}
           path: ${{ steps.backup.outputs.backup_dir }}/
@@ -384,7 +384,7 @@ jobs:
       # ── Alert on failure ───────────────────────────────────────────────────
       - name: Alert on-call via Slack
         if: failure() && github.event_name == 'schedule' && env.SLACK_WEBHOOK_URL != ''
-        uses: slackapi/slack-github-action@v1.26.0
+        uses: slackapi/slack-github-action@37ebaef184d7626c5f204ab8d3baff4262dd30f0 # v1.27.0
         with:
           payload: |
             {

@@ -283,6 +283,57 @@ The policy is validated in CI using the `htmlhint` linter (configured in
 cd frontend && npx htmlhint "*.html"
 ```
 
+## Automated secret rotation (Issue #1547)
+
+Production secrets (admin keys, webhook signing secrets, RPC API keys) are no
+longer rotated by hand. They live in a managed secret store — **AWS Secrets
+Manager** or **HashiCorp Vault** — and are rotated automatically with a
+dual-active overlap so there is never a window where the old or new value is
+invalid.
+
+### How rotation works
+
+1. **Stored in a secret manager.** Each environment (`testnet`, `mainnet`) has
+   its own secret path, e.g. `lumenflow/testnet/admin-key` or
+   `secret/lumenflow/mainnet/webhook-signing`. Secrets are never stored in
+   `.env` files, CI variables, or the repository.
+2. **Rotation job creates a new version.** A scheduled rotation lambda/job
+   writes a new secret version (`AWSCURRENT` in Secrets Manager, a new version
+   in Vault) **without deleting the previous one**. The previous version is
+   demoted to `AWSPREVIOUS` (or kept as a readable prior version in Vault).
+3. **Dual-active overlap.** For a 15-minute overlap window both the old and new
+   secret are accepted. Services validate inbound credentials (webhook
+   signatures, API keys) against both versions, so in-flight requests signed
+   with the old secret keep working while clients pick up the new one.
+4. **Runtime refresh, no restart.** Applications poll the secret manager (or
+   subscribe to change notifications) and swap the in-memory secret when a new
+   version appears. No redeploy or restart is required; the refresh interval is
+   well under the 15-minute overlap.
+5. **Old version deactivated.** After the overlap window the rotation job
+   disables the old version. It is retained (not destroyed) for audit and
+   rollback, then cleaned up on the next rotation cycle.
+
+### Local development vs. managed secrets
+
+Local development does **not** talk to the secret manager. Keep using the
+gitignored `.env.local` file described above, with throwaway testnet keys. The
+managed secrets are only used by deployed environments:
+
+| Environment        | Secret source                                   |
+| ------------------ | ----------------------------------------------- |
+| Local              | `.env.local` (gitignored, throwaway keys)       |
+| CI                 | CI provider secret store (see rotation reminder)|
+| `testnet` / `mainnet` | AWS Secrets Manager / HashiCorp Vault        |
+
+Never copy a managed production secret into a local `.env` file. If you need to
+reproduce a production issue locally, use a dedicated testnet key instead.
+
+### Full runbook
+
+See [`docs/admin-key-rotation.md`](./admin-key-rotation.md) for the complete
+runbook: secret paths, rotation schedule, the dual-active overlap procedure,
+emergency (compromised-key) rotation, verification steps, and rollback.
+
 ## Quarterly secret rotation reminder
 
 The `.github/workflows/secret-rotation-reminder.yml` workflow runs automatically
@@ -299,3 +350,7 @@ Issues are automatically assigned to `@Gloriachinedu` (CODEOWNERS). To perform a
 manual rotation outside the quarterly cycle, use the issue template at
 `.github/ISSUE_TEMPLATE/secret_rotation.yml` or trigger the workflow manually from
 the Actions tab using the `workflow_dispatch` event.
+
+> **Note:** Deployed-environment secrets are rotated automatically by the secret
+> manager (see above). The quarterly reminder now covers only CI/GitHub Actions
+> secrets; managed secrets are audited through the rotation job's logs.

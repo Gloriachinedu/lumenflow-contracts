@@ -35,6 +35,11 @@ export enum PaymentErrorCode {
   PaginationLimitExceeded = 51,
   BatchSizeExceeded = 52,
   InvalidTags = 53,
+  BatchPartialFailure = 54,
+  RpcTimeout = 70,
+  RpcUnavailable = 71,
+  EventPollerFailure = 72,
+  DuplicateSubmission = 73,
   SubscriptionPlanAlreadyExists = 60,
   SubscriptionAlreadyExists = 61,
   SubscriptionPlanNotFound = 62,
@@ -82,6 +87,11 @@ export const ERROR_MESSAGES: Record<PaymentErrorCode, string> = {
   [PaymentErrorCode.PaginationLimitExceeded]: "The requested page size exceeds the maximum limit.",
   [PaymentErrorCode.BatchSizeExceeded]: "The payment batch exceeds the maximum size (10 items).",
   [PaymentErrorCode.InvalidTags]: "The provided tags exceed length or count limits.",
+  [PaymentErrorCode.BatchPartialFailure]: "One or more items in the batch failed; see per-item error details.",
+  [PaymentErrorCode.RpcTimeout]: "The RPC request timed out before a response was received.",
+  [PaymentErrorCode.RpcUnavailable]: "The RPC node is currently unavailable.",
+  [PaymentErrorCode.EventPollerFailure]: "The event poller failed to fetch events from the RPC node.",
+  [PaymentErrorCode.DuplicateSubmission]: "A duplicate submission was detected and ignored.",
   [PaymentErrorCode.SubscriptionPlanAlreadyExists]: "A subscription plan with this ID already exists.",
   [PaymentErrorCode.SubscriptionAlreadyExists]: "A subscription with this ID already exists.",
   [PaymentErrorCode.SubscriptionPlanNotFound]: "The specified subscription plan could not be found.",
@@ -156,6 +166,72 @@ export class LumenFlowError extends Error {
     }
     return json;
   }
+}
+
+/**
+ * Per-item error entry produced by a partially failed batch operation.
+ * `index` is the position of the failing item within the submitted batch.
+ */
+export interface BatchItemError {
+  index: number;
+  code: PaymentErrorCode;
+  codeName: string;
+  message: string;
+  details?: unknown;
+}
+
+/**
+ * Error raised when a batch operation fails for one or more (but not all)
+ * items. `details` carries the per-item error list so callers can map each
+ * failure back to the item that caused it.
+ */
+export class BatchPartialFailureError extends LumenFlowError {
+  public readonly itemErrors: BatchItemError[];
+
+  constructor(itemErrors: BatchItemError[], details?: unknown) {
+    super(PaymentErrorCode.BatchPartialFailure, details ?? itemErrors);
+    this.name = "BatchPartialFailureError";
+    this.itemErrors = itemErrors;
+  }
+
+  /** Error codes of the failed items, in submission order. */
+  get failedCodes(): PaymentErrorCode[] {
+    return this.itemErrors.map((e) => e.code);
+  }
+
+  /** Indices of the failed items, in submission order. */
+  get failedIndices(): number[] {
+    return this.itemErrors.map((e) => e.index);
+  }
+}
+
+/**
+ * Builds a {@link BatchItemError} from a raw error code and batch index.
+ */
+export function batchItemError(index: number, code: number, details?: unknown): BatchItemError {
+  const error = errorFromCode(code, details);
+  const item: BatchItemError = {
+    index,
+    code: error.code,
+    codeName: error.codeName,
+    message: error.message,
+  };
+  if (details !== undefined) {
+    item.details = details;
+  }
+  return item;
+}
+
+/**
+ * Builds a {@link BatchPartialFailureError} from a list of raw per-item
+ * failures (`{ index, code, details? }`).
+ */
+export function batchPartialFailure(
+  failures: Array<{ index: number; code: number; details?: unknown }>,
+): BatchPartialFailureError {
+  return new BatchPartialFailureError(
+    failures.map((f) => batchItemError(f.index, f.code, f.details)),
+  );
 }
 
 abstract class ContractError extends LumenFlowError {
@@ -255,6 +331,10 @@ export class LumenFlowValidationError extends LumenFlowError {
 export class PaginationLimitExceededError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.PaginationLimitExceeded, details); } }
 export class BatchSizeExceededError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.BatchSizeExceeded, details); } }
 export class InvalidTagsError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.InvalidTags, details); } }
+export class RpcTimeoutError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.RpcTimeout, details); } }
+export class RpcUnavailableError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.RpcUnavailable, details); } }
+export class EventPollerFailureError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.EventPollerFailure, details); } }
+export class DuplicateSubmissionError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.DuplicateSubmission, details); } }
 
 /**
  * Thrown when the deployed contract version is incompatible with the SDK
@@ -295,6 +375,8 @@ export const ERROR_TYPES: Record<PaymentErrorCode, new (details?: unknown) => Lu
   [PaymentErrorCode.RefundExceedsOriginal]: RefundExceedsOriginalError, [PaymentErrorCode.RefundNotApproved]: RefundNotApprovedError, [PaymentErrorCode.RefundAlreadyCompleted]: RefundAlreadyCompletedError, [PaymentErrorCode.TooManyRefunds]: TooManyRefundsError,
   [PaymentErrorCode.MultisigNotFound]: MultisigNotFoundError, [PaymentErrorCode.MultisigAlreadySigned]: MultisigAlreadySignedError, [PaymentErrorCode.MultisigAlreadyExecuted]: MultisigAlreadyExecutedError, [PaymentErrorCode.InsufficientSignatures]: InsufficientSignaturesError,
   [PaymentErrorCode.InvalidInput]: InvalidInputError, [PaymentErrorCode.PaginationLimitExceeded]: PaginationLimitExceededError, [PaymentErrorCode.BatchSizeExceeded]: BatchSizeExceededError, [PaymentErrorCode.InvalidTags]: InvalidTagsError,
+  [PaymentErrorCode.BatchPartialFailure]: BatchPartialFailureError, [PaymentErrorCode.RpcTimeout]: RpcTimeoutError, [PaymentErrorCode.RpcUnavailable]: RpcUnavailableError,
+  [PaymentErrorCode.EventPollerFailure]: EventPollerFailureError, [PaymentErrorCode.DuplicateSubmission]: DuplicateSubmissionError,
 };
 
 /**

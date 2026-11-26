@@ -251,7 +251,12 @@ export function pollContractEvents(
       });
   }, intervalMs);
 
-  return () => clearInterval(timer);
+  const timer = setInterval(tick, intervalMs);
+
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
 }
 
 export interface WebhookEvent {

@@ -21,6 +21,15 @@ error()   { echo "[ERROR] $*" >&2; }
 
 FAILURES=0
 
+# ── Secret manager configuration (issue #1547) ────────────────────────────────
+# When SECRET_MANAGER is set (aws|vault), secrets are expected to come from the
+# secret manager rather than .env. Rotation uses dual-active versions: the
+# current version and the previous version overlap for ROTATION_OVERLAP_MINUTES
+# (default 15) before the old version is deactivated.
+SECRET_MANAGER="${SECRET_MANAGER:-}"
+ROTATION_OVERLAP_MINUTES="${ROTATION_OVERLAP_MINUTES:-15}"
+EXPECTED_OVERLAP_MINUTES=15
+
 # ── Source .env if present ─────────────────────────────────────────────────────
 # The .env file is not committed; it holds local overrides for the runtime
 # configuration injected into containers (see .env.example).
@@ -32,6 +41,10 @@ if [[ -f ".env" ]]; then
   source ".env"
   set +o allexport
 fi
+
+# Re-read secret manager settings in case .env defined them.
+SECRET_MANAGER="${SECRET_MANAGER:-}"
+ROTATION_OVERLAP_MINUTES="${ROTATION_OVERLAP_MINUTES:-15}"
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -235,7 +248,10 @@ validate_local() {
 echo "============================================"
 echo "  LumenFlow — Secret Validation"
 echo "  Environment: $ENVIRONMENT"
+echo "  Secret manager: ${SECRET_MANAGER:-.env}"
 echo "============================================"
+
+validate_secret_manager
 
 case "$ENVIRONMENT" in
   testnet) validate_testnet ;;
@@ -247,13 +263,17 @@ case "$ENVIRONMENT" in
     ;;
 esac
 
+validate_rotation_overlap
+validate_deactivation_schedule
+
 echo ""
 echo "============================================"
 if [[ "$FAILURES" -gt 0 ]]; then
   echo "  ❌ FAILED: $FAILURES check(s) did not pass."
   echo "============================================"
   echo ""
-  echo "Add missing secrets to your .env file (for local use) or to the"
+  echo "Add missing secrets to your .env file (for local use), configure the"
+  echo "secret manager (SECRET_MANAGER=aws|vault), or add them to the"
   echo "GitHub repository secrets at:"
   echo "  Settings > Secrets and variables > Actions"
   echo ""
