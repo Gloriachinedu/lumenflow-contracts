@@ -1339,7 +1339,10 @@ impl PaymentProcessingContract {
         let token_client = token::Client::new(&env, &token_address);
         let fee_bps = storage::get_platform_fee_bps(&env);
         let platform_fee: i128 = if fee_bps > 0 {
-            amount * (fee_bps as i128) / 10_000
+            amount
+                .checked_mul(fee_bps as i128)
+                .and_then(|v| v.checked_div(10_000))
+                .ok_or(PaymentError::Overflow)?
         } else {
             0
         };
@@ -1479,7 +1482,10 @@ impl PaymentProcessingContract {
         let token_client = token::Client::new(&env, &token_address);
         let fee_bps = storage::get_platform_fee_bps(&env);
         let platform_fee: i128 = if fee_bps > 0 {
-            amount * (fee_bps as i128) / 10_000
+            amount
+                .checked_mul(fee_bps as i128)
+                .and_then(|v| v.checked_div(10_000))
+                .ok_or(PaymentError::Overflow)?
         } else {
             0
         };
@@ -4207,6 +4213,13 @@ impl PaymentProcessingContract {
             return Err(PaymentError::EscrowNotUnlocked);
         }
 
+        // Reentrancy guard
+        let lock_key = soroban_sdk::Symbol::new(&env, "reentrancy_lock");
+        if env.storage().instance().get::<_, bool>(&lock_key).unwrap_or(false) {
+            return Err(PaymentError::Reentrancy);
+        }
+        env.storage().instance().set(&lock_key, &true);
+
         // Effects before interaction
         escrow.status = EscrowStatus::Released;
         storage::set_escrow(&env, &escrow);
@@ -4219,6 +4232,7 @@ impl PaymentProcessingContract {
             &escrow.amount,
         );
 
+        env.storage().instance().set(&soroban_sdk::Symbol::new(&env, "reentrancy_lock"), &false);
         env.events()
             .publish(("lumenflow", "escrow_released"), (order_id, escrow.amount));
         Ok(())
@@ -4431,6 +4445,13 @@ impl PaymentProcessingContract {
             return Err(PaymentError::EscrowNotUnlocked);
         }
 
+        // Reentrancy guard
+        let lock_key = soroban_sdk::Symbol::new(&env, "reentrancy_lock");
+        if env.storage().instance().get::<_, bool>(&lock_key).unwrap_or(false) {
+            return Err(PaymentError::Reentrancy);
+        }
+        env.storage().instance().set(&lock_key, &true);
+
         // Effects before interactions.
         hold.status = EscrowHoldStatus::Released;
         storage::set_escrow_hold(&env, &hold);
@@ -4443,6 +4464,7 @@ impl PaymentProcessingContract {
             &hold.amount,
         );
 
+        env.storage().instance().set(&soroban_sdk::Symbol::new(&env, "reentrancy_lock"), &false);
         env.events().publish(
             ("lumenflow", "escrow_released"),
             (escrow_id, hold.merchant, hold.amount),
@@ -4518,6 +4540,166 @@ impl PaymentProcessingContract {
     /// * [`PaymentError::EscrowNotFound`] — no hold with `escrow_id`.
     pub fn get_escrow_hold(env: Env, escrow_id: String) -> Result<EscrowHold, PaymentError> {
         storage::get_escrow_hold(&env, &escrow_id).ok_or(PaymentError::EscrowNotFound)
+    }
+
+    // ── Emergency Escrow Withdrawal (Issue #1511) ─────────────────────────────
+
+    /// Set the governance treasury address for emergency withdrawals. Admin only.
+    ///
+    /// The treasury receives funds transferred via `emergency_withdraw`.  Must
+    /// be called once before any emergency withdrawal can be executed.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the contract administrator. Must sign the call.
+    /// * `treasury` - The governance-controlled treasury address.
+    pub fn set_treasury_address(
+        env: Env,
+        admin: Address,
+        treasury: Address,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        storage::set_treasury_address(&env, &treasury);
+        Ok(())
+    }
+
+    /// Set the emergency lock period in seconds (default 90 days). Admin only.
+    ///
+    /// Only escrows whose `created_at` is older than this period are eligible
+    /// for emergency withdrawal.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the contract administrator. Must sign the call.
+    /// * `secs` - New lock period in seconds. Must be greater than zero.
+    pub fn set_emergency_lock_period(
+        env: Env,
+        admin: Address,
+        secs: u64,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+        if secs == 0 {
+            return Err(PaymentError::InvalidInput);
+        }
+        storage::set_emergency_lock_period(&env, secs);
+        Ok(())
+    }
+
+    /// Record one admin's approval for an emergency withdrawal of a stuck escrow.
+    ///
+    /// At least `EMERGENCY_WITHDRAWAL_REQUIRED_APPROVALS` (default 3) distinct
+    /// admins must approve before `emergency_withdraw` can execute. This
+    /// function is intentionally separate so that multiple admins can approve
+    /// asynchronously without coordinating a single transaction.
+    ///
+    /// # Arguments
+    /// * `admin` - A contract administrator approving the withdrawal. Must sign.
+    /// * `escrow_id` - The escrow order_id being approved for withdrawal.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — caller is not the admin.
+    /// * [`PaymentError::EscrowNotFound`] — no escrow with `escrow_id` exists.
+    /// * [`PaymentError::EscrowAlreadyFinalised`] — escrow is not in `Locked` state.
+    /// * [`PaymentError::EmergencyAlreadyApproved`] — this admin already approved.
+    pub fn approve_emergency_withdrawal(
+        env: Env,
+        admin: Address,
+        escrow_id: String,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+
+        let escrow =
+            storage::get_escrow(&env, &escrow_id).ok_or(PaymentError::EscrowNotFound)?;
+        if !matches!(escrow.status, EscrowStatus::Locked) {
+            return Err(PaymentError::EscrowAlreadyFinalised);
+        }
+
+        let mut approvals = storage::get_emergency_withdrawal_approvals(&env, &escrow_id);
+        for a in approvals.iter() {
+            if a == admin {
+                return Err(PaymentError::EmergencyAlreadyApproved);
+            }
+        }
+
+        approvals.push_back(admin);
+        storage::set_emergency_withdrawal_approvals(&env, &escrow_id, &approvals);
+        Ok(())
+    }
+
+    /// Emergency-withdraw stuck escrow funds to the governance treasury.
+    ///
+    /// Can only be called when ALL of the following conditions are met:
+    /// 1. Caller is the contract admin.
+    /// 2. The escrow is still in `Locked` status (not already released/cancelled).
+    /// 3. The escrow's `created_at` is older than `EMERGENCY_LOCK_PERIOD`
+    ///    (default 90 days).
+    /// 4. At least `EMERGENCY_WITHDRAWAL_REQUIRED_APPROVALS` (default 3) distinct
+    ///    admins have called `approve_emergency_withdrawal` for this escrow_id.
+    /// 5. A treasury address has been configured via `set_treasury_address`.
+    ///
+    /// On success the escrow status is set to `Cancelled` (funds are gone from
+    /// the contract), the approval set is cleared, and an
+    /// `EmergencyWithdrawalEvent` is emitted.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the contract administrator. Must sign the call.
+    /// * `escrow_id` - The escrow order_id to withdraw.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — caller is not the admin.
+    /// * [`PaymentError::EscrowNotFound`] — no escrow with `escrow_id` exists.
+    /// * [`PaymentError::EscrowAlreadyFinalised`] — escrow is not in `Locked` state.
+    /// * [`PaymentError::EmergencyLockPeriodNotMet`] — escrow is too recent.
+    /// * [`PaymentError::EmergencyMultisigNotMet`] — insufficient admin approvals.
+    /// * [`PaymentError::TreasuryNotSet`] — treasury address not configured.
+    pub fn emergency_withdraw(
+        env: Env,
+        admin: Address,
+        escrow_id: String,
+    ) -> Result<(), PaymentError> {
+        require_admin(&env, &admin)?;
+
+        let mut escrow =
+            storage::get_escrow(&env, &escrow_id).ok_or(PaymentError::EscrowNotFound)?;
+
+        if !matches!(escrow.status, EscrowStatus::Locked) {
+            return Err(PaymentError::EscrowAlreadyFinalised);
+        }
+
+        // Enforce minimum lock period before an emergency withdrawal is allowed.
+        let now = env.ledger().timestamp();
+        let lock_period = storage::get_emergency_lock_period(&env);
+        if now.saturating_sub(escrow.created_at) < lock_period {
+            return Err(PaymentError::EmergencyLockPeriodNotMet);
+        }
+
+        // Require sufficient multisig approvals from distinct admins.
+        let approvals = storage::get_emergency_withdrawal_approvals(&env, &escrow_id);
+        if approvals.len() < storage::EMERGENCY_WITHDRAWAL_REQUIRED_APPROVALS {
+            return Err(PaymentError::EmergencyMultisigNotMet);
+        }
+
+        // Treasury must be configured.
+        let treasury =
+            storage::get_treasury_address(&env).ok_or(PaymentError::TreasuryNotSet)?;
+
+        // Effects before interaction (checks-effects-interactions).
+        let amount = escrow.amount;
+        escrow.status = EscrowStatus::Cancelled;
+        storage::set_escrow(&env, &escrow);
+        storage::clear_emergency_withdrawal_approvals(&env, &escrow_id);
+
+        // Transfer funds from contract to treasury.
+        let token_client = token::Client::new(&env, &escrow.token);
+        token_client.transfer(&env.current_contract_address(), &treasury, &amount);
+
+        env.events().publish(
+            ("lumenflow", "emergency_withdrawal"),
+            crate::types::EmergencyWithdrawalEvent {
+                escrow_id,
+                amount,
+                recipient: treasury,
+            },
+        );
+        Ok(())
     }
 
     // ── Admin Audit Log (Issue #1115) ─────────────────────────────────────────

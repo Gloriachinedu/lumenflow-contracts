@@ -52,17 +52,92 @@
       width: min(100%, 560px);
       padding: 2rem;
       overflow-wrap: anywhere;
+      /* Prevent any child from escaping the card horizontally */
+      overflow-x: hidden;
     }
 
     .receipt-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.5rem;
       margin-bottom: 1.5rem;
       border-bottom: 1px solid #e8ecf0;
       padding-bottom: 1rem;
     }
-    .receipt-header h1 { font-size: 1.25rem; margin-bottom: 0; }
+    .receipt-header h1 { font-size: 1.25rem; margin-bottom: 0; min-width: 0; }
+
+    /* ── Responsive breakpoints ───────────────────────────────────────────── */
+
+    /* 768px — tablet: reduce horizontal padding */
+    @media (max-width: 768px) {
+      body {
+        padding: 1.5rem 0.75rem;
+      }
+      .receipt {
+        padding: 1.5rem;
+      }
+    }
+
+    /* 414px — large phone (iPhone Plus / Android XL) */
+    @media (max-width: 414px) {
+      body {
+        padding: 1rem 0.5rem;
+      }
+      .receipt {
+        padding: 1.25rem;
+        border-radius: 8px;
+      }
+      .field .value.amount {
+        font-size: 1.2rem;
+      }
+    }
+
+    /* 375px — standard phone (iPhone SE / standard Android) */
+    @media (max-width: 375px) {
+      body {
+        padding: 0.75rem 0.5rem;
+      }
+      .receipt {
+        padding: 1rem;
+        border-radius: 6px;
+      }
+      .receipt-header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .receipt-header h1 {
+        font-size: 1.1rem;
+      }
+      .field .value.amount {
+        font-size: 1.1rem;
+      }
+    }
+
+    /* 320px — smallest supported phone (iPhone SE 1st gen, Galaxy S5) */
+    @media (max-width: 320px) {
+      body {
+        padding: 0.5rem 0.25rem;
+      }
+      .receipt {
+        padding: 0.75rem;
+        border-radius: 4px;
+      }
+      .receipt-header h1 {
+        font-size: 1rem;
+      }
+      .field .value {
+        font-size: 0.875rem;
+      }
+      .field .value.amount {
+        font-size: 1rem;
+      }
+      /* Ensure the nav brand doesn't overflow */
+      .lf-nav__brand {
+        font-size: 0.9rem;
+      }
+    }
 
     .field label {
       font-size: 0.72rem;
@@ -311,15 +386,49 @@
     @media print {
       /* Reset background so the receipt prints cleanly on white paper */
       body {
-        background: #fff;
+        background: #fff !important;
+        color: #000 !important;
         padding: 0;
+        margin: 0;
         min-height: unset;
+        font-size: 11pt;
+        line-height: 1.4;
       }
 
-      /* Hide everything that isn't the receipt card */
-      #lf-mode-banner,
+      /* ── Hide non-essential chrome ── */
+
+      /* Navigation bar */
+      nav,
+      .lf-nav,
+      [role="navigation"],
+      .skip-link {
+        display: none !important;
+      }
+
+      /* Wallet status widget */
+      #wallet-status-container,
+      .wallet-status,
+      #lf-wallet-status,
+      [data-wallet-status] {
+        display: none !important;
+      }
+
+      /* Toast notifications */
+      .lf-toast,
+      #lf-toast,
+      [role="status"],
+      [role="alert"].toast {
+        display: none !important;
+      }
+
+      /* Dark-mode toggle and floating UI */
+      #lf-dark-toggle,
       #pwa-install-banner,
-      .skip-link,
+      #lf-mode-banner {
+        display: none !important;
+      }
+
+      /* Action buttons and interactive controls */
       .actions,
       #prefill-pay-btn,
       .btn,
@@ -329,24 +438,46 @@
         display: none !important;
       }
 
-      /* Remove shadows and rounded corners for print */
+      /* Remove shadows, rounded corners, and backgrounds for print */
       .receipt {
-        box-shadow: none;
-        border-radius: 0;
-        max-width: 100%;
-        width: 100%;
-        padding: 1rem;
+        box-shadow: none !important;
+        border-radius: 0 !important;
+        max-width: 100% !important;
+        width: 100% !important;
+        padding: 1rem !important;
+        background: #fff !important;
       }
 
-      /* Ensure text is black and links are plain */
-      * { color: #000 !important; }
+      /* ── Force black text; strip colour backgrounds ── */
+      *,
+      *::before,
+      *::after {
+        color: #000 !important;
+        background: transparent !important;
+        background-color: transparent !important;
+        box-shadow: none !important;
+        text-shadow: none !important;
+      }
+
+      /* Keep badge text readable with a border instead of a colour fill */
+      .badge {
+        border: 1px solid #000;
+        padding: 1pt 4pt;
+      }
+
       a { text-decoration: none; }
 
-      /* Avoid page breaks inside receipt sections */
+      /* ── Keep key payment fields together — no orphaned rows ── */
       .field,
       .refund-item,
       .refunds-section {
         break-inside: avoid;
+      }
+
+      /* ── Page setup ── */
+      @page {
+        size: A4 portrait;
+        margin: 18mm 15mm;
       }
     }
   </style>
