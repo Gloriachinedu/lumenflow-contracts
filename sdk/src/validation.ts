@@ -1,4 +1,4 @@
-import { LumenFlowError, PaymentErrorCode } from './errors';
+import { LumenFlowError, LumenFlowValidationError, PaymentErrorCode } from './errors';
 
 const STELLAR_ADDRESS_REGEX = /^G[A-Z2-7]{55}$/;
 
@@ -8,6 +8,52 @@ export function isValidOrderId(value: unknown): value is string {
 
 export function isValidAddress(value: unknown): value is string {
   return typeof value === 'string' && STELLAR_ADDRESS_REGEX.test(value);
+}
+
+export function assertNonEmptyString(value: unknown, field: string): string {
+  if (!isValidOrderId(value)) {
+    throw new LumenFlowValidationError(field, `${field} must be a non-empty string`);
+  }
+  return value;
+}
+
+export function assertPositiveAmount(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw new LumenFlowValidationError(field, `${field} must be a positive number`);
+  }
+  return value;
+}
+
+export function assertTokenAddress(value: unknown, field: string): string {
+  if (!isValidAddress(value)) {
+    throw new LumenFlowValidationError(field, `${field} must be a valid Stellar address`);
+  }
+  return value;
+}
+
+export function assertStellarAddress(value: unknown, field: string): string {
+  if (!isValidAddress(value)) {
+    throw new LumenFlowValidationError(field, `${field} must be a valid Stellar address`);
+  }
+  return value;
+}
+
+export function validateProcessPaymentInput(options: {
+  orderId?: unknown;
+  amount?: unknown;
+  tokenAddress?: unknown;
+}): void {
+  assertNonEmptyString(options.orderId, 'orderId');
+  assertPositiveAmount(options.amount, 'amount');
+  assertTokenAddress(options.tokenAddress, 'tokenAddress');
+}
+
+export function validateRegisterMerchantInput(options: {
+  name?: unknown;
+  address?: unknown;
+}): void {
+  assertNonEmptyString(options.name, 'name');
+  assertStellarAddress(options.address, 'address');
 }
 
 export function validateContractFields(options: {
