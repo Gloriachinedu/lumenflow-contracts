@@ -127,51 +127,14 @@ export const EVENT_CATALOG: readonly CatalogEntry[] = [
     ['payer', 'address'],
     ['amount', 'i128'],
   ]),
-  // ── Admin / configuration telemetry ──────────────────────────────────────
-  entry('admin_transferred', false, [
-    ['old_admin', 'address'],
-    ['new_admin', 'address'],
-  ]),
-  entry('fee_updated', false, [
-    ['old_fee_bps', 'u32'],
-    ['new_fee_bps', 'u32'],
-  ]),
-  entry('treasury_updated', false, [['treasury', 'address']]),
-  entry('token_added', false, [
-    ['token', 'address'],
-    ['symbol', 'symbol'],
-  ]),
-  entry('token_removed', false, [['token', 'address']]),
-  entry('payment_expired', false, [['order_id', 'string']]),
-  entry('payment_request_created', false, [
-    ['request_id', 'string'],
-    ['merchant', 'address'],
-    ['amount', 'i128'],
-  ]),
-  entry('payment_request_cancelled', false, [['request_id', 'string']]),
-  entry('subscription_plan_updated', false, [['plan_id', 'string']]),
-  entry('subscription_plan_deactivated', false, [['plan_id', 'string']]),
-  entry('subscription_paused', false, [['subscription_id', 'string']]),
-  entry('subscription_resumed', false, [['subscription_id', 'string']]),
-  entry('dispute_evidence_submitted', false, [
-    ['dispute_id', 'string'],
-    ['submitter', 'address'],
-  ]),
-  entry('dispute_cancelled', false, [['dispute_id', 'string']]),
-  entry('multisig_cancelled', false, [['payment_id', 'string']]),
-  entry('multisig_signer_added', false, [
-    ['payment_id', 'string'],
-    ['signer', 'address'],
-  ]),
-  entry('multisig_signer_removed', false, [
-    ['payment_id', 'string'],
-    ['signer', 'address'],
-  ]),
-  entry('escrow_condition_updated', false, [
+  // ── Escrow Expiry Warning (Issue #1623) ───────────────────────────────────
+  entry('escrow_expiry_warning', false, [
     ['escrow_id', 'string'],
-    ['condition_hash', 'bytes'],
+    ['payer', 'address'],
+    ['merchant', 'address'],
+    ['unlock_at', 'u64'],
+    ['lead_time', 'u64'],
   ]),
-  entry('escrow_expired', false, [['escrow_id', 'string']]),
 ] as const;
 
 const BY_NAME = new Map(EVENT_CATALOG.map((e) => [e.name, e]));

@@ -1,5 +1,5 @@
 import { LumenFlowClient } from "./client";
-import { PaymentStatus, PaymentSummary } from "./types";
+import { PaymentStatus, PaymentSummary, PayerPaymentSummary } from "./types";
 
 describe("LumenFlowClient.getPaymentSummary", () => {
   it("queries the public summary without a signer", async () => {

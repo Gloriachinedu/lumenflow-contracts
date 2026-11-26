@@ -23,6 +23,14 @@ on:
         description: 'Items per batch payment call (default: 10)'
         required: false
         default: '10'
+      db_pool_vus:
+        description: 'Concurrent virtual users for the DB pool exhaustion scenario (default: 500)'
+        required: false
+        default: '500'
+      db_pool_requests_per_vu:
+        description: 'Requests per virtual user in the DB pool scenario (default: 5)'
+        required: false
+        default: '5'
       network:
         description: 'Target network'
         required: false
@@ -62,6 +70,10 @@ jobs:
           PAYMENTS_PER_VU: ${{ github.event.inputs.payments_per_vu || '10' }}
           BATCH_CLIENTS: ${{ github.event.inputs.batch_clients || '10' }}
           BATCH_ITEMS: ${{ github.event.inputs.batch_items || '10' }}
+          # DB connection pool scenario — verifies no connection exhaustion
+          # (pool min 2 / max 20, 5s query timeout) at 500 concurrent requests.
+          DB_POOL_VUS: ${{ github.event.inputs.db_pool_vus || '500' }}
+          DB_POOL_REQUESTS_PER_VU: ${{ github.event.inputs.db_pool_requests_per_vu || '5' }}
           # Recorded baseline P95 for the concurrent batch scenario — see
           # docs/benchmarking.md "Load Test Baseline". The load test fails
           # if the measured P95 regresses more than 20% over this value.

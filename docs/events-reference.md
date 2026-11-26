@@ -410,8 +410,49 @@ the admin bulk-cleanup call.
 
 ---
 
+### `escrow_expiry_warning`
+Emitted when an escrow record is approaching its `unlock_at` timestamp and will
+soon be auto-cancelled. This gives merchants a chance to release funds
+proactively before the escrow expires.
+
+The warning fires when `unlock_at - current_time <= WARNING_LEAD_TIME`, where
+`WARNING_LEAD_TIME` is an admin-configurable lead time (default: 24 hours,
+i.e. `86_400` seconds). It is emitted at most once per escrow record, on the
+first escrow query that observes the record within the lead-time window.
+
+The merchant address is emitted as **`topic[2]`** so merchants can subscribe
+only to expiry warnings relevant to their own escrows.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Any escrow query (e.g. `get_escrow`, `get_escrows_by_merchant`) that observes an escrow whose `unlock_at - current_time <= WARNING_LEAD_TIME`. |
+| **Topics** | `["lumenflow", "escrow_expiry_warning", merchant_address: Address]` |
+| **Data** | `(escrow_id: String, unlock_at: u64, seconds_remaining: u64)` |
+
+**Topic Details:**
+- `topic[0]`: `"lumenflow"` — contract namespace.
+- `topic[1]`: `"escrow_expiry_warning"` — event name.
+- `topic[2]`: `merchant_address` — the merchant who owns the escrow. **Filterable.**
+
+**Data Details:**
+- `escrow_id`: The unique identifier of the escrow record.
+- `unlock_at`: The ledger timestamp at which the escrow auto-cancels.
+- `seconds_remaining`: `unlock_at - current_time` at the moment the warning was emitted.
+
+**Configuration:**
+- `WARNING_LEAD_TIME` is set via the admin entrypoint `set_escrow_warning_lead_time`
+  and defaults to `86_400` seconds (24 hours). Changes are reported through the
+  `config_updated` event with `param = "escrow_warning_lead_time"`.
+
+**Example Decoded Payload:**
+```json
+["ESCROW_123", 1750000000, 82800]
+```
+
+---
+
 ### `config_updated`
-Emitted when an admin changes a configurable contract parameter via `set_platform_fee`, `set_refund_window`, `set_min_refund_amount`, or `set_multisig_expiry_duration`.
+Emitted when an admin changes a configurable contract parameter via `set_platform_fee`, `set_refund_window`, `set_min_refund_amount`, `set_multisig_expiry_duration`, or `set_escrow_warning_lead_time`.
 
 | Field | Description |
 |---|---|
@@ -420,7 +461,7 @@ Emitted when an admin changes a configurable contract parameter via `set_platfor
 | **Payload** | `(param: String, old_value: i128, new_value: i128, admin: Address, timestamp: u64)` |
 
 **Payload Details:**
-- `param`: Name of the parameter changed. One of: `"platform_fee"`, `"refund_window"`, `"min_refund_amount"`, `"multisig_expiry_duration"`.
+- `param`: Name of the parameter changed. One of: `"platform_fee"`, `"refund_window"`, `"min_refund_amount"`, `"multisig_expiry_duration"`, `"escrow_warning_lead_time"`.
 - `old_value`: The previous value of the parameter before the update.
 - `new_value`: The new value of the parameter after the update.
 - `admin`: The `Address` of the administrator who made the change.

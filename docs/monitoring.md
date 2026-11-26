@@ -18,6 +18,9 @@ All events are emitted under the `lumenflow` topic prefix. See [events-reference
 | `lumenflow/merchant_registered` | New merchant registered |
 | `lumenflow/admin_set` | Admin initialised |
 | `lumenflow/admin_transferred` | Admin privileges transferred |
+| `lumenflow/escrow_expiry_warning` | Escrow approaching `unlock_at` (emitted at the configured warning lead time, default 24 h, before auto-cancellation) |
+
+> **Escrow expiry warnings:** the contract emits `escrow_expiry_warning` whenever an escrow is queried and `unlock_at - current_time <= WARNING_LEAD_TIME`. The lead time is configurable by the admin (default 24 hours). Treat these events as a prompt to release funds proactively before the escrow auto-cancels. The off-chain event poller forwards them as webhook events.
 
 ---
 
@@ -120,6 +123,71 @@ Configure these thresholds in your alerting tool (PagerDuty, Grafana, etc.) by f
 3. **Deduplicate** on `id` — Horizon may re-deliver events after a reconnect.
 4. **Alert on stream errors** — a broken SSE connection means missed events.
 5. **Rotate monitoring keys** — use a read-only Stellar account for the Horizon API; never use a signing key.
+
+---
+
+## Health Check Endpoint
+
+The backend exposes a structured `GET /health` endpoint for Kubernetes probes and dashboards.
+
+### Response shape
+
+```json
+{
+  "status": "ok",
+  "rpc": { "ok": true, "latency_ms": 42 },
+  "redis": { "ok": true },
+  "webhookRelay": { "ok": true }
+}
+```
+
+- `status` is `"ok"` when every dependency is healthy, otherwise `"degraded"`.
+- `rpc` reports reachability of the Stellar RPC node and the measured round-trip latency in milliseconds.
+- `redis` reports the cache/queue connection status.
+- `webhookRelay` reports the webhook relay status.
+
+### Status codes
+
+| Condition | HTTP status |
+|---|---|
+| All dependencies healthy | `200` |
+| Any dependency degraded | `503` |
+
+### Timeout budget
+
+Each dependency check runs with its own timeout so the whole response is computed within **500 ms**:
+
+| Dependency | Timeout |
+|---|---|
+| RPC node | 300 ms |
+| Redis | 100 ms |
+| Webhook relay | 100 ms |
+
+Checks run concurrently; a dependency that times out is reported as `{ "ok": false }` and causes a `503`.
+
+### Kubernetes probes
+
+Point both probes at `/health`. Readiness fails fast on a degraded dependency, while liveness uses a more tolerant threshold to avoid restart loops during brief dependency blips.
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  periodSeconds: 30
+  timeoutSeconds: 1
+  failureThreshold: 5
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  periodSeconds: 10
+  timeoutSeconds: 1
+  failureThreshold: 2
+```
+
+The dashboard `/health` badge polls the same endpoint and displays the real-time status of each dependency.
 
 ---
 

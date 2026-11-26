@@ -117,6 +117,48 @@
       font-size: 0.9rem;
     }
 
+    /* ── Empty state ───────────────────────────────────────────────────── */
+    .empty-state {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 2px 16px rgba(0,0,0,0.07);
+      padding: 3rem 1.5rem;
+      text-align: center;
+      margin-bottom: 1rem;
+    }
+    .empty-state[hidden] { display: none; }
+    .empty-state-illustration {
+      width: 160px;
+      height: 160px;
+      margin: 0 auto 1.25rem;
+      display: block;
+    }
+    .empty-state-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #1a1a2e;
+      margin-bottom: 0.5rem;
+    }
+    .empty-state-text {
+      color: #666;
+      font-size: 0.875rem;
+      margin-bottom: 1.5rem;
+    }
+    .empty-state-cta {
+      display: inline-block;
+      padding: 0.6rem 1.25rem;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      text-decoration: none;
+      background: #6c47ff;
+      color: #fff;
+      transition: background 0.15s;
+    }
+    .empty-state-cta:hover { background: #5636d6; }
+    .empty-state-cta:focus-visible { outline: 2px solid #1a1a2e; outline-offset: 2px; }
+=======
+
     /* ── Pagination bar ────────────────────────────────────────────────── */
     .pagination-bar {
       display: flex;
@@ -496,9 +538,19 @@
       return true;
     });
 
+    const emptyState = document.getElementById('empty-state');
+    const tableWrap  = document.getElementById('table-wrap');
+    const paginationBar = document.getElementById('pagination-bar');
+
     if (newPayments.length === 0 && loadedOrderIds.size === 0) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No payments found.</td></tr>';
+      tbody.innerHTML = '';
+      emptyState.hidden = false;
+      tableWrap.hidden = true;
+      paginationBar.hidden = true;
     } else {
+      emptyState.hidden = true;
+      tableWrap.hidden = false;
+      paginationBar.hidden = false;
       tbody.innerHTML = payments.map(p => `
         <tr>
           <td><span class="order-id">${p.order_id}</span></td>

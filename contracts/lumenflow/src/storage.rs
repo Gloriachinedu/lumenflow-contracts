@@ -3,8 +3,8 @@ use soroban_sdk::{contracttype, Address, Env, String, Vec};
 use crate::error::PaymentError;
 use crate::types::{
     AdminAuditEntry, DisputeRecord, EscrowRecord, GlobalStats, Merchant, MerchantStats,
-    MultisigPayment, MerchantCommitment, PaymentOrder, PaymentRequest, RefundRecord, Subscription,
-    SubscriptionPlan, EscrowHold,
+    MultisigPayment, MerchantCommitment, PaymentOrder, PaymentRequest, PayerPaymentSummary,
+    RefundRecord, Subscription, SubscriptionPlan, EscrowHold,
 };
 
 // ── TTL / limit constants ─────────────────────────────────────────────────────
