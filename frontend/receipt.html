@@ -52,17 +52,92 @@
       width: min(100%, 560px);
       padding: 2rem;
       overflow-wrap: anywhere;
+      /* Prevent any child from escaping the card horizontally */
+      overflow-x: hidden;
     }
 
     .receipt-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.5rem;
       margin-bottom: 1.5rem;
       border-bottom: 1px solid #e8ecf0;
       padding-bottom: 1rem;
     }
-    .receipt-header h1 { font-size: 1.25rem; margin-bottom: 0; }
+    .receipt-header h1 { font-size: 1.25rem; margin-bottom: 0; min-width: 0; }
+
+    /* ── Responsive breakpoints ───────────────────────────────────────────── */
+
+    /* 768px — tablet: reduce horizontal padding */
+    @media (max-width: 768px) {
+      body {
+        padding: 1.5rem 0.75rem;
+      }
+      .receipt {
+        padding: 1.5rem;
+      }
+    }
+
+    /* 414px — large phone (iPhone Plus / Android XL) */
+    @media (max-width: 414px) {
+      body {
+        padding: 1rem 0.5rem;
+      }
+      .receipt {
+        padding: 1.25rem;
+        border-radius: 8px;
+      }
+      .field .value.amount {
+        font-size: 1.2rem;
+      }
+    }
+
+    /* 375px — standard phone (iPhone SE / standard Android) */
+    @media (max-width: 375px) {
+      body {
+        padding: 0.75rem 0.5rem;
+      }
+      .receipt {
+        padding: 1rem;
+        border-radius: 6px;
+      }
+      .receipt-header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .receipt-header h1 {
+        font-size: 1.1rem;
+      }
+      .field .value.amount {
+        font-size: 1.1rem;
+      }
+    }
+
+    /* 320px — smallest supported phone (iPhone SE 1st gen, Galaxy S5) */
+    @media (max-width: 320px) {
+      body {
+        padding: 0.5rem 0.25rem;
+      }
+      .receipt {
+        padding: 0.75rem;
+        border-radius: 4px;
+      }
+      .receipt-header h1 {
+        font-size: 1rem;
+      }
+      .field .value {
+        font-size: 0.875rem;
+      }
+      .field .value.amount {
+        font-size: 1rem;
+      }
+      /* Ensure the nav brand doesn't overflow */
+      .lf-nav__brand {
+        font-size: 0.9rem;
+      }
+    }
 
     .field label {
       font-size: 0.72rem;
