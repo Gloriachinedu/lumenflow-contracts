@@ -15,6 +15,26 @@
     })();
   </script>
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://horizon.stellar.org; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none';" />
+  <!--
+    Subresource Integrity (SRI) — issue #1557
+    ─────────────────────────────────────────────────────────────────────────
+    Every external <script>/<link rel="stylesheet"> MUST carry an `integrity`
+    attribute plus `crossorigin="anonymous"`. The Stellar SDK is loaded via a
+    dynamic `import()` from https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm
+    inside the module below; its SRI hash is pinned in the constant
+    STELLAR_SDK_SRI and verified at runtime before the module is used.
+
+    Regenerating hashes on a CDN dependency upgrade:
+      1. Pin the exact version (never use a floating tag).
+      2. Download the asset and compute its digest, e.g.:
+           curl -sSL https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm \
+             | openssl dgst -sha384 -binary | openssl base64 -A
+      3. Update the `integrity` attribute / STELLAR_SDK_SRI constant below
+         with the value prefixed by `sha384-`.
+      4. Run `npm run verify:sri` (CI step) to confirm every external
+         resource has a matching integrity attribute.
+  -->
+=======
   <title>Multisig Payment – LumenFlow</title>
   <meta name="description" content="Initiate and manage multi-signature payments on LumenFlow. Requires threshold approvals before funds are released." />
   <meta property="og:title" content="Multisig Payment – LumenFlow" />
@@ -91,6 +111,7 @@
     }
     .signer-status-list li:last-child { border-bottom: none; }
     .sig-icon { font-size: 1rem; flex-shrink: 0; }
+    .sig-icon[aria-hidden="true"] { /* decorative icons are hidden from AT */ }
     .sig-addr { flex: 1; word-break: break-all; color: #333; min-width: 0; display: inline-flex; align-items: center; gap: 0.25rem; }
     .lf-copy-btn:hover { background: #f0ecff !important; color: #6c47ff !important; border-color: #6c47ff !important; }
     .sig-status { font-size: 0.75rem; font-weight: 600; flex-shrink: 0; }
@@ -110,6 +131,13 @@
     }
     .sign-btn:hover { background: #f0ecff; }
     .sign-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .sign-btn:focus-visible,
+    .btn-icon:focus-visible,
+    .btn-link:focus-visible,
+    #connect-wallet-btn:focus-visible {
+      outline: 3px solid #6c47ff;
+      outline-offset: 2px;
+    }
 
     .execute-section { margin-top: 1.25rem; }
 
@@ -353,9 +381,10 @@
   <div class="progress-bar-wrap">
     <div class="progress-bar" id="progress-bar" style="width:0%"
          role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"
+         aria-valuetext="0 of 1 signatures collected"
          aria-label="Signature progress"></div>
   </div>
-  <div class="progress-label" id="progress-label"></div>
+  <div class="progress-label" id="progress-label" role="status" aria-live="polite"></div>
 
   <ul class="signer-status-list" id="signer-status-list"></ul>
 
@@ -379,6 +408,45 @@
   import { CONTRACT_ID, RPC_URL, renderModeBanner, copyButtonHtml, initCopyButtons, formatAmount, showLoadingOverlay, hideLoadingOverlay } from './lumenflow-shared.js';
   import { validateOrderId, validateAmount, validateAddress, isValidStellarKey } from './validation.js';
   import { initWalletStatus } from './wallet-status.js';
+
+  // ── Subresource Integrity for the CDN-loaded Stellar SDK (issue #1557) ────
+  // The SDK is fetched dynamically from jsDelivr. Browsers do not apply SRI to
+  // dynamic import() automatically, so we pin the expected digest here and
+  // verify the fetched bytes before evaluating the module. Regenerate this
+  // value whenever the SDK version is bumped (see the SRI note in <head>).
+  const STELLAR_SDK_URL = 'https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm';
+  const STELLAR_SDK_SRI = 'sha384-REPLACE_WITH_REGENERATED_HASH_ON_UPGRADE';
+
+  let _stellarSdkPromise = null;
+  async function loadStellarSdk() {
+    if (_stellarSdkPromise) return _stellarSdkPromise;
+    _stellarSdkPromise = (async () => {
+      const res = await fetch(STELLAR_SDK_URL, { mode: 'cors', credentials: 'omit' });
+      if (!res.ok) throw new Error(`Failed to fetch Stellar SDK (HTTP ${res.status}).`);
+      const bytes = new Uint8Array(await res.arrayBuffer());
+
+      // Compute the SHA-384 digest and compare against the pinned SRI value.
+      const digest = await crypto.subtle.digest('SHA-384', bytes);
+      const b64 = btoa(String.fromCharCode(...new Uint8Array(digest)));
+      const actual = `sha384-${b64}`;
+      if (actual !== STELLAR_SDK_SRI) {
+        throw new Error(
+          'Stellar SDK integrity check failed — the CDN asset does not match the pinned SRI hash. ' +
+          'Refusing to load. If you upgraded the SDK, regenerate STELLAR_SDK_SRI.'
+        );
+      }
+
+      // Evaluate the verified module source via a blob URL.
+      const blob = new Blob([bytes], { type: 'text/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      try {
+        return await import(/* @vite-ignore */ blobUrl);
+      } finally {
+        URL.revokeObjectURL(blobUrl);
+      }
+    })();
+    return _stellarSdkPromise;
+  }
 
   // ── State ──────────────────────────────────────────────────────────────────
 
@@ -704,7 +772,7 @@ feat/sdk-rpc-retry-integration
     }
     try {
       const { SorobanRpc, Contract, nativeToScVal, Networks, TransactionBuilder, BASE_FEE } =
-        await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
+        await loadStellarSdk();
       const server   = new SorobanRpc.Server(RPC_URL);
       const contract = new Contract(CONTRACT_ID);
       const account  = await server.getAccount(connectedPublicKey);
@@ -745,7 +813,7 @@ feat/sdk-rpc-retry-integration
     }
     try {
       const { SorobanRpc, Contract, nativeToScVal, Networks, TransactionBuilder, BASE_FEE } =
-        await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
+        await loadStellarSdk();
       const server   = new SorobanRpc.Server(RPC_URL);
       const contract = new Contract(CONTRACT_ID);
       const account  = await server.getAccount(connectedPublicKey);
@@ -785,7 +853,7 @@ feat/sdk-rpc-retry-integration
     }
     try {
       const { SorobanRpc, Contract, nativeToScVal, Networks, TransactionBuilder, BASE_FEE } =
-        await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
+        await loadStellarSdk();
       const server   = new SorobanRpc.Server(RPC_URL);
       const contract = new Contract(CONTRACT_ID);
       const account  = await server.getAccount(connectedPublicKey);
@@ -832,7 +900,7 @@ feat/sdk-rpc-retry-integration
     }
     try {
       const { SorobanRpc, Contract, nativeToScVal, Networks, TransactionBuilder, BASE_FEE, scValToNative } =
-        await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
+        await loadStellarSdk();
       const server   = new SorobanRpc.Server(RPC_URL);
       const contract = new Contract(CONTRACT_ID);
       const account  = await server.getAccount(connectedPublicKey);
@@ -969,8 +1037,12 @@ feat/sdk-rpc-retry-integration
     }
     idDisplay.innerHTML = `Payment ID: <code>${paymentId}</code>${copyButtonHtml(paymentId, 'Copy payment ID')}`;
 
-    document.getElementById('progress-bar').style.width = pct + '%';
-    document.getElementById('progress-bar').setAttribute('aria-valuenow', String(pct));
+    const progressBar = document.getElementById('progress-bar');
+    progressBar.style.width = pct + '%';
+    progressBar.setAttribute('aria-valuenow', String(pct));
+    progressBar.setAttribute('aria-valuemin', '0');
+    progressBar.setAttribute('aria-valuemax', '100');
+    progressBar.setAttribute('aria-valuetext', `${signed} of ${signers.length} signatures collected`);
     document.getElementById('progress-fraction').textContent = `${signed} / ${signers.length} signed`;
     document.getElementById('progress-label').textContent =
       signed >= required
@@ -983,13 +1055,18 @@ feat/sdk-rpc-retry-integration
       const isSigned = signatures.has(addr);
       const li = document.createElement('li');
       const truncated = addr.length > 12 ? addr.slice(0, 8) + '…' + addr.slice(-4) : addr;
+      const statusText = isSigned ? 'Signed' : 'Pending';
       li.innerHTML = `
-        <span class="sig-icon">${isSigned ? '✅' : '⬜'}</span>
+        <span class="sig-icon" aria-hidden="true">${isSigned ? '✅' : '⬜'}</span>
         <span class="sig-addr"><code title="${addr}">${addr.slice(0,8)}…</code>${copyButtonHtml(addr, 'Copy signer address')}</span>
-        <span class="sig-status ${isSigned ? 'signed' : 'pending'}">${isSigned ? 'Signed' : 'Pending'}</span>
-        <button class="sign-btn" onclick="signPayment('${addr}')" ${isSigned ? 'disabled' : ''}>
+        <span class="sig-status ${isSigned ? 'signed' : 'pending'}">${statusText}</span>
+        <button type="button" class="sign-btn" data-signer="${addr}" aria-label="${isSigned ? `Signer ${truncated} has signed` : `Sign payment as ${truncated}`}" ${isSigned ? 'disabled' : ''}>
           ${isSigned ? 'Signed' : 'Sign'}
         </button>`;
+      const signBtn = li.querySelector('.sign-btn');
+      if (!isSigned) {
+        signBtn.addEventListener('click', () => signPayment(addr));
+      }
       list.appendChild(li);
     });
 
@@ -1002,7 +1079,7 @@ feat/sdk-rpc-retry-integration
   async function signPayment(signerAddress) {
     // Prevent re-entrant signing while wallet dialog is open
     const btn = [...document.querySelectorAll('.sign-btn')]
-      .find(b => b.onclick && b.onclick.toString().includes(signerAddress));
+      .find(b => b.dataset.signer === signerAddress);
     if (btn) { btn.disabled = true; btn.textContent = 'Signing…'; }
 
     showLoadingOverlay('Waiting for transaction confirmation…');
@@ -1070,6 +1147,17 @@ feat/sdk-rpc-retry-integration
   window.connectWallet   = connectWallet;
   window.stopPolling     = stopPolling;
 
+  // Keyboard activation for custom clickable elements (Enter/Space).
+  // Native <button> elements already handle this; this guard covers any
+  // element that receives role="button" without native semantics.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const target = e.target.closest('[role="button"]:not(button)');
+    if (!target) return;
+    e.preventDefault();
+    target.click();
+  });
+
   document.getElementById('required-sigs').addEventListener('input', () => {
     validateThreshold();
     updateSubmitState();
@@ -1093,6 +1181,14 @@ feat/sdk-rpc-retry-integration
   initCopyButtons(document.body);
   updateThresholdLabel();
   initWalletStatus(document.getElementById('wallet-status-container'));
+
+  // Ensure icon-only copy buttons rendered by copyButtonHtml() have an
+  // accessible name even if the helper only supplied a title attribute.
+  document.querySelectorAll('.lf-copy-btn').forEach(btn => {
+    if (!btn.getAttribute('aria-label') && !btn.textContent.trim()) {
+      btn.setAttribute('aria-label', btn.getAttribute('title') || 'Copy to clipboard');
+    }
+  });
 </script>
 
 <script>
@@ -1122,7 +1218,7 @@ feat/sdk-rpc-retry-integration
   });
 </script>
 <!-- Confirmation Dialog Modal (#1337) -->
-<div id="confirmModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle" style="display:none;">
+<div id="confirmModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle" tabindex="-1" style="display:none;">
   <div class="modal__backdrop" id="confirmModalBackdrop"></div>
   <div class="modal__content" role="document">
     <h2 id="confirmModalTitle" class="modal__title">Confirm Multisig Payment</h2>

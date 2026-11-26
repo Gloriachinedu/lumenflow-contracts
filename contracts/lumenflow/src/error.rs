@@ -25,6 +25,8 @@ pub enum PaymentError {
     MerchantAlreadyRegistered = 11,
     /// The merchant profile is deactivated. Remediation: An admin must reactivate the merchant profile to resume operations.
     MerchantInactive = 12,
+    /// The maximum number of registered merchants has been reached. Remediation: An admin can raise the cap via `set_merchant_cap`.
+    MerchantLimitExceeded = 13,
 
     // Payment
     /// The specified payment was not found. Remediation: Verify the payment ID or order ID.
@@ -50,8 +52,15 @@ pub enum PaymentError {
     RefundNotFound = 30,
     /// A refund with the given ID already exists. Remediation: Use a unique refund ID.
     RefundAlreadyExists = 31,
-    /// The allowed time window for initiating a refund has passed. Remediation: Refunds must be initiated within 30 days of the payment.
+    /// The allowed time window for initiating a refund has passed. Remediation: Refunds must be
+    /// initiated within the merchant's configured `refund_window_secs` (set via
+    /// `set_refund_window`) or, if the merchant has not configured one, within the global
+    /// default refund window.
     RefundWindowExpired = 32,
+    /// The merchant-specific refund window value passed to `set_refund_window` is invalid
+    /// (e.g. zero or negative). Remediation: Provide a positive number of seconds, or pass
+    /// `None` to clear the override and fall back to the global default.
+    InvalidRefundWindow = 38,
     /// The total refund amount exceeds the original payment amount. Remediation: Ensure the refund amount (or cumulative partial refunds) does not exceed the original payment.
     RefundExceedsOriginal = 33,
     /// The refund has not been approved yet. Remediation: The merchant or admin must approve the refund before it can be executed.
@@ -81,6 +90,12 @@ pub enum PaymentError {
     /// The multi-signature payment has expired. Remediation: Create a new multisig payment.
     MultisigExpired = 46,
 
+    // Merchant limits
+    /// The payment amount exceeds the merchant's configured `max_payment_amount`.
+    /// Remediation: Use a smaller payment amount or ask an admin to raise the merchant's
+    /// payment limit via `set_merchant_payment_limit`.
+    ExceedsMerchantLimit = 76,
+
     // Contract state
     /// The contract is currently paused. Remediation: An admin must unpause the contract.
     ContractPaused = 70,
@@ -106,6 +121,8 @@ pub enum PaymentError {
     CommitmentNotFound = 85,
     CommitmentExpired = 86,
     CommitmentHashMismatch = 87,
+    Reentrancy = 90,
+    Overflow = 91,
 
     // General
     /// The provided input parameters are invalid. Remediation: Check the input values and format.
@@ -145,6 +162,8 @@ pub enum PaymentError {
     SubscriptionMaxCyclesReached = 65,
     /// The required interval between subscription charges has not elapsed. Remediation: Wait for the next billing cycle.
     SubscriptionIntervalNotElapsed = 66,
+    /// The subscription charge was attempted before `next_due_at`. Remediation: Wait until the next billing cycle (when `next_due_at` has passed) before charging again.
+    SubscriptionNotDue = 67,
 
     // Rate limiting
     /// The merchant has exceeded the payment rate limit for the current ledger window. Remediation: Wait for the next rate-limit window (~25 minutes) before submitting more payments.
@@ -163,6 +182,14 @@ pub enum PaymentError {
     EscrowUnauthorised = 104,
     /// The escrow unlock time has already passed; it can no longer be cancelled. Remediation: Call release_escrow instead.
     EscrowLockExpired = 105,
+    /// The emergency lock period has not yet elapsed. Remediation: Wait until the escrow is older than EMERGENCY_LOCK_PERIOD (default 90 days) before calling emergency_withdraw.
+    EmergencyLockPeriodNotMet = 106,
+    /// Not enough admin approvals to execute an emergency withdrawal. Remediation: Collect the required number of admin approvals via approve_emergency_withdrawal before calling emergency_withdraw.
+    EmergencyMultisigNotMet = 107,
+    /// The treasury address has not been configured. Remediation: An admin must call set_treasury_address before emergency withdrawals can be performed.
+    TreasuryNotSet = 108,
+    /// The admin has already approved this emergency withdrawal. Remediation: Wait for other admins to approve.
+    EmergencyAlreadyApproved = 109,
 
     // Disputes
     /// The requested dispute was not found. Remediation: Verify the dispute ID.
@@ -177,4 +204,8 @@ pub enum PaymentError {
     DisputeNotOpen = 114,
     /// The dispute has already been escalated and cannot be escalated again.
     DisputeAlreadyEscalated = 115,
+    /// The requested dispute state transition is not permitted from the dispute's current state.
+    /// Remediation: Check the dispute's current state and only perform transitions allowed by the
+    /// dispute state machine (Open -> UnderReview -> Escalated -> Resolved).
+    InvalidDisputeState = 116,
 }

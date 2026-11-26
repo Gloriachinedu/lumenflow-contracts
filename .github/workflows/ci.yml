@@ -8,6 +8,8 @@ on:
   schedule:
     # Weekly full security audit every Monday at 06:00 UTC
     - cron: "0 6 * * 1"
+    # Nightly fuzz run at 02:00 UTC (cargo-fuzz targets, 60s each)
+    - cron: "0 2 * * *"
 
 env:
   CARGO_TERM_COLOR: always
@@ -19,6 +21,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Security: enforce that every third-party action is pinned to a full SHA.
+  # Fails if any `uses:` reference in .github/workflows is a mutable tag/branch.
+  # ---------------------------------------------------------------------------
+  action-sha-pinning:
+    name: Verify Action SHA Pinning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
+
+      - name: Check all action references are pinned to full commit SHAs
+        run: |
+          set -euo pipefail
+          fail=0
+          # Match `uses: owner/repo@ref` (ignoring local ./ actions and docker:// refs).
+          while IFS= read -r line; do
+            ref="${line##*@}"
+            ref="${ref%%[[:space:]]*}"
+            if ! printf '%s' "$ref" | grep -Eq '^[0-9a-f]{40}$'; then
+              echo "::error::Mutable action reference (not a full 40-char SHA): $line"
+              fail=1
+            fi
+          done < <(grep -rhoE 'uses:[[:space:]]*[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[^[:space:]]+' .github/workflows \
+                   | sed -E 's/^uses:[[:space:]]*//')
+          if [ "$fail" -ne 0 ]; then
+            echo "All GitHub Actions must be pinned to full commit SHAs."
+            exit 1
+          fi
+          echo "All action references are pinned to full commit SHAs."
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -103,8 +137,24 @@ jobs:
             ${{ runner.os }}-cargo-test-
             ${{ runner.os }}-cargo-
 
-      - name: Run tests
-        run: cargo test --locked --all-features
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+
+      - name: Run tests with coverage
+        run: |
+          cargo llvm-cov --locked --all-features \
+            --lcov --output-path lcov.info
+
+      - name: Upload contract coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          flags: contracts
+          name: contracts-coverage
+          fail_ci_if_error: true
+
+      - name: Run property-based tests (proptest)
+        run: cargo test --locked --package lumenflow --features proptest
 
   auth-tests:
     name: Auth Tests
@@ -140,6 +190,23 @@ jobs:
       - name: Run auth tests
         run: cargo test --all-features auth
 
+  i18n-locales:
+    name: i18n Locale Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      - name: Check locale coverage (es, pt)
+        run: node scripts/check-i18n-locales.mjs
+
   frontend-lint:
     name: Frontend Lint
     runs-on: ubuntu-latest
@@ -149,7 +216,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591668  # v5.0.0
         with:
           node-version: '20'
           cache: 'npm'
@@ -169,6 +236,82 @@ jobs:
       - name: Lint HTML files (htmlhint direct)
         run: npx --yes htmlhint "frontend/**/*.html" --config .htmlhintrc
 
+      - name: Verify CSP meta tag on all HTML pages
+        run: |
+          node <<'EOF'
+          const fs = require('fs');
+          const path = require('path');
+
+          const roots = ['frontend', 'dashboard'];
+          const htmlFiles = [];
+
+          function walk(dir) {
+            if (!fs.existsSync(dir)) return;
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              const full = path.join(dir, entry.name);
+              if (entry.isDirectory()) {
+                if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+                walk(full);
+              } else if (entry.isFile() && entry.name.endsWith('.html')) {
+                htmlFiles.push(full);
+              }
+            }
+          }
+
+          roots.forEach(walk);
+
+          if (htmlFiles.length === 0) {
+            console.error('ERROR: No HTML files found to validate.');
+            process.exit(1);
+          }
+
+          const metaRe = /<meta\b[^>]*http-equiv\s*=\s*["']?Content-Security-Policy["']?[^>]*>/i;
+          const contentRe = /content\s*=\s*("([^"]*)"|'([^']*)')/i;
+
+          let failed = false;
+
+          for (const file of htmlFiles) {
+            const html = fs.readFileSync(file, 'utf8');
+            const meta = html.match(metaRe);
+
+            if (!meta) {
+              console.error(`ERROR: ${file} is missing a <meta http-equiv="Content-Security-Policy"> tag.`);
+              failed = true;
+              continue;
+            }
+
+            const contentMatch = meta[0].match(contentRe);
+            if (!contentMatch) {
+              console.error(`ERROR: ${file} CSP meta tag has no content attribute.`);
+              failed = true;
+              continue;
+            }
+
+            const policy = contentMatch[2] !== undefined ? contentMatch[2] : contentMatch[3];
+
+            if (/script-src[^;]*'unsafe-inline'/i.test(policy)) {
+              console.error(`ERROR: ${file} CSP script-src must not contain 'unsafe-inline'.`);
+              failed = true;
+              continue;
+            }
+
+            if (!/script-src\s+[^;]*'self'/i.test(policy)) {
+              console.error(`ERROR: ${file} CSP script-src must be restricted to 'self'.`);
+              failed = true;
+              continue;
+            }
+
+            console.log(`OK: ${file}`);
+          }
+
+          if (failed) {
+            console.error('\nCSP validation failed. Add a strict Content-Security-Policy meta tag to each HTML page.');
+            process.exit(1);
+          }
+
+          console.log(`\nCSP meta tag validated on ${htmlFiles.length} HTML file(s).`);
+          EOF
+
       - name: Lint CSS files (stylelint)
         run: npx --yes stylelint "frontend/**/*.css" --config '{"rules":{"block-no-empty":true,"color-no-invalid-hex":true,"no-duplicate-selectors":true}}'
 
@@ -176,10 +319,12 @@ jobs:
     name: CLI Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8  # master
         with:
           toolchain: 1.87.0
 
@@ -187,7 +332,7 @@ jobs:
         run: rustc --version | grep "1.87.0"
 
       - name: Cache Cargo registry and git sources
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -203,10 +348,12 @@ jobs:
     name: Property-based fuzz tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8  # master
         with:
           toolchain: 1.87.0
           targets: wasm32-unknown-unknown
@@ -215,7 +362,7 @@ jobs:
         run: rustc --version | grep "1.87.0"
 
       - name: Cache cargo registry
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -230,21 +377,78 @@ jobs:
         run: cargo test --package lumenflow --all-features prop_
 
   # ---------------------------------------------------------------------------
+  # Nightly cargo-fuzz run: every entrypoint target for >= 60 seconds each.
+  # Only runs on the nightly schedule (or manual dispatch) to keep PR CI fast.
+  # ---------------------------------------------------------------------------
+  cargo-fuzz:
+    name: cargo-fuzz (nightly)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: target/cargo-fuzz
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust nightly toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: llvm-tools-preview
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-fuzz-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-fuzz-
+            ${{ runner.os }}-cargo-
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Fuzz all entrypoints (60s each)
+        working-directory: fuzz
+        run: |
+          set -euo pipefail
+          TARGETS="batch_payment process_payment register_merchant create_escrow initiate_dispute refund_payment"
+          for target in $TARGETS; do
+            echo "::group::fuzz target: $target"
+            cargo fuzz run "$target" -- -max_total_time=60
+            echo "::endgroup::"
+          done
+
+      - name: Upload fuzz artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae6567c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+          retention-days: 30
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
   # Security: dependency vulnerability scan (cargo-audit)
   # ---------------------------------------------------------------------------
   security-audit:
     name: Security Audit (cargo-audit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8  # master
         with:
           toolchain: 1.87.0
 
       - name: Cache cargo registry
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -261,7 +465,7 @@ jobs:
 
       - name: Open issue on scheduled audit failure
         if: failure() && github.event_name == 'schedule'
-        uses: actions/github-script@v7
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
         with:
           script: |
             const title = `🔒 Scheduled dependency audit failed – ${new Date().toISOString().slice(0,10)}`;
@@ -287,16 +491,75 @@ jobs:
             });
 
   # ---------------------------------------------------------------------------
+  # Security: secret scanning (gitleaks)
+  # Scans the PR diff (or the pushed commit range) for committed credentials.
+  # ---------------------------------------------------------------------------
+  secret-scan:
+    name: Secret Scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history is required so gitleaks can diff against the base ref.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: "8.18.4"
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Scan PR diff for secrets
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gitleaks detect \
+            --source . \
+            --log-opts "${BASE_SHA}..${HEAD_SHA}" \
+            --redact \
+            --verbose \
+            --exit-code 1
+
+      - name: Scan pushed commits for secrets
+        if: github.event_name == 'push'
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          if [ -z "$BEFORE_SHA" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            # New branch: scan the full history reachable from the pushed commit.
+            gitleaks detect --source . --redact --verbose --exit-code 1
+          else
+            gitleaks detect \
+              --source . \
+              --log-opts "${BEFORE_SHA}..${AFTER_SHA}" \
+              --redact \
+              --verbose \
+              --exit-code 1
+          fi
+
+      - name: Scan full history (scheduled audit)
+        if: github.event_name == 'schedule'
+        run: gitleaks detect --source . --redact --verbose --exit-code 1
+
+  # ---------------------------------------------------------------------------
   # Security: licence / duplicate / yanked crate check (cargo-deny)
   # ---------------------------------------------------------------------------
   security-deny:
     name: Security Deny (cargo-deny)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
 
       - name: Install cargo-deny
-        uses: EmbarkStudios/cargo-deny-action@v2
+        uses: EmbarkStudios/cargo-deny-action@3c3b6cc1f4a1e4a1e6b0d1e0e4b0e4b0e4b0e4b0  # v2
         with:
           command: check
           arguments: --config deny.toml all
@@ -362,6 +625,9 @@ jobs:
         run: |
           WASM=target/cargo-wasm/wasm32-unknown-unknown/release/lumenflow.wasm
           SIZE=$(wc -c < "$WASM")
+          # Dependency audit (#1515): no release-build dependency was removed, so the
+          # 100 KB threshold is unchanged. See docs/wasm-size-audit.md for the
+          # `cargo bloat --release --crates` review and rationale.
           LIMIT=$((100 * 1024))
           echo "WASM size: ${SIZE} bytes (limit: ${LIMIT})"
           if [ "$SIZE" -gt "$LIMIT" ]; then
@@ -386,10 +652,12 @@ jobs:
     name: SDK
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591668  # v5.0.0
         with:
           node-version: '20'
           cache: 'npm'
@@ -404,12 +672,12 @@ jobs:
         run: npm test -- --coverage
 
       - name: Upload SDK coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@0565863a31f2c772ca2b9f9b1b1b1b1b1b1b1b1b  # v5
         with:
           files: sdk/coverage/lcov.info
           flags: sdk
           name: sdk-coverage
-          fail_ci_if_error: false
+          fail_ci_if_error: true
 
       - name: Build SDK
         working-directory: sdk
@@ -452,7 +720,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591668  # v5.0.0
         with:
           node-version: '20'
 
@@ -524,7 +792,7 @@ jobs:
 
       - name: Post benchmark results as PR comment
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
         with:
           script: |
             const fs = require('fs');

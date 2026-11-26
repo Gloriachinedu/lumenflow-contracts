@@ -13,13 +13,42 @@ A payment link is a URL that encodes the following parameters:
 | Parameter   | Description                              | Required |
 |-------------|------------------------------------------|----------|
 | `merchant`  | Your Stellar merchant address (`G…`)     | Yes      |
-| `token`     | Token / asset address                    | Yes      |
-| `amount`    | Amount in stroops (1 XLM = 10,000,000)  | Yes      |
-| `order_id`  | Unique order identifier                  | Yes      |
+| `amount`    | Amount in stroops (1 XLM = 10,000,000)  | No       |
 | `memo`      | Optional payment note                    | No       |
+| `token`     | Token / asset address                    | No       |
+| `order_id`  | Unique order identifier                  | No       |
 | `expires`   | Expiry timestamp (Unix ms, default 24 h) | Auto     |
 
 When a payer opens the link, [`frontend/receipt.html`](../frontend/receipt.html) shows a pre-filled payment request with all the details and a **Pay with Freighter** button.
+
+---
+
+## Canonical URL schema
+
+The canonical, framework-free payment link is:
+
+```
+https://<your-host>/pay?merchant=X&amount=Y&memo=Z
+```
+
+- `merchant` — **required**. The merchant's Stellar address (`G…`, 56 characters).
+- `amount` — **optional**. Amount in stroops (1 XLM = 10,000,000). When omitted, the payer chooses the amount.
+- `memo` — **optional**. A short note shown on the payer's form. URL-encoded.
+
+The link is a plain URL: it works in any browser with no JavaScript framework, SDK, or build step. The page reads the query string on load and pre-fills the payment form. If the payer has JavaScript disabled, the page still renders the merchant address and memo as static text so the payment details are never lost.
+
+### Validation rules
+
+Before pre-filling the form, `index.html` validates the query parameters:
+
+| Parameter  | Rule | Error shown |
+|------------|------|-------------|
+| `merchant` | Must be present and match `^G[A-Z2-7]{55}$` | `Missing or invalid merchant address` |
+| `amount`   | If present, must be a positive integer (stroops) | `Invalid amount — must be a positive integer in stroops` |
+| `memo`     | If present, max 28 bytes (Stellar memo limit) | `Memo is too long (max 28 bytes)` |
+| `expires`  | If present, must be a Unix ms timestamp in the future | `This payment link has expired` |
+
+When any rule fails, the form is **not** rendered in a broken state. Instead the page shows a clear error panel with the message above and a short hint (e.g. "Ask the merchant to resend the link."). The **Pay** button is hidden until the parameters are valid.
 
 ---
 
@@ -83,15 +112,40 @@ import { generatePaymentLink } from './dashboard/merchant-dashboard/app.js';
 
 const url = generatePaymentLink({
   merchant:  'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON',
-  token:     'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVMIQVU2HHGCYSC',
-  amount:    10_000_000, // 1 XLM in stroops
-  orderId:   'ORDER_001',
-  memo:      'Invoice #001',
-  ttlHours:  24,
+  amount:    10_000_000, // 1 XLM in stroops (optional)
+  memo:      'Invoice #001', // optional
+  ttlHours:  24, // optional, default 24
 });
 
 console.log(url);
-// https://<your-host>/frontend/receipt.html?merchant=GBXG...&token=CDLZ...&amount=10000000&order_id=ORDER_001&memo=Invoice+%23001&expires=1753639200000
+// https://<your-host>/pay?merchant=GBXG...&amount=10000000&memo=Invoice+%23001&expires=1753639200000
+```
+
+`generatePaymentLink(options)` accepts:
+
+| Option     | Required | Description |
+|------------|----------|-------------|
+| `merchant` | Yes      | Stellar merchant address (`G…`) |
+| `amount`   | No       | Amount in stroops |
+| `memo`     | No       | Payment note (max 28 bytes) |
+| `ttlHours` | No       | Link lifetime in hours (default 24, max 8,760) |
+
+It throws if `merchant` is missing or malformed, or if `amount` is not a positive integer.
+
+### Plain-browser usage (no framework)
+
+The helper is also exposed on `window` so it can be used from a plain HTML page with no bundler:
+
+```html
+<script src="/dashboard/merchant-dashboard/app.js"></script>
+<script>
+  const url = window.generatePaymentLink({
+    merchant: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON',
+    amount: 10_000_000,
+    memo: 'Invoice #001',
+  });
+  document.getElementById('pay-now').href = url;
+</script>
 ```
 
 ---
@@ -101,16 +155,14 @@ console.log(url);
 A generated payment link looks like this:
 
 ```
-https://<your-host>/frontend/receipt.html
+https://<your-host>/pay
   ?merchant=GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON
-  &token=CDLZFC3SYJYDZT7K67VZ75HPJVIEUVMIQVU2HHGCYSC
   &amount=10000000
-  &order_id=ORDER_001
   &memo=Invoice+%23001
   &expires=1753639200000
 ```
 
-All parameter values are URL-encoded. The `expires` value is a Unix timestamp in **milliseconds**.
+All parameter values are URL-encoded. The `expires` value is a Unix timestamp in **milliseconds**. The `token` and `order_id` parameters are optional extensions used by the receipt page; the `/pay` page only requires `merchant`.
 
 ---
 
@@ -137,6 +189,9 @@ The dashboard automatically generates a QR code alongside the URL using the [qrc
 
 | Issue | Cause | Resolution |
 |-------|-------|------------|
+| "Missing or invalid merchant address" | `merchant` absent or malformed | Include a valid `G…` address in the link |
+| "Invalid amount" | `amount` not a positive integer | Pass stroops as an integer, or omit `amount` |
+| "Memo is too long" | `memo` exceeds 28 bytes | Shorten the memo |
 | "Link Expired" shown to payer | TTL elapsed | Generate a new link with a longer TTL |
 | QR code shows "QR library not loaded" | CDN blocked (offline/firewall) | Serve locally or use a self-hosted qrcode.js bundle |
 | Pay button does nothing | Freighter not installed | Payer must install the [Freighter extension](https://www.freighter.app/) |

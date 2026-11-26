@@ -40,12 +40,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable
         with:
           toolchain: 1.87.0
           targets: ${{ matrix.target }}
@@ -57,7 +57,7 @@ jobs:
           sudo apt-get install -y gcc-mingw-w64-x86-64
 
       - name: Cache cargo registry
-        uses: actions/cache@v6
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: |
             ~/.cargo/registry
@@ -104,7 +104,7 @@ jobs:
           sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
 
       - name: Upload artifact (7-day retention)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: lumenflow-cli-nightly-${{ matrix.target }}
           path: |
@@ -114,7 +114,7 @@ jobs:
 
       - name: Configure AWS credentials with OIDC
         if: vars.AWS_ROLE_ARN != ''
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e034513 # v4.0.2
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: us-east-1
@@ -142,18 +142,18 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable
         with:
           toolchain: 1.87.0
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo registry
-        uses: actions/cache@v6
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: |
             ~/.cargo/registry
@@ -163,7 +163,7 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-integration-
 
       - name: Set up Node.js (for generate_smoke_keypair.sh)
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
 
@@ -175,7 +175,7 @@ jobs:
           stellar --version
 
       - name: Download linux CLI binary artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: lumenflow-cli-nightly-x86_64-unknown-linux-gnu
           path: /tmp/cli-artifact
@@ -218,7 +218,7 @@ jobs:
 
       - name: Upload integration test log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: cli-integration-test-results-${{ github.run_id }}
           path: integration-test-results/
@@ -241,7 +241,7 @@ jobs:
     if: failure()
     steps:
       - name: Post to #ci-alerts Slack channel
-        uses: slackapi/slack-github-action@v1.26.0
+        uses: slackapi/slack-github-action@37ebaef184d7626c5f204ab8d3baff4262dd30f0 # v1.27.0
         with:
           payload: |
             {

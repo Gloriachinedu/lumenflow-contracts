@@ -452,7 +452,38 @@ key (see [Idempotency Considerations](#4-idempotency-considerations)).
 
 ---
 
-## 7. Further Resources
+## 7. Performance Budget and Load Testing
+
+The webhook relay is load-tested to establish a baseline and guard against
+regressions. The load test scenario (`scripts/load-test.sh`) drives **1000
+webhook events per minute for 5 minutes** (5000 events total) against the relay.
+
+### Performance budget
+
+| Metric | Target |
+|--------|--------|
+| Sustained throughput | 1000 events/min for 5 minutes |
+| P99 delivery latency | < 2 seconds under load |
+| Dropped events at target throughput | 0 (zero) |
+| Regression alert threshold | P99 increase > 20% vs. recorded baseline |
+
+### How results are used
+
+- Each CI run stores the load test results (latency percentiles, throughput,
+  drop count) as a build artifact so results are comparable across runs.
+- The recorded baseline P99 is compared on every run. If P99 increases by more
+  than 20% relative to the baseline, the run raises a performance regression
+  alert.
+- A run that drops any event at the target throughput, or whose P99 exceeds
+  2 seconds, fails the budget regardless of the baseline comparison.
+
+If you operate your own relay, use the same budget as a starting point: size
+your downstream endpoint and dedupe store so that sustained bursts of
+~17 events/second are absorbed without retries or drops.
+
+---
+
+## 8. Further Resources
 
 - [Stellar Horizon API — Contract Events](https://developers.stellar.org/docs/data/horizon/api-reference/resources/contract-events)
 - [Soroban Events](https://developers.stellar.org/docs/learn/encyclopedia/contract-development/events)

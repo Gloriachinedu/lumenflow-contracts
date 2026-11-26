@@ -74,6 +74,68 @@
     }
   }
 
+  // ── makeKeyboardOperable ───────────────────────────────────────────────────
+
+  /**
+   * Make a non-native interactive element (e.g. a `<div>` acting as a button)
+   * keyboard-operable: ensures it is focusable (`tabindex="0"`), exposes an
+   * appropriate role, and activates on Enter / Space.
+   *
+   * @param {Element} el
+   * @param {object}  [options]
+   * @param {Function} options.onActivate      Called when Enter/Space is pressed
+   * @param {string}  [options.role='button']  ARIA role to apply if none present
+   * @param {string}  [options.label]          Accessible name (aria-label) if none present
+   * @returns {Function} teardown function that removes the added listener/attributes
+   */
+  function makeKeyboardOperable(el, options) {
+    options = options || {};
+    if (!el || typeof el.addEventListener !== 'function') {
+      return function () {};
+    }
+
+    var role = options.role || 'button';
+    var addedTabindex = false;
+    var addedRole = false;
+    var addedLabel = false;
+
+    if (!el.hasAttribute('tabindex')) {
+      el.setAttribute('tabindex', '0');
+      addedTabindex = true;
+    }
+    if (!el.hasAttribute('role')) {
+      el.setAttribute('role', role);
+      addedRole = true;
+    }
+    if (options.label && !el.hasAttribute('aria-label') && !el.textContent.trim()) {
+      el.setAttribute('aria-label', options.label);
+      addedLabel = true;
+    }
+
+    function handleKeydown(e) {
+      var key = e.key;
+      if (key !== 'Enter' && key !== ' ' && key !== 'Spacebar') return;
+      // Let native controls handle their own activation
+      var tag = el.tagName ? el.tagName.toLowerCase() : '';
+      if (tag === 'button' || tag === 'a' || tag === 'input') return;
+      e.preventDefault();
+      if (typeof options.onActivate === 'function') {
+        options.onActivate(e);
+      } else if (typeof el.click === 'function') {
+        el.click();
+      }
+    }
+
+    el.addEventListener('keydown', handleKeydown);
+
+    return function teardown() {
+      el.removeEventListener('keydown', handleKeydown);
+      if (addedTabindex) el.removeAttribute('tabindex');
+      if (addedRole) el.removeAttribute('role');
+      if (addedLabel) el.removeAttribute('aria-label');
+    };
+  }
+
   // ── restoreFocus ───────────────────────────────────────────────────────────
 
   /**
@@ -172,6 +234,62 @@
 
       /** @returns {boolean} */
       isActive: function () { return _active; },
+    };
+  }
+
+  // ── trapModal ──────────────────────────────────────────────────────────────
+
+  /**
+   * Convenience wrapper around `createFocusTrap` for modal dialogs.
+   *
+   * In addition to trapping focus, it:
+   *   - sets `aria-modal="true"` on the container (if not already set)
+   *   - wires an `onEscape` callback that closes the modal and restores focus
+   *     to the trigger element
+   *   - restores focus to the element focused at `activate()` time on
+   *     `deactivate()`
+   *
+   * @param {Element} container   The dialog element to trap focus within
+   * @param {object}  [options]
+   * @param {Function} [options.onEscape]       Called when Escape is pressed
+   * @param {Element} [options.initialFocusEl]  Override where focus lands on activate
+   * @param {Element} [options.triggerElement]  Explicit trigger to restore focus to
+   * @returns {{ activate: Function, deactivate: Function, isActive: Function }}
+   */
+  function trapModal(container, options) {
+    options = options || {};
+
+    var _trigger = options.triggerElement || null;
+    var _userOnEscape = options.onEscape;
+
+    if (container && typeof container.setAttribute === 'function') {
+      container.setAttribute('aria-modal', 'true');
+    }
+
+    var trap = createFocusTrap(container, {
+      initialFocusEl: options.initialFocusEl,
+      onEscape: function (e) {
+        if (typeof _userOnEscape === 'function') {
+          _userOnEscape(e);
+        }
+        trap.deactivate();
+      },
+    });
+
+    return {
+      activate: function () {
+        if (trap.isActive()) return;
+        _trigger = _trigger || document.activeElement;
+        trap.activate();
+      },
+      deactivate: function (skipRestoreFocus) {
+        if (!trap.isActive()) return;
+        trap.deactivate(skipRestoreFocus);
+        if (!skipRestoreFocus) {
+          restoreFocus(_trigger);
+        }
+      },
+      isActive: function () { return trap.isActive(); },
     };
   }
 
@@ -346,10 +464,11 @@
   // ── Public API ─────────────────────────────────────────────────────────────
 
   return {
-    getFocusable:    getFocusable,
-    moveFocusTo:     moveFocusTo,
-    restoreFocus:    restoreFocus,
-    createFocusTrap: createFocusTrap,
-    toast:           toast,
+    getFocusable:          getFocusable,
+    moveFocusTo:           moveFocusTo,
+    restoreFocus:          restoreFocus,
+    makeKeyboardOperable:  makeKeyboardOperable,
+    createFocusTrap:       createFocusTrap,
+    toast:                 toast,
   };
 }));

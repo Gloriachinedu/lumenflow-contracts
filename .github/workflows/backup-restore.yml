@@ -20,6 +20,8 @@ on:
   # Nightly backup + drill
   schedule:
     - cron: "0 3 * * *"
+    # Monthly restore drill — first Monday of each month at 03:00 UTC
+    - cron: "0 3 1-7 * 1"
 
   # On every push to main (deploy artifacts change)
   push:
@@ -50,15 +52,20 @@ jobs:
     name: Backup & Restore Drill
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      drill_passed: ${{ steps.drill.outputs.drill_passed || 'false' }}
+      backup_timestamp: ${{ steps.backup.outputs.backup_timestamp }}
+      checksum: ${{ steps.drill.outputs.checksum || '' }}
+      rto_seconds: ${{ steps.rto.outputs.rto_seconds || '' }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: "20"
 
@@ -156,6 +163,7 @@ jobs:
           process.stdout.write(
             `restore drill OK — ${report.fileCount} file(s), ${report.bytes} bytes, checksum ${report.checksum.slice(0,12)}…\n`
           );
+          process.stdout.write(`CHECKSUM=${report.checksum}\n`);
           EOF
           )
 
@@ -194,10 +202,160 @@ jobs:
           fi
           echo "✅ All file checksums verified."
 
+      # ── Monthly drill: fresh environment + latest backup restore ───────────
+      # Only runs on the monthly schedule (first Monday of each month).
+      - name: Provision fresh environment
+        id: fresh_env
+        if: github.event_name == 'schedule' && github.event.schedule == '0 3 1-7 * 1'
+        run: |
+          set -euo pipefail
+          # Record the drill start time so RTO can be measured end-to-end.
+          START_EPOCH="$(date -u +%s)"
+          echo "start_epoch=$START_EPOCH" >> "$GITHUB_OUTPUT"
+
+          # Provision an isolated, empty restore target so we never restore
+          # over the live workspace.
+          FRESH_DIR="fresh-restore-env"
+          rm -rf "$FRESH_DIR"
+          mkdir -p "$FRESH_DIR"
+          echo "fresh_dir=$FRESH_DIR" >> "$GITHUB_OUTPUT"
+          echo "✅ Fresh restore environment provisioned ($FRESH_DIR)"
+
+      - name: Restore latest backup into fresh environment
+        id: restore
+        if: github.event_name == 'schedule' && github.event.schedule == '0 3 1-7 * 1'
+        run: |
+          set -euo pipefail
+
+          BACKUP_DIR="${{ steps.backup.outputs.backup_dir }}"
+          FRESH_DIR="${{ steps.fresh_env.outputs.fresh_dir }}"
+
+          # Restore the latest backup bundle into the fresh environment.
+          cp -a "$BACKUP_DIR/." "$FRESH_DIR/"
+
+          # Verify the restored copy via the restore drill module.
+          (
+            cd "$FRESH_DIR"
+            node - <<'EOF'
+          import { runRestoreDrill } from '../scripts/restore-drill.mjs';
+          import { readFileSync, readdirSync, statSync } from 'node:fs';
+          import { resolve } from 'node:path';
+
+          const dir = process.cwd();
+          const files = {};
+
+          function walk(base) {
+            for (const entry of readdirSync(base)) {
+              const abs = resolve(base, entry);
+              const rel = abs.slice(dir.length + 1);
+              if (statSync(abs).isFile()) {
+                files[rel] = readFileSync(abs, 'utf8');
+              }
+            }
+          }
+
+          walk(dir);
+
+          if (Object.keys(files).length === 0) {
+            process.stderr.write('ERROR: restored environment is empty\n');
+            process.exit(1);
+          }
+
+          const report = runRestoreDrill(files);
+          process.stdout.write(
+            `restore OK — ${report.fileCount} file(s), checksum ${report.checksum.slice(0,12)}…\n`
+          );
+          process.stdout.write(`CHECKSUM=${report.checksum}\n`);
+          EOF
+          )
+
+          echo "restore_ok=true" >> "$GITHUB_OUTPUT"
+          echo "✅ Latest backup restored into fresh environment"
+
+      - name: Run smoke tests against restored environment
+        id: smoke
+        if: github.event_name == 'schedule' && github.event.schedule == '0 3 1-7 * 1'
+        run: |
+          set -euo pipefail
+
+          FRESH_DIR="${{ steps.fresh_env.outputs.fresh_dir }}"
+
+          # Smoke test: restored critical files must exist and be non-empty.
+          REQUIRED=(
+            "Cargo.toml"
+            "Cargo.lock"
+            "rust-toolchain.toml"
+            "terraform-main.tf"
+            "deployment-metadata.json"
+          )
+
+          FAILURES=0
+          for f in "${REQUIRED[@]}"; do
+            if [[ -s "$FRESH_DIR/$f" ]]; then
+              echo "  ✅  $f"
+            else
+              echo "  ❌  $f — missing or empty after restore"
+              FAILURES=$((FAILURES + 1))
+            fi
+          done
+
+          if [[ "$FAILURES" -gt 0 ]]; then
+            echo "::error::$FAILURES smoke test(s) failed against restored environment."
+            exit 1
+          fi
+          echo "✅ Smoke tests passed against restored environment"
+
+      - name: Measure RTO
+        id: rto
+        if: github.event_name == 'schedule' && github.event.schedule == '0 3 1-7 * 1'
+        run: |
+          set -euo pipefail
+
+          START_EPOCH="${{ steps.fresh_env.outputs.start_epoch }}"
+          END_EPOCH="$(date -u +%s)"
+          RTO_SECONDS=$((END_EPOCH - START_EPOCH))
+          RTO_HOURS=$(awk "BEGIN { printf \"%.2f\", $RTO_SECONDS / 3600 }")
+          RTO_LIMIT_SECONDS=$((4 * 3600))
+
+          echo "rto_seconds=$RTO_SECONDS" >> "$GITHUB_OUTPUT"
+          echo "rto_hours=$RTO_HOURS"     >> "$GITHUB_OUTPUT"
+          echo "RTO: ${RTO_SECONDS}s (~${RTO_HOURS}h), limit ${RTO_LIMIT_SECONDS}s"
+
+          if [[ "$RTO_SECONDS" -ge "$RTO_LIMIT_SECONDS" ]]; then
+            echo "::error::RTO ${RTO_SECONDS}s exceeds the 4 hour limit."
+            exit 1
+          fi
+          echo "✅ RTO within 4 hour limit"
+
+      - name: Log drill result to artifact-retention.md
+        if: github.event_name == 'schedule' && github.event.schedule == '0 3 1-7 * 1' && success()
+        run: |
+          set -euo pipefail
+
+          DATE="$(date -u +%Y-%m-%d)"
+          RTO_HOURS="${{ steps.rto.outputs.rto_hours }}"
+          CHECKSUM="${{ steps.drill.outputs.checksum }}"
+          RESULT="PASS"
+
+          # Ensure the log file and its drill-results section exist.
+          touch docs/artifact-retention.md
+          if ! grep -q "## Restore Drill Results" docs/artifact-retention.md; then
+            {
+              echo ""
+              echo "## Restore Drill Results"
+              echo ""
+              echo "| Date | RTO (h) | Result | Checksum |"
+              echo "|------|---------|--------|----------|"
+            } >> docs/artifact-retention.md
+          fi
+
+          echo "| $DATE | $RTO_HOURS | $RESULT | \`${CHECKSUM:0:16}\` |" >> docs/artifact-retention.md
+          echo "✅ Drill result logged to docs/artifact-retention.md"
+
       # ── Upload backup artifact ─────────────────────────────────────────────
       - name: Upload backup artifact
         if: ${{ github.event.inputs.dry_run != 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
           name: production-backup-${{ steps.backup.outputs.backup_timestamp }}-${{ github.run_id }}
           path: ${{ steps.backup.outputs.backup_dir }}/
@@ -224,9 +382,9 @@ jobs:
           echo "| Dry run | \`${{ github.event.inputs.dry_run || 'false' }}\` |" >> "$GITHUB_STEP_SUMMARY"
 
       # ── Alert on failure ───────────────────────────────────────────────────
-      - name: Alert on failure
+      - name: Alert on-call via Slack
         if: failure() && github.event_name == 'schedule' && env.SLACK_WEBHOOK_URL != ''
-        uses: slackapi/slack-github-action@v1.26.0
+        uses: slackapi/slack-github-action@37ebaef184d7626c5f204ab8d3baff4262dd30f0 # v1.27.0
         with:
           payload: |
             {
@@ -236,7 +394,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "❌ *Backup and restore drill failed*\n*Commit:* `${{ github.sha }}`\n*Ref:* `${{ github.ref_name }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+                    "text": "❌ *Backup and restore drill failed*\n*On-call:* please investigate\n*Commit:* `${{ github.sha }}`\n*Ref:* `${{ github.ref_name }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
                   }
                 }
               ]
@@ -244,3 +402,28 @@ jobs:
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
           SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Alert on-call via PagerDuty
+        if: failure() && github.event_name == 'schedule' && env.PAGERDUTY_ROUTING_KEY != ''
+        run: |
+          set -euo pipefail
+          curl -fsS -X POST "https://events.pagerduty.com/v2/enqueue" \
+            -H "Content-Type: application/json" \
+            -d @- <<EOF
+          {
+            "routing_key": "${PAGERDUTY_ROUTING_KEY}",
+            "event_action": "trigger",
+            "payload": {
+              "summary": "Backup/restore drill FAILED (${GITHUB_REPOSITORY})",
+              "source": "backup-restore.yml",
+              "severity": "critical",
+              "custom_details": {
+                "commit": "${GITHUB_SHA}",
+                "ref": "${GITHUB_REF_NAME}",
+                "run_url": "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+              }
+            }
+          }
+          EOF
+        env:
+          PAGERDUTY_ROUTING_KEY: ${{ secrets.PAGERDUTY_ROUTING_KEY }}

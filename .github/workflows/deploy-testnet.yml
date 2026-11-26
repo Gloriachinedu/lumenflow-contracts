@@ -1,5 +1,11 @@
 name: Deploy to Testnet
 
+# NOTE: Successful runs of this workflow are consumed by the mainnet approval
+# gate in deploy-mainnet.yml. The gate queries the GitHub Actions API for a
+# successful run of this workflow (file: deploy-testnet.yml, job: "Deploy +
+# Smoke Test") on `develop` within the last 24 hours. Keep the workflow file
+# name, job name, and success semantics stable so the gate can find it.
+
 on:
   push:
     branches: [develop]
@@ -22,18 +28,18 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@6d653acede28d24f02e3cd7ee9c24a1b3e1c4b0b # 1.87.0
         with:
           toolchain: 1.87.0
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo registry
-        uses: actions/cache@v6
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: |
             ~/.cargo/registry
@@ -47,6 +53,31 @@ jobs:
           curl -fsSL \
             https://github.com/stellar/stellar-cli/releases/download/v22.8.1/stellar-cli-22.8.1-x86_64-unknown-linux-gnu.tar.gz \
             | tar -xz -C /usr/local/bin stellar
+
+      # ── Build frontend (inject service worker cache version) ─────────────
+      - name: Build frontend with service worker cache version
+        run: |
+          set -euo pipefail
+          BUILD_HASH="${GITHUB_SHA::12}"
+          echo "BUILD_HASH=$BUILD_HASH" >> "$GITHUB_ENV"
+          if [ ! -f frontend/sw.js ]; then
+            echo "::error::frontend/sw.js not found"
+            exit 1
+          fi
+          sed -i "s/__BUILD_HASH__/${BUILD_HASH}/g" frontend/sw.js
+          if grep -q '__BUILD_HASH__' frontend/sw.js; then
+            echo "::error::Failed to inject BUILD_HASH into frontend/sw.js"
+            exit 1
+          fi
+          echo "## 🏗 Frontend build" >> "$GITHUB_STEP_SUMMARY"
+          echo "Service worker cache version: \`lf-cache-v${BUILD_HASH}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload built frontend
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build-${{ github.run_id }}
+          path: frontend/
+          retention-days: 14
 
       # ── Deploy ────────────────────────────────────────────────────────────
       - name: Deploy contract to testnet
@@ -128,7 +159,7 @@ jobs:
       # ── Upload smoke test results ─────────────────────────────────────────
       - name: Upload smoke test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: smoke-test-results-${{ github.run_id }}
           path: smoke-results/
@@ -137,7 +168,7 @@ jobs:
       # ── Notify success ────────────────────────────────────────────────────
       - name: Notify Slack — deploy succeeded
         if: success()
-        uses: slackapi/slack-github-action@v1.26.0
+        uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
         with:
           payload: |
             {
@@ -177,7 +208,7 @@ jobs:
 
       - name: Notify Slack — deploy failed
         if: failure()
-        uses: slackapi/slack-github-action@v1.26.0
+        uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
         with:
           payload: |
             {

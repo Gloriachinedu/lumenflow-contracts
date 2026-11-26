@@ -16,6 +16,16 @@ CHAOS_TESTS=1 node --test tests/chaos/rpc-chaos.test.mjs
 
 The tests inject RPC timeouts, 5-second latency, and truncated responses. The SDK retry suite covers recovery from transient failures and the CLI reports persistent failures in its result table. HTTP 503 responses should be supplied by a fault-injecting RPC fixture; Toxiproxy itself is a transport proxy and does not generate application-layer status codes. True 50% packet loss requires host network emulation such as `tc netem` and is intentionally kept outside the default Docker setup.
 
+## Test wallet keys
+
+Test wallet keypairs must be generated fresh for each environment with
+`scripts/generate_smoke_keypair.sh`; never reuse a keypair across environments
+or copy one from another document. Any secret keys previously shown in this
+repository's docs or test fixtures are **deprecated and unfunded** — do not
+fund them or use them for anything beyond local experimentation. Hardcoded
+secret keys must never appear in tests, fixtures, or documentation; use
+obviously fake placeholders such as `S_EXAMPLE...` instead.
+
 ## Soroban testutils overview
 
 Soroban provides a `testutils` module for contract unit testing in Rust. It includes:
@@ -285,6 +295,52 @@ Soroban RPC transient failures (503/504, timeouts, `ECONNRESET`). It verifies
 the event stream reconnects with capped exponential backoff, stops cleanly when
 unsubscribed mid-outage, resumes delivery once the outage clears, and that
 `withRetry` retries transient errors but surfaces permanent ones immediately.
+
+## Contract storage snapshot tests
+
+`contracts/lumenflow/test_snapshots/` holds committed snapshot files that
+serialize the full contract storage layout after key operations. They catch
+unintended breaking storage schema changes (renamed keys, changed value types,
+reordered struct fields) that would otherwise slip through PRs.
+
+### Covered operations
+
+| Operation | Snapshot |
+|---|---|
+| `process_payment` | Payment record storage after a successful payment |
+| `refund_payment` | Refund record storage after a refund |
+| `create_escrow` | Escrow storage after creation |
+
+### Running
+
+```bash
+cargo test --manifest-path contracts/lumenflow/Cargo.toml
+```
+
+### Failing diffs in CI
+
+When storage layout changes, the snapshot assertion fails and CI prints a diff
+of the expected vs. actual serialized storage, e.g.:
+
+```text
+snapshot assertion for 'payment_record_after_process_payment' failed
+--- expected
++++ actual
+- Payment { id: 1, amount: 1000, status: Completed }
++ Payment { id: 1, amount: 1000, status: Pending }
+```
+
+Review the diff carefully: if the change is intentional, update the snapshots;
+if not, fix the regression.
+
+### Updating snapshots intentionally
+
+```bash
+cargo test --manifest-path contracts/lumenflow/Cargo.toml -- --update-snapshots
+```
+
+Commit the regenerated files under `contracts/lumenflow/test_snapshots/`
+alongside the code change so reviewers can see the storage change in the diff.
 
 ## Restore drills
 
