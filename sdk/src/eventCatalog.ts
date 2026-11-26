@@ -89,6 +89,13 @@ export const EVENT_CATALOG: readonly CatalogEntry[] = [
   entry('merchant_unverified', false, [['merchant_address', 'address']]),
   entry('merchant_deactivated', false, [['merchant_address', 'address']]),
   entry('merchant_reactivated', false, [['merchant_address', 'address']]),
+  // ── Merchant Suspension (Issue #1591) ────────────────────────────────────
+  entry('merchant_suspended', true, [
+    ['merchant', 'address'],
+    ['reason', 'symbol'],
+    ['timestamp', 'u64'],
+    ['admin', 'address'],
+  ]),
   entry('payment_archived', false, [['order_id', 'string']]),
   entry('payment_request_paid', false, [['request_id', 'string']]),
   entry('subscription_created', false, [

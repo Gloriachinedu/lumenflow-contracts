@@ -1315,14 +1315,19 @@ impl PaymentProcessingContract {
         Ok(())
     }
 
-    /// Deactivate a merchant (admin only).
+    /// Deactivate (suspend) a merchant (admin only).
     ///
     /// Deactivated merchants cannot receive new payments. The global active-merchant
     /// count is decremented (saturating at zero).
     ///
+    /// A [`MerchantSuspensionRecord`] capturing the typed `reason`, timestamp and
+    /// acting admin is persisted for audit purposes and a `lumenflow/merchant_suspended`
+    /// event carrying a [`MerchantSuspendedEvent`] payload is emitted.
+    ///
     /// # Arguments
     /// * `admin` - Must be the configured administrator address.
     /// * `merchant_address` - Address of the merchant to deactivate.
+    /// * `reason` - Typed reason code for the suspension.
     ///
     /// # Returns
     /// `Ok(())` on success.
@@ -1334,6 +1339,7 @@ impl PaymentProcessingContract {
         env: Env,
         admin: Address,
         merchant_address: Address,
+        reason: MerchantSuspensionReason,
     ) -> Result<(), PaymentError> {
         require_not_paused(&env)?;
         require_admin_rate_limited(&env, &admin)?;
@@ -1352,6 +1358,23 @@ impl PaymentProcessingContract {
         env.events()
             .publish(("lumenflow", "merchant_deactivated"), merchant_address);
         Ok(())
+    }
+
+    /// Return the suspension history for a merchant (read-only).
+    ///
+    /// # Arguments
+    /// * `merchant_address` - Address of the merchant whose history is requested.
+    ///
+    /// # Returns
+    /// A `Vec<MerchantSuspensionRecord>` (empty if the merchant was never suspended).
+    pub fn get_merchant_suspension_history(
+        env: Env,
+        merchant_address: Address,
+    ) -> Result<Vec<MerchantSuspensionRecord>, PaymentError> {
+        Ok(storage::get_merchant_suspension_history(
+            &env,
+            &merchant_address,
+        ))
     }
 
     /// Reactivate a merchant (admin only).
