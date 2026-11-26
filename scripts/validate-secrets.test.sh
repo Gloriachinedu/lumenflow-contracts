@@ -97,6 +97,25 @@ run_test_env() {
 
 run_test_env "unknown environment 'staging' → exit 1" 1 "staging"
 
+# ── Runtime / local environment variables ──────────────────────────────────────
+
+run_test "all required local runtime vars present → exit 0" 0 \
+  "RPC_URL=https://soroban-testnet.stellar.org" \
+  "CONTRACT_ID=CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" \
+  "SOURCE_ACCOUNT=$VALID_ADDRESS"
+
+run_test "missing RPC_URL → exit 1" 1 \
+  "CONTRACT_ID=CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" \
+  "SOURCE_ACCOUNT=$VALID_ADDRESS"
+
+run_test "missing CONTRACT_ID → exit 1" 1 \
+  "RPC_URL=https://soroban-testnet.stellar.org" \
+  "SOURCE_ACCOUNT=$VALID_ADDRESS"
+
+run_test "missing SOURCE_ACCOUNT → exit 1" 1 \
+  "RPC_URL=https://soroban-testnet.stellar.org" \
+  "CONTRACT_ID=CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 echo ""

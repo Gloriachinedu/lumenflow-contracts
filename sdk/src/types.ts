@@ -46,6 +46,37 @@ export interface Merchant {
   totalReceived: bigint;
 }
 
+/**
+ * Merchant profile as stored by the smart contract.
+ *
+ * `refundWindowSecs` is the merchant-specific refund window in seconds.
+ * When omitted (or `undefined`), the contract falls back to the global
+ * default refund window.  Mirrors the Rust `MerchantProfile` struct.
+ */
+export interface MerchantProfile {
+  address: string;
+  name: string;
+  description: string;
+  contactInfo: string;
+  category: MerchantCategory;
+  active: boolean;
+  verified: boolean;
+  registeredAt: bigint;
+  totalReceived: bigint;
+  refundWindowSecs?: bigint;
+}
+
+/**
+ * Arguments for the `set_refund_window` contract entrypoint.
+ *
+ * Callable by the merchant to configure their own refund period.
+ * `refundWindowSecs` must be a non-negative number of seconds.
+ */
+export interface SetRefundWindowArgs {
+  merchant: string;
+  refundWindowSecs: bigint;
+}
+
 export enum PaymentStatus {
   Completed = "Completed",
   PartiallyRefunded = "PartiallyRefunded",

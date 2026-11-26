@@ -280,6 +280,134 @@ describe('receiptCache.keys', () => {
   });
 });
 
+describe('receiptCache.getWithRevalidate — fresh cache hit', () => {
+  it('returns fresh data with stale=false and does not call the fetcher', async () => {
+    await receiptCache.set('ORDER_FRESH', DEMO_RECEIPT);
+
+    let fetchCalls = 0;
+    const fetcher = async () => {
+      fetchCalls++;
+      return { ...DEMO_RECEIPT, payment: { ...DEMO_RECEIPT.payment, status: 'Refreshed' } };
+    };
+
+    const result = await receiptCache.getWithRevalidate('ORDER_FRESH', fetcher);
+
+    assert.ok(result !== null, 'fresh cache hit should return an entry');
+    assert.equal(result.stale, false, 'fresh entry should not be marked stale');
+    assert.equal(result.data.payment.order_id, 'ORDER_001', 'data intact');
+    assert.equal(fetchCalls, 0, 'fetcher must not be called for a fresh entry');
+  });
+
+  it('returns null when the cache is empty and no fetcher result is awaited', async () => {
+    let fetchCalls = 0;
+    const fetcher = async () => {
+      fetchCalls++;
+      return DEMO_RECEIPT;
+    };
+
+    const result = await receiptCache.getWithRevalidate('ORDER_MISSING', fetcher);
+    assert.equal(result, null, 'missing entry should return null');
+    assert.equal(fetchCalls, 0, 'fetcher should not be invoked synchronously for a miss');
+  });
+});
+
+describe('receiptCache invalidation on refund_payment event', () => {
+  it('deletes the cache entry for the order when refund_payment is received', async () => {
+    await receiptCache.set('ORDER_REFUND', DEMO_RECEIPT);
+    assert.ok(await receiptCache.get('ORDER_REFUND') !== null, 'entry exists before refund');
+
+    receiptCache.handleRefundEvent({ type: 'refund_payment', order_id: 'ORDER_REFUND' });
+
+    const result = await receiptCache.get('ORDER_REFUND');
+    assert.equal(result, null, 'entry should be invalidated after refund_payment');
+  });
+
+  it('leaves other orders untouched when refund_payment is received', async () => {
+    await receiptCache.set('ORDER_A', DEMO_RECEIPT);
+    await receiptCache.set('ORDER_B', DEMO_RECEIPT);
+
+    receiptCache.handleRefundEvent({ type: 'refund_payment', order_id: 'ORDER_A' });
+
+    assert.equal(await receiptCache.get('ORDER_A'), null, 'ORDER_A invalidated');
+    assert.ok(await receiptCache.get('ORDER_B') !== null, 'ORDER_B untouched');
+  });
+
+  it('ignores events that are not refund_payment', async () => {
+    await receiptCache.set('ORDER_C', DEMO_RECEIPT);
+
+    receiptCache.handleRefundEvent({ type: 'payment_completed', order_id: 'ORDER_C' });
+
+    assert.ok(await receiptCache.get('ORDER_C') !== null, 'entry survives unrelated events');
+  });
+});
+
+describe('receiptCache.getWithRevalidate — TTL expiry (stale-while-revalidate)', () => {
+  it('returns the stale entry immediately and revalidates in the background', async () => {
+    await receiptCache.set('ORDER_STALE', DEMO_RECEIPT);
+
+    // Force the entry to be older than the 5-minute TTL by mutating cached_at
+    const raw = rawStore.get('ORDER_STALE');
+    assert.ok(raw, 'raw entry should exist in the mock store');
+    raw.cached_at = Date.now() - (6 * 60 * 1000); // 6 minutes ago
+
+    const freshReceipt = {
+      ...DEMO_RECEIPT,
+      payment: { ...DEMO_RECEIPT.payment, status: 'FullyRefunded' },
+    };
+
+    let fetchCalls = 0;
+    let revalidatedPayload = null;
+    const fetcher = async () => {
+      fetchCalls++;
+      return freshReceipt;
+    };
+    const onRevalidated = (data) => {
+      revalidatedPayload = data;
+    };
+
+    const result = await receiptCache.getWithRevalidate('ORDER_STALE', fetcher, onRevalidated);
+
+    // Stale entry returned immediately
+    assert.ok(result !== null, 'stale entry should still be returned');
+    assert.equal(result.stale, true, 'entry should be marked stale after TTL expiry');
+    assert.equal(result.data.payment.status, 'Completed', 'stale data returned synchronously');
+
+    // Background revalidation should have been kicked off
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(fetchCalls, 1, 'fetcher should be invoked once in the background');
+    assert.ok(revalidatedPayload !== null, 'onRevalidated should be called with fresh data');
+    assert.equal(
+      revalidatedPayload.payment.status,
+      'FullyRefunded',
+      'onRevalidated receives fresh data'
+    );
+
+    // Cache should now hold the fresh data
+    const updated = await receiptCache.get('ORDER_STALE');
+    assert.ok(updated !== null, 'cache entry should still exist');
+    assert.equal(updated.data.payment.status, 'FullyRefunded', 'cache updated with fresh data');
+  });
+
+  it('does not call onRevalidated when the background fetch fails', async () => {
+    await receiptCache.set('ORDER_ERR', DEMO_RECEIPT);
+    const raw = rawStore.get('ORDER_ERR');
+    raw.cached_at = Date.now() - (10 * 60 * 1000);
+
+    let revalidated = false;
+    const fetcher = async () => {
+      throw new Error('network error');
+    };
+    const onRevalidated = () => { revalidated = true; };
+
+    const result = await receiptCache.getWithRevalidate('ORDER_ERR', fetcher, onRevalidated);
+    assert.equal(result.stale, true, 'stale entry returned despite fetch failure');
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(revalidated, false, 'onRevalidated must not fire on fetch failure');
+  });
+});
+
 describe('LRU eviction (MAX_ENTRIES = 50)', () => {
   it('evicts the least-recently-used entry when cache exceeds 50 entries', async () => {
     // Insert 51 distinct entries — the first one should be evicted
