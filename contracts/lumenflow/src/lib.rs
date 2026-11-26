@@ -1282,7 +1282,10 @@ impl PaymentProcessingContract {
         let token_client = token::Client::new(&env, &token_address);
         let fee_bps = storage::get_platform_fee_bps(&env);
         let platform_fee: i128 = if fee_bps > 0 {
-            amount * (fee_bps as i128) / 10_000
+            amount
+                .checked_mul(fee_bps as i128)
+                .and_then(|v| v.checked_div(10_000))
+                .ok_or(PaymentError::Overflow)?
         } else {
             0
         };
@@ -1422,7 +1425,10 @@ impl PaymentProcessingContract {
         let token_client = token::Client::new(&env, &token_address);
         let fee_bps = storage::get_platform_fee_bps(&env);
         let platform_fee: i128 = if fee_bps > 0 {
-            amount * (fee_bps as i128) / 10_000
+            amount
+                .checked_mul(fee_bps as i128)
+                .and_then(|v| v.checked_div(10_000))
+                .ok_or(PaymentError::Overflow)?
         } else {
             0
         };
@@ -4150,6 +4156,13 @@ impl PaymentProcessingContract {
             return Err(PaymentError::EscrowNotUnlocked);
         }
 
+        // Reentrancy guard
+        let lock_key = soroban_sdk::Symbol::new(&env, "reentrancy_lock");
+        if env.storage().instance().get::<_, bool>(&lock_key).unwrap_or(false) {
+            return Err(PaymentError::Reentrancy);
+        }
+        env.storage().instance().set(&lock_key, &true);
+
         // Effects before interaction
         escrow.status = EscrowStatus::Released;
         storage::set_escrow(&env, &escrow);
@@ -4162,6 +4175,7 @@ impl PaymentProcessingContract {
             &escrow.amount,
         );
 
+        env.storage().instance().set(&soroban_sdk::Symbol::new(&env, "reentrancy_lock"), &false);
         env.events()
             .publish(("lumenflow", "escrow_released"), (order_id, escrow.amount));
         Ok(())
@@ -4374,6 +4388,13 @@ impl PaymentProcessingContract {
             return Err(PaymentError::EscrowNotUnlocked);
         }
 
+        // Reentrancy guard
+        let lock_key = soroban_sdk::Symbol::new(&env, "reentrancy_lock");
+        if env.storage().instance().get::<_, bool>(&lock_key).unwrap_or(false) {
+            return Err(PaymentError::Reentrancy);
+        }
+        env.storage().instance().set(&lock_key, &true);
+
         // Effects before interactions.
         hold.status = EscrowHoldStatus::Released;
         storage::set_escrow_hold(&env, &hold);
@@ -4386,6 +4407,7 @@ impl PaymentProcessingContract {
             &hold.amount,
         );
 
+        env.storage().instance().set(&soroban_sdk::Symbol::new(&env, "reentrancy_lock"), &false);
         env.events().publish(
             ("lumenflow", "escrow_released"),
             (escrow_id, hold.merchant, hold.amount),
