@@ -60,6 +60,17 @@ pub fn constant_time_eq_bytes(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
+/// Compute the number of ledgers elapsed since `start_ledger`.
+///
+/// Used as a duration proxy in diagnostic events: Soroban contracts cannot
+/// observe wall-clock time, so the ledger sequence delta is the canonical
+/// measure of how long an operation took. Saturating subtraction guarantees
+/// a non-negative result even if `start_ledger` is in the future (e.g. a
+/// caller-supplied value).
+pub fn ledger_sequence_delta(env: &Env, start_ledger: u32) -> u32 {
+    env.ledger().sequence().saturating_sub(start_ledger)
+}
+
 pub const MAX_PAGE_LIMIT: u32 = 100;
 pub const REFUND_WINDOW_SECS: u64 = 30 * 24 * 3600; // 30 days
 pub const MULTISIG_EXPIRY_SECS: u64 = 7 * 24 * 3600; // 7 days

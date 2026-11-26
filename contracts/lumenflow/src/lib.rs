@@ -31,6 +31,7 @@ use types::{
     RefundRecord, RefundStatus, SignatureEntry, SortField, SortOrder, StatusFilter, Subscription,
     SubscriptionPlan, SubscriptionStatus, SuspiciousActivityReason,
     AdminActionType, AdminAuditEntry, EscrowHold, EscrowHoldStatus,
+    PaymentProcessedDiagnostic, RefundIssuedDiagnostic, BatchPaymentCompletedDiagnostic,
 };
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -40,6 +41,14 @@ const PAUSE_TIMELOCK_SECS: u64 = 7 * 24 * 3600;
 const EARLY_UNPAUSE_THRESHOLD: u32 = 3;
 const MAX_BATCH_SIZE: u32 = 10;
 const MAX_SERIALIZED_PAYLOAD_BYTES: u32 = 4096;
+
+/// Compute the number of ledgers elapsed since `start_ledger`, saturating at 0.
+///
+/// Used to populate the `ledger_sequence_delta` field of diagnostic events so
+/// off-chain monitoring can derive duration-equivalent execution metrics.
+fn ledger_sequence_delta(env: &Env, start_ledger: u32) -> u32 {
+    env.ledger().sequence().saturating_sub(start_ledger)
+}
 
 #[contract]
 pub struct PaymentProcessingContract;
@@ -1824,6 +1833,15 @@ impl PaymentProcessingContract {
             );
         }
 
+        // ── Phase 6: Emit batch_payment_completed diagnostic event ──
+        env.events().publish(
+            ("lumenflow", "batch_payment_completed_diagnostic"),
+            BatchPaymentCompletedDiagnostic {
+                batch_size: payments.len(),
+                ledger_sequence_delta: ledger_sequence_delta(&env, start_ledger),
+            },
+        );
+
         Ok(())
     }
 
@@ -2462,6 +2480,7 @@ impl PaymentProcessingContract {
     /// * [`PaymentError::RefundNotApproved`] — the refund is not in `Approved` state.
     /// * [`PaymentError::PaymentNotFound`] — the associated payment no longer exists.
     pub fn execute_refund(env: Env, refund_id: String) -> Result<(), PaymentError> {
+        let start_ledger = env.ledger().sequence();
         require_not_paused(&env)?;
         let refund = storage::get_refund(&env, &refund_id).ok_or(PaymentError::RefundNotFound)?;
 
@@ -2514,6 +2533,15 @@ impl PaymentProcessingContract {
                 payment.merchant_address.clone(),
             ),
             (refund_id, r.order_id.clone()),
+        );
+
+        // Diagnostic event for off-chain observability (issue #1589).
+        env.events().publish(
+            ("lumenflow", "refund_issued_diagnostic"),
+            RefundIssuedDiagnostic {
+                amount: refund_amount,
+                ledger_sequence_delta: ledger_sequence_delta(&env, start_ledger),
+            },
         );
         Ok(())
     }

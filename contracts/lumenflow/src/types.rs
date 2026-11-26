@@ -584,6 +584,59 @@ pub struct PaymentStatusUpdatedEvent {
     pub original_amount: i128,
 }
 
+// ── Diagnostic event payloads (issue #1589) ───────────────────────────────────
+//
+// These events are emitted on performance-critical paths so that off-chain
+// monitoring (see `lumenflow_exporter.py`) can track contract execution
+// metrics. Each payload carries a `ledger_sequence_delta` — the difference
+// between the ledger sequence at which the operation was observed and the
+// ledger sequence at which it was initiated — which serves as a
+// duration-equivalent measure of execution latency.
+
+/// Topic symbol for the payment-processed diagnostic event.
+pub const TOPIC_PAYMENT_PROCESSED_DIAGNOSTIC: &str = "payment_processed_diagnostic";
+/// Topic symbol for the refund-issued diagnostic event.
+pub const TOPIC_REFUND_ISSUED_DIAGNOSTIC: &str = "refund_issued_diagnostic";
+/// Topic symbol for the batch-payment-completed diagnostic event.
+pub const TOPIC_BATCH_PAYMENT_COMPLETED_DIAGNOSTIC: &str = "batch_payment_completed_diagnostic";
+
+/// Data payload for `lumenflow/payment_processed_diagnostic`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaymentProcessedDiagnostic {
+    pub order_id: String,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    /// Ledger sequence delta (duration-equivalent) for this operation.
+    pub ledger_sequence_delta: u32,
+}
+
+/// Data payload for `lumenflow/refund_issued_diagnostic`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefundIssuedDiagnostic {
+    pub refund_id: String,
+    pub order_id: String,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    /// Ledger sequence delta (duration-equivalent) for this operation.
+    pub ledger_sequence_delta: u32,
+}
+
+/// Data payload for `lumenflow/batch_payment_completed_diagnostic`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchPaymentCompletedDiagnostic {
+    /// Number of payments successfully processed in the batch.
+    pub batch_size: u32,
+    /// Aggregate amount processed across the batch.
+    pub total_amount: i128,
+    /// Ledger sequence delta (duration-equivalent) for the whole batch.
+    pub ledger_sequence_delta: u32,
+}
+
 // ── Admin Audit Log ───────────────────────────────────────────────────────────
 
 /// The type of admin action recorded in the audit log.
