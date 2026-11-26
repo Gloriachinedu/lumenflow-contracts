@@ -159,6 +159,14 @@ pub enum DataKey {
     AdminAuditMaxEntries,
     /// Configurable maximum signers per multisig payment (issue #1269). Short code `MSL`.
     MSL,
+    /// Treasury address for governance-controlled emergency withdrawals.
+    TreasuryAddress,
+    /// Emergency lock period in seconds (default 90 days). Escrows older than this
+    /// are eligible for emergency withdrawal.
+    EmergencyLockPeriod,
+    /// Approval set for a pending emergency withdrawal, keyed by escrow order_id.
+    /// Stores the Vec<Address> of admins that have approved.
+    EWA(String),
 }
 
 /// The schema version this binary was compiled against.
@@ -321,6 +329,35 @@ pub fn get_merchant(env: &Env, address: &Address) -> Option<Merchant> {
     env.storage()
         .persistent()
         .get(&DataKey::Merchant(address.clone()))
+}
+
+/// Return the merchant-specific refund window in seconds, if the merchant has
+/// configured one.  `None` means the caller should fall back to the global
+/// default via [`get_refund_window`].
+pub fn get_merchant_refund_window(env: &Env, address: &Address) -> Option<u64> {
+    get_merchant(env, address).and_then(|m| m.refund_window_secs)
+}
+
+/// Persist a merchant-specific refund window on the merchant profile.
+///
+/// Returns `PaymentError::MerchantNotFound` if the merchant is not registered.
+/// The caller is responsible for authorization (merchant only) and for
+/// validating the window against [`MIN_REFUND_WINDOW_SECS`].
+pub fn set_merchant_refund_window(
+    env: &Env,
+    address: &Address,
+    window_secs: u64,
+) -> Result<(), PaymentError> {
+    let mut merchant = get_merchant(env, address).ok_or(PaymentError::MerchantNotFound)?;
+    merchant.refund_window_secs = Some(window_secs);
+    set_merchant(env, &merchant);
+    Ok(())
+}
+
+/// Resolve the effective refund window for `merchant`: the merchant-specific
+/// value when set, otherwise the global default.
+pub fn get_effective_refund_window(env: &Env, merchant: &Address) -> u64 {
+    get_merchant_refund_window(env, merchant).unwrap_or_else(|| get_refund_window(env))
 }
 
 pub fn set_merchant(env: &Env, merchant: &Merchant) {
@@ -1396,4 +1433,55 @@ pub fn query_admin_audit_log(
     }
 
     results
+}
+
+// ── Emergency withdrawal (Issue #1511) ───────────────────────────────────────
+
+/// Default emergency lock period: 90 days in seconds.
+pub const DEFAULT_EMERGENCY_LOCK_PERIOD_SECS: u64 = 90 * 24 * 3600;
+
+/// Minimum number of admin co-approvals required to execute an emergency
+/// withdrawal. The initiating admin counts as one approval, so at least two
+/// additional admins must call `approve_emergency_withdrawal` before the
+/// withdrawal can proceed (3-of-N multisig confirmation).
+pub const EMERGENCY_WITHDRAWAL_REQUIRED_APPROVALS: u32 = 3;
+
+pub fn get_treasury_address(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::TreasuryAddress)
+}
+
+pub fn set_treasury_address(env: &Env, address: &Address) {
+    env.storage().instance().set(&DataKey::TreasuryAddress, address);
+}
+
+pub fn get_emergency_lock_period(env: &Env) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::EmergencyLockPeriod)
+        .unwrap_or(DEFAULT_EMERGENCY_LOCK_PERIOD_SECS)
+}
+
+pub fn set_emergency_lock_period(env: &Env, secs: u64) {
+    env.storage().instance().set(&DataKey::EmergencyLockPeriod, &secs);
+}
+
+/// Return the list of admin addresses that have approved an emergency
+/// withdrawal for `escrow_id`.
+pub fn get_emergency_withdrawal_approvals(env: &Env, escrow_id: &String) -> Vec<Address> {
+    env.storage()
+        .instance()
+        .get(&DataKey::EWA(escrow_id.clone()))
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+pub fn set_emergency_withdrawal_approvals(env: &Env, escrow_id: &String, approvals: &Vec<Address>) {
+    env.storage()
+        .instance()
+        .set(&DataKey::EWA(escrow_id.clone()), approvals);
+}
+
+pub fn clear_emergency_withdrawal_approvals(env: &Env, escrow_id: &String) {
+    env.storage()
+        .instance()
+        .remove(&DataKey::EWA(escrow_id.clone()));
 }

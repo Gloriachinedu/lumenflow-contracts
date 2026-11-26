@@ -37,6 +37,7 @@ const EventSource = require('eventsource');
 const fetch = require('node-fetch');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { MemoryIdempotencyStore } = require('./idempotency-store');
 
 // ---------------------------------------------------------------------------
@@ -49,8 +50,23 @@ const HORIZON_URL = process.env.HORIZON_URL || 'https://horizon-testnet.stellar.
 const MAX_RETRIES = parseInt(process.env.MAX_RETRIES || '5', 10);
 const RETRY_BASE_MS = parseInt(process.env.RETRY_BASE_MS || '500', 10);
 
+// Shared secret used to verify inbound webhook signatures.  Must be supplied
+// via the environment — never hard-coded.
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
+
+// Replay protection: reject signatures whose timestamp is outside this window.
+const SIGNATURE_TOLERANCE_MS = parseInt(
+  process.env.SIGNATURE_TOLERANCE_MS || '300000',
+  10,
+);
+
+// Per-merchant outbound delivery rate limit.
+const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX || '100', 10);
+const RATE_LIMIT_WINDOW_MS = parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10);
+
 if (!CONTRACT_ID) throw new Error('CONTRACT_ID environment variable is required.');
 if (!WEBHOOK_URL) throw new Error('WEBHOOK_URL environment variable is required.');
+if (!WEBHOOK_SECRET) throw new Error('WEBHOOK_SECRET environment variable is required.');
 
 // ---------------------------------------------------------------------------
 // Security headers
@@ -115,6 +131,205 @@ function applySecurityHeaders(headers) {
 }
 
 // ---------------------------------------------------------------------------
+// Inbound HMAC-SHA256 signature verification
+//
+// Every inbound webhook delivery must carry an `X-LumenFlow-Signature` header
+// of the form `t=<unix-ms>,v1=<hex-hmac>`, where the HMAC is computed over
+// `<t>.<raw-body>` using the shared WEBHOOK_SECRET.  Verification is
+// timing-safe and includes a replay guard.
+// ---------------------------------------------------------------------------
+
+/**
+ * Computes the expected HMAC-SHA256 signature over `<timestamp>.<rawBody>`.
+ *
+ * @param {string|Buffer} rawBody    Raw request body (before JSON parsing).
+ * @param {string|number} timestamp  Unix timestamp in milliseconds.
+ * @param {string} [secret]          Shared secret (defaults to WEBHOOK_SECRET).
+ * @returns {string}                 Lower-case hex digest.
+ */
+function computeSignature(rawBody, timestamp, secret = WEBHOOK_SECRET) {
+  const body = Buffer.isBuffer(rawBody) ? rawBody : Buffer.from(String(rawBody), 'utf8');
+  const signedPayload = Buffer.concat([
+    Buffer.from(`${timestamp}.`, 'utf8'),
+    body,
+  ]);
+  return crypto.createHmac('sha256', secret).update(signedPayload).digest('hex');
+}
+
+/**
+ * Parses an `X-LumenFlow-Signature` header value into its components.
+ *
+ * @param {string} header  e.g. "t=1700000000000,v1=abc123..."
+ * @returns {{timestamp: number, signature: string}|null}
+ */
+function parseSignatureHeader(header) {
+  if (typeof header !== 'string' || header.length === 0) return null;
+  const parts = {};
+  for (const segment of header.split(',')) {
+    const idx = segment.indexOf('=');
+    if (idx === -1) continue;
+    const key = segment.slice(0, idx).trim();
+    const value = segment.slice(idx + 1).trim();
+    if (key) parts[key] = value;
+  }
+  if (!parts.t || !parts.v1) return null;
+  const timestamp = Number(parts.t);
+  if (!Number.isFinite(timestamp)) return null;
+  return { timestamp, signature: parts.v1 };
+}
+
+// Bounded set of recently-seen signatures to reject exact replays.
+const seenSignatures = new Map();
+const SEEN_SIGNATURE_TTL_MS = SIGNATURE_TOLERANCE_MS * 2;
+
+function pruneSeenSignatures(now) {
+  for (const [sig, seenAt] of seenSignatures) {
+    if (now - seenAt > SEEN_SIGNATURE_TTL_MS) seenSignatures.delete(sig);
+  }
+}
+
+/**
+ * Verifies an inbound webhook request.
+ *
+ * @param {string|undefined} signatureHeader  Value of X-LumenFlow-Signature.
+ * @param {string|Buffer} rawBody             Raw request body.
+ * @param {number} [now]                      Current time in ms (for tests).
+ * @returns {{ok: true}|{ok: false, status: number, reason: string}}
+ */
+function verifyWebhookSignature(signatureHeader, rawBody, now = Date.now()) {
+  if (!signatureHeader) {
+    return { ok: false, status: 401, reason: 'missing signature header' };
+  }
+
+  const parsed = parseSignatureHeader(signatureHeader);
+  if (!parsed) {
+    return { ok: false, status: 401, reason: 'malformed signature header' };
+  }
+
+  // Replay guard: timestamp must be within the tolerance window.
+  if (Math.abs(now - parsed.timestamp) > SIGNATURE_TOLERANCE_MS) {
+    return { ok: false, status: 401, reason: 'signature timestamp outside tolerance' };
+  }
+
+  const expected = computeSignature(rawBody, parsed.timestamp);
+  const expectedBuf = Buffer.from(expected, 'utf8');
+  const providedBuf = Buffer.from(parsed.signature, 'utf8');
+
+  // Length check first — timingSafeEqual throws on mismatched lengths.
+  if (expectedBuf.length !== providedBuf.length) {
+    return { ok: false, status: 401, reason: 'signature mismatch' };
+  }
+  if (!crypto.timingSafeEqual(expectedBuf, providedBuf)) {
+    return { ok: false, status: 401, reason: 'signature mismatch' };
+  }
+
+  // Replay guard: reject an exact signature we have already accepted.
+  pruneSeenSignatures(now);
+  if (seenSignatures.has(parsed.signature)) {
+    return { ok: false, status: 401, reason: 'replayed signature' };
+  }
+  seenSignatures.set(parsed.signature, now);
+
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Per-merchant outbound rate limiting
+//
+// At most RATE_LIMIT_MAX deliveries per merchant per RATE_LIMIT_WINDOW_MS.
+// Deliveries that exceed the limit are queued (never dropped) and drained as
+// the window resets.
+// ---------------------------------------------------------------------------
+
+class MerchantRateLimiter {
+  constructor(max, windowMs) {
+    this.max = max;
+    this.windowMs = windowMs;
+    this.buckets = new Map(); // merchantId -> { count, windowStart }
+    this.queues = new Map();  // merchantId -> Array<() => void>
+    this.timers = new Map();  // merchantId -> Timeout
+  }
+
+  _bucket(merchantId, now) {
+    let bucket = this.buckets.get(merchantId);
+    if (!bucket || now - bucket.windowStart >= this.windowMs) {
+      bucket = { count: 0, windowStart: now };
+      this.buckets.set(merchantId, bucket);
+    }
+    return bucket;
+  }
+
+  /**
+   * Resolves when the caller is allowed to perform a delivery for the given
+   * merchant.  If the limit is exceeded the caller is queued and resolved
+   * once the window resets.
+   *
+   * @param {string} merchantId
+   * @returns {Promise<void>}
+   */
+  acquire(merchantId) {
+    const now = Date.now();
+    const bucket = this._bucket(merchantId, now);
+
+    if (bucket.count < this.max) {
+      bucket.count += 1;
+      return Promise.resolve();
+    }
+
+    return new Promise((resolve) => {
+      let queue = this.queues.get(merchantId);
+      if (!queue) {
+        queue = [];
+        this.queues.set(merchantId, queue);
+      }
+      queue.push(resolve);
+      this._scheduleDrain(merchantId);
+    });
+  }
+
+  _scheduleDrain(merchantId) {
+    if (this.timers.has(merchantId)) return;
+    const bucket = this.buckets.get(merchantId);
+    const now = Date.now();
+    const delay = bucket
+      ? Math.max(0, bucket.windowStart + this.windowMs - now)
+      : this.windowMs;
+
+    const timer = setTimeout(() => {
+      this.timers.delete(merchantId);
+      this._drain(merchantId);
+    }, delay);
+    if (typeof timer.unref === 'function') timer.unref();
+    this.timers.set(merchantId, timer);
+  }
+
+  _drain(merchantId) {
+    const queue = this.queues.get(merchantId);
+    if (!queue || queue.length === 0) {
+      this.queues.delete(merchantId);
+      return;
+    }
+
+    const now = Date.now();
+    const bucket = this._bucket(merchantId, now);
+
+    while (queue.length > 0 && bucket.count < this.max) {
+      bucket.count += 1;
+      const resolve = queue.shift();
+      resolve();
+    }
+
+    if (queue.length > 0) {
+      this._scheduleDrain(merchantId);
+    } else {
+      this.queues.delete(merchantId);
+    }
+  }
+}
+
+const deliveryRateLimiter = new MerchantRateLimiter(RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS);
+
+// ---------------------------------------------------------------------------
 // Cursor persistence
 // ---------------------------------------------------------------------------
 
@@ -162,10 +377,16 @@ const idempotencyStore = new MemoryIdempotencyStore();
  * @param {string} pagingToken   Original paging token (for logging).
  * @returns {Promise<void>}
  */
-async function deliverWithRetry(eventName, data, ledger, pagingToken) {
+async function deliverWithRetry(eventName, data, ledger, pagingToken, merchantId) {
   const payload = JSON.stringify({ event: eventName, data, ledger });
+  const rateLimitKey = merchantId || 'default';
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    // Apply per-merchant rate limiting before each outbound attempt.  If the
+    // limit is exceeded this awaits until the window resets (queued, not
+    // dropped).
+    await deliveryRateLimiter.acquire(rateLimitKey);
+
     try {
       const response = await fetch(WEBHOOK_URL, {
         method: 'POST',
@@ -256,8 +477,9 @@ async function handleMessage(msg) {
 
   const eventName = Array.isArray(event.topic) ? event.topic[1] : String(event.topic);
   const data = event.value;
+  const merchantId = event.merchant_id || event.merchantId || data && data.merchant_id;
 
-  await deliverWithRetry(eventName, data, event.ledger, pagingToken);
+  await deliverWithRetry(eventName, data, event.ledger, pagingToken, merchantId);
 
   // Persist cursor after successful processing so restarts resume here.
   saveCursor(pagingToken);
@@ -302,7 +524,24 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 // ---------------------------------------------------------------------------
+// Exports (for testing)
+// ---------------------------------------------------------------------------
+
+module.exports = {
+  computeSignature,
+  parseSignatureHeader,
+  verifyWebhookSignature,
+  MerchantRateLimiter,
+  deliveryRateLimiter,
+  deliverWithRetry,
+  applySecurityHeaders,
+  SECURITY_HEADERS,
+};
+
+// ---------------------------------------------------------------------------
 // Start
 // ---------------------------------------------------------------------------
 
-connect();
+if (require.main === module) {
+  connect();
+}
