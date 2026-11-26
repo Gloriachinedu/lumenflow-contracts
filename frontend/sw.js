@@ -4,11 +4,13 @@
  * Strategy: Cache-first for static assets, network-first for API calls.
  */
 
-// Cache version — bump this value on every deployment to bust stale caches.
-// In a CI/CD pipeline this constant can be replaced at build time with a
-// content hash or build number (e.g. via sed or envsubst).
-const CACHE_VERSION = 'v1.1.0';
-const CACHE_NAME = `lumenflow-${CACHE_VERSION}`;
+// Build hash — injected at build time by the CI pipeline.
+// The CI step substitutes the literal placeholder `__BUILD_HASH__` below with
+// the current Git SHA (e.g. via sed or envsubst) before deploying sw.js.
+// Every deployment therefore gets a unique cache name, so stale assets from a
+// previous version can never be served after an update.
+const BUILD_HASH = '__BUILD_HASH__';
+const CACHE_NAME = `lf-cache-v${BUILD_HASH}`;
 
 /**
  * Static assets to pre-cache on service worker install.

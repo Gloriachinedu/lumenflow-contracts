@@ -381,6 +381,51 @@ function buildCombobox(selectEl) {
     const idx = opts.indexOf(optEl);
     selectOption(idx);
     closeDropdown();
+    applyFiltersFromCombobox(selectEl);
+  });
+
+  // ── Keyboard handling on listbox (focus trapped inside) ───────────────────
+  listbox.addEventListener('keydown', (e) => {
+    const opts = getOptions();
+    switch (e.key) {
+      case 'Enter':
+      case ' ':
+        e.preventDefault();
+        if (focusedIdx >= 0) selectOption(focusedIdx);
+        closeDropdown();
+        applyFiltersFromCombobox(selectEl);
+        break;
+
+      case 'ArrowDown':
+        e.preventDefault();
+        highlightOption(focusedIdx < opts.length - 1 ? focusedIdx + 1 : 0);
+        break;
+
+      case 'ArrowUp':
+        e.preventDefault();
+        highlightOption(focusedIdx > 0 ? focusedIdx - 1 : opts.length - 1);
+        break;
+
+      case 'Home':
+        e.preventDefault();
+        highlightOption(0);
+        break;
+
+      case 'End':
+        e.preventDefault();
+        highlightOption(opts.length - 1);
+        break;
+
+      case 'Escape':
+        e.preventDefault();
+        e.stopPropagation();
+        closeDropdown();
+        break;
+
+      case 'Tab':
+        closeDropdown(false);
+        break;
+    }
   });
 
   // ── Keyboard handling on trigger ──────────────────────────────────────────
@@ -397,6 +442,9 @@ function buildCombobox(selectEl) {
             selectOption(focusedIdx);
           }
           closeDropdown();
+          // Applying a filter via keyboard should trigger the page's
+          // filter application logic (payment-history.html).
+          applyFiltersFromCombobox(selectEl);
         } else {
           openDropdown();
         }
@@ -494,6 +542,9 @@ function buildCombobox(selectEl) {
   selectEl.style.display = 'none';
   selectEl.setAttribute('aria-hidden', 'true');
   selectEl.setAttribute('tabindex', '-1');
+
+  // Ensure the trigger participates in the natural tab order
+  trigger.setAttribute('tabindex', '0');
 
   // Initial label
   syncOptions();
@@ -607,6 +658,75 @@ function enhanceChips(panel) {
   observer.observe(activeFiltersContainer, { childList: true, subtree: true });
 }
 
+// ─── Filter application integration ──────────────────────────────────────────
+
+/**
+ * Calls the page's global applyFilters() (exposed by payment-history.js) when
+ * a filter is applied via the custom combobox. Falls back silently when the
+ * page does not define it.
+ *
+ * @param {HTMLSelectElement} selectEl
+ */
+function applyFiltersFromCombobox(selectEl) {
+  if (typeof window.applyFilters === 'function') {
+    window.applyFilters();
+  }
+}
+
+// ─── Tab order / filter application for native controls ──────────────────────
+
+/**
+ * Ensures all filter controls (search input, status select, reset button) are
+ * reachable via Tab, and wires Enter/Space to apply filters and Escape to
+ * close any open dropdown.
+ */
+function enhanceFilterControls(panel) {
+  // Make sure native controls are in the tab order (remove stray tabindex=-1)
+  const controls = panel.querySelectorAll(
+    'input, select, button, [role="combobox"], [role="button"]'
+  );
+  controls.forEach(el => {
+    if (el.dataset.lfEnhanced) return; // hidden original select
+    const ti = el.getAttribute('tabindex');
+    if (ti === '-1' && !el.closest('.lf-listbox')) {
+      el.removeAttribute('tabindex');
+    }
+  });
+
+  panel.addEventListener('keydown', (e) => {
+    const el = e.target;
+
+    // Escape closes any open custom dropdown
+    if (e.key === 'Escape') {
+      const openListbox = panel.querySelector('.lf-listbox[aria-hidden="false"]');
+      if (openListbox) {
+        const trigger = panel.querySelector(
+          `.lf-combobox-trigger[aria-controls="${openListbox.id}"]`
+        );
+        openListbox.setAttribute('aria-hidden', 'true');
+        if (trigger) {
+          trigger.setAttribute('aria-expanded', 'false');
+          trigger.removeAttribute('aria-activedescendant');
+          trigger.focus();
+        }
+      }
+    }
+
+    // Enter / Space on the reset button applies the reset
+    if ((e.key === 'Enter' || e.key === ' ') && el.tagName === 'BUTTON') {
+      const isReset = el.id === 'reset-filters' || el.classList.contains('reset-filters');
+      if (isReset) {
+        e.preventDefault();
+        if (typeof window.resetFilters === 'function') {
+          window.resetFilters();
+        } else {
+          el.click();
+        }
+      }
+    }
+  });
+}
+
 // ─── Combobox enhancement for select elements ─────────────────────────────────
 
 /**
@@ -684,6 +804,6 @@ export function initFilterKeyboard(panelSelector = '.filter-panel') {
   // 5. Replace status/token selects with accessible comboboxes
   enhanceSelects(panel);
 
-  // 6. Guarantee every interactive ARIA control is Tab-reachable
-  ensureKeyboardReachable(panel);
+  // 6. Ensure native filter controls are tab-reachable and keyboard-operable
+  enhanceFilterControls(panel);
 }

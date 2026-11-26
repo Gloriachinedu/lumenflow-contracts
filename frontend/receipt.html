@@ -52,17 +52,92 @@
       width: min(100%, 560px);
       padding: 2rem;
       overflow-wrap: anywhere;
+      /* Prevent any child from escaping the card horizontally */
+      overflow-x: hidden;
     }
 
     .receipt-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.5rem;
       margin-bottom: 1.5rem;
       border-bottom: 1px solid #e8ecf0;
       padding-bottom: 1rem;
     }
-    .receipt-header h1 { font-size: 1.25rem; margin-bottom: 0; }
+    .receipt-header h1 { font-size: 1.25rem; margin-bottom: 0; min-width: 0; }
+
+    /* ── Responsive breakpoints ───────────────────────────────────────────── */
+
+    /* 768px — tablet: reduce horizontal padding */
+    @media (max-width: 768px) {
+      body {
+        padding: 1.5rem 0.75rem;
+      }
+      .receipt {
+        padding: 1.5rem;
+      }
+    }
+
+    /* 414px — large phone (iPhone Plus / Android XL) */
+    @media (max-width: 414px) {
+      body {
+        padding: 1rem 0.5rem;
+      }
+      .receipt {
+        padding: 1.25rem;
+        border-radius: 8px;
+      }
+      .field .value.amount {
+        font-size: 1.2rem;
+      }
+    }
+
+    /* 375px — standard phone (iPhone SE / standard Android) */
+    @media (max-width: 375px) {
+      body {
+        padding: 0.75rem 0.5rem;
+      }
+      .receipt {
+        padding: 1rem;
+        border-radius: 6px;
+      }
+      .receipt-header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .receipt-header h1 {
+        font-size: 1.1rem;
+      }
+      .field .value.amount {
+        font-size: 1.1rem;
+      }
+    }
+
+    /* 320px — smallest supported phone (iPhone SE 1st gen, Galaxy S5) */
+    @media (max-width: 320px) {
+      body {
+        padding: 0.5rem 0.25rem;
+      }
+      .receipt {
+        padding: 0.75rem;
+        border-radius: 4px;
+      }
+      .receipt-header h1 {
+        font-size: 1rem;
+      }
+      .field .value {
+        font-size: 0.875rem;
+      }
+      .field .value.amount {
+        font-size: 1rem;
+      }
+      /* Ensure the nav brand doesn't overflow */
+      .lf-nav__brand {
+        font-size: 0.9rem;
+      }
+    }
 
     .field label {
       font-size: 0.72rem;
@@ -327,15 +402,49 @@
     @media print {
       /* Reset background so the receipt prints cleanly on white paper */
       body {
-        background: #fff;
+        background: #fff !important;
+        color: #000 !important;
         padding: 0;
+        margin: 0;
         min-height: unset;
+        font-size: 11pt;
+        line-height: 1.4;
       }
 
-      /* Hide everything that isn't the receipt card */
-      #lf-mode-banner,
+      /* ── Hide non-essential chrome ── */
+
+      /* Navigation bar */
+      nav,
+      .lf-nav,
+      [role="navigation"],
+      .skip-link {
+        display: none !important;
+      }
+
+      /* Wallet status widget */
+      #wallet-status-container,
+      .wallet-status,
+      #lf-wallet-status,
+      [data-wallet-status] {
+        display: none !important;
+      }
+
+      /* Toast notifications */
+      .lf-toast,
+      #lf-toast,
+      [role="status"],
+      [role="alert"].toast {
+        display: none !important;
+      }
+
+      /* Dark-mode toggle and floating UI */
+      #lf-dark-toggle,
       #pwa-install-banner,
-      .skip-link,
+      #lf-mode-banner {
+        display: none !important;
+      }
+
+      /* Action buttons and interactive controls */
       .actions,
       #prefill-pay-btn,
       .btn,
@@ -345,24 +454,46 @@
         display: none !important;
       }
 
-      /* Remove shadows and rounded corners for print */
+      /* Remove shadows, rounded corners, and backgrounds for print */
       .receipt {
-        box-shadow: none;
-        border-radius: 0;
-        max-width: 100%;
-        width: 100%;
-        padding: 1rem;
+        box-shadow: none !important;
+        border-radius: 0 !important;
+        max-width: 100% !important;
+        width: 100% !important;
+        padding: 1rem !important;
+        background: #fff !important;
       }
 
-      /* Ensure text is black and links are plain */
-      * { color: #000 !important; }
+      /* ── Force black text; strip colour backgrounds ── */
+      *,
+      *::before,
+      *::after {
+        color: #000 !important;
+        background: transparent !important;
+        background-color: transparent !important;
+        box-shadow: none !important;
+        text-shadow: none !important;
+      }
+
+      /* Keep badge text readable with a border instead of a colour fill */
+      .badge {
+        border: 1px solid #000;
+        padding: 1pt 4pt;
+      }
+
       a { text-decoration: none; }
 
-      /* Avoid page breaks inside receipt sections */
+      /* ── Keep key payment fields together — no orphaned rows ── */
       .field,
       .refund-item,
       .refunds-section {
         break-inside: avoid;
+      }
+
+      /* ── Page setup ── */
+      @page {
+        size: A4 portrait;
+        margin: 18mm 15mm;
       }
     }
   </style>
@@ -372,7 +503,7 @@
 
 <nav class="lf-nav" aria-label="LumenFlow navigation">
   <span class="lf-nav__brand">⚡ LumenFlow</span>
-  <div id="wallet-status-container"></div>
+  <div id="wallet-status-container" aria-live="polite" aria-atomic="true"></div>
   <div id="lf-lang-nav"></div>
 </nav>
 
@@ -628,6 +759,10 @@
 
 <script src="./toast.js"></script>
 <script type="module">
+  import { initWalletStatus } from './wallet-status.js';
+  initWalletStatus(document.getElementById('wallet-status-container'));
+</script>
+<script type="module">
   import { i18n } from './i18n.js';
   i18n.init().then(() => {
     i18n.renderSwitcher(document.getElementById('lf-lang-nav'));
@@ -723,6 +858,9 @@
     // in a static preview without a live contract.
     if (!CONTRACT_ID) return getDemoData(orderId);
 
+    // SRI note: dynamic ES module imports cannot carry an `integrity` attribute.
+    // The pinned version below is the trust anchor; see docs/SRI.md for the
+    // process to regenerate/verify CDN dependency hashes on upgrade.
     const { SorobanRpc, Contract, nativeToScVal, scValToNative, Networks } =
       await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
 
@@ -736,4 +874,699 @@
 
     try {
       const result = await server.simulateTransaction(
-        contract.call('get_payment_by_id', callerArg,
+        contract.call('get_payment_by_id', callerArg, idArg)
+      );
+      if (SorobanRpc.Api.isSimulationError(result)) return null;
+      const payment = scValToNative(result.result.retval);
+
+      // Fetch merchant name
+      const merchantArg = nativeToScVal(payment.merchant_address, { type: 'address' });
+      const mResult = await server.simulateTransaction(
+        contract.call('get_merchant', merchantArg)
+      );
+      const merchant = SorobanRpc.Api.isSimulationError(mResult)
+        ? { name: payment.merchant_address, verified: false }
+        : scValToNative(mResult.result.retval);
+
+      return { payment, merchant, refunds: [] };
+    } catch {
+      return null;
+    }
+  }
+
+  function getDemoData(orderId) {
+    if (orderId === 'NOT_FOUND') return null;
+    const now = Math.floor(Date.now() / 1000);
+    return {
+      payment: {
+        order_id:         orderId,
+        merchant_address: 'GBXGQJWVLWOYHFLVTKWV5FGHA3LNYY2JQKM7OAJAUEQFU6LPCSEFVXON',
+        payer:            'GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN',
+        token:            'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
+        amount:           50000000n,
+        status:           'PartiallyRefunded',
+        paid_at:          BigInt(now - 7200),
+        refunded_amount:  15000000n,
+        memo:             'Invoice #001',
+      },
+      merchant: { name: 'Demo Store', verified: true },
+      refunds: [
+        {
+          refund_id:   'REFUND_001',
+          amount:      5000000n,
+          reason:      'Item damaged in transit',
+          status:      'Completed',
+          created_at:  BigInt(now - 3600),
+          executed_at: BigInt(now - 1800),
+        },
+        {
+          refund_id:  'REFUND_002',
+          amount:     10000000n,
+          reason:     'Wrong size delivered',
+          status:     'Pending',
+          created_at: BigInt(now - 900),
+        },
+        {
+          refund_id:      'REFUND_003',
+          amount:         5000000n,
+          reason:         'Change of mind',
+          status:         'Rejected',
+          created_at:     BigInt(now - 5400),
+          dispute_reason: 'Item was used before return request was submitted.',
+        },
+      ],
+    };
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+
+  function renderReceipt({ payment, merchant, refunds }) {
+    const orderIdEl = document.getElementById('field-order-id');
+    orderIdEl.innerHTML = `<code>${escapeHtml(payment.order_id)}</code>${copyButtonHtml(payment.order_id, 'Copy order ID')}`;
+
+    const merchantEl = document.getElementById('field-merchant-name');
+    merchantEl.innerHTML = `${escapeHtml(merchant.name || payment.merchant_address)}${copyButtonHtml(payment.merchant_address, 'Copy merchant address')}`;
+
+    document.getElementById('field-date').textContent        = formatDate(payment.paid_at);
+    document.getElementById('field-token').innerHTML         = `<code>${escapeHtml(payment.token)}</code>${copyButtonHtml(payment.token, 'Copy token address')}`;
+
+    if (merchant.verified) {
+      document.getElementById('verified-badge').style.display = 'inline-flex';
+    }
+
+    const { label, cls } = statusBadge(payment.status);
+    const badge = document.getElementById('status-badge');
+    badge.textContent = label;
+    badge.className   = 'badge ' + cls;
+
+    // ── Amount display (currency-aware) ───────────────────────────────────────
+    const amountEl    = document.getElementById('field-amount');
+    const xlmEqEl     = document.getElementById('field-amount-xlm-eq');
+    const currencyToggle = document.getElementById('currency-display-select');
+
+    function refreshAmount() {
+      const mode = currencyToggle ? currencyToggle.value : 'native';
+      if (mode === 'xlm') {
+        amountEl.textContent = convertToXlm(payment.amount, payment.token);
+      } else {
+        amountEl.textContent = formatTokenAmount(payment.amount, payment.token);
+      }
+      // Show XLM equivalent only when the token isn't already XLM
+      const isXlm = !payment.token || payment.token === 'native';
+      if (xlmEqEl) {
+        xlmEqEl.style.display = (!isXlm && mode === 'native') ? 'block' : 'none';
+        xlmEqEl.textContent   = '≈ ' + convertToXlm(payment.amount, payment.token);
+      }
+    }
+
+    refreshAmount();
+    if (currencyToggle) {
+      currencyToggle.addEventListener('change', refreshAmount);
+    }
+
+    if (refunds && refunds.length > 0) {
+      const list = document.getElementById('refunds-list');
+      refunds.forEach(r => {
+        const needsHelp = r.status === 'Pending' || r.status === 'Rejected';
+        const disputeHtml = r.dispute_reason
+          ? `<div class="dispute-section">
+               <strong>⚠ Dispute Note</strong>
+               ${escapeHtml(r.dispute_reason)}
+             </div>`
+          : '';
+        const helpHtml = needsHelp
+          ? `<a class="help-link" href="mailto:support@lumenflow.io?subject=Refund%20query">Need help? Contact support →</a>`
+          : '';
+
+        const item = document.createElement('div');
+        item.className = 'refund-item';
+        item.innerHTML = `
+          <div class="refund-row">
+            <span>
+              <em class="refund-status-icon">${refundStatusIcon(r.status)}</em>
+              <strong>${escapeHtml(refundStatusLabel(r.status))}</strong>
+              ${r.dispute_reason ? '<span class="dispute-badge">⚠ Disputed</span>' : ''}
+            </span>
+            <span><strong>${formatTokenAmount(r.amount, payment.token)}</strong></span>
+          </div>
+          <div class="refund-row" style="font-size:0.8rem;color:#666;">
+            <span><strong>Reason:</strong> ${escapeHtml(r.reason || '—')}</span>
+            <span>${formatDate(r.created_at)}</span>
+          </div>
+          ${disputeHtml}
+          ${buildRefundTimeline(r)}
+          ${helpHtml}`;
+        list.appendChild(item);
+      });
+      document.getElementById('refunds-section').style.display = 'block';
+    }
+
+    document.getElementById('receipt-content').style.display = 'block';
+
+    // Initialise inline refund section (issue #1280).
+    initRefundSection(payment);
+  }
+
+  function copyLink() {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(window.location.href)
+        .then(() => {
+          if (typeof window.showToast === 'function') showToast('Link copied!', 'success');
+        })
+        .catch(() => prompt('Copy this link:', window.location.href));
+      return;
+    }
+    prompt('Copy this link:', window.location.href);
+  }
+  window.copyLink = copyLink;
+
+  /**
+   * Triggers the browser Print-to-PDF dialog with the page title pre-set to
+   * lumenflow-receipt-{order_id}.pdf so the browser suggests that filename
+   * when the user saves as PDF.
+   */
+  function downloadPdf() {
+    const orderId   = getOrderId() || 'receipt';
+    const filename  = `lumenflow-receipt-${orderId}.pdf`;
+    const prevTitle = document.title;
+    document.title  = filename;
+    window.print();
+    // Restore title after the dialog has had time to read it
+    setTimeout(() => { document.title = prevTitle; }, 500);
+  }
+  window.downloadPdf = downloadPdf;
+
+  // ── Inline refund initiation (issue #1280) ─────────────────────────────────
+
+  const REFUND_WINDOW_DAYS = 30;
+
+  /**
+   * Examine the loaded payment and decide whether to show the refund button.
+   * Called from renderReceipt() after the payment data is available.
+   *
+   * @param {object} payment - The payment record from fetchPayment().
+   */
+  function initRefundSection(payment) {
+    const section = document.getElementById('refund-initiation-section');
+    if (!section) return;
+
+    // Only show for statuses that still allow a new refund.
+    const refundableStatuses = ['Completed', 'PartiallyRefunded'];
+    if (!refundableStatuses.includes(payment.status)) return;
+
+    // Check 30-day refund window.
+    const paidAtMs = Number(payment.paid_at) * 1000;
+    const windowMs = REFUND_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+    if (Date.now() - paidAtMs > windowMs) {
+      // Outside window — keep section hidden.
+      return;
+    }
+
+    // Pre-fill form fields.
+    const orderIdInput = document.getElementById('refund-order-id-display');
+    if (orderIdInput) orderIdInput.value = payment.order_id;
+
+    const amountInput = document.getElementById('refund-amount-input');
+    if (amountInput) {
+      // Pre-fill with the remaining refundable amount (original minus already refunded).
+      const refundable = Number(payment.amount) - Number(payment.refunded_amount || 0n);
+      amountInput.value = (refundable / 1e7).toFixed(7).replace(/\.?0+$/, '');
+      amountInput.max   = (refundable / 1e7).toFixed(7);
+    }
+
+    section.style.display = 'block';
+
+    // Store payment context for the submit handler.
+    section.dataset.orderId  = payment.order_id;
+    section.dataset.maxUnits = String(Number(payment.amount) - Number(payment.refunded_amount || 0n));
+  }
+
+  /**
+   * Toggle the inline refund form open/closed.
+   */
+  function toggleRefundForm() {
+    const panel  = document.getElementById('refund-form-panel');
+    const button = document.getElementById('btn-request-refund');
+    if (!panel || !button) return;
+
+    const isOpen = panel.style.display !== 'none';
+    panel.style.display  = isOpen ? 'none' : 'block';
+    button.setAttribute('aria-expanded', String(!isOpen));
+
+    // Clear previous status messages when closing.
+    if (isOpen) {
+      document.getElementById('refund-submit-status').textContent = '';
+      document.getElementById('refund-amount-error').style.display = 'none';
+    } else {
+      // Move focus into the form.
+      const firstInput = panel.querySelector('input, textarea, button');
+      if (firstInput) firstInput.focus();
+    }
+  }
+  window.toggleRefundForm = toggleRefundForm;
+
+  /**
+   * Validate and submit the refund request.
+   * In the absence of a live contract this shows a success confirmation and
+   * redirects to the refund status view.
+   */
+  async function submitRefundRequest() {
+    const section      = document.getElementById('refund-initiation-section');
+    const amountInput  = document.getElementById('refund-amount-input');
+    const reasonInput  = document.getElementById('refund-reason-input');
+    const statusEl     = document.getElementById('refund-submit-status');
+    const errorEl      = document.getElementById('refund-amount-error');
+    const submitBtn    = document.getElementById('btn-submit-refund');
+
+    if (!section || !amountInput) return;
+
+    const orderId  = section.dataset.orderId || '';
+    const maxUnits = parseFloat(section.dataset.maxUnits || '0');
+    const enteredAmount = parseFloat(amountInput.value);
+    const enteredUnits  = Math.round(enteredAmount * 1e7);
+
+    // ── Validation ───────────────────────────────────────────────────────────
+    errorEl.style.display = 'none';
+
+    if (!enteredAmount || enteredAmount <= 0) {
+      errorEl.textContent   = 'Please enter a refund amount greater than zero.';
+      errorEl.style.display = 'block';
+      amountInput.focus();
+      return;
+    }
+
+    if (enteredUnits > maxUnits) {
+      errorEl.textContent   = `Amount exceeds the refundable balance for this order.`;
+      errorEl.style.display = 'block';
+      amountInput.focus();
+      return;
+    }
+
+    // ── Submit ───────────────────────────────────────────────────────────────
+    submitBtn.disabled = true;
+    statusEl.textContent = '⏳ Submitting refund request…';
+
+    try {
+      // Generate a unique refund ID from the order ID + timestamp.
+      const refundId = `REFUND_${orderId}_${Date.now()}`;
+      const reason   = (reasonInput ? reasonInput.value.trim() : '') || 'Requested via receipt page';
+
+      if (typeof window.lumenflowClient !== 'undefined' && window.lumenflowClient) {
+        // Live contract path — call initiate_refund.
+        await window.lumenflowClient.initiate_refund({
+          payer:    window.lumenflowWalletAddress,
+          refund_id: refundId,
+          order_id: orderId,
+          amount:   BigInt(enteredUnits),
+          reason:   reason,
+        });
+      }
+      // In demo / static mode we treat the call as immediately succeeded.
+
+      statusEl.innerHTML = '✅ Refund request submitted successfully.';
+
+      // Redirect to refund status view after a short delay.
+      setTimeout(() => {
+        const params = new URLSearchParams({ refund_id: refundId, order_id: orderId });
+        window.location.href = `refund-status.html?${params.toString()}`;
+      }, 1800);
+
+    } catch (err) {
+      statusEl.textContent = `❌ Submission failed: ${err?.message || 'Unknown error. Please try again.'}`;
+      submitBtn.disabled = false;
+    }
+  }
+  window.submitRefundRequest = submitRefundRequest;
+
+  // ── Payment link pre-fill ──────────────────────────────────────────────────
+
+  /**
+   * Returns the payment-link params from the current URL, or null if this is
+   * not a generated payment link (i.e. the `merchant` param is absent).
+   */
+  function getPaymentLinkParams() {
+    const p = new URLSearchParams(window.location.search);
+    if (!p.get('merchant')) return null;
+    return {
+      merchant: p.get('merchant'),
+      token:    p.get('token') || '',
+      amount:   p.get('amount') || '0',
+      orderId:  p.get('order_id') || p.get('orderId') || '',
+      memo:     p.get('memo') || '',
+      expires:  parseInt(p.get('expires') || '0', 10),
+    };
+  }
+
+  function renderPaymentLinkPrefill(params) {
+    const expired = params.expires && Date.now() > params.expires;
+
+    document.getElementById('prefill-merchant').textContent  = params.merchant;
+    document.getElementById('prefill-merchant').appendChild(makeCopyButton(params.merchant, 'Copy merchant address'));
+    document.getElementById('prefill-order-id').textContent  = params.orderId;
+    document.getElementById('prefill-amount').textContent    = formatAmount(BigInt(params.amount), 7, 'XLM');
+    document.getElementById('prefill-token').textContent     = params.token;
+
+    if (params.memo) {
+      document.getElementById('prefill-memo').textContent    = params.memo;
+      document.getElementById('prefill-memo-row').style.display = 'block';
+    }
+
+    if (params.expires) {
+      document.getElementById('prefill-expiry').textContent  =
+        new Date(params.expires).toLocaleString();
+    } else {
+      document.getElementById('prefill-expiry-row').style.display = 'none';
+    }
+
+    if (expired) {
+      document.getElementById('prefill-expired-badge').style.display = 'inline-flex';
+      document.getElementById('prefill-pay-btn').disabled = true;
+      document.getElementById('prefill-pay-note').style.display = 'block';
+    } else if (params.expires) {
+      // Start the live countdown for active (non-expired) requests.
+      startExpiryCountdown(params.expires);
+    }
+
+    document.getElementById('payment-prefill').style.display = 'block';
+  }
+
+  /**
+   * Starts a live countdown timer for a payment request with the given expiry
+   * timestamp (milliseconds since Unix epoch).
+   *
+   * - Updates every second.
+   * - Shows a warning state when < 60 seconds remain.
+   * - Disables the pay button and shows the expired message when TTL elapses.
+   * - Uses Intl.RelativeTimeFormat for i18n-friendly labels where available,
+   *   falling back to a plain mm:ss display.
+   *
+   * @param {number} expiresAt  Unix-millisecond timestamp when the link expires.
+   */
+  function startExpiryCountdown(expiresAt) {
+    const timerRow     = document.getElementById('prefill-countdown-row');
+    const timerText    = document.getElementById('prefill-countdown-text');
+    const warningEl    = document.getElementById('prefill-countdown-warning');
+    const expiredBadge = document.getElementById('prefill-expired-badge');
+    const payBtn       = document.getElementById('prefill-pay-btn');
+    const payNote      = document.getElementById('prefill-pay-note');
+
+    if (!timerRow || !timerText) return;
+    timerRow.style.display = 'block';
+
+    /**
+     * Format remaining seconds as a human-readable string.
+     * Uses Intl.RelativeTimeFormat when a locale is available for full i18n
+     * ("2 minutes remaining"), otherwise renders as mm:ss.
+     *
+     * @param {number} totalSeconds
+     * @returns {string}
+     */
+    function formatRemaining(totalSeconds) {
+      if (totalSeconds <= 0) return '0:00';
+
+      const mins = Math.floor(totalSeconds / 60);
+      const secs = totalSeconds % 60;
+
+      // Use Intl.RelativeTimeFormat for friendly labels (e.g. "2 minutes remaining").
+      // Gracefully degrade if the API is unavailable.
+      try {
+        const lang = document.documentElement.lang || navigator.language || 'en';
+        const rtf  = new Intl.RelativeTimeFormat(lang, { numeric: 'always', style: 'long' });
+
+        if (totalSeconds >= 120) {
+          // Round to nearest minute for readability when > 2 minutes remain.
+          return rtf.format(Math.ceil(totalSeconds / 60), 'minute').replace('-', '') + ' remaining';
+        }
+        if (totalSeconds >= 60) {
+          return '1 minute remaining';
+        }
+      } catch {
+        // Intl not available — fall through to mm:ss
+      }
+
+      // < 60 s or Intl unavailable: plain mm:ss
+      const mm = String(mins).padStart(1, '0');
+      const ss = String(secs).padStart(2, '0');
+      return `${mm}:${ss}`;
+    }
+
+    let intervalId = null;
+
+    function tick() {
+      const remaining = Math.ceil((expiresAt - Date.now()) / 1000);
+
+      if (remaining <= 0) {
+        // TTL elapsed — stop the timer and show expired state.
+        clearInterval(intervalId);
+        timerRow.style.display = 'none';
+        expiredBadge.style.display = 'inline-flex';
+        payBtn.disabled = true;
+        payNote.style.display = 'block';
+        warningEl.style.display = 'none';
+        return;
+      }
+
+      // Update timer text.
+      timerText.textContent = formatRemaining(remaining);
+
+      // Warning state when < 60 seconds remain.
+      if (remaining < 60) {
+        // Change timer colour to amber/warning.
+        const timerDiv = document.getElementById('prefill-countdown-timer');
+        if (timerDiv) {
+          timerDiv.style.color      = '#b45309';
+          timerDiv.style.background = '#fffbeb';
+          timerDiv.style.borderColor = '#fcd34d';
+        }
+        warningEl.style.display = 'block';
+      }
+    }
+
+    // Run immediately, then every second.
+    tick();
+    intervalId = setInterval(tick, 1000);
+  }
+
+  // ── Bootstrap ──────────────────────────────────────────────────────────────
+
+  (async () => {
+    renderModeBanner();
+    initCopyButtons(document.body);
+
+    // Dark mode
+    import('./dark-mode.js').then(m => m.initDarkMode());
+
+    // Check if this URL was generated by the payment link generator.
+    // If `merchant` is in the query string, show the pre-fill form instead of
+    // trying to look up a receipt that may not exist yet.
+    const linkParams = getPaymentLinkParams();
+    if (linkParams) {
+      renderPaymentLinkPrefill(linkParams);
+      return;
+    }
+
+    const orderId = getOrderId();
+    if (validateOrderId(orderId)) {
+      document.getElementById('missing-id').textContent = orderId || '(none)';
+      document.getElementById('not-found').style.display = 'block';
+      return;
+    }
+
+    document.title = `Receipt ${orderId} – LumenFlow`;
+    document.getElementById('loading').style.display = 'block';
+    showLoadingOverlay('Loading payment receipt…');
+
+    // ── IndexedDB cache integration (#1112) ────────────────────────────────
+    // Strategy:
+    //  1. Try to load fresh data from the network.
+    //  2. If successful, store in IndexedDB cache for offline use.
+    //  3. If offline (fetch fails), serve from IndexedDB cache.
+    //  4. Show a stale banner whenever cached data is served.
+
+    let data = null;
+    let servedFromCache = false;
+
+    try {
+      data = await fetchPayment(orderId);
+      if (data) {
+        // Cache the fresh result (non-blocking — don't await)
+        receiptCache.set(orderId, data).catch(() => {});
+      }
+    } catch (e) {
+      // Network error — try the cache
+      const cached = await receiptCache.get(orderId).catch(() => null);
+      if (cached) {
+        data = cached.data;
+        servedFromCache = true;
+      } else {
+        showErrorToast(e);
+      }
+    }
+
+    // If online fetch returned null (not found), still try the cache as a
+    // fallback in case connectivity was partial
+    if (!data) {
+      const cached = await receiptCache.get(orderId).catch(() => null);
+      if (cached) {
+        data = cached.data;
+        servedFromCache = true;
+      }
+    }
+
+    document.getElementById('loading').style.display = 'none';
+    hideLoadingOverlay();
+
+    if (!data) {
+      const notFound = document.getElementById('not-found');
+      document.getElementById('missing-id').textContent = orderId;
+      notFound.style.display = 'block';
+      // Move focus to not-found heading (issue #790)
+      const heading = notFound.querySelector('h2');
+      if (heading) {
+        if (!heading.hasAttribute('tabindex')) heading.setAttribute('tabindex', '-1');
+        heading.focus();
+      }
+    } else {
+      renderReceipt(data);
+      // Show stale banner if this data came from the IndexedDB cache (#1112)
+      if (servedFromCache) {
+        let staleBanner = document.getElementById('cached-receipt-banner');
+        if (!staleBanner) {
+          staleBanner = document.createElement('div');
+          staleBanner.id = 'cached-receipt-banner';
+          staleBanner.setAttribute('role', 'status');
+          staleBanner.setAttribute('aria-live', 'polite');
+          staleBanner.style.cssText = [
+            'background:#fff3cd', 'color:#856404',
+            'border:1px solid #ffc107', 'border-radius:6px',
+            'padding:0.5rem 1rem', 'margin-bottom:1rem',
+            'font-size:0.85rem', 'font-weight:600',
+          ].join(';');
+          staleBanner.textContent = '📦 Cached — may not reflect latest status';
+          const receiptEl = document.getElementById('receipt-content');
+          if (receiptEl) receiptEl.prepend(staleBanner);
+        }
+      }
+      // Move focus to receipt heading after async load (issue #790)
+      const heading = document.querySelector('#receipt-content h1');
+      if (heading) {
+        if (!heading.hasAttribute('tabindex')) heading.setAttribute('tabindex', '-1');
+        heading.focus();
+      }
+    }
+  })();
+</script>
+
+<script>
+  // ── Service Worker Registration ────────────────────────────────────────────
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker
+        .register('./sw.js', { scope: './' })
+        .then((registration) => {
+          console.log('[LumenFlow] Service worker registered:', registration.scope);
+
+          // Listen for SW updates and notify the user
+          registration.addEventListener('updatefound', () => {
+            const newWorker = registration.installing;
+            if (!newWorker) return;
+            newWorker.addEventListener('statechange', () => {
+              if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                console.log('[LumenFlow] New version available. Refresh to update.');
+              }
+            });
+          });
+        })
+        .catch((err) => {
+          console.warn('[LumenFlow] Service worker registration failed:', err);
+        });
+    });
+  }
+
+  // ── PWA Install Prompt ─────────────────────────────────────────────────────
+  let deferredInstallPrompt = null;
+
+  window.addEventListener('beforeinstallprompt', (event) => {
+    // Prevent the default mini-infobar on mobile Chrome
+    event.preventDefault();
+    deferredInstallPrompt = event;
+    showInstallBanner();
+  });
+
+  function showInstallBanner() {
+    if (document.getElementById('pwa-install-banner')) return;
+
+    const banner = document.createElement('div');
+    banner.id = 'pwa-install-banner';
+    banner.setAttribute('role', 'complementary');
+    banner.setAttribute('aria-label', 'Install LumenFlow app');
+    banner.style.cssText = [
+      'position:fixed', 'bottom:0', 'left:0', 'right:0',
+      'background:#6c47ff', 'color:#fff',
+      'padding:1rem 1.25rem',
+      'display:flex', 'align-items:center', 'justify-content:space-between',
+      'gap:0.75rem', 'flex-wrap:wrap',
+      'box-shadow:0 -2px 16px rgba(0,0,0,0.15)',
+      'z-index:9999',
+      'font-family:system-ui,-apple-system,sans-serif',
+      'font-size:0.9rem',
+    ].join(';');
+
+    banner.innerHTML = `
+      <span style="flex:1;min-width:0">
+        📱 <strong>Install LumenFlow</strong> — access payments offline, right from your home screen.
+      </span>
+      <div style="display:flex;gap:0.5rem;flex-shrink:0">
+        <button id="pwa-install-btn"
+          style="background:#fff;color:#6c47ff;border:none;border-radius:6px;padding:0.5rem 1rem;font-weight:700;font-size:0.85rem;cursor:pointer;min-height:40px"
+          aria-label="Install LumenFlow as an app">
+          Install app
+        </button>
+        <button id="pwa-dismiss-btn"
+          style="background:transparent;color:#fff;border:1.5px solid rgba(255,255,255,0.6);border-radius:6px;padding:0.5rem 0.75rem;font-size:0.85rem;cursor:pointer;min-height:40px"
+          aria-label="Dismiss install prompt">
+          Not now
+        </button>
+      </div>`;
+
+    document.body.appendChild(banner);
+
+    document.getElementById('pwa-install-btn').addEventListener('click', installApp);
+    document.getElementById('pwa-dismiss-btn').addEventListener('click', dismissBanner);
+  }
+
+  async function installApp() {
+    if (!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    const { outcome } = await deferredInstallPrompt.userChoice;
+    console.log('[LumenFlow] PWA install outcome:', outcome);
+    deferredInstallPrompt = null;
+    dismissBanner();
+  }
+
+  function dismissBanner() {
+    const banner = document.getElementById('pwa-install-banner');
+    if (banner) banner.remove();
+  }
+
+  window.addEventListener('appinstalled', () => {
+    console.log('[LumenFlow] App installed successfully.');
+    deferredInstallPrompt = null;
+    dismissBanner();
+  });
+</script>
+<!-- CSP violation reporter: logs policy violations to the console in development -->
+<script>
+  document.addEventListener('securitypolicyviolation', function(e) {
+    console.error('[CSP Violation]', {
+      blockedURI: e.blockedURI,
+      violatedDirective: e.violatedDirective,
+      effectiveDirective: e.effectiveDirective,
+      originalPolicy: e.originalPolicy,
+      sourceFile: e.sourceFile,
+      lineNumber: e.lineNumber,
+    });
+  });
+</script>
+</body>
+</html>

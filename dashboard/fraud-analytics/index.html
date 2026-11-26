@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Fraud Analytics — LumenFlow</title>
   <link rel="stylesheet" href="styles.css" />
+  <!--
+    SRI note: all external (CDN) scripts and stylesheets must include
+    integrity="sha384-..." and crossorigin="anonymous" attributes.
+    Regenerate hashes on dependency upgrade (see docs/sri-update.md).
+  -->
 </head>
 <body>
   <a href="#main-content" class="skip-link">Skip to main content</a>
@@ -215,5 +220,10 @@
   </main>
 
   <script src="app.js" type="module"></script>
+  <!--
+    SRI note: any external <script src="https://..."> added here must include
+    integrity="sha384-..." and crossorigin="anonymous". Local scripts (app.js)
+    are same-origin and do not require SRI.
+  -->
 </body>
 </html>

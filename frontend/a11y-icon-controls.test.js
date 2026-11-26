@@ -147,6 +147,62 @@ describe('payment-history.html – Search and filter inputs', () => {
   );
 });
 
+describe('payment-history.html – Filter keyboard accessibility', () => {
+  const html = readFile('payment-history.html');
+
+  assert(
+    count(html, /<select[^>]*id="filter-/g) >= 1,
+    'Filter dropdowns are native <select> elements (reachable via Tab)'
+  );
+  assert(
+    !/<select[^>]*tabindex="-1"/.test(html),
+    'No filter dropdown is removed from the Tab order with tabindex="-1"'
+  );
+  assert(
+    html.includes('filter-keyboard.js'),
+    'filter-keyboard.js is loaded on the payment history page'
+  );
+  assert(
+    /addEventListener\(\s*['"]keydown['"]/.test(html) ||
+    html.includes('filter-keyboard.js'),
+    'Filter controls have a keydown handler for Enter/Space/Escape'
+  );
+  assert(
+    html.includes('aria-haspopup') || html.includes('role="listbox"') ||
+    count(html, /<select/g) >= 1,
+    'Filter dropdowns expose popup/listbox semantics'
+  );
+  assert(
+    html.includes('aria-expanded') || count(html, /<select/g) >= 1,
+    'Filter dropdowns expose expanded state (aria-expanded or native select)'
+  );
+});
+
+describe('filter-keyboard.js – Keyboard interaction handlers', () => {
+  const js = readFile('filter-keyboard.js');
+
+  assert(
+    /['"]Enter['"]/.test(js),
+    'filter-keyboard.js handles the Enter key to apply filters'
+  );
+  assert(
+    /['"] ['"]|['"]Space['"]|['"]Spacebar['"]/.test(js),
+    'filter-keyboard.js handles the Space key to apply filters'
+  );
+  assert(
+    /['"]Escape['"]|['"]Esc['"]/.test(js),
+    'filter-keyboard.js handles the Escape key to close dropdowns'
+  );
+  assert(
+    /addEventListener\(\s*['"]keydown['"]/.test(js),
+    'filter-keyboard.js registers a keydown listener'
+  );
+  assert(
+    /\.focus\(\)/.test(js),
+    'filter-keyboard.js manages focus for keyboard navigation'
+  );
+});
+
 describe('payment-history.html – sr-only class', () => {
   const html = readFile('payment-history.html');
 

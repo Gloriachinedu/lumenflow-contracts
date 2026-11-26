@@ -533,7 +533,7 @@
 
 <nav class="lf-nav" aria-label="LumenFlow navigation">
   <span class="lf-nav__brand">⚡ LumenFlow</span>
-  <div id="wallet-status-container"></div>
+  <div id="wallet-status-container" aria-live="polite" aria-atomic="true"></div>
   <div id="lf-lang-nav"></div>
 </nav>
 
@@ -579,7 +579,7 @@
       <!-- Token -->
       <div class="filter-group">
         <label for="token-selector">Token</label>
-        <select id="token-selector">
+        <select id="token-selector" data-filter-control aria-haspopup="listbox">
           <option value="">All Tokens</option>
           <option value="native">Native (XLM)</option>
           <option value="USDC">USDC</option>
@@ -589,7 +589,7 @@
       <!-- Status -->
       <div class="filter-group">
         <label for="status-selector">Status</label>
-        <select id="status-selector">
+        <select id="status-selector" data-filter-control aria-haspopup="listbox">
           <option value="Any">Any Status</option>
           <option value="Completed">Completed</option>
           <option value="PartiallyRefunded">Partially Refunded</option>
@@ -600,15 +600,16 @@
       <!-- Currency display toggle -->
       <div class="filter-group">
         <label for="currency-display-toggle">Display Amounts As</label>
-        <select id="currency-display-toggle" aria-label="Currency display format">
+        <select id="currency-display-toggle" data-filter-control aria-haspopup="listbox" aria-label="Currency display format">
           <option value="native">Native Token</option>
           <option value="xlm">XLM Equivalent</option>
         </select>
       </div>
     </div>
 
-    <div style="display:flex;justify-content:flex-end;margin-top:0.75rem;">
-      <button type="button" id="reset-filters-btn" onclick="resetFilters()" style="padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:6px;background:#fff;color:#6c47ff;font-weight:600;font-size:0.85rem;cursor:pointer;transition:background 0.15s,color 0.15s;" aria-label="Reset all filters and clear saved preferences">Reset filters</button>
+    <div style="display:flex;justify-content:flex-end;gap:0.5rem;margin-top:0.75rem;">
+      <button id="apply-filters-btn" type="button" data-filter-control style="padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:6px;background:#6c47ff;color:#fff;font-weight:600;font-size:0.85rem;cursor:pointer;transition:background 0.15s,color 0.15s;" aria-label="Apply the selected filters">Apply filters</button>
+      <button id="reset-filters-btn" type="button" onclick="resetFilters()" data-filter-control style="padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:6px;background:#fff;color:#6c47ff;font-weight:600;font-size:0.85rem;cursor:pointer;transition:background 0.15s,color 0.15s;" aria-label="Reset all filters and clear saved preferences">Reset filters</button>
     </div>
 
     <div id="active-filters" class="active-filters" role="group" aria-label="Active filters" aria-live="polite">
@@ -685,6 +686,11 @@
 </div>
 
 <script type="module" src="history.js"></script>
+<script type="module" src="filter-keyboard.js"></script>
+<script type="module">
+  import { initWalletStatus } from './wallet-status.js';
+  initWalletStatus(document.getElementById('wallet-status-container'));
+</script>
 <script type="module">
   import { initDarkMode } from './dark-mode.js';
   initDarkMode();

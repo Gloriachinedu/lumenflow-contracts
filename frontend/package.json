@@ -7,11 +7,13 @@
     "dev": "browser-sync start --server . --files '**/*.html,**/*.css,**/*.js' --no-notify --port 3000",
     "serve": "npx serve . --listen 3000",
     "test:unit": "node --test \"tests/unit/*.test.mjs\"",
-    "test:a11y": "playwright test tests/a11y"
+    "test:security": "node --test \"tests/security/*.test.mjs\""
+  },
+  "dependencies": {
+    "dompurify": "^3.1.6"
   },
   "devDependencies": {
-    "@axe-core/playwright": "^4.10.2",
-    "@playwright/test": "^1.49.1",
+    "@lhci/cli": "^0.14.0",
     "browser-sync": "^3.0.4"
   }
 }
