@@ -9812,6 +9812,71 @@ fn test_replay_in_batch_payment_fails() {
     );
 }
 
+// ── Issue #1581: unauthenticated get_payment_summary ─────────────────────────
+
+/// `get_payment_summary` must be callable by third parties (explorers,
+/// dashboards) without any payer or merchant authorization. This test builds a
+/// fresh environment with no mocked auths at all, so any `require_auth` call in
+/// the entrypoint would panic and fail the test.
+#[test]
+fn test_get_payment_summary_requires_no_auth() {
+    // Build a fully configured environment first (auths mocked for setup only).
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "SUMMARY_001", 750);
+
+    // Drop every mocked authorization: from here on, any require_auth panics.
+    env.mock_auths(&[]);
+
+    let summary = client.get_payment_summary(&str(&env, "SUMMARY_001"));
+
+    assert_eq!(summary.order_id, str(&env, "SUMMARY_001"));
+    assert_eq!(summary.merchant, merchant);
+    assert_eq!(summary.amount, 750);
+    assert!(matches!(summary.status, PaymentStatus::Completed));
+    assert_eq!(summary.created_at, env.ledger().timestamp());
+}
+
+/// The public summary must not leak the payer address (sensitive field).
+#[test]
+fn test_get_payment_summary_omits_payer_address() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "SUMMARY_002", 100);
+
+    env.mock_auths(&[]);
+
+    let summary = client.get_payment_summary(&str(&env, "SUMMARY_002"));
+
+    // PaymentSummary has no payer field; serializing it must not contain the
+    // payer's address bytes anywhere in the payload.
+    let encoded = summary.clone().to_xdr(&env);
+    let payer_xdr = payer.clone().to_xdr(&env);
+    assert!(
+        !encoded.windows(payer_xdr.len()).any(|w| w == payer_xdr.as_slice()),
+        "payer address must not be exposed in the public payment summary"
+    );
+}
+
+/// Regression test for the security catalogue entry covering the
+/// unauthenticated read-only entrypoint (#1581 / #1353): a caller with no
+/// wallet auth must be able to read the summary, and unknown order ids must
+/// fail cleanly rather than leaking data.
+#[test]
+fn test_security_regression_unauthenticated_payment_summary() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "SEC_SUMMARY", 42);
+
+    env.mock_auths(&[]);
+
+    // Read succeeds without auth.
+    let summary = client.get_payment_summary(&str(&env, "SEC_SUMMARY"));
+    assert_eq!(summary.order_id, str(&env, "SEC_SUMMARY"));
+    assert_eq!(summary.amount, 42);
+
+    // Unknown order ids are rejected with a typed error, not a panic.
+    let missing = client.try_get_payment_summary(&str(&env, "SEC_SUMMARY_MISSING"));
+    assert_eq!(missing, Err(Ok(PaymentError::PaymentNotFound)));
+}
+
 // ── Issue #1025: config_updated event tests ───────────────────────────────────
 
 #[test]
