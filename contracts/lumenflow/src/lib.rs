@@ -84,6 +84,11 @@ pub const MIN_LOCK_SECS: u64 = 3600;
 /// Default lead time (seconds) before `unlock_at` at which an expiry warning is emitted (issue #1623).
 pub const DEFAULT_WARNING_LEAD_TIME: u64 = 24 * 3600;
 
+/// Number of ledgers persistent storage entries are extended to live for on
+/// every read. Defined once in `storage` and re-exported here so callers and
+/// tests can reference the single source of truth.
+pub use storage::LEDGERS_TO_LIVE;
+
 #[contract]
 pub struct PaymentProcessingContract;
 
