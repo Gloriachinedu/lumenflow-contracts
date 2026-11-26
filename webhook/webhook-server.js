@@ -33,6 +33,17 @@
 
 'use strict';
 
+// ---------------------------------------------------------------------------
+// Distributed tracing (OpenTelemetry)
+//
+// Must be required and started before any other module so that the SDK can
+// patch instrumented libraries (http, node-fetch, etc.) at load time.
+// ---------------------------------------------------------------------------
+
+const { startTracing, shutdownTracing, trace, propagation, SpanStatusCode } = require('./tracing');
+
+startTracing('webhook-relay');
+
 const EventSource = require('eventsource');
 const fetch = require('node-fetch');
 const fs = require('fs');
@@ -411,9 +422,14 @@ async function deliverWithRetry(eventName, data, ledger, pagingToken, merchantId
     await deliveryRateLimiter.acquire(rateLimitKey);
 
     try {
+      // Propagate W3C trace context to the downstream webhook receiver.
+      const traceHeaders = {};
+      propagation.inject(trace.setSpan(trace.context.active(), span), traceHeaders);
+
       const response = await fetch(WEBHOOK_URL, {
         method: 'POST',
         headers: applySecurityHeaders({
+          ...traceHeaders,
           'Content-Type': 'application/json',
           'X-LumenFlow-Event': eventName,
           'X-LumenFlow-Paging-Token': pagingToken,
@@ -422,19 +438,30 @@ async function deliverWithRetry(eventName, data, ledger, pagingToken, merchantId
         body: payload,
       });
 
+      span.setAttribute('http.status_code', response.status);
+
       if (response.ok) {
+        span.setStatus({ code: SpanStatusCode.OK });
         console.log(`[delivered] ${eventName} (token=${pagingToken}, attempt=${attempt})`);
         return;
       }
 
       const body = await response.text().catch(() => '');
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: `HTTP ${response.status}`,
+      });
       console.warn(
         `[retry] ${eventName} attempt ${attempt}/${MAX_RETRIES} — HTTP ${response.status}: ${body}`,
       );
     } catch (err) {
+      span.recordException(err);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
       console.warn(
         `[retry] ${eventName} attempt ${attempt}/${MAX_RETRIES} — network error: ${err.message}`,
       );
+    } finally {
+      span.end();
     }
 
     if (attempt < MAX_RETRIES) {
@@ -617,19 +644,30 @@ let shutdownRequested = false;
  * @returns {Promise<void>}
  */
 async function handleMessage(msg) {
-  let event;
-  try {
-    event = JSON.parse(msg.data);
-  } catch (err) {
-    console.error('[parse] Failed to parse SSE message:', err.message, msg.data);
-    return;
-  }
+  const span = trace.getTracer('webhook-relay').startSpan('webhook.handleMessage', {
+    kind: trace.SpanKind.SERVER,
+    attributes: {
+      'messaging.system': 'horizon-sse',
+      'messaging.operation': 'process',
+    },
+  });
 
-  const pagingToken = event.paging_token;
-  if (!pagingToken) {
-    console.warn('[skip] Event missing paging_token — cannot deduplicate:', event);
-    return;
-  }
+  try {
+    let event;
+    try {
+      event = JSON.parse(msg.data);
+    } catch (err) {
+      span.recordException(err);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+      console.error('[parse] Failed to parse SSE message:', err.message, msg.data);
+      return;
+    }
+
+    const pagingToken = event.paging_token;
+    if (!pagingToken) {
+      console.warn('[skip] Event missing paging_token — cannot deduplicate:', event);
+      return;
+    }
 
   // ── Idempotency check ────────────────────────────────────────────────────
   // Atomically claim the token before delivery.  If it is already claimed
@@ -664,8 +702,15 @@ async function handleMessage(msg) {
     ledger: event.ledger,
   });
 
-  // Persist cursor after successful processing so restarts resume here.
-  saveCursor(pagingToken);
+    // Persist cursor after successful processing so restarts resume here.
+    saveCursor(pagingToken);
+  } catch (err) {
+    span.recordException(err);
+    span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+    throw err;
+  } finally {
+    span.end();
+  }
 }
 
 function connect() {

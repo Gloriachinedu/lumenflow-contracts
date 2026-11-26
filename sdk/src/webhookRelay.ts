@@ -340,9 +340,39 @@ export class WebhookRelay {
         return { status: 'delivered', key, attempts: attempt };
       }
 
-      lastStatus = response?.status;
-      const retryable = threw || (lastStatus !== undefined && isRetryableStatus(lastStatus));
-      const isLast = attempt === this.maxAttempts;
+        let lastStatus: number | undefined;
+        for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
+          let response: DeliveryResponse | undefined;
+          let threw = false;
+          let thrownError: unknown;
+          try {
+            response = await tracer.startActiveSpan('webhook.deliver', async (deliverSpan) => {
+              deliverSpan.setAttribute('webhook.attempt', attempt);
+              try {
+                const result = await this.deliver(event);
+                deliverSpan.setAttribute('http.status_code', result.status);
+                if (result.status < 200 || result.status >= 300) {
+                  deliverSpan.setStatus({
+                    code: SpanStatusCode.ERROR,
+                    message: `HTTP ${result.status}`,
+                  });
+                }
+                return result;
+              } catch (err) {
+                deliverSpan.recordException(err as Error);
+                deliverSpan.setStatus({
+                  code: SpanStatusCode.ERROR,
+                  message: err instanceof Error ? err.message : String(err),
+                });
+                throw err;
+              } finally {
+                deliverSpan.end();
+              }
+            });
+          } catch (err) {
+            threw = true;
+            thrownError = err;
+          }
 
       if (!retryable) {
         this.log('error', 'relay', Date.now() - startedAt, {
@@ -372,9 +402,14 @@ export class WebhookRelay {
         throw new WebhookDeliveryError(
           `webhook delivery for event ${key} exhausted ${this.maxAttempts} attempts`,
           event,
-          attempt,
+          this.maxAttempts,
           lastStatus,
         );
+        span.recordException(error);
+        span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+        throw error;
+      } finally {
+        span.end();
       }
 
       const backoff = Math.min(this.baseDelayMs * 2 ** (attempt - 1), this.maxDelayMs);
