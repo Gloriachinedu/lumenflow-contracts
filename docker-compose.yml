@@ -1,5 +1,57 @@
 services:
+  # ── Internal CA / certificate issuance ──────────────────────────────────────
+  # Generates a short-lived (<90-day) internal CA and per-service certificates
+  # into the shared `certs` volume. Re-running this service rotates the certs;
+  # schedule it (e.g. via cron / a sidecar) to automate rotation.
+  cert-init:
+    image: alpine:3.19
+    volumes:
+      - certs:/certs
+    environment:
+      # Certificate validity in days; must stay below 90 days.
+      - CERT_VALIDITY_DAYS=${CERT_VALIDITY_DAYS:-30}
+      # Comma-separated list of internal service DNS names to issue certs for.
+      - CERT_SERVICES=${CERT_SERVICES:-webhook-relay,event-poller,monitoring-exporter}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -euo pipefail
+        apk add --no-cache openssl > /dev/null
+        mkdir -p /certs
+        cd /certs
+
+        DAYS="${CERT_VALIDITY_DAYS}"
+        SERVICES="${CERT_SERVICES}"
+
+        # Internal CA (regenerated only if missing)
+        if [ ! -f ca.crt ] || [ ! -f ca.key ]; then
+          echo "==> Generating internal CA..."
+          openssl genrsa -out ca.key 4096
+          openssl req -x509 -new -nodes -key ca.key -sha256 -days "${DAYS}" \
+            -subj "/CN=internal-ca" -out ca.crt
+        fi
+
+        # Per-service certificates signed by the internal CA
+        for svc in $(echo "${SERVICES}" | tr ',' ' '); do
+          echo "==> Issuing certificate for ${svc}..."
+          openssl genrsa -out "${svc}.key" 2048
+          openssl req -new -key "${svc}.key" -subj "/CN=${svc}" -out "${svc}.csr"
+          cat > "${svc}.ext" <<EOF
+        subjectAltName=DNS:${svc},DNS:localhost
+        extendedKeyUsage=serverAuth,clientAuth
+        EOF
+          openssl x509 -req -in "${svc}.csr" -CA ca.crt -CAkey ca.key \
+            -CAcreateserial -out "${svc}.crt" -days "${DAYS}" -sha256 \
+            -extfile "${svc}.ext"
+          rm -f "${svc}.csr" "${svc}.ext"
+        done
+
+        chmod 644 /certs/*.crt
+        chmod 600 /certs/*.key
+        echo "==> Certificates ready in /certs"
+
   toxiproxy:
+=======
     image: ghcr.io/shopify/toxiproxy:2.9.0
     ports:
       - "8474:8474"
@@ -8,6 +60,20 @@ services:
       test: ["CMD", "wget", "-qO-", "http://localhost:8474/proxies"]
       interval: 3s
       timeout: 3s
+      retries: 10
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4318:4318"     # OTLP HTTP receiver
+      - "6831:6831/udp" # Jaeger agent (compact thrift over UDP)
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:16686"]
+      interval: 5s
+      timeout: 5s
       retries: 10
 
   stellar:
@@ -34,16 +100,21 @@ services:
       # Shared volume: CONTRACT_ID is written to /shared/contract-id.txt
       - shared-data:/shared
     working_dir: /workspace
+    # Local overrides come from an uncommitted .env file (see .env.example).
+    # Required variables are validated at startup by scripts/validate-secrets.sh.
+    env_file:
+      - .env
     environment:
       # Required: the Stellar secret key used to build and deploy the contract.
       # Set SOURCE_ACCOUNT in your shell or a local .env file before running
-      # `docker compose up`.
-      - SOURCE_ACCOUNT=${SOURCE_ACCOUNT}
-      # Stellar node coordinates (resolved via Docker's internal DNS)
-      - STELLAR_URL=http://stellar:8000
-      - RPC_URL=http://stellar:8000/soroban/rpc
-      - NETWORK=local
-      - NETWORK_PASSPHRASE=Standalone Network ; February 2017
+      # `docker compose up`. The `:?` form makes compose fail clearly if unset.
+      - SOURCE_ACCOUNT=${SOURCE_ACCOUNT:?SOURCE_ACCOUNT must be set (see .env.example)}
+      # Stellar node coordinates (resolved via Docker's internal DNS).
+      # Override via .env for non-local environments.
+      - STELLAR_URL=${STELLAR_URL:-http://stellar:8000}
+      - RPC_URL=${RPC_URL:-http://stellar:8000/soroban/rpc}
+      - NETWORK=${NETWORK:-local}
+      - NETWORK_PASSPHRASE=${NETWORK_PASSPHRASE:-Standalone Network ; February 2017}
       # Set SEED=0 to skip test-data creation
       - SEED=${SEED:-1}
       # ── Seed / test keys (generate with: stellar keys generate --network local <name>) ──
@@ -59,6 +130,10 @@ services:
       - PAYER_KEY=${PAYER_KEY:-}
       - PAYER_ADDRESS=${PAYER_ADDRESS:-}
       - TOKEN_ADDRESS=${TOKEN_ADDRESS:-}
+      # ── OpenTelemetry / distributed tracing ──
+      # Export traces to the local Jaeger instance (OTLP HTTP).
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4318}
+      - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-stellar-payment-setup}
     # Install prerequisites (curl, Rust, Stellar CLI) then run the setup script.
     # The install step is intentionally fast-pathed: if the tools are already
     # present the commands are no-ops.
@@ -66,6 +141,9 @@ services:
     command:
       - |
         set -euo pipefail
+        echo "==> Validating required environment variables..."
+        bash /workspace/scripts/validate-secrets.sh
+
         echo "==> Installing prerequisites..."
         apt-get update -qq
         apt-get install -y --no-install-recommends curl ca-certificates build-essential pkg-config \
@@ -87,5 +165,71 @@ services:
 
         exec bash /workspace/scripts/docker-setup.sh
 
+  # ── Internal services (mTLS) ────────────────────────────────────────────────
+  webhook-relay:
+    image: ${WEBHOOK_RELAY_IMAGE:-internal/webhook-relay:latest}
+    depends_on:
+      cert-init:
+        condition: service_completed_successfully
+    volumes:
+      - certs:/certs:ro
+    environment:
+      - TLS_ENABLED=true
+      - TLS_CA_CERT=/certs/ca.crt
+      - TLS_CERT=/certs/webhook-relay.crt
+      - TLS_KEY=/certs/webhook-relay.key
+      # Internal service-to-service endpoints must use https://
+      - EVENT_POLLER_URL=https://event-poller:8443
+      - MONITORING_EXPORTER_URL=https://monitoring-exporter:8443
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "--cacert", "/certs/ca.crt", "https://localhost:8443/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  event-poller:
+    image: ${EVENT_POLLER_IMAGE:-internal/event-poller:latest}
+    depends_on:
+      cert-init:
+        condition: service_completed_successfully
+    volumes:
+      - certs:/certs:ro
+    environment:
+      - TLS_ENABLED=true
+      - TLS_CA_CERT=/certs/ca.crt
+      - TLS_CERT=/certs/event-poller.crt
+      - TLS_KEY=/certs/event-poller.key
+      # Internal service-to-service endpoints must use https://
+      - WEBHOOK_RELAY_URL=https://webhook-relay:8443
+      - MONITORING_EXPORTER_URL=https://monitoring-exporter:8443
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "--cacert", "/certs/ca.crt", "https://localhost:8443/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  monitoring-exporter:
+    image: ${MONITORING_EXPORTER_IMAGE:-internal/monitoring-exporter:latest}
+    depends_on:
+      cert-init:
+        condition: service_completed_successfully
+    volumes:
+      - certs:/certs:ro
+    environment:
+      - TLS_ENABLED=true
+      - TLS_CA_CERT=/certs/ca.crt
+      - TLS_CERT=/certs/monitoring-exporter.crt
+      - TLS_KEY=/certs/monitoring-exporter.key
+      # Internal service-to-service endpoints must use https://
+      - WEBHOOK_RELAY_URL=https://webhook-relay:8443
+      - EVENT_POLLER_URL=https://event-poller:8443
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "--cacert", "/certs/ca.crt", "https://localhost:8443/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   shared-data:
+  # Shared volume holding the internal CA and per-service certificates.
+  certs:

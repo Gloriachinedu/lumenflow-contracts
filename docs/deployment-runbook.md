@@ -693,16 +693,68 @@ Update `docs/release-hashes.md` to mark the rolled-back version as retired.
 A canary deployment runs a new contract instance alongside the stable one and
 routes a small fraction of traffic to it before a full cutover.
 
-### 10.1 Deploy the canary
+The canary pipeline is **fully automated**: `deploy-canary.sh` runs the smoke
+tests immediately after deploying, promotion to stable happens only when every
+smoke test exits `0`, and any failure triggers an automatic rollback via
+`rollback-canary.sh` plus a Slack alert. **Manual promotion is no longer
+required** — do not run `promote-canary.sh` by hand as part of the normal flow.
+
+### 10.1 Deploy the canary (smoke tests run automatically)
 
 ```bash
 NETWORK=testnet SOURCE_ACCOUNT=<deployer-secret> ./scripts/deploy-canary.sh
 ```
 
 The script prints and writes the `CANARY_CONTRACT_ID` to
-`canary-contract-id.txt`.
+`canary-contract-id.txt`, then automatically runs the canary smoke tests
+(`canary-health-check.sh`) against the freshly deployed canary. No separate
+manual invocation of the health check is needed.
 
-### 10.2 Initialise and register the canary
+### 10.2 Automated gating and promotion
+
+After the smoke tests complete, the pipeline decides the outcome:
+
+| Outcome | Condition | Action |
+|---------|-----------|--------|
+| **Promote** | Every smoke test exits `0` | `promote-canary.sh` runs automatically — canary becomes the stable contract |
+| **Roll back** | Any smoke test exits non-zero | `rollback-canary.sh` runs automatically and a Slack alert is posted to `#deploys` |
+
+Promotion is gated strictly on the smoke test exit codes: a single failing test
+blocks promotion and forces the rollback path. There is no override in the
+normal pipeline — if you need to bypass a failure, fix the underlying issue and
+re-deploy.
+
+### 10.3 Monitor the automated run
+
+Watch for `lumenflow/routed_to_canary` and `lumenflow/routed_to_stable` events
+from the router, plus `lumenflow/payment_processed` from both contracts.
+Compare error rates and latency. See [docs/monitoring.md](monitoring.md).
+
+The Slack notification in `#deploys` reports whether the canary was promoted or
+rolled back, along with a link to the run and the failing smoke test output.
+
+### 10.4 After an automatic rollback
+
+1. Inspect the smoke test output referenced in the Slack alert to find the root
+   cause.
+2. Fix the issue and validate on testnet before re-running `deploy-canary.sh`.
+3. Do **not** manually run `promote-canary.sh` to force a failed canary live.
+4. Document the incident per section 9 step 7.
+
+### 10.5 Manual commands (reference only)
+
+These scripts are normally invoked by the pipeline. Run them manually only for
+debugging or recovery:
+
+```bash
+# Promote the current canary to stable (normally automatic)
+./scripts/promote-canary.sh
+
+# Roll back the canary to the previous stable contract (normally automatic)
+./scripts/rollback-canary.sh
+```
+
+### 10.6 Initialise and register the canary (manual setup)
 
 ```bash
 # Initialise admin on the canary
@@ -716,24 +768,6 @@ stellar contract invoke --id $ROUTER_CONTRACT_ID --source-account $SOURCE_ACCOUN
 
 stellar contract invoke --id $ROUTER_CONTRACT_ID --source-account $SOURCE_ACCOUNT \
   --network testnet -- set_canary_weight --admin $ADMIN_ADDR --weight 5
-```
-
-### 10.3 Monitor error rates
-
-Watch for `lumenflow/routed_to_canary` and `lumenflow/routed_to_stable` events
-from the router, plus `lumenflow/payment_processed` from both contracts.
-Compare error rates and latency. See [docs/monitoring.md](monitoring.md).
-
-### 10.4 Promote the canary to stable
-
-```bash
-./scripts/promote-canary.sh
-```
-
-### 10.5 Roll back the canary
-
-```bash
-./scripts/rollback-canary.sh
 ```
 
 ---

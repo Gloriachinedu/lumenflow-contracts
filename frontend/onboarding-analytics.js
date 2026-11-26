@@ -40,6 +40,7 @@
     onboarding_started:            { props: [] },
     onboarding_step_viewed:        { props: ['step', 'stage'] },
     onboarding_step_completed:     { props: ['step', 'stage'] },
+    onboarding_step_duration:      { props: ['step', 'stage', 'duration_ms'] },
     onboarding_step_back:          { props: ['from_step', 'to_step'] },
     wallet_connect_attempted:      { props: ['provider'] },
     wallet_connected:              { props: ['provider', 'is_demo'] },
@@ -50,7 +51,17 @@
     merchant_registration_failed:       { props: ['is_demo', 'reason'] },
     onboarding_completed:          { props: ['duration_ms', 'is_demo'] },
     onboarding_abandoned:          { props: ['step', 'stage'] },
+    // Activation-funnel milestones consumed by the onboarding analytics
+    // dashboard (issue #1577). Each carries the funnel `stage` so the
+    // dashboard can bucket events without re-deriving wizard position.
+    merchant_registered:           { props: ['stage', 'is_demo', 'duration_ms'] },
+    first_payment_completed:       { props: ['stage', 'amount_bucket', 'asset'] },
   };
+
+  // Coarse, non-identifying amount buckets for `first_payment_completed`.
+  // Raw amounts are never emitted — only the bucket label.
+  var AMOUNT_BUCKETS = ['lt_10', '10_100', '100_1k', '1k_10k', 'gte_10k'];
+  var ASSETS = ['xlm', 'usdc', 'other'];
 
   // Property allow-list values. Free-form strings are length-clamped; enum-like
   // properties are validated against these sets.
@@ -70,6 +81,9 @@
     startedAt: null,
     dropped: 0,
     lastStage: null,
+    // Step whose view was most recently recorded, and when (ms, monotonic).
+    currentStep: null,
+    stepStartedAt: null,
   };
 
   function now() {
@@ -102,6 +116,28 @@
   function clampString(value, max) {
     var s = String(value == null ? '' : value);
     return s.length > max ? s.slice(0, max) : s;
+  }
+
+  function validStep(value) {
+    var n = parseInt(value, 10);
+    return (n >= 1 && n <= 5) ? n : null;
+  }
+
+  /**
+   * Emit `onboarding_step_duration` for the step currently being timed, then
+   * clear the timer. Safe to call when no step is being timed (no-op).
+   */
+  function flushStepDuration() {
+    if (state.currentStep == null || state.stepStartedAt == null) return;
+    var step = state.currentStep;
+    var duration = now() - state.stepStartedAt;
+    state.currentStep = null;
+    state.stepStartedAt = null;
+    Analytics.track('onboarding_step_duration', {
+      step: step,
+      stage: FUNNEL_STAGES[step],
+      duration_ms: duration,
+    });
   }
 
   function isDenied(key) {
@@ -138,6 +174,10 @@
       }
       case 'reason':
         return clampString(value, MAX_REASON_LEN);
+      case 'amount_bucket':
+        return AMOUNT_BUCKETS.indexOf(value) !== -1 ? value : undefined;
+      case 'asset':
+        return ASSETS.indexOf(value) !== -1 ? value : undefined;
       case 'fields': {
         if (!Array.isArray(value)) return undefined;
         var out = value.filter(function (f) {
@@ -235,17 +275,71 @@
 
     /** Convenience helper for the common step-view signal. */
     stepViewed: function (step) {
-      var stage = FUNNEL_STAGES[step];
-      if (stage && stage !== state.lastStage) {
+      var n = validStep(step);
+      if (n == null) return;
+      var stage = FUNNEL_STAGES[n];
+      if (!stage) return;
+      // Leaving a different step: report how long it was on screen.
+      if (state.currentStep != null && state.currentStep !== n) {
+        flushStepDuration();
+      }
+      if (stage !== state.lastStage) {
         state.lastStage = stage;
-        this.track('onboarding_step_viewed', { step: step, stage: stage });
+        this.track('onboarding_step_viewed', { step: n, stage: stage });
+      }
+      // (Re)start the per-step timer for the step now being viewed.
+      if (state.currentStep !== n) {
+        state.currentStep = n;
+        state.stepStartedAt = now();
       }
     },
 
     /** Convenience helper for the common step-complete signal. */
     stepCompleted: function (step) {
+      var n = validStep(step);
+      if (n == null) return;
+      // Emit time spent on the step before marking it complete.
+      if (state.currentStep === n) {
+        flushStepDuration();
+      }
       this.track('onboarding_step_completed', {
-        step: step, stage: FUNNEL_STAGES[step],
+        step: n, stage: FUNNEL_STAGES[n],
+      });
+    },
+
+    /**
+     * Emit `wallet_connected` for the activation funnel. `provider` must be
+     * one of the known providers; `is_demo` flags demo-mode connections.
+     */
+    walletConnected: function (provider, isDemo) {
+      return this.track('wallet_connected', {
+        provider: provider, is_demo: Boolean(isDemo),
+      });
+    },
+
+    /**
+     * Emit `merchant_registered` once registration succeeds. Carries the
+     * funnel stage and elapsed duration so the dashboard can compute
+     * wallet-connect → register conversion.
+     */
+    merchantRegistered: function (isDemo) {
+      return this.track('merchant_registered', {
+        stage: 'done',
+        is_demo: Boolean(isDemo),
+        duration_ms: this.elapsedMs(),
+      });
+    },
+
+    /**
+     * Emit `first_payment_completed` for the final funnel step. Only a coarse
+     * amount bucket and asset symbol are emitted — never the raw amount or
+     * any counterparty details.
+     */
+    firstPaymentCompleted: function (amountBucket, asset) {
+      return this.track('first_payment_completed', {
+        stage: 'done',
+        amount_bucket: amountBucket,
+        asset: asset,
       });
     },
 

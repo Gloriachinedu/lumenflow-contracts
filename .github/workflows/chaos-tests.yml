@@ -9,8 +9,10 @@ jobs:
   chaos:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      # actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # actions/setup-node@v4
+      - uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a
         with:
           node-version: 22
       - name: Start Toxiproxy
@@ -29,7 +31,8 @@ jobs:
           RPC_URL: http://localhost:18000
       - name: Upload chaos results
         if: always()
-        uses: actions/upload-artifact@v4
+        # actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: rpc-chaos-results
           path: chaos-results.log

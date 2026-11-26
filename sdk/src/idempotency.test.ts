@@ -176,3 +176,85 @@ describe("withIdempotency", () => {
     expect(fn2).toHaveBeenCalledTimes(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Concurrent duplicate submissions (chaos: duplicate payment races)
+// ---------------------------------------------------------------------------
+
+describe("withIdempotency — concurrent duplicate submissions", () => {
+  it("returns the same result to all concurrent callers for one key", async () => {
+    const result = { orderId: "ORDER-RACE-1", status: "ok" };
+    const fn = jest.fn().mockResolvedValue(result);
+
+    const results = await Promise.all([
+      withIdempotency("key-a", fn),
+      withIdempotency("key-a", fn),
+      withIdempotency("key-a", fn),
+      withIdempotency("key-a", fn),
+      withIdempotency("key-a", fn),
+    ]);
+
+    for (const r of results) {
+      expect(r).toEqual(result);
+    }
+  });
+
+  it("invokes fn at most once when submissions race for the same key", async () => {
+    let resolveFn: (value: unknown) => void = () => {};
+    const fn = jest.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveFn = resolve;
+        }),
+    );
+
+    const pending = [
+      withIdempotency("key-a", fn),
+      withIdempotency("key-a", fn),
+      withIdempotency("key-a", fn),
+    ];
+
+    // Let the microtask queue drain so the first call registers.
+    await Promise.resolve();
+
+    resolveFn({ orderId: "ORDER-RACE-2" });
+
+    const results = await Promise.all(pending);
+    expect(fn).toHaveBeenCalledTimes(1);
+    for (const r of results) {
+      expect(r).toEqual({ orderId: "ORDER-RACE-2" });
+    }
+  });
+
+  it("does not cache a failed submission so a retry can succeed", async () => {
+    const fn = jest
+      .fn()
+      .mockRejectedValueOnce(new Error("RPC timeout"))
+      .mockResolvedValueOnce({ orderId: "ORDER-RACE-3", status: "ok" });
+
+    await expect(withIdempotency("key-a", fn)).rejects.toThrow("RPC timeout");
+
+    const retried = await withIdempotency("key-a", fn);
+    expect(retried).toEqual({ orderId: "ORDER-RACE-3", status: "ok" });
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps concurrent submissions for distinct keys isolated", async () => {
+    const fnA = jest.fn().mockResolvedValue({ orderId: "ORDER-A" });
+    const fnB = jest.fn().mockResolvedValue({ orderId: "ORDER-B" });
+
+    const [a1, b1, a2, b2] = await Promise.all([
+      withIdempotency("key-a", fnA),
+      withIdempotency("key-b", fnB),
+      withIdempotency("key-a", fnA),
+      withIdempotency("key-b", fnB),
+    ]);
+
+    expect(a1).toEqual({ orderId: "ORDER-A" });
+    expect(a2).toEqual({ orderId: "ORDER-A" });
+    expect(b1).toEqual({ orderId: "ORDER-B" });
+    expect(b2).toEqual({ orderId: "ORDER-B" });
+    expect(fnA).toHaveBeenCalledTimes(1);
+    expect(fnB).toHaveBeenCalledTimes(1);
+  });
+});

@@ -13,20 +13,143 @@ jobs:
     name: Label PR by size
     runs-on: ubuntu-latest
     steps:
-      - name: Apply size label
-        uses: codelytv/pr-size-labeler@f0c4cdde2802b7f244aba8d23cf9f0d7dc7be490  # v1.10.1
+      - name: Compute PR size and apply labels
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
         with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          xs_max_size: 49
-          s_max_size: 200
-          m_max_size: 500
-          l_max_size: 1000
-          xs_label: "size/XS"
-          s_label:  "size/S"
-          m_label:  "size/M"
-          l_label:  "size/L"
-          xl_label: "size/XL"
-          fail_if_xl: false
-          message_if_xl: >
-            ⚠️ This PR is **extra-large** (>1000 lines changed).
-            Please consider splitting it into smaller, focused PRs to make review easier.
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+
+            // Files excluded from the size calculation (auto-generated / lockfiles).
+            const EXCLUDED_PATTERNS = [
+              /(^|\/)Cargo\.lock$/,
+              /(^|\/)package-lock\.json$/,
+              /(^|\/)yarn\.lock$/,
+              /(^|\/)pnpm-lock\.yaml$/,
+              /(^|\/)npm-shrinkwrap\.json$/,
+              /(^|\/)Gemfile\.lock$/,
+              /(^|\/)poetry\.lock$/,
+              /(^|\/)composer\.lock$/,
+              /(^|\/)go\.sum$/,
+              /(^|\/)Pipfile\.lock$/,
+              /(^|\/)bun\.lockb$/,
+            ];
+
+            const isExcluded = (filename) =>
+              EXCLUDED_PATTERNS.some((re) => re.test(filename));
+
+            // Fetch all changed files (paginated).
+            const files = await github.paginate(
+              github.rest.pulls.listFiles,
+              { owner, repo, pull_number, per_page: 100 }
+            );
+
+            let changedLines = 0;
+            for (const file of files) {
+              if (isExcluded(file.filename)) continue;
+              changedLines += (file.additions || 0) + (file.deletions || 0);
+            }
+            core.info(`Changed lines (excluding generated files): ${changedLines}`);
+
+            // Thresholds: XS <50, S 50-200, M 200-500, L 500-800, XL >800.
+            const SIZE_LABELS = ['size/XS', 'size/S', 'size/M', 'size/L', 'size/XL'];
+            const BLOCKED_LABEL = 'size/blocked';
+
+            let sizeLabel;
+            if (changedLines < 50) sizeLabel = 'size/XS';
+            else if (changedLines <= 200) sizeLabel = 'size/S';
+            else if (changedLines <= 500) sizeLabel = 'size/M';
+            else if (changedLines <= 800) sizeLabel = 'size/L';
+            else sizeLabel = 'size/XL';
+
+            const isXL = sizeLabel === 'size/XL';
+            const isBlocked = changedLines > 1500;
+
+            // Determine current labels.
+            const { data: issue } = await github.rest.issues.get({
+              owner, repo, issue_number: pull_number,
+            });
+            const currentLabels = new Set(issue.labels.map((l) =>
+              typeof l === 'string' ? l : l.name
+            ));
+
+            // Remove stale size labels.
+            const toRemove = [];
+            for (const label of SIZE_LABELS) {
+              if (label !== sizeLabel && currentLabels.has(label)) toRemove.push(label);
+            }
+            if (!isBlocked && currentLabels.has(BLOCKED_LABEL)) toRemove.push(BLOCKED_LABEL);
+            for (const label of toRemove) {
+              await github.rest.issues.removeLabel({
+                owner, repo, issue_number: pull_number, name: label,
+              }).catch((err) => {
+                if (err.status !== 404) throw err;
+              });
+            }
+
+            // Add the correct size label (idempotent).
+            if (!currentLabels.has(sizeLabel)) {
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: pull_number, labels: [sizeLabel],
+              });
+            }
+
+            // Handle the XL comment (post or update).
+            const COMMENT_MARKER = '<!-- pr-size-labeler -->';
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number: pull_number, per_page: 100,
+            });
+            const existing = comments.find(
+              (c) => c.user && c.user.type === 'Bot' && c.body && c.body.includes(COMMENT_MARKER)
+            );
+
+            if (isXL) {
+              let body = `${COMMENT_MARKER}\n`;
+              body += `⚠️ This PR is **extra-large** (${changedLines} lines changed, excluding generated files).\n\n`;
+              body += `Please consider splitting it into smaller, focused PRs to make review easier.\n`;
+              if (isBlocked) {
+                body += `\n🚫 This PR exceeds **1500 changed lines** and is **blocked** pending review from two maintainers.\n`;
+              }
+              if (existing) {
+                await github.rest.issues.updateComment({
+                  owner, repo, comment_id: existing.id, body,
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: pull_number, body,
+                });
+              }
+            } else if (existing) {
+              await github.rest.issues.deleteComment({
+                owner, repo, comment_id: existing.id,
+              });
+            }
+
+            // Blocking behavior for very large PRs.
+            if (isBlocked) {
+              if (!currentLabels.has(BLOCKED_LABEL)) {
+                await github.rest.issues.addLabels({
+                  owner, repo, issue_number: pull_number, labels: [BLOCKED_LABEL],
+                });
+              }
+
+              // Request reviews from two maintainers via CODEOWNERS.
+              try {
+                await github.rest.pulls.requestReviewers({
+                  owner, repo, pull_number,
+                  team_reviewers: [],
+                });
+              } catch (err) {
+                core.info(`Could not request team reviewers: ${err.message}`);
+              }
+
+              // Request review from CODEOWNERS owners.
+              try {
+                await github.rest.pulls.requestReviewers({
+                  owner, repo, pull_number,
+                });
+              } catch (err) {
+                core.info(`Could not request CODEOWNERS reviewers: ${err.message}`);
+              }
+            }

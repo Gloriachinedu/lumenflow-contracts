@@ -175,13 +175,29 @@ function renderProgress() {
   signers.forEach(addr => {
     const isSigned = signatures.has(addr);
     const li = document.createElement('li');
-    li.innerHTML = `
-      <span class="sig-icon">${isSigned ? '✅' : '⬜'}</span>
-      <span class="sig-addr">${addr}</span>
-      <span class="sig-status ${isSigned ? 'signed' : 'pending'}">${isSigned ? 'Signed' : 'Pending'}</span>
-      <button class="sign-btn" onclick="signPayment('${addr}')" ${isSigned ? 'disabled' : ''}>
-        ${isSigned ? 'Signed' : 'Sign'}
-      </button>`;
+
+    const icon = document.createElement('span');
+    icon.className = 'sig-icon';
+    icon.textContent = isSigned ? '✅' : '⬜';
+
+    const addrEl = document.createElement('span');
+    addrEl.className = 'sig-addr';
+    addrEl.textContent = addr;
+
+    const status = document.createElement('span');
+    status.className = 'sig-status ' + (isSigned ? 'signed' : 'pending');
+    status.textContent = isSigned ? 'Signed' : 'Pending';
+
+    const btn = document.createElement('button');
+    btn.className = 'sign-btn';
+    btn.textContent = isSigned ? 'Signed' : 'Sign';
+    btn.disabled = isSigned;
+    btn.addEventListener('click', () => signPayment(addr));
+
+    li.appendChild(icon);
+    li.appendChild(addrEl);
+    li.appendChild(status);
+    li.appendChild(btn);
     list.appendChild(li);
   });
 

@@ -45,7 +45,20 @@ The following functions require the caller to authenticate and pass an identity 
 | `get_refunds_for_order(caller, order_id)` | Caller must be the **payer**, **merchant**, or **admin** | `PaymentError::Unauthorized` |
 | `get_multisig_payment(caller, payment_id)` | Caller must be the **admin**, **merchant**, or a **signer** on the multisig | `PaymentError::Unauthorized` |
 
+### Dispute Resolution
+
+| Function | Required Auth | Error if Unauthorized |
+|---|---|---|
+| `assign_arbiter(admin, dispute_id, arbiter)` | **Admin** only (designates the arbiter for a dispute) | `PaymentError::Unauthorized` |
+| `arbiter_vote(arbiter, dispute_id, release_funds)` | Caller must be the **assigned arbiter** for that dispute | `PaymentError::Unauthorized` |
+
+`arbiter_vote` is callable only by the arbiter previously designated via
+`assign_arbiter`. The vote is binding and immediately triggers fund release
+(to the merchant) or refund (to the payer). Any other caller — including the
+admin, payer, or merchant — is rejected with `PaymentError::Unauthorized`.
+
 ### Merchant Management (Admin-only)
+=======
 
 | Function | Required Auth | Error if Unauthorized |
 |---|---|---|
@@ -113,6 +126,8 @@ Restricted (caller must auth + identity check):
   get_refunds_for_order        → payer | merchant | admin
   get_multisig_payment         → admin | merchant | signer
   get_merchants                → admin only
+  assign_arbiter               → admin only
+  arbiter_vote                 → assigned arbiter only
 ```
 
 ---

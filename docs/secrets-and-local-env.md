@@ -103,10 +103,50 @@ mistake, rotate it immediately — do not simply allowlist it.
 
 ---
 
+## Runtime configuration injection (Issue #1550)
+
+Container images are **environment-agnostic**. No environment-specific value
+(RPC URL, contract ID, network passphrase, account addresses) is baked in at
+build time. Every such value is injected at container startup via environment
+variables, so the same image can be deployed to local, testnet, or mainnet
+without rebuilding.
+
+### Required environment variables
+
+The container entrypoint refuses to start unless all of the following are set
+(see `scripts/validate-secrets.sh`):
+
+| Variable              | Required | Description                                                        |
+| --------------------- | -------- | ------------------------------------------------------------------ |
+| `NETWORK`             | Yes      | `local` / `testnet` / `mainnet`. Selects the network config.       |
+| `RPC_URL`             | Yes      | Soroban RPC endpoint for the target network.                       |
+| `NETWORK_PASSPHRASE`  | Yes      | Stellar network passphrase (public, fixed per network).            |
+| `CONTRACT_ID`         | Yes      | Deployed contract ID (`C...`) for the target network.              |
+| `ADMIN_ADDRESS`       | Yes      | Admin public key (`G...`) for the target network.                  |
+| `SOURCE_ACCOUNT`      | Yes*     | Stellar secret key (`S...`). Required for deploy/upgrade jobs only. |
+
+\* `SOURCE_ACCOUNT` is only required when the container performs a deploy or
+upgrade. Read-only services may omit it.
+
+### Validating configuration before startup
+
+Run the validator before bringing the stack up. It checks that every required
+variable is present and non-empty, and that secret-shaped values are not
+obviously malformed:
+
+```bash
+./scripts/validate-secrets.sh          # validates the current environment
+docker compose up -d                   # only after validation passes
+```
+
+The validator exits non-zero with a list of missing variables if anything is
+unset, so it can be wired into CI or a startup wrapper.
+
 ## Environment files
 
 `.env.example` is the only environment file tracked in git. It documents every
-variable but contains no real values. Everything else is ignored:
+variable (including the runtime-injection variables above) but contains no real
+values. Everything else is ignored:
 
 ```gitignore
 .env
@@ -114,16 +154,18 @@ variable but contains no real values. Everything else is ignored:
 !.env.example
 ```
 
-To set up locally, copy the example to a network-specific file and fill it in:
+`docker-compose.yml` reads an uncommitted `.env` file for local overrides. Copy
+the example and fill it in:
 
 ```bash
+cp .env.example .env            # local overrides used by docker compose
 cp .env.example .env.local      # local quickstart
 cp .env.example .env.testnet    # testnet
 cp .env.example .env.mainnet    # mainnet
 ```
 
-Never commit `.env.local`, `.env.testnet`, or `.env.mainnet`. They are gitignored
-on purpose.
+Never commit `.env`, `.env.local`, `.env.testnet`, or `.env.mainnet`. They are
+gitignored on purpose.
 
 ## Which values are secret
 
@@ -145,6 +187,8 @@ Only `SOURCE_ACCOUNT` is sensitive. Treat it like a password.
   source.
 - Use a dedicated **testnet** key for day-to-day work. Fund it from the
   [testnet friendbot](https://laboratory.stellar.org/#account-creator?network=test).
+- Generate fresh smoke-test keypairs with `scripts/generate_smoke_keypair.sh`
+  instead of reusing any key that appears in documentation or test fixtures.
 - For mainnet, store the key in a password manager or OS keychain and export it
   into the shell only for the deploy command:
 
@@ -159,9 +203,14 @@ The deploy scripts read the key from the environment, so it never needs to be
 written to a tracked file:
 
 ```bash
-SOURCE_ACCOUNT=<secret-key> ./scripts/local_up.sh
-NETWORK=testnet SOURCE_ACCOUNT=<testnet-secret-key> ./scripts/deploy.sh
+SOURCE_ACCOUNT=S_EXAMPLE_DO_NOT_USE ./scripts/local_up.sh
+NETWORK=testnet SOURCE_ACCOUNT=S_EXAMPLE_DO_NOT_USE ./scripts/deploy.sh
 ```
+
+> **Deprecated test keys:** any Stellar secret key previously shown in this
+> documentation or in test fixtures is deprecated and must be treated as
+> unfunded. Do not reuse them on any network. Generate a new keypair with
+> `scripts/generate_smoke_keypair.sh` for each environment.
 
 ## Validating Docker Compose
 
@@ -173,8 +222,9 @@ docker compose up -d stellar # start the local Stellar quickstart node
 ```
 
 `docker compose config` resolves and type-checks `docker-compose.yml`. The
-committed compose file contains no secrets; it only sets the public `NETWORK`
-value for the local quickstart node, so it is safe to commit as-is.
+committed compose file contains no secrets or environment-specific values; it
+reads them from the uncommitted `.env` file (or the shell environment) and
+passes them to the container at startup, so it is safe to commit as-is.
 
 ## Frontend Content Security Policy (CSP)
 
@@ -233,6 +283,57 @@ The policy is validated in CI using the `htmlhint` linter (configured in
 cd frontend && npx htmlhint "*.html"
 ```
 
+## Automated secret rotation (Issue #1547)
+
+Production secrets (admin keys, webhook signing secrets, RPC API keys) are no
+longer rotated by hand. They live in a managed secret store — **AWS Secrets
+Manager** or **HashiCorp Vault** — and are rotated automatically with a
+dual-active overlap so there is never a window where the old or new value is
+invalid.
+
+### How rotation works
+
+1. **Stored in a secret manager.** Each environment (`testnet`, `mainnet`) has
+   its own secret path, e.g. `lumenflow/testnet/admin-key` or
+   `secret/lumenflow/mainnet/webhook-signing`. Secrets are never stored in
+   `.env` files, CI variables, or the repository.
+2. **Rotation job creates a new version.** A scheduled rotation lambda/job
+   writes a new secret version (`AWSCURRENT` in Secrets Manager, a new version
+   in Vault) **without deleting the previous one**. The previous version is
+   demoted to `AWSPREVIOUS` (or kept as a readable prior version in Vault).
+3. **Dual-active overlap.** For a 15-minute overlap window both the old and new
+   secret are accepted. Services validate inbound credentials (webhook
+   signatures, API keys) against both versions, so in-flight requests signed
+   with the old secret keep working while clients pick up the new one.
+4. **Runtime refresh, no restart.** Applications poll the secret manager (or
+   subscribe to change notifications) and swap the in-memory secret when a new
+   version appears. No redeploy or restart is required; the refresh interval is
+   well under the 15-minute overlap.
+5. **Old version deactivated.** After the overlap window the rotation job
+   disables the old version. It is retained (not destroyed) for audit and
+   rollback, then cleaned up on the next rotation cycle.
+
+### Local development vs. managed secrets
+
+Local development does **not** talk to the secret manager. Keep using the
+gitignored `.env.local` file described above, with throwaway testnet keys. The
+managed secrets are only used by deployed environments:
+
+| Environment        | Secret source                                   |
+| ------------------ | ----------------------------------------------- |
+| Local              | `.env.local` (gitignored, throwaway keys)       |
+| CI                 | CI provider secret store (see rotation reminder)|
+| `testnet` / `mainnet` | AWS Secrets Manager / HashiCorp Vault        |
+
+Never copy a managed production secret into a local `.env` file. If you need to
+reproduce a production issue locally, use a dedicated testnet key instead.
+
+### Full runbook
+
+See [`docs/admin-key-rotation.md`](./admin-key-rotation.md) for the complete
+runbook: secret paths, rotation schedule, the dual-active overlap procedure,
+emergency (compromised-key) rotation, verification steps, and rollback.
+
 ## Quarterly secret rotation reminder
 
 The `.github/workflows/secret-rotation-reminder.yml` workflow runs automatically
@@ -249,3 +350,7 @@ Issues are automatically assigned to `@Gloriachinedu` (CODEOWNERS). To perform a
 manual rotation outside the quarterly cycle, use the issue template at
 `.github/ISSUE_TEMPLATE/secret_rotation.yml` or trigger the workflow manually from
 the Actions tab using the `workflow_dispatch` event.
+
+> **Note:** Deployed-environment secrets are rotated automatically by the secret
+> manager (see above). The quarterly reminder now covers only CI/GitHub Actions
+> secrets; managed secrets are audited through the rotation job's logs.

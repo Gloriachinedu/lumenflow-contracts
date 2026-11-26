@@ -1,5 +1,10 @@
 import * as crypto from 'crypto';
-import { verifyWebhookSignature } from './webhookSignature';
+import {
+  verifyWebhookSignature,
+  loadWebhookSecret,
+  isReplay,
+  verifyInboundWebhook,
+} from './webhookSignature';
 
 // ── Known-good HMAC vectors ──────────────────────────────────────────────────
 // Precomputed HMAC-SHA256 digests for deterministic test vectors.
@@ -131,5 +136,107 @@ describe('verifyWebhookSignature', () => {
 
     expect(verifyWebhookSignature(payload, validSig, SECRET)).toBe(true);
     expect(verifyWebhookSignature(payload, invalidSigHex, SECRET)).toBe(false);
+  });
+});
+
+// ── Environment-variable secret loader ───────────────────────────────────────
+
+describe('loadWebhookSecret', () => {
+  const originalSecret = process.env.WEBHOOK_SECRET;
+
+  afterEach(() => {
+    if (originalSecret === undefined) {
+      delete process.env.WEBHOOK_SECRET;
+    } else {
+      process.env.WEBHOOK_SECRET = originalSecret;
+    }
+  });
+
+  it('returns the secret from WEBHOOK_SECRET', () => {
+    process.env.WEBHOOK_SECRET = 'env-secret-value';
+    expect(loadWebhookSecret()).toBe('env-secret-value');
+  });
+
+  it('throws when WEBHOOK_SECRET is unset', () => {
+    delete process.env.WEBHOOK_SECRET;
+    expect(() => loadWebhookSecret()).toThrow('WEBHOOK_SECRET');
+  });
+
+  it('throws when WEBHOOK_SECRET is empty', () => {
+    process.env.WEBHOOK_SECRET = '';
+    expect(() => loadWebhookSecret()).toThrow('WEBHOOK_SECRET');
+  });
+});
+
+// ── Replay protection ────────────────────────────────────────────────────────
+
+describe('isReplay', () => {
+  it('returns false for a signature seen for the first time', () => {
+    const seen = new Set<string>();
+    expect(isReplay('sig-abc', seen)).toBe(false);
+  });
+
+  it('returns true for a signature already recorded', () => {
+    const seen = new Set<string>(['sig-abc']);
+    expect(isReplay('sig-abc', seen)).toBe(true);
+  });
+});
+
+// ── Inbound webhook verification (header + body + replay) ────────────────────
+
+describe('verifyInboundWebhook', () => {
+  const body = Buffer.from('{"event":"payment_processed","order_id":"ORDER_001"}');
+
+  it('accepts a valid signature', () => {
+    const signature = hmacSha256Hex(body, SECRET);
+    const seen = new Set<string>();
+    const result = verifyInboundWebhook(
+      { 'x-lumenflow-signature': signature },
+      body,
+      SECRET,
+      seen,
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it('rejects a request missing the X-LumenFlow-Signature header', () => {
+    const seen = new Set<string>();
+    const result = verifyInboundWebhook({}, body, SECRET, seen);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('missing_signature');
+  });
+
+  it('rejects a tampered body', () => {
+    const signature = hmacSha256Hex(body, SECRET);
+    const tamperedBody = Buffer.from('{"event":"payment_processed","order_id":"ORDER_999"}');
+    const seen = new Set<string>();
+    const result = verifyInboundWebhook(
+      { 'x-lumenflow-signature': signature },
+      tamperedBody,
+      SECRET,
+      seen,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('invalid_signature');
+  });
+
+  it('rejects a replayed signature', () => {
+    const signature = hmacSha256Hex(body, SECRET);
+    const seen = new Set<string>();
+    const first = verifyInboundWebhook(
+      { 'x-lumenflow-signature': signature },
+      body,
+      SECRET,
+      seen,
+    );
+    expect(first.ok).toBe(true);
+    const replay = verifyInboundWebhook(
+      { 'x-lumenflow-signature': signature },
+      body,
+      SECRET,
+      seen,
+    );
+    expect(replay.ok).toBe(false);
+    expect(replay.reason).toBe('replay');
   });
 });
