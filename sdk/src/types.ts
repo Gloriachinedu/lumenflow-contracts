@@ -210,10 +210,67 @@ export interface PaymentFilter {
   tag?: string;
 }
 
+/**
+ * Generic page shape used by paginated list endpoints.
+ *
+ * `nextCursor` is `null` when there are no further pages; consumers should
+ * treat both `null` and `undefined` as "end of results".
+ */
+export interface PaginatedPage<T> {
+  items: T[];
+  nextCursor?: string | null;
+  total: number;
+}
+
 export interface PaymentPage {
   payments: PaymentOrder[];
-  nextCursor?: string;
+  nextCursor?: string | null;
   total: number;
+}
+
+/** Event types emitted by the smart contract that can be subscribed to. */
+export type LumenFlowEventType =
+  | "PaymentReceived"
+  | "RefundInitiated"
+  | "RefundCompleted"
+  | "DisputeOpened"
+  | "DisputeResolved"
+  | "MerchantRegistered"
+  | "SubscriptionCharged";
+
+/** Map of event type to its decoded payload shape. */
+export interface LumenFlowEventPayloadMap {
+  PaymentReceived: PaymentSummary;
+  RefundInitiated: RefundRecord;
+  RefundCompleted: RefundRecord;
+  DisputeOpened: DisputeRecord;
+  DisputeResolved: DisputeRecord;
+  MerchantRegistered: Merchant;
+  SubscriptionCharged: Subscription;
+}
+
+/**
+ * Typed event payload delivered to subscription handlers.
+ *
+ * `payload` is the decoded, strongly-typed event body (never raw XDR).
+ */
+export interface TypedEventPayload<T extends LumenFlowEventType> {
+  type: T;
+  payload: LumenFlowEventPayloadMap[T];
+  ledger: number;
+  txHash: string;
+  timestamp: bigint;
+}
+
+/** Handler invoked for each event received by a subscription. */
+export type EventHandler<T extends LumenFlowEventType> = (
+  event: TypedEventPayload<T>,
+) => void | Promise<void>;
+
+/** Options controlling event subscription polling. */
+export interface SubscribeOptions {
+  /** Polling interval in milliseconds. Defaults to 5000 (5 s). */
+  intervalMs?: number;
 }
 
 export interface GlobalStats {

@@ -1696,4 +1696,94 @@ export class LumenFlowClient {
     }
     return new Error(`Simulation failed: ${errorMsg}`);
   }
+
+  // ── Event subscription ────────────────────────────────────────────────────
+
+  /**
+   * Subscribe to on-chain contract events of a given type.
+   *
+   * This is a high-level wrapper around the low-level event poller. It polls
+   * the Soroban RPC endpoint at a configurable interval, decodes each raw
+   * contract event into a typed {@link TypedEventPayload}, and invokes
+   * `handler` for every matching event.
+   *
+   * Handler errors are caught and logged so that a single faulty handler
+   * cannot crash the poller or prevent subsequent events from being delivered.
+   *
+   * @param eventType - The contract event type to listen for (e.g. `"payment_completed"`).
+   * @param handler - Callback invoked with the decoded, typed event payload.
+   * @param options - Optional configuration; `intervalMs` defaults to `5000` (5 s).
+   * @returns An {@link Unsubscribe} function that stops polling and clears the interval.
+   *
+   * @example
+   * const unsubscribe = client.subscribe("payment_completed", (event) => {
+   *   console.log("Payment completed:", event);
+   * });
+   *
+   * // Later, when no longer interested:
+   * unsubscribe();
+   */
+  subscribe(
+    eventType: string,
+    handler: (payload: TypedEventPayload) => void,
+    options: SubscribeOptions = {}
+  ): Unsubscribe {
+    const intervalMs = options.intervalMs ?? 5000;
+    let stopped = false;
+    let inFlight = false;
+
+    const tick = async (): Promise<void> => {
+      if (stopped || inFlight) {
+        return;
+      }
+      inFlight = true;
+      try {
+        const rawEvents = await pollContractEvents({
+          server: this.server,
+          contractId: this.contract.contractId(),
+          eventType,
+        });
+
+        for (const raw of rawEvents) {
+          if (stopped) {
+            break;
+          }
+          let payload: TypedEventPayload;
+          try {
+            payload = parseLumenFlowEvent(raw);
+          } catch (decodeErr) {
+            console.warn(
+              "[LumenFlowSDK] Failed to decode contract event:",
+              decodeErr
+            );
+            continue;
+          }
+          try {
+            handler(payload);
+          } catch (handlerErr) {
+            console.error(
+              "[LumenFlowSDK] Event handler threw an error:",
+              handlerErr
+            );
+          }
+        }
+      } catch (pollErr) {
+        console.warn("[LumenFlowSDK] Event polling failed:", pollErr);
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const intervalId = setInterval(() => {
+      void tick();
+    }, intervalMs);
+
+    return () => {
+      if (stopped) {
+        return;
+      }
+      stopped = true;
+      clearInterval(intervalId);
+    };
+  }
 }
