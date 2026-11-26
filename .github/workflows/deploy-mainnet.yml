@@ -168,6 +168,33 @@ jobs:
             https://github.com/stellar/stellar-cli/releases/download/v22.8.1/stellar-cli-22.8.1-x86_64-unknown-linux-gnu.tar.gz \
             | tar -xz -C /usr/local/bin stellar
 
+      # ── Service worker cache versioning ───────────────────────────────────────
+      # Inject the Git SHA into frontend/sw.js so the production service worker
+      # cache name is unique per release (lf-cache-v<sha>). This prevents stale
+      # assets from a previous deployment being served, which would break
+      # payment flows that depend on updated contract ABIs.
+      - name: Inject BUILD_HASH into service worker
+        env:
+          BUILD_HASH: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! -f frontend/sw.js ]]; then
+            echo "::error::frontend/sw.js not found"
+            exit 1
+          fi
+          if ! grep -q '__BUILD_HASH__' frontend/sw.js; then
+            echo "::error::frontend/sw.js does not contain the __BUILD_HASH__ placeholder"
+            exit 1
+          fi
+          sed -i "s/__BUILD_HASH__/${BUILD_HASH}/g" frontend/sw.js
+          if grep -q '__BUILD_HASH__' frontend/sw.js; then
+            echo "::error::Failed to replace __BUILD_HASH__ in frontend/sw.js"
+            exit 1
+          fi
+          echo "Injected BUILD_HASH=${BUILD_HASH} into frontend/sw.js"
+          echo "## 🔄 Service Worker Cache Version" >> "$GITHUB_STEP_SUMMARY"
+          echo "Cache name: \`lf-cache-v${BUILD_HASH}\`" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Deploy contract to mainnet
         id: deploy
         env:

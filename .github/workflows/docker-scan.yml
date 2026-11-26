@@ -16,20 +16,25 @@ on:
   push:
     branches: [main, develop]
     paths:
-      - 'Dockerfile'
+      - '**/Dockerfile*'
       - 'docker-compose*.yml'
       - '.github/workflows/docker-scan.yml'
   pull_request:
     branches: [main, develop]
     paths:
-      - 'Dockerfile'
+      - '**/Dockerfile*'
       - 'docker-compose*.yml'
       - '.github/workflows/docker-scan.yml'
+  schedule:
+    # Weekly scan of the main branch image (Mondays at 03:00 UTC)
+    - cron: '0 3 * * 1'
 
 permissions:
   contents: read
   security-events: write   # required to upload SARIF to the Security tab
   pull-requests: write     # required to post warning annotations on PRs
+  issues: write            # required to open Dependabot-style issues for HIGH CVEs
+=======
 
 jobs:
   docker-scan:
@@ -65,6 +70,38 @@ jobs:
           tags: lumenflow:scan-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # -----------------------------------------------------------------------
+      # 3b. Verify every Dockerfile pins its base image by digest
+      #     (FROM ...@sha256:<digest>).  Fails the workflow otherwise.
+      # -----------------------------------------------------------------------
+      - name: Verify base images are pinned by digest
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r -d '' dockerfile; do
+            echo "Checking ${dockerfile}"
+            # Extract FROM lines, ignoring comments and stage references.
+            while IFS= read -r line; do
+              image=$(echo "$line" | sed -E 's/^[[:space:]]*FROM[[:space:]]+//I' | awk '{print $1}')
+              # Skip references to earlier build stages (no registry/repo path).
+              if [[ "$image" == *"@"*"sha256:"* ]]; then
+                continue
+              fi
+              # Allow stage aliases (e.g. FROM builder AS final) only if the
+              # referenced name matches a previously declared stage.
+              if [[ "$image" != *"/"* && "$image" != *":"* ]]; then
+                continue
+              fi
+              echo "::error file=${dockerfile}::Base image '${image}' is not pinned by digest"
+              fail=1
+            done < <(grep -iE '^[[:space:]]*FROM[[:space:]]' "$dockerfile" || true)
+          done < <(find . -type f -iname 'Dockerfile*' -not -path './.git/*' -print0)
+          if [[ "$fail" -ne 0 ]]; then
+            echo "One or more Dockerfiles use unpinned base images."
+            exit 1
+          fi
+          echo "All Dockerfiles pin base images by digest."
 
       # -----------------------------------------------------------------------
       # 4. Trivy scan — SARIF output (uploaded to Security tab)
@@ -103,15 +140,73 @@ jobs:
           ignore-unfixed: false
 
       # -----------------------------------------------------------------------
-      # 7. Trivy scan — High CVEs generate a PR warning annotation only
-      #    (continue-on-error keeps the step non-blocking)
+      # 7. Trivy scan — High CVEs produce a warning annotation and open a
+      #    Dependabot-style issue.  The step is non-blocking (continue-on-error)
+      #    so the workflow itself still succeeds.
       # -----------------------------------------------------------------------
       - name: Warn on High CVEs
+        id: high-cves
         uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8  # v0.30.0
         continue-on-error: true
         with:
           image-ref: lumenflow:scan-${{ github.sha }}
           format: table
+          output: trivy-high.txt
           severity: HIGH
           exit-code: '1'          # non-zero so GitHub shows it as a warning annotation
           ignore-unfixed: false
+
+      # -----------------------------------------------------------------------
+      # 8. Open a Dependabot-style issue when HIGH CVEs are found
+      # -----------------------------------------------------------------------
+      - name: Open issue for High CVEs
+        if: steps.high-cves.outcome == 'failure'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            const fs = require('fs');
+            let details = '';
+            try {
+              details = fs.readFileSync('trivy-high.txt', 'utf8');
+            } catch (e) {
+              details = 'Trivy reported HIGH severity vulnerabilities (details unavailable).';
+            }
+            const maxLen = 60000;
+            const body = [
+              '## Container image HIGH severity vulnerabilities',
+              '',
+              `Trivy detected HIGH severity CVEs in the image built from \`${context.sha}\`.`,
+              '',
+              '### Scan results',
+              '```',
+              details.length > maxLen ? details.slice(0, maxLen) + '\n... (truncated)' : details,
+              '```',
+              '',
+              '### Remediation',
+              '- Update the affected base image (pin by digest) or dependencies.',
+              '- Re-run the Docker Image Scan workflow after applying fixes.',
+              '',
+              `_Detected by [Docker Image Scan](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})._`
+            ].join('\n');
+
+            const title = `[Security] HIGH severity CVEs in container image (${context.sha.slice(0, 7)})`;
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'security,dependencies',
+              per_page: 100
+            });
+            const duplicate = existing.data.find(i => i.title === title);
+            if (duplicate) {
+              core.info(`Issue already exists: #${duplicate.number}`);
+              return;
+            }
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ['security', 'dependencies']
+            });
+            core.info(`Opened issue #${issue.data.number}`);

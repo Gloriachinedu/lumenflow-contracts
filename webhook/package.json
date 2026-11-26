@@ -5,7 +5,11 @@
   "main": "webhook-server.js",
   "scripts": {
     "start": "node webhook-server.js",
-    "test": "jest --testPathPattern=webhook/ --no-coverage"
+    "pretest": "npm --prefix ../sdk run build --if-present",
+    "test": "jest --testPathPattern='webhook/.*\\.test\\.js$' --no-coverage"
+  },
+  "jest": {
+    "testEnvironment": "node"
   },
   "dependencies": {
     "eventsource": "5.1.3",

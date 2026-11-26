@@ -86,4 +86,34 @@ describe("redactingLogger", () => {
       { authorization: REDACTED },
     ]);
   });
+
+  it("redacts private keys and raw payloads in structured log entries", () => {
+    const calls: unknown[][] = [];
+    const log = redactingLogger((...args: unknown[]) => calls.push(args));
+    log({
+      level: "info",
+      correlationId: "c-1",
+      operation: "submitPayment",
+      duration_ms: 12,
+      privateKey: STELLAR_SECRET,
+      rawPayload: { api_key: "supersecretvalue123", note: "ok" },
+    });
+    expect(calls[0]).toEqual([
+      {
+        level: "info",
+        correlationId: "c-1",
+        operation: "submitPayment",
+        duration_ms: 12,
+        privateKey: REDACTED,
+        rawPayload: { api_key: REDACTED, note: "ok" },
+      },
+    ]);
+  });
+
+  it("scrubs secrets embedded in raw payload strings", () => {
+    const calls: unknown[][] = [];
+    const log = redactingLogger((...args: unknown[]) => calls.push(args));
+    log({ rawPayload: `signed with ${STELLAR_SECRET}` });
+    expect(calls[0]).toEqual([{ rawPayload: `signed with ${REDACTED}` }]);
+  });
 });

@@ -1,16 +1,49 @@
 name: Accessibility Audit
 
+# ---------------------------------------------------------------------------
+# NOTE: Accessibility is covered by TWO workflows.
+#
+#   1. This workflow (a11y.yml) runs the Playwright accessibility audit
+#      (axe-core) on every push/PR touching the frontend and weekly on a
+#      schedule.
+#
+#   2. Performance budgets are enforced by `.github/workflows/lighthouse.yml`,
+#      which runs Lighthouse CI on every PR. In addition to the performance
+#      budgets, that workflow also asserts the Lighthouse accessibility
+#      score gate (>= 90). Contributors should be aware that both workflows
+#      cover accessibility.
+#
+# Lighthouse CI performance budget thresholds (enforced in lighthouse.yml):
+#   - Largest Contentful Paint (LCP)  < 2.5 s
+#   - First Input Delay (FID)         < 100 ms
+#   - Cumulative Layout Shift (CLS)   < 0.1
+#   - Accessibility score             >= 90
+#
+# Running the checks locally:
+#   - Accessibility audit (this workflow):
+#       npm ci
+#       npx playwright install --with-deps chromium
+#       npm run test:a11y
+#       # full HTML report:
+#       npm run test:a11y:report
+#   - Lighthouse CI (performance + accessibility budgets):
+#       npm run build
+#       npx lhci autorun
+# ---------------------------------------------------------------------------
+
 on:
   push:
     branches: [main, develop]
     paths:
       - 'frontend/**'
+      - 'dashboard/**'
       - 'tests/playwright/**'
       - '.github/workflows/a11y.yml'
   pull_request:
     branches: [main, develop]
     paths:
       - 'frontend/**'
+      - 'dashboard/**'
       - 'tests/playwright/**'
       - '.github/workflows/a11y.yml'
   # Weekly full accessibility report every Monday at 08:00 UTC
@@ -34,6 +67,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Install @axe-core/playwright
+        run: npm install --no-save @axe-core/playwright
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium

@@ -61,6 +61,72 @@ through the calls above.
 > conflict, not a documentation choice, and is out of scope for this guide to
 > fix. Flag it to a maintainer if you hit a signature mismatch.
 
+## Worked example — USDC (Stellar) (issue #1576)
+
+USDC is the first supported non-native token. Its details are verified and
+recorded here so operators do not have to re-derive them.
+
+### Verified SAC addresses
+
+| Network | USDC SAC address |
+|---|---|
+| Mainnet | `CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75` |
+| Testnet | `CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC` |
+
+These are the canonical Circle-issued USDC Stellar Asset Contract addresses.
+Never reuse the testnet address on mainnet (or vice versa) — see the caution
+in [deployment-runbook.md](deployment-runbook.md) section 5, Step 1.
+
+### Precision
+
+USDC on Stellar uses **6 decimal places** (`decimals() == 6`). Amounts are
+expressed in stroops-equivalent base units: `1 USDC == 1_000_000` base units.
+The SDK and dashboard must format with 6 decimals; a mismatch silently
+corrupts displayed and computed amounts without a contract-level error.
+
+### Clawback-aware refund behavior
+
+USDC has issuer-level clawback enabled. If the destination of a refund has
+been clawback-frozen (or its balance clawed back) by the issuer, the refund
+transfer fails and the contract surfaces the corresponding error rather than
+silently succeeding. Operators should treat a refund to a clawback-frozen
+address as a hard failure and reconcile out-of-band; the payment itself is
+not reversed by the contract.
+
+### Allowlisting USDC
+
+On testnet, whitelist USDC with its testnet SAC address:
+
+```bash
+stellar contract invoke \
+  --id $CONTRACT_ID \
+  --source-account $ADMIN_SECRET \
+  --network-passphrase "$NETWORK_PASSPHRASE" \
+  --rpc-url $RPC_URL \
+  -- add_allowed_token \
+  --admin $ADMIN_ADDRESS \
+  --token CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC \
+  --issuer $USDC_ISSUER_ADDRESS
+```
+
+On mainnet, repeat with the mainnet SAC address:
+
+```bash
+stellar contract invoke \
+  --id $CONTRACT_ID \
+  --source-account $ADMIN_SECRET \
+  --network-passphrase "$NETWORK_PASSPHRASE" \
+  --rpc-url $RPC_URL \
+  -- add_allowed_token \
+  --admin $ADMIN_ADDRESS \
+  --token CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75 \
+  --issuer $USDC_ISSUER_ADDRESS
+```
+
+The deploy script also calls `add_allowed_token(USDC_ADDRESS)` so a fresh
+deployment is USDC-ready without a manual step. After allowlisting, run the
+full payment-and-refund cycle in USDC (see Step 2) before promoting.
+
 ## Step 1 — Testnet validation
 
 1. Deploy or use an existing testnet contract instance
@@ -188,3 +254,4 @@ Do not promote to mainnet until each item below is explicitly checked off:
 | `TokenNotAllowed` on a payment after whitelisting | Whitelisted on the wrong network/contract instance, or the token address is the testnet SAC while paying against mainnet (or vice versa) |
 | `Unauthorized` on `add_allowed_token` / `add_allowed_issuer` | Caller is not the configured admin address; see [admin-key-rotation.md](admin-key-rotation.md) |
 | CLI rejects the argument list for `add_allowed_token` | The build resolved the older 2-argument definition — see "Known issue" above; confirm the actual deployed ABI |
+| Refund to a clawback-frozen USDC address fails | Issuer clawback froze the destination; refund cannot complete — reconcile out-of-band (see "Clawback-aware refund behavior") |

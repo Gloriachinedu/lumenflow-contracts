@@ -22,11 +22,27 @@ const FUNNEL_STAGES = [
   { key: 'business_details', label: 'Business Details' },
   { key: 'review',           label: 'Review' },
   { key: 'done',             label: 'Registration' },
+  { key: 'first_payment',    label: 'First Payment' },
 ];
+
+// Activation funnel: the three headline steps operators care about most.
+// Each entry maps a funnel step to the analytics event(s) emitted by
+// frontend/onboarding-analytics.js that mark its completion.
+const ACTIVATION_FUNNEL = [
+  { key: 'wallet',        label: 'Wallet Connect',  events: ['wallet_connected'] },
+  { key: 'done',          label: 'Merchant Register', events: ['onboarding_completed', 'registration_completed'] },
+  { key: 'first_payment', label: 'First Payment',   events: ['first_payment'] },
+];
+
+// Operator auth gate configuration.
+const OPERATOR_AUTH_ENDPOINT = window.LUMENFLOW_OPERATOR_AUTH_ENDPOINT || null;
+const OPERATOR_LOGIN_URL     = window.LUMENFLOW_OPERATOR_LOGIN_URL || '/login';
 
 // ── State ──────────────────────────────────────────────────────────────────
 let currentFrom = null;
 let currentTo   = null;
+let currentData = null; // last successfully fetched dataset (for CSV export)
+let isAuthenticated = false;
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
 const kpiStarted      = document.getElementById('kpi-started');
@@ -52,6 +68,12 @@ const dateFrom  = document.getElementById('date-from');
 const dateTo    = document.getElementById('date-to');
 const applyBtn  = document.getElementById('apply-filter-btn');
 const refreshBtn = document.getElementById('refresh-btn');
+const exportBtn = document.getElementById('export-csv-btn');
+const authGate  = document.getElementById('auth-gate');
+const dashboardRoot = document.getElementById('dashboard-root');
+
+// Live region for announcing loading / refresh / error states to screen readers.
+const statusRegion = document.getElementById('dashboard-status');
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -82,6 +104,15 @@ function setVisible(el, visible) {
   if (visible) { el.removeAttribute('hidden'); } else { el.setAttribute('hidden', ''); }
 }
 
+// Announce a message to assistive technology via the polite live region.
+function announce(message) {
+  if (!statusRegion) return;
+  // Clear first so repeated identical messages are re-announced.
+  statusRegion.textContent = '';
+  // Defer so the DOM mutation is observed as a change by screen readers.
+  window.setTimeout(() => { statusRegion.textContent = message; }, 50);
+}
+
 // ── Demo data factory ──────────────────────────────────────────────────────
 
 function buildDemoData(fromMs, toMs) {
@@ -96,7 +127,7 @@ function buildDemoData(fromMs, toMs) {
 
   const stepCounts = FUNNEL_STAGES.map((_, i) => {
     // Each stage has fewer completions (drop-off cascade)
-    const dropFactors = [1, 0.91, 0.83, 0.76, completed / started];
+    const dropFactors = [1, 0.91, 0.83, 0.76, completed / started, (completed / started) * 0.62];
     return Math.round(started * dropFactors[i]);
   });
 
@@ -121,9 +152,117 @@ async function fetchData(fromMs, toMs) {
   if (fromMs) params.set('from', String(Math.floor(fromMs / 1000)));
   if (toMs)   params.set('to',   String(Math.floor(toMs   / 1000)));
 
-  const res = await fetch(`${ANALYTICS_ENDPOINT}?${params}`);
+  const res = await fetch(`${ANALYTICS_ENDPOINT}?${params}`, { credentials: 'include' });
   if (!res.ok) throw new Error(`Analytics API returned ${res.status}`);
   return res.json();
+}
+
+// ── Operator authentication gate ───────────────────────────────────────────
+
+async function checkOperatorAuth() {
+  if (!OPERATOR_AUTH_ENDPOINT) {
+    // No auth endpoint configured (local/dev) — treat as authenticated.
+    return true;
+  }
+  try {
+    const res = await fetch(OPERATOR_AUTH_ENDPOINT, {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return false;
+    const body = await res.json();
+    return Boolean(body && (body.authenticated || body.operator));
+  } catch (err) {
+    console.error('[onboarding-analytics] auth check failed:', err);
+    return false;
+  }
+}
+
+function showAuthGate() {
+  if (dashboardRoot) setVisible(dashboardRoot, false);
+  if (authGate) {
+    authGate.innerHTML = `
+      <p>This dashboard is restricted to authenticated operators.</p>
+      <p><a class="btn" href="${escHtml(OPERATOR_LOGIN_URL)}">Sign in</a></p>`;
+    setVisible(authGate, true);
+  }
+}
+
+// ── Activation funnel computation ──────────────────────────────────────────
+
+/**
+ * Build the wallet → register → first-payment activation funnel from the
+ * step counts. Returns an array of { key, label, count, conversionPct,
+ * dropoffPct } where conversionPct is the step-to-step conversion rate.
+ */
+function buildActivationFunnel(stepCounts) {
+  const byKey = {};
+  FUNNEL_STAGES.forEach((stage, i) => { byKey[stage.key] = stepCounts[i] || 0; });
+
+  return ACTIVATION_FUNNEL.map((step, i) => {
+    const count = byKey[step.key] || 0;
+    const prev  = i === 0 ? count : (byKey[ACTIVATION_FUNNEL[i - 1].key] || 0);
+    const conversionPct = i === 0 ? 100 : pct(count, prev);
+    const dropoffPct    = i === 0 ? 0   : pct(prev - count, prev);
+    return { key: step.key, label: step.label, count, conversionPct, dropoffPct };
+  });
+}
+
+function renderActivationFunnel(stepCounts) {
+  const el = document.getElementById('activation-funnel');
+  if (!el) return;
+  const funnel = buildActivationFunnel(stepCounts);
+  el.innerHTML = '';
+
+  funnel.forEach((step, i) => {
+    const row = document.createElement('div');
+    row.className = 'activation-step';
+    const convLabel = i === 0
+      ? '—'
+      : `${fmtPct(step.conversionPct)} <span class="dropoff">(−${fmtPct(step.dropoffPct)})</span>`;
+    row.innerHTML = `
+      <span class="activation-step-label">${escHtml(step.label)}</span>
+      <span class="activation-step-count">${step.count.toLocaleString()}</span>
+      <span class="activation-step-conv">${convLabel}</span>`;
+    el.appendChild(row);
+  });
+}
+
+// ── CSV export ─────────────────────────────────────────────────────────────
+
+function csvEscape(value) {
+  const str = String(value == null ? '' : value);
+  if (/[",\n]/.test(str)) return '"' + str.replace(/"/g, '""') + '"';
+  return str;
+}
+
+function buildFunnelCsv(data) {
+  const funnel = buildActivationFunnel(data.stepCounts || []);
+  const lines = [['Step', 'Count', 'Conversion Rate (%)', 'Drop-off (%)'].join(',')];
+  funnel.forEach((step, i) => {
+    lines.push([
+      csvEscape(step.label),
+      step.count,
+      i === 0 ? '' : step.conversionPct.toFixed(1),
+      i === 0 ? '' : step.dropoffPct.toFixed(1),
+    ].join(','));
+  });
+  return lines.join('\n');
+}
+
+function exportFunnelCsv() {
+  if (!currentData) return;
+  const csv = buildFunnelCsv(currentData);
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `onboarding-activation-funnel-${stamp}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 // ── Render funnel chart ────────────────────────────────────────────────────
@@ -140,13 +279,16 @@ function renderFunnel(stepCounts) {
     const dropoff = i === 0 ? 0 : prevCount - count;
     const dropoffPct = i === 0 ? 0 : pct(dropoff, prevCount);
 
-    // Visual funnel bar row
+    // Visual funnel bar row. The bar itself is decorative; the numeric values
+    // are exposed to assistive tech via the sr-only table below, so the whole
+    // visual row is hidden from the accessibility tree to avoid duplication.
     const row = document.createElement('div');
     row.className = 'funnel-step';
+    row.setAttribute('aria-hidden', 'true');
     row.innerHTML = `
       <span class="funnel-step-label">${escHtml(stage.label)}</span>
       <div class="funnel-bar-wrap" role="presentation">
-        <div class="funnel-bar" style="width:${widthPct}%" aria-hidden="true"></div>
+        <div class="funnel-bar" style="width:${widthPct}%"></div>
       </div>
       <span class="funnel-count">${count.toLocaleString()}</span>
       <span class="funnel-dropoff${dropoff === 0 ? ' no-drop' : ''}">
@@ -154,10 +296,11 @@ function renderFunnel(stepCounts) {
       </span>`;
     funnelChart.appendChild(row);
 
-    // Accessible table row (sr-only)
+    // Accessible table row (sr-only). Column headers live in the table's
+    // <thead>; associate each cell with its header via scope="col".
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${escHtml(stage.label)}</td>
+      <th scope="row">${escHtml(stage.label)}</th>
       <td>${count.toLocaleString()}</td>
       <td>${dropoff > 0 ? fmtPct(dropoffPct) : '—'}</td>`;
     funnelTableBody.appendChild(tr);
@@ -190,7 +333,7 @@ function renderSteps(stepCounts) {
     const cls = pctClass(completionPct);
     tr.innerHTML = `
       <td>${i + 1}</td>
-      <td>${escHtml(stage.label)}</td>
+      <th scope="row">${escHtml(stage.label)}</th>
       <td>${count.toLocaleString()}</td>
       <td>${dropoff > 0 ? dropoff.toLocaleString() : '—'}</td>
       <td><span class="pct-pill ${cls}">${fmtPct(completionPct)}</span></td>`;
@@ -219,7 +362,7 @@ function renderWallet(walletProviders) {
     const cls = pctClass(successPct);
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${escHtml(wp.provider)}</td>
+      <th scope="row">${escHtml(wp.provider)}</th>
       <td>${wp.attempts.toLocaleString()}</td>
       <td>${wp.connected.toLocaleString()}</td>
       <td>${wp.failed.toLocaleString()}</td>
@@ -246,6 +389,8 @@ async function render(fromMs, toMs) {
   setVisible(walletLoading, true);
   setVisible(walletTable,   false);
 
+  announce('Loading analytics data…');
+
   try {
     const data = await fetchData(fromMs, toMs);
 
@@ -264,16 +409,21 @@ async function render(fromMs, toMs) {
       funnelDateLabel.textContent = 'All time (demo data)';
     }
 
+    currentData = data;
+
     renderFunnel(data.stepCounts);
+    renderActivationFunnel(data.stepCounts);
     renderSteps(data.stepCounts);
     renderWallet(data.walletProviders);
 
     lastRefreshEl.textContent = 'Updated ' + new Date().toLocaleTimeString();
+    announce('Analytics data updated at ' + new Date().toLocaleTimeString());
   } catch (err) {
     console.error('[onboarding-analytics] fetch error:', err);
     funnelLoading.textContent = 'Failed to load data.';
     stepsLoading.textContent  = 'Failed to load data.';
     walletLoading.textContent = 'Failed to load data.';
+    announce('Failed to load analytics data. Please try refreshing.');
   }
 }
 
@@ -316,13 +466,38 @@ refreshBtn.addEventListener('click', () => {
   render(currentFrom, currentTo);
 });
 
+// Native <button> elements already handle Enter/Space, but guard against
+// custom elements or future refactors by wiring explicit keyboard handlers.
+[applyBtn, refreshBtn].forEach((btn) => {
+  if (!btn) return;
+  btn.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+      e.preventDefault();
+      btn.click();
+    }
+  });
+});
+
 // ── Bootstrap ─────────────────────────────────────────────────────────────
 
-setDefaultDateRange();
-const init = getDateRange();
-currentFrom = init.from;
-currentTo   = init.to;
-render(currentFrom, currentTo);
+async function bootstrap() {
+  isAuthenticated = await checkOperatorAuth();
+  if (!isAuthenticated) {
+    showAuthGate();
+    return;
+  }
 
-// Auto-refresh
-setInterval(() => render(currentFrom, currentTo), REFRESH_MS);
+  if (authGate) setVisible(authGate, false);
+  if (dashboardRoot) setVisible(dashboardRoot, true);
+
+  setDefaultDateRange();
+  const init = getDateRange();
+  currentFrom = init.from;
+  currentTo   = init.to;
+  render(currentFrom, currentTo);
+
+  // Auto-refresh
+  setInterval(() => render(currentFrom, currentTo), REFRESH_MS);
+}
+
+bootstrap();

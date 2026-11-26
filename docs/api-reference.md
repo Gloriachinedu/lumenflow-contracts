@@ -17,14 +17,15 @@ Each entry includes the function signature, a description, a parameter table, re
 
 1. [Versioning](#versioning)
 2. [Admin](#admin)
-3. [Merchant Management](#merchant-management)
-4. [Payment Processing](#payment-processing)
-5. [Payment History Queries](#payment-history-queries)
-6. [Refunds](#refunds)
-7. [Multi-Signature Payments](#multi-signature-payments)
-8. [Subscriptions](#subscriptions)
-9. [Payment Requests](#payment-requests)
-10. [Data Types](#data-types)
+3. [Merchant API Keys](#merchant-api-keys)
+4. [Merchant Management](#merchant-management)
+5. [Payment Processing](#payment-processing)
+6. [Payment History Queries](#payment-history-queries)
+7. [Refunds](#refunds)
+8. [Multi-Signature Payments](#multi-signature-payments)
+9. [Subscriptions](#subscriptions)
+10. [Payment Requests](#payment-requests)
+11. [Data Types](#data-types)
 
 ---
 
@@ -328,6 +329,84 @@ Unpause the contract. Admin only.
 
 ---
 
+### `assign_arbiter`
+
+> **Issue #1575** — Decentralized dispute resolution v1.
+
+```rust
+pub fn assign_arbiter(
+    env: Env,
+    admin: Address,
+    dispute_id: String,
+    arbiter: Address,
+) -> Result<(), PaymentError>
+```
+
+Designate a third-party arbiter for an open dispute. The assigned arbiter is the only address permitted to call [`arbiter_vote`](#arbiter_vote) for that dispute. Admin only. Emits `lumenflow/arbiter_assigned` and appends an `AssignArbiter` entry to the admin audit log.
+
+| Parameter    | Type      | Required | Constraints | Example |
+|--------------|-----------|----------|-------------|---------|
+| `admin`      | `Address` | Yes      | Must be the configured administrator; must sign | `GABC…` |
+| `dispute_id` | `String`  | Yes      | Non-empty; must reference an open dispute | `"DISPUTE-001"` |
+| `arbiter`    | `Address` | Yes      | Must not be a contract address; must not be the payer or merchant of the disputed payment | `GARBITER…` |
+
+**Returns:** `()` on success.
+
+**Events:** `lumenflow/arbiter_assigned` — topics `(symbol_short!("arbiter"), symbol_short!("assigned"))`, data `(dispute_id, arbiter, admin)`.
+
+**Errors:**
+
+| Code | Name | Condition |
+|------|------|-----------|
+| 1 | [`Unauthorized`](errors.md#auth-errors) | `admin` is not the configured administrator. |
+| 3 | [`InvalidAdminAddress`](errors.md#auth-errors) | `arbiter` is a contract address. |
+| 50 | [`InvalidInput`](errors.md#general-errors) | `dispute_id` is empty or does not reference an open dispute. |
+| 51 | [`ArbiterAlreadyAssigned`](errors.md#dispute-errors) | An arbiter is already assigned to `dispute_id`. |
+| 70 | [`ContractPaused`](errors.md#general-errors) | Contract is paused. |
+
+---
+
+### `arbiter_vote`
+
+> **Issue #1575** — Decentralized dispute resolution v1.
+
+```rust
+pub fn arbiter_vote(
+    env: Env,
+    arbiter: Address,
+    dispute_id: String,
+    release_to_merchant: bool,
+) -> Result<(), PaymentError>
+```
+
+Cast the assigned arbiter's binding vote on a dispute. The vote is final and immediately settles the dispute: `release_to_merchant = true` releases the escrowed funds to the merchant, `false` refunds the payer. Only the arbiter assigned via [`assign_arbiter`](#assign_arbiter) may call this, and only once per dispute. Emits `lumenflow/arbiter_voted` followed by `lumenflow/dispute_resolved`.
+
+| Parameter             | Type      | Required | Constraints | Example |
+|-----------------------|-----------|----------|-------------|---------|
+| `arbiter`             | `Address` | Yes      | Must be the arbiter assigned to `dispute_id`; must sign | `GARBITER…` |
+| `dispute_id`          | `String`  | Yes      | Non-empty; must reference an open dispute with an assigned arbiter | `"DISPUTE-001"` |
+| `release_to_merchant` | `bool`    | Yes      | `true` = release to merchant, `false` = refund payer | `true` |
+
+**Returns:** `()` on success.
+
+**Events:**
+
+- `lumenflow/arbiter_voted` — topics `(symbol_short!("arbiter"), symbol_short!("voted"))`, data `(dispute_id, arbiter, release_to_merchant)`.
+- `lumenflow/dispute_resolved` — topics `(symbol_short!("dispute"), symbol_short!("resolved"))`, data `(dispute_id, release_to_merchant, amount)`.
+
+**Errors:**
+
+| Code | Name | Condition |
+|------|------|-----------|
+| 1 | [`Unauthorized`](errors.md#auth-errors) | `arbiter` is not the arbiter assigned to `dispute_id`. |
+| 50 | [`InvalidInput`](errors.md#general-errors) | `dispute_id` is empty or does not reference an open dispute. |
+| 52 | [`ArbiterNotAssigned`](errors.md#dispute-errors) | No arbiter has been assigned to `dispute_id`. |
+| 53 | [`DisputeAlreadyResolved`](errors.md#dispute-errors) | The dispute has already been resolved. |
+| 20 | [`PaymentNotFound`](errors.md#payment-errors) | The disputed payment no longer exists. |
+| 70 | [`ContractPaused`](errors.md#general-errors) | Contract is paused. |
+
+---
+
 ### `get_admin_audit_log`
 
 > **Issue #1115** — Structured audit log for all admin actions.
@@ -402,6 +481,8 @@ The audit log captures every privileged admin action with a tamper-evident on-ch
 | `SetPauseGuardians` | `set_pause_guardians` |
 | `UpgradeContract` | `upgrade` |
 | `ConfirmMerchantDataDeletion` | `confirm_merchant_data_deletion` |
+| `AssignArbiter` | `assign_arbiter` |
+| `RemoveArbiter` | `remove_arbiter` |
 | `Other` | Any admin action not listed above. |
 
 #### Access control
@@ -422,6 +503,99 @@ stellar contract invoke \
   --to_ledger 4294967295 \
   --limit 20
 ```
+
+---
+
+## Merchant API Keys
+
+> **Issue #1627** — Per-merchant API key authentication for the dashboard API.
+
+The merchant dashboard API is protected by per-merchant API keys. Every dashboard request must present a key scoped to the merchant whose data is being accessed; a key issued for one merchant cannot read another merchant's data.
+
+### Authentication
+
+Pass the key in the `Authorization` header using the `Bearer` scheme:
+
+```http
+GET /dashboard/payments HTTP/1.1
+Authorization: Bearer lf_live_9f2c4a7b8e1d3f5061728394a5b6c7d8
+```
+
+Requests with a missing, malformed, unknown, or revoked key are rejected with `401 Unauthorized`. Requests whose key is valid but scoped to a different merchant are rejected with `403 Forbidden`.
+
+### Rate limiting
+
+Each API key is independently rate limited to **100 requests per minute**. The limit is applied per key, not per merchant address, so rotating keys does not share a budget. When the limit is exceeded the API responds with `429 Too Many Requests` and a `Retry-After` header indicating how many seconds to wait before retrying.
+
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 12
+```
+
+| Status | Condition |
+|--------|-----------|
+| `401 Unauthorized` | Key missing, malformed, unknown, or revoked. |
+| `403 Forbidden` | Key is valid but not scoped to the requested merchant. |
+| `429 Too Many Requests` | More than 100 requests in the current one-minute window for this key. |
+
+### `POST /admin/merchant-keys`
+
+Generate a new API key scoped to a single merchant address. Admin only.
+
+**Request body:**
+
+| Field      | Type      | Required | Description |
+|------------|-----------|----------|-------------|
+| `merchant` | `Address` | Yes      | Merchant address the key is scoped to. |
+
+```json
+{
+  "merchant": "GMERCHANT…"
+}
+```
+
+**Response:** `201 Created`
+
+| Field      | Type      | Description |
+|------------|-----------|-------------|
+| `id`       | `String`  | Key identifier, used for revocation. |
+| `key`      | `String`  | The plaintext API key. **Returned only once** — store it securely. |
+| `merchant` | `Address` | Merchant address the key is scoped to. |
+| `created_at` | `u64`   | Unix timestamp of creation. |
+
+```json
+{
+  "id": "key_01HZX…",
+  "key": "lf_live_9f2c4a7b8e1d3f5061728394a5b6c7d8",
+  "merchant": "GMERCHANT…",
+  "created_at": 1710000000
+}
+```
+
+**Errors:**
+
+| Status | Condition |
+|--------|-----------|
+| `400 Bad Request` | `merchant` is missing or not a valid address. |
+| `401 Unauthorized` | Caller is not authenticated as admin. |
+| `404 Not Found` | No merchant profile exists for `merchant`. |
+
+### `DELETE /admin/merchant-keys/:id`
+
+Revoke an API key. Revocation is immediate: subsequent requests using the key fail with `401 Unauthorized`. Admin only.
+
+| Parameter | Type     | Required | Description |
+|-----------|----------|----------|-------------|
+| `id`      | `String` | Yes      | Key identifier returned by `POST /admin/merchant-keys`. |
+
+**Response:** `204 No Content`
+
+**Errors:**
+
+| Status | Condition |
+|--------|-----------|
+| `401 Unauthorized` | Caller is not authenticated as admin. |
+| `404 Not Found` | No key exists with `id` (including already-revoked keys). |
 
 ---
 
@@ -1714,6 +1888,43 @@ number of requests removed.
 | `initiator`           | `Address`         | Address that created the payment. |
 | `created_at`          | `u64`             | Unix timestamp of creation. |
 | `expires_at`          | `Option<u64>`     | Unix timestamp of expiry. |
+
+---
+
+### `Dispute`
+
+| Field              | Type            | Description |
+|--------------------|-----------------|-------------|
+| `dispute_id`       | `String`        | Unique dispute identifier. |
+| `order_id`         | `String`        | Associated payment order. |
+| `payer`            | `Address`       | Payer of the disputed payment. |
+| `merchant_address` | `Address`       | Merchant of the disputed payment. |
+| `amount`           | `i128`          | Disputed amount held in escrow. |
+| `token`            | `Address`       | Token contract used. |
+| `status`           | `DisputeStatus` | Current dispute state. |
+| `arbiter`          | `Option<Address>` | Arbiter assigned via `assign_arbiter`; `null` until assigned. |
+| `created_at`       | `u64`           | Unix timestamp of dispute creation. |
+| `resolved_at`      | `Option<u64>`   | Unix timestamp of resolution; `null` while open. |
+
+---
+
+### `DisputeStatus`
+
+| Variant      | Description |
+|--------------|-------------|
+| `Open`       | Dispute raised; awaiting arbiter assignment or vote. |
+| `Resolved`   | Arbiter has voted; funds released to merchant or refunded to payer. |
+
+---
+
+### `ArbiterVote`
+
+| Field                 | Type      | Description |
+|-----------------------|-----------|-------------|
+| `dispute_id`          | `String`  | Dispute the vote applies to. |
+| `arbiter`             | `Address` | Arbiter that cast the vote. |
+| `release_to_merchant` | `bool`    | `true` = released to merchant, `false` = refunded payer. |
+| `voted_at`            | `u64`     | Unix timestamp of the vote. |
 
 ---
 

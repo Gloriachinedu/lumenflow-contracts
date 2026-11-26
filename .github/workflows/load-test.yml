@@ -23,6 +23,14 @@ on:
         description: 'Items per batch payment call (default: 10)'
         required: false
         default: '10'
+      db_pool_vus:
+        description: 'Concurrent virtual users for the DB pool exhaustion scenario (default: 500)'
+        required: false
+        default: '500'
+      db_pool_requests_per_vu:
+        description: 'Requests per virtual user in the DB pool scenario (default: 5)'
+        required: false
+        default: '5'
       network:
         description: 'Target network'
         required: false
@@ -62,6 +70,10 @@ jobs:
           PAYMENTS_PER_VU: ${{ github.event.inputs.payments_per_vu || '10' }}
           BATCH_CLIENTS: ${{ github.event.inputs.batch_clients || '10' }}
           BATCH_ITEMS: ${{ github.event.inputs.batch_items || '10' }}
+          # DB connection pool scenario — verifies no connection exhaustion
+          # (pool min 2 / max 20, 5s query timeout) at 500 concurrent requests.
+          DB_POOL_VUS: ${{ github.event.inputs.db_pool_vus || '500' }}
+          DB_POOL_REQUESTS_PER_VU: ${{ github.event.inputs.db_pool_requests_per_vu || '5' }}
           # Recorded baseline P95 for the concurrent batch scenario — see
           # docs/benchmarking.md "Load Test Baseline". The load test fails
           # if the measured P95 regresses more than 20% over this value.
@@ -89,3 +101,86 @@ jobs:
             cat /tmp/load-test-results.json >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  webhook-relay-load-test:
+    name: Webhook Relay Load Test — 1000 events/min
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install k6
+        run: |
+          sudo gpg --no-default-keyring \
+            --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+            --keyserver hkp://keyserver.ubuntu.com:80 \
+            --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] \
+            https://dl.k6.io/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update -qq
+          sudo apt-get install -y k6
+
+      - name: Run webhook relay load test
+        env:
+          WEBHOOK_RELAY_URL: ${{ secrets.WEBHOOK_RELAY_URL }}
+          WEBHOOK_RELAY_TOKEN: ${{ secrets.WEBHOOK_RELAY_TOKEN }}
+          EVENTS_PER_MIN: ${{ github.event.inputs.webhook_events_per_min || '1000' }}
+          DURATION: ${{ github.event.inputs.webhook_duration || '5m' }}
+          # Recorded baseline P99 delivery latency for the webhook relay at
+          # 1000 events/min — see docs/benchmarking.md "Webhook Relay Load
+          # Test Baseline". The test fails if the measured P99 regresses more
+          # than 20% over this value.
+          BASELINE_P99_MS: '2000'
+          RESULTS_FILE: /tmp/webhook-relay-results.json
+        run: |
+          chmod +x scripts/load-test.sh
+          ./scripts/load-test.sh --scenario webhook-relay
+
+      - name: Upload webhook relay results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webhook-relay-load-test-results-${{ github.run_id }}
+          path: /tmp/webhook-relay-results.json
+          retention-days: 90
+
+      - name: Compare P99 against baseline
+        if: always()
+        run: |
+          if [ ! -f /tmp/webhook-relay-results.json ]; then
+            echo "::error::Webhook relay results file missing — cannot evaluate performance budget"
+            exit 1
+          fi
+          P99=$(jq -r '.metrics.p99_delivery_latency_ms // empty' /tmp/webhook-relay-results.json)
+          DROPPED=$(jq -r '.metrics.dropped_events // empty' /tmp/webhook-relay-results.json)
+          BASELINE="${BASELINE_P99_MS:-2000}"
+          if [ -z "$P99" ]; then
+            echo "::error::P99 delivery latency not found in results"
+            exit 1
+          fi
+          THRESHOLD=$(awk -v b="$BASELINE" 'BEGIN { printf "%.2f", b * 1.20 }')
+          echo "P99=${P99}ms baseline=${BASELINE}ms threshold=${THRESHOLD}ms dropped=${DROPPED}"
+          {
+            echo "### Webhook Relay Load Test"
+            echo ""
+            echo "| Metric | Value | Budget |"
+            echo "| --- | --- | --- |"
+            echo "| P99 delivery latency | ${P99}ms | < ${THRESHOLD}ms (baseline ${BASELINE}ms +20%) |"
+            echo "| Dropped events | ${DROPPED} | 0 |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          FAIL=0
+          if awk -v p="$P99" -v t="$THRESHOLD" 'BEGIN { exit !(p > t) }'; then
+            echo "::error::Performance regression: P99 ${P99}ms exceeds ${THRESHOLD}ms (>20% over baseline ${BASELINE}ms)"
+            FAIL=1
+          fi
+          if awk -v p="$P99" -v b="$BASELINE" 'BEGIN { exit !(p > b) }'; then
+            echo "::warning::P99 ${P99}ms is above baseline ${BASELINE}ms"
+          fi
+          if [ -n "$DROPPED" ] && [ "$DROPPED" != "0" ]; then
+            echo "::error::Dropped events detected: ${DROPPED} (budget: 0)"
+            FAIL=1
+          fi
+          exit "$FAIL"

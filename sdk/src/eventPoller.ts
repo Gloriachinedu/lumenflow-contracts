@@ -1,5 +1,7 @@
-import { LumenFlowError, PaymentErrorCode } from './errors';
+import { LumenFlowError, NetworkError, PaymentErrorCode, RateLimitError } from './errors';
 import { EventCompatError, parseLumenFlowEvent } from './eventCatalog';
+import { LogLevel, StructuredLogger, resolveCorrelationId } from './logging';
+import { redactSensitive } from './logRedaction';
 
 export interface ContractEvent {
   id: string;
@@ -10,18 +12,58 @@ export interface ContractEvent {
   value: unknown;
 }
 
+export interface EventPollerTlsOptions {
+  /** PEM-encoded CA certificate(s) used to verify the internal RPC endpoint. */
+  ca?: string | Buffer | Array<string | Buffer>;
+  /** PEM-encoded client certificate presented for mutual TLS. */
+  cert?: string | Buffer;
+  /** PEM-encoded private key for the client certificate. */
+  key?: string | Buffer;
+  /** Reject unauthorized server certificates. Defaults to true. */
+  rejectUnauthorized?: boolean;
+}
+
 export interface EventPollerOptions {
   rpcUrl: string;
   contractId: string;
   eventTypes?: string[];
   fromLedger?: number;
   strict?: boolean;
-  /** Optional fetch implementation, primarily for chaos/testing injection. */
-  fetchImpl?: typeof fetch;
-  /** Optional callback invoked when a poll cycle fails (e.g. during an RPC outage). */
-  onError?: (error: unknown) => void;
-  /** Optional callback invoked when polling recovers after one or more failures. */
-  onRecover?: (events: ContractEvent[]) => void;
+  correlationId?: string;
+  logLevel?: LogLevel;
+}
+
+function createLogger(options: EventPollerOptions): StructuredLogger {
+  return new StructuredLogger({
+    level: options.logLevel,
+    correlationId: resolveCorrelationId(options.correlationId),
+  });
+}
+
+/**
+ * Event types the poller subscribes to by default. Includes the escrow expiry
+ * warning so off-chain consumers receive it as a webhook event before the
+ * escrow auto-cancels.
+ */
+export const DEFAULT_EVENT_TYPES: string[] = [
+  'escrow_created',
+  'escrow_released',
+  'escrow_cancelled',
+  'escrow_expiry_warning',
+];
+
+/** Maps a contract event topic to the webhook event type delivered off-chain. */
+export function toWebhookEventType(event: ContractEvent): string {
+  const topic = event.topic[0];
+  if (typeof topic === 'string' && topic.length > 0) {
+    return topic;
+  }
+  return 'unknown';
+}
+
+/** Returns true when the event is an escrow expiry warning. */
+export function isEscrowExpiryWarning(event: ContractEvent): boolean {
+  return toWebhookEventType(event) === 'escrow_expiry_warning';
 }
 
 function validateEvent(event: unknown): ContractEvent {
@@ -57,12 +99,53 @@ function validateEvent(event: unknown): ContractEvent {
   };
 }
 
-function buildRpcPayload(options: EventPollerOptions) {
-  const filters: any[] = [
+export interface RpcFilter {
+  type: 'contract';
+  contractIds: string[];
+  topics?: string[][];
+}
+
+interface RpcRequestPayload {
+  jsonrpc: '2.0';
+  id: number;
+  method: 'getEvents';
+  params: {
+    startLedger: number;
+    filters: RpcFilter[];
+  };
+}
+
+interface RpcErrorObject {
+  code?: number;
+  message?: string;
+}
+
+interface RpcSuccessResponse {
+  jsonrpc: '2.0';
+  id: number;
+  result?: {
+    events?: unknown[];
+  };
+}
+
+interface RpcErrorResponse {
+  jsonrpc: '2.0';
+  id: number;
+  error: RpcErrorObject;
+}
+
+type RpcResponse = RpcSuccessResponse | RpcErrorResponse;
+
+function isRpcErrorResponse(data: RpcResponse): data is RpcErrorResponse {
+  return typeof (data as RpcErrorResponse).error === 'object' && (data as RpcErrorResponse).error !== null;
+}
+
+function buildRpcPayload(options: EventPollerOptions): RpcRequestPayload {
+  const filters: RpcFilter[] = [
     {
       type: 'contract',
       contractIds: [options.contractId],
-      topics: options.eventTypes ? [options.eventTypes] : undefined,
+      topics: [options.eventTypes ?? DEFAULT_EVENT_TYPES],
     },
   ];
 
@@ -78,43 +161,66 @@ function buildRpcPayload(options: EventPollerOptions) {
 }
 
 export async function fetchContractEvents(options: EventPollerOptions): Promise<ContractEvent[]> {
-  if (!options.rpcUrl) throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'rpcUrl is required');
-  if (!options.contractId) throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'contractId is required');
+  const logger = createLogger(options);
+  const startedAt = Date.now();
+  const operation = 'fetchContractEvents';
 
-  const doFetch = options.fetchImpl ?? fetch;
-  let response: Response;
   try {
-    response = await doFetch(options.rpcUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildRpcPayload(options)),
-    });
-  } catch (err) {
-    throw new LumenFlowError(PaymentErrorCode.InvalidInput, String(err));
-  }
+    if (!options.rpcUrl) throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'rpcUrl is required');
+    if (!options.contractId) throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'contractId is required');
 
-  let data: any;
-  try {
-    data = await response.json();
-  } catch (err) {
-    throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'Invalid JSON response from RPC');
-  }
-
-  if (data.error) {
-    throw new LumenFlowError(PaymentErrorCode.InvalidInput, data.error.message ?? JSON.stringify(data.error));
-  }
-
-  const events = data.result?.events ?? [];
-  const validEvents: ContractEvent[] = [];
-  for (const event of events) {
+    let response: Response;
     try {
-      validEvents.push(validateEvent(event));
-    } catch (error) {
-      if (options.strict) throw error;
-      console.warn('[LumenFlow] Discarding invalid contract event', error);
+      response = await fetch(options.rpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildRpcPayload(options)),
+      });
+    } catch (err) {
+      throw new LumenFlowError(PaymentErrorCode.InvalidInput, String(err));
     }
+
+    let data: any;
+    try {
+      data = await response.json();
+    } catch (err) {
+      throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'Invalid JSON response from RPC');
+    }
+
+    if (data.error) {
+      throw new LumenFlowError(PaymentErrorCode.InvalidInput, data.error.message ?? JSON.stringify(data.error));
+    }
+
+    const events = data.result?.events ?? [];
+    const validEvents: ContractEvent[] = [];
+    for (const event of events) {
+      try {
+        validEvents.push(validateEvent(event));
+      } catch (error) {
+        if (options.strict) throw error;
+        logger.warn('Discarding invalid contract event', {
+          operation,
+          error: redactSensitive(error),
+        });
+      }
+    }
+
+    logger.info('Fetched contract events', {
+      operation,
+      duration_ms: Date.now() - startedAt,
+      contractId: options.contractId,
+      eventCount: validEvents.length,
+    });
+    return validEvents;
+  } catch (error) {
+    logger.error('Failed to fetch contract events', {
+      operation,
+      duration_ms: Date.now() - startedAt,
+      contractId: options.contractId,
+      error: redactSensitive(error),
+    });
+    throw error;
   }
-  return validEvents;
 }
 
 export function pollContractEvents(
@@ -122,31 +228,28 @@ export function pollContractEvents(
   intervalMs: number,
   callback: (events: ContractEvent[]) => void,
 ): () => void {
-  let stopped = false;
-  let inFlight = false;
-  let failing = false;
+  const logger = createLogger(options);
+  const operation = 'pollContractEvents';
 
-  const tick = () => {
-    if (stopped || inFlight) return;
-    inFlight = true;
+  const timer = setInterval(() => {
+    const startedAt = Date.now();
     fetchContractEvents(options)
       .then((events) => {
-        if (stopped) return;
-        if (failing) {
-          failing = false;
-          options.onRecover?.(events);
-        }
         callback(events);
+        logger.debug('Poll cycle completed', {
+          operation,
+          duration_ms: Date.now() - startedAt,
+          eventCount: events.length,
+        });
       })
       .catch((error) => {
-        if (stopped) return;
-        failing = true;
-        options.onError?.(error);
-      })
-      .finally(() => {
-        inFlight = false;
+        logger.error('Poll cycle failed', {
+          operation,
+          duration_ms: Date.now() - startedAt,
+          error: redactSensitive(error),
+        });
       });
-  };
+  }, intervalMs);
 
   const timer = setInterval(tick, intervalMs);
 
@@ -154,4 +257,38 @@ export function pollContractEvents(
     stopped = true;
     clearInterval(timer);
   };
+}
+
+export interface WebhookEvent {
+  type: string;
+  eventId: string;
+  contractId: string;
+  ledger: number;
+  payload: unknown;
+}
+
+/** Converts a contract event into the webhook event shape delivered off-chain. */
+export function toWebhookEvent(event: ContractEvent): WebhookEvent {
+  return {
+    type: toWebhookEventType(event),
+    eventId: event.id,
+    contractId: event.contractId,
+    ledger: event.ledger,
+    payload: event.value,
+  };
+}
+
+/**
+ * Polls contract events and forwards them as webhook events. Escrow expiry
+ * warnings are surfaced with type `escrow_expiry_warning` so consumers can
+ * release funds proactively before auto-cancellation.
+ */
+export function pollWebhookEvents(
+  options: EventPollerOptions,
+  intervalMs: number,
+  callback: (events: WebhookEvent[]) => void,
+): () => void {
+  return pollContractEvents(options, intervalMs, (events) => {
+    callback(events.map(toWebhookEvent));
+  });
 }

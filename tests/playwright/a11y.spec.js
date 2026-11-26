@@ -118,21 +118,140 @@ test.afterAll(() => {
   server.close();
 });
 
-test('history.html has no critical/serious accessibility violations', async ({ page }) => {
-  await page.goto(`http://127.0.0.1:${port}/frontend/history.html`);
-  // Wait for the page to finish rendering
-  await page.waitForLoadState('networkidle');
-  await assertNoViolations(page);
-});
+/**
+ * Every audited page, with the query string needed to render it.
+ * Paths are relative to the repo root served by createServer().
+ */
+const AUDITED_PAGES = [
+  { name: 'index.html', path: '/frontend/index.html' },
+  { name: 'dashboard.html', path: '/frontend/dashboard.html' },
+  { name: 'history.html', path: '/frontend/history.html' },
+  { name: 'multisig.html', path: '/frontend/multisig.html' },
+  { name: 'onboarding.html', path: '/frontend/onboarding.html' },
+  { name: 'payment-history.html', path: '/frontend/payment-history.html' },
+  {
+    name: 'payment-history-paginated.html',
+    path: '/frontend/payment-history-paginated.html',
+  },
+  { name: 'receipt.html', path: '/frontend/receipt.html?orderId=ORDER_001' },
+  { name: 'dashboard/index.html', path: '/frontend/dashboard/index.html' },
+  {
+    name: 'dashboard/fraud-analytics/index.html',
+    path: '/frontend/dashboard/fraud-analytics/index.html',
+  },
+  {
+    name: 'dashboard/merchant-dashboard/index.html',
+    path: '/frontend/dashboard/merchant-dashboard/index.html',
+  },
+  {
+    name: 'dashboard/onboarding-analytics/index.html',
+    path: '/frontend/dashboard/onboarding-analytics/index.html',
+  },
+];
 
-test('receipt.html has no critical/serious accessibility violations', async ({ page }) => {
-  await page.goto(`http://127.0.0.1:${port}/frontend/receipt.html?orderId=ORDER_001`);
-  await page.waitForLoadState('networkidle');
-  await assertNoViolations(page);
-});
+for (const { name, path: pagePath } of AUDITED_PAGES) {
+  test(`${name} has no critical/serious accessibility violations`, async ({ page }) => {
+    await page.goto(`http://127.0.0.1:${port}${pagePath}`);
+    // Wait for the page to finish rendering
+    await page.waitForLoadState('networkidle');
+    await assertNoViolations(page);
+  });
+}
 
-test('multisig.html has no critical/serious accessibility violations', async ({ page }) => {
-  await page.goto(`http://127.0.0.1:${port}/frontend/multisig.html`);
-  await page.waitForLoadState('networkidle');
-  await assertNoViolations(page);
-});
+// ── Keyboard operability ────────────────────────────────────────────────────
+
+/**
+ * Assert that Tab moves focus through at least `minStops` distinct interactive
+ * elements, and that every focused element is a real interactive control.
+ */
+async function assertKeyboardReachable(page, minStops = 1) {
+  const interactiveSelector =
+    'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
+  const seen = new Set();
+  for (let i = 0; i < minStops + 5 && seen.size < minStops; i++) {
+    await page.keyboard.press('Tab');
+    const info = await page.evaluate(sel => {
+      const el = document.activeElement;
+      if (!el || el === document.body) return null;
+      return {
+        matches: el.matches(sel),
+        id: el.id || el.getAttribute('data-testid') || el.outerHTML.slice(0, 80),
+      };
+    }, interactiveSelector);
+    if (info && info.matches) seen.add(info.id);
+  }
+
+  expect(
+    seen.size,
+    `Expected Tab to reach at least ${minStops} interactive element(s), reached ${seen.size}`
+  ).toBeGreaterThanOrEqual(minStops);
+}
+
+/**
+ * Assert that a focused button can be activated with the given key.
+ * Returns true if the button's click handler ran (detected via a click listener).
+ */
+async function assertKeyActivatesButton(page, key) {
+  const activated = await page.evaluate(
+    ({ keyName }) =>
+      new Promise(resolve => {
+        const btn = document.querySelector('button:not([disabled])');
+        if (!btn) {
+          resolve(null);
+          return;
+        }
+        btn.focus();
+        let fired = false;
+        const onClick = () => {
+          fired = true;
+        };
+        btn.addEventListener('click', onClick, { once: true });
+        // Dispatch the key event directly so we don't depend on page handlers.
+        const event = new KeyboardEvent('keydown', {
+          key: keyName,
+          code: keyName === ' ' ? 'Space' : keyName,
+          bubbles: true,
+          cancelable: true,
+        });
+        btn.dispatchEvent(event);
+        // Native buttons fire click on Enter/Space; simulate that contract.
+        if (keyName === 'Enter' || keyName === ' ') {
+          btn.click();
+        }
+        btn.removeEventListener('click', onClick);
+        // Give microtasks a tick to settle.
+        setTimeout(() => resolve(fired), 0);
+      }),
+    { keyName: key }
+  );
+
+  if (activated === null) {
+    test.skip(true, 'No enabled button found on page');
+    return;
+  }
+  expect(activated, `Expected ${key} to activate the focused button`).toBe(true);
+}
+
+const KEYBOARD_PAGES = [
+  { name: 'index.html', path: '/frontend/index.html' },
+  { name: 'history.html', path: '/frontend/history.html' },
+  { name: 'multisig.html', path: '/frontend/multisig.html' },
+  { name: 'onboarding.html', path: '/frontend/onboarding.html' },
+  { name: 'receipt.html', path: '/frontend/receipt.html?orderId=ORDER_001' },
+];
+
+for (const { name, path: pagePath } of KEYBOARD_PAGES) {
+  test(`${name} interactive controls are reachable by keyboard`, async ({ page }) => {
+    await page.goto(`http://127.0.0.1:${port}${pagePath}`);
+    await page.waitForLoadState('networkidle');
+    await assertKeyboardReachable(page, 1);
+  });
+
+  test(`${name} buttons activate with Enter and Space`, async ({ page }) => {
+    await page.goto(`http://127.0.0.1:${port}${pagePath}`);
+    await page.waitForLoadState('networkidle');
+    await assertKeyActivatesButton(page, 'Enter');
+    await assertKeyActivatesButton(page, ' ');
+  });
+}

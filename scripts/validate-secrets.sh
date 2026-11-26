@@ -31,6 +31,8 @@ ROTATION_OVERLAP_MINUTES="${ROTATION_OVERLAP_MINUTES:-15}"
 EXPECTED_OVERLAP_MINUTES=15
 
 # ── Source .env if present ─────────────────────────────────────────────────────
+# The .env file is not committed; it holds local overrides for the runtime
+# configuration injected into containers (see .env.example).
 if [[ -f ".env" ]]; then
   info "Sourcing .env..."
   # shellcheck disable=SC1091
@@ -99,130 +101,37 @@ validate_stellar_address() {
   fi
 }
 
-# ── Secret manager / rotation helpers (issue #1547) ───────────────────────────
+validate_contract_id() {
+  local name="$1"
+  local value="${!name:-}"
 
-# Verify the secret manager is configured and reachable when enabled.
-validate_secret_manager() {
-  if [[ -z "$SECRET_MANAGER" ]]; then
-    info "SECRET_MANAGER not set — using .env-based secrets (backward compatible)."
-    return
+  if [[ -z "$value" ]]; then
+    return  # caught by check_secret
   fi
 
-  echo ""
-  echo "--- Secret manager checks ---"
-
-  case "$SECRET_MANAGER" in
-    aws)
-      if ! command -v aws >/dev/null 2>&1; then
-        error "SECRET_MANAGER=aws but the AWS CLI ('aws') is not installed."
-        FAILURES=$((FAILURES + 1))
-        return
-      fi
-      success "AWS Secrets Manager selected (aws CLI available)"
-      ;;
-    vault)
-      if ! command -v vault >/dev/null 2>&1; then
-        error "SECRET_MANAGER=vault but the Vault CLI ('vault') is not installed."
-        FAILURES=$((FAILURES + 1))
-        return
-      fi
-      success "HashiCorp Vault selected (vault CLI available)"
-      ;;
-    *)
-      error "Unknown SECRET_MANAGER '$SECRET_MANAGER'. Use 'aws' or 'vault'."
-      FAILURES=$((FAILURES + 1))
-      return
-      ;;
-  esac
-
-  # Confirm the environment's secret path is configured.
-  local path_var="SECRET_MANAGER_PATH"
-  local path="${!path_var:-}"
-  if [[ -z "$path" ]]; then
-    error "SECRET_MANAGER is set but '$path_var' is empty."
-    error "  Set it to the secret name/path, e.g. 'lumenflow/${ENVIRONMENT}/secrets'."
+  # Soroban contract IDs: 'C' followed by 55 uppercase base32 chars
+  if [[ ! "$value" =~ ^C[A-Z2-7]{55}$ ]]; then
+    error "Variable '$name' does not look like a valid Soroban contract ID."
+    error "  Expected: C + 55 uppercase base32 chars (A-Z2-7), total 56 chars."
     FAILURES=$((FAILURES + 1))
   else
-    success "$path_var is set ($path)"
+    success "$name has valid contract ID format"
   fi
 }
 
-# During the overlap window both the current and previous versions must be
-# present so in-flight requests signed with the old secret still validate.
-validate_rotation_overlap() {
-  if [[ -z "$SECRET_MANAGER" ]]; then
-    return
+validate_url() {
+  local name="$1"
+  local value="${!name:-}"
+
+  if [[ -z "$value" ]]; then
+    return  # caught by check_secret
   fi
 
-  echo ""
-  echo "--- Rotation overlap checks ---"
-
-  if [[ ! "$ROTATION_OVERLAP_MINUTES" =~ ^[0-9]+$ ]]; then
-    error "ROTATION_OVERLAP_MINUTES must be an integer (got '$ROTATION_OVERLAP_MINUTES')."
-    FAILURES=$((FAILURES + 1))
-    return
-  fi
-
-  if [[ "$ROTATION_OVERLAP_MINUTES" -ne "$EXPECTED_OVERLAP_MINUTES" ]]; then
-    error "ROTATION_OVERLAP_MINUTES must be $EXPECTED_OVERLAP_MINUTES (got $ROTATION_OVERLAP_MINUTES)."
-    error "  The 15-minute overlap window is required for zero-downtime rollover."
+  if [[ ! "$value" =~ ^https?:// ]]; then
+    error "Variable '$name' does not look like a valid URL (must start with http:// or https://)."
     FAILURES=$((FAILURES + 1))
   else
-    success "Rotation overlap window is ${ROTATION_OVERLAP_MINUTES} minutes"
-  fi
-
-  # Both versions must be present while the overlap window is active.
-  local current_var="SECRET_CURRENT_VERSION"
-  local previous_var="SECRET_PREVIOUS_VERSION"
-  local current="${!current_var:-}"
-  local previous="${!previous_var:-}"
-
-  if [[ -z "$current" ]]; then
-    error "Required '$current_var' is not set (latest secret version id)."
-    FAILURES=$((FAILURES + 1))
-  else
-    success "$current_var is present ($current)"
-  fi
-
-  if [[ -z "$previous" ]]; then
-    warn "'$previous_var' is not set — no overlap window active (fresh deploy)."
-  elif [[ "$previous" == "$current" ]]; then
-    error "'$previous_var' must differ from '$current_var' during rotation."
-    FAILURES=$((FAILURES + 1))
-  else
-    success "$previous_var is present ($previous) — dual-active overlap"
-  fi
-}
-
-# Ensure the deactivation schedule respects the 15-minute overlap window.
-validate_deactivation_schedule() {
-  if [[ -z "$SECRET_MANAGER" ]]; then
-    return
-  fi
-
-  echo ""
-  echo "--- Deactivation schedule checks ---"
-
-  local sched_var="SECRET_DEACTIVATION_DELAY_MINUTES"
-  local delay="${!sched_var:-}"
-
-  if [[ -z "$delay" ]]; then
-    warn "'$sched_var' is not set — defaulting to ${EXPECTED_OVERLAP_MINUTES} minutes."
-    return
-  fi
-
-  if [[ ! "$delay" =~ ^[0-9]+$ ]]; then
-    error "$sched_var must be an integer (got '$delay')."
-    FAILURES=$((FAILURES + 1))
-    return
-  fi
-
-  if [[ "$delay" -lt "$EXPECTED_OVERLAP_MINUTES" ]]; then
-    error "$sched_var ($delay) is shorter than the required ${EXPECTED_OVERLAP_MINUTES}-minute overlap."
-    error "  Old versions must stay active for at least ${EXPECTED_OVERLAP_MINUTES} minutes."
-    FAILURES=$((FAILURES + 1))
-  else
-    success "Old version deactivated after ${delay} minutes (>= ${EXPECTED_OVERLAP_MINUTES})"
+    success "$name has valid URL format"
   fi
 }
 
@@ -280,6 +189,60 @@ validate_mainnet() {
   validate_stellar_secret  "MAINNET_SOURCE_ACCOUNT"
 }
 
+# ── Local / container runtime validation ───────────────────────────────────────
+#
+# These variables are injected into the container at startup (see
+# docker-compose.yml and .env.example) so the same image can be deployed to
+# any environment without rebuilding.
+
+validate_local() {
+  echo ""
+  echo "=== Local / Container Runtime Validation ==="
+  echo ""
+
+  # Required runtime configuration
+  check_secret "NETWORK"            "true"
+  check_secret "RPC_URL"            "true"
+  check_secret "NETWORK_PASSPHRASE" "true"
+  check_secret "SOURCE_ACCOUNT"     "true"
+  check_secret "CONTRACT_ID"        "true"
+  check_secret "ADMIN_ADDRESS"      "true"
+
+  # Required seed keys used by docker-compose.yml
+  check_secret "DEPLOYER_KEY" "true"
+  check_secret "ADMIN_KEY"    "true"
+
+  # Optional seed keys (needed for smoke tests)
+  check_secret "MERCHANT_KEY" "false"
+  check_secret "PAYER_KEY"    "false"
+
+  echo ""
+  echo "--- Format checks ---"
+
+  validate_url             "RPC_URL"
+  validate_stellar_address "SOURCE_ACCOUNT"
+  validate_stellar_address "ADMIN_ADDRESS"
+  validate_contract_id     "CONTRACT_ID"
+
+  validate_stellar_secret  "DEPLOYER_KEY"
+  validate_stellar_secret  "ADMIN_KEY"
+
+  if [[ -n "${MERCHANT_KEY:-}" ]]; then validate_stellar_secret "MERCHANT_KEY"; fi
+  if [[ -n "${PAYER_KEY:-}" ]];    then validate_stellar_secret "PAYER_KEY";    fi
+
+  if [[ -n "${NETWORK:-}" ]]; then
+    case "$NETWORK" in
+      testnet|mainnet|futurenet|local)
+        success "NETWORK is a recognised network ('$NETWORK')"
+        ;;
+      *)
+        error "NETWORK has unrecognised value '$NETWORK' (expected testnet, mainnet, futurenet or local)."
+        FAILURES=$((FAILURES + 1))
+        ;;
+    esac
+  fi
+}
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 echo "============================================"
@@ -293,8 +256,9 @@ validate_secret_manager
 case "$ENVIRONMENT" in
   testnet) validate_testnet ;;
   mainnet) validate_mainnet ;;
+  local)   validate_local ;;
   *)
-    error "Unknown environment: '$ENVIRONMENT'. Use 'testnet' or 'mainnet'."
+    error "Unknown environment: '$ENVIRONMENT'. Use 'testnet', 'mainnet' or 'local'."
     exit 1
     ;;
 esac
@@ -313,7 +277,8 @@ if [[ "$FAILURES" -gt 0 ]]; then
   echo "GitHub repository secrets at:"
   echo "  Settings > Secrets and variables > Actions"
   echo ""
-  echo "See docs/admin-key-rotation.md for the rotation runbook."
+  echo "For container deployments, set the required runtime variables in the"
+  echo "environment (see .env.example and docs/secrets-and-local-env.md)."
   exit 1
 else
   echo "  ✅ All checks passed for '$ENVIRONMENT'."

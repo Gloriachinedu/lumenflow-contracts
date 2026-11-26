@@ -127,71 +127,65 @@ describe("Non-retryable errors", () => {
   });
 });
 
-// ─── Integration: retry success after outage ─────────────────────────────────
+// ─── Retry behaviour (issue #1522) ────────────────────────────────────────────
 
-describe("Integration: RPC outage recovery", () => {
-  it("succeeds after a burst of transient failures (simulated outage)", async () => {
+describe("Retry behaviour", () => {
+  it("succeeds on the second attempt after a transient failure", async () => {
     const rpcFetch = jest
       .fn()
-      .mockRejectedValueOnce(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }))
-      .mockRejectedValueOnce(Object.assign(new Error("network"), { code: "ECONNRESET" }))
+      .mockRejectedValueOnce(
+        Object.assign(new Error("temporary glitch"), { code: "ECONNRESET" })
+      )
       .mockResolvedValue({ result: null });
 
     const client = new LumenFlowClient(rpcFetch);
     await expect(client.registerMerchant(MERCHANT_PARAMS)).resolves.toBeUndefined();
-    expect(rpcFetch).toHaveBeenCalledTimes(3);
+    expect(rpcFetch).toHaveBeenCalledTimes(2);
   });
-});
 
-// ─── Integration: partial batch payment failure ──────────────────────────────
-
-describe("Integration: partial batch payment failure", () => {
-  it("returns per-item results with correct error codes", async () => {
+  it("surfaces the last error once retries are exhausted", async () => {
     const rpcFetch = jest
       .fn()
-      .mockResolvedValueOnce({ result: null }) // item 1 succeeds
-      .mockRejectedValueOnce(
-        new LumenFlowError(PaymentErrorCode.InsufficientFunds)
-      ) // item 2 fails, non-retryable
-      .mockResolvedValueOnce({ result: null }); // item 3 succeeds
+      .mockRejectedValueOnce(Object.assign(new Error("first failure"), { code: "ETIMEDOUT" }))
+      .mockRejectedValueOnce(Object.assign(new Error("second failure"), { code: "ETIMEDOUT" }))
+      .mockRejectedValueOnce(Object.assign(new Error("third failure"), { code: "ETIMEDOUT" }))
+      .mockRejectedValueOnce(Object.assign(new Error("final failure"), { code: "ETIMEDOUT" }));
 
     const client = new LumenFlowClient(rpcFetch);
-
-    const results = await client.processBatchPayments([
-      { payer: "G1", order_id: "O1", merchant_address: "G2", amount: 100 },
-      { payer: "G1", order_id: "O2", merchant_address: "G2", amount: 200 },
-      { payer: "G1", order_id: "O3", merchant_address: "G2", amount: 300 },
-    ]);
-
-    expect(results).toHaveLength(3);
-    expect(results[0].success).toBe(true);
-    expect(results[1].success).toBe(false);
-    expect(results[1].error?.code).toBe(PaymentErrorCode.InsufficientFunds);
-    expect(results[2].success).toBe(true);
+    await expect(client.registerMerchant(MERCHANT_PARAMS)).rejects.toThrow(
+      "final failure"
+    );
+    // 1 initial attempt + 3 retries
+    expect(rpcFetch).toHaveBeenCalledTimes(4);
   });
-});
 
-// ─── Integration: idempotent duplicate submissions ───────────────────────────
-
-describe("Integration: concurrent duplicate submissions", () => {
-  it("handles duplicate order submissions idempotently", async () => {
-    const rpcFetch = jest.fn().mockResolvedValue({ result: null });
+  it("fails fast on auth errors without retrying", async () => {
+    const rpcFetch = jest
+      .fn()
+      .mockRejectedValue(new LumenFlowError(PaymentErrorCode.Unauthorized));
     const client = new LumenFlowClient(rpcFetch);
 
-    const params = {
+    await expect(client.processPayment({
       payer: "G1",
-      order_id: "O_DUP",
+      order_id: "O1",
       merchant_address: "G2",
       amount: 100,
-    };
+    })).rejects.toBeInstanceOf(LumenFlowError);
+    expect(rpcFetch).toHaveBeenCalledTimes(1);
+  });
 
-    const results = await Promise.all([
-      client.processPayment(params),
-      client.processPayment(params),
-      client.processPayment(params),
-    ]);
+  it("fails fast on validation errors without retrying", async () => {
+    const rpcFetch = jest
+      .fn()
+      .mockRejectedValue(new LumenFlowError(PaymentErrorCode.InvalidAmount));
+    const client = new LumenFlowClient(rpcFetch);
 
-    // All duplicate submissions resolve without throwing
-    results.forEach((r) => expect(r).toBeUndefined());
+    await expect(client.processPayment({
+      payer: "G1",
+      order_id: "O1",
+      merchant_address: "G2",
+      amount: 100,
+    })).rejects.toBeInstanceOf(LumenFlowError);
+    expect(rpcFetch).toHaveBeenCalledTimes(1);
   });
 });

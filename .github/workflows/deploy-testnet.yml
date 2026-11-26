@@ -48,6 +48,31 @@ jobs:
             https://github.com/stellar/stellar-cli/releases/download/v22.8.1/stellar-cli-22.8.1-x86_64-unknown-linux-gnu.tar.gz \
             | tar -xz -C /usr/local/bin stellar
 
+      # ── Build frontend (inject service worker cache version) ─────────────
+      - name: Build frontend with service worker cache version
+        run: |
+          set -euo pipefail
+          BUILD_HASH="${GITHUB_SHA::12}"
+          echo "BUILD_HASH=$BUILD_HASH" >> "$GITHUB_ENV"
+          if [ ! -f frontend/sw.js ]; then
+            echo "::error::frontend/sw.js not found"
+            exit 1
+          fi
+          sed -i "s/__BUILD_HASH__/${BUILD_HASH}/g" frontend/sw.js
+          if grep -q '__BUILD_HASH__' frontend/sw.js; then
+            echo "::error::Failed to inject BUILD_HASH into frontend/sw.js"
+            exit 1
+          fi
+          echo "## 🏗 Frontend build" >> "$GITHUB_STEP_SUMMARY"
+          echo "Service worker cache version: \`lf-cache-v${BUILD_HASH}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload built frontend
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build-${{ github.run_id }}
+          path: frontend/
+          retention-days: 14
+
       # ── Deploy ────────────────────────────────────────────────────────────
       - name: Deploy contract to testnet
         id: deploy

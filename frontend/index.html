@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://horizon.stellar.org; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none';" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'" />
     <title>LumenFlow</title>
     <link rel="manifest" href="manifest.json" />
     <meta name="theme-color" content="#6c47ff" />
@@ -12,27 +12,60 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="LumenFlow" />
     <link rel="apple-touch-icon" href="icons/icon.svg" />
+    <!--
+      SRI policy: every externally hosted <script> or <link rel="stylesheet"> MUST
+      carry `integrity` and `crossorigin="anonymous"` attributes. Same-origin
+      assets (e.g. styles.css) are covered by CSP 'self' and need no SRI.
+      When adding/upgrading a CDN dependency, regenerate its hash with:
+        curl -sSL <url> | openssl dgst -sha384 -binary | openssl base64 -A
+      then set integrity="sha384-<hash>" and crossorigin="anonymous".
+      CI enforces this via scripts/check-sri.mjs.
+    -->
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <main>
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+    <main id="main-content" tabindex="-1">
       <h1>LumenFlow</h1>
       <p>Scalable, secure, and decentralized payments on Stellar Soroban.</p>
-      <nav style="margin-top:1.5rem;display:flex;flex-wrap:wrap;gap:0.75rem;">
-        <a href="dashboard.html" style="font-weight:600;color:#6c47ff;text-decoration:none;padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:8px;">Merchant Dashboard</a>
-        <a href="history.html"   style="font-weight:600;color:#6c47ff;text-decoration:none;padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:8px;">Payment History</a>
-        <a href="receipt.html"   style="font-weight:600;color:#6c47ff;text-decoration:none;padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:8px;">View Receipt</a>
-        <a href="multisig.html"  style="font-weight:600;color:#6c47ff;text-decoration:none;padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:8px;">Multisig Payment</a>
+      <nav aria-label="Primary" style="margin-top:1.5rem;display:flex;flex-wrap:wrap;gap:0.75rem;">
+        <a href="dashboard.html" class="nav-link">Merchant Dashboard</a>
+        <a href="history.html"   class="nav-link">Payment History</a>
+        <a href="receipt.html"   class="nav-link">View Receipt</a>
+        <a href="multisig.html"  class="nav-link">Multisig Payment</a>
       </nav>
+
+      <section id="payment-link-section" style="margin-top:2rem;max-width:32rem;" aria-labelledby="payment-link-heading">
+        <h2 id="payment-link-heading" style="font-size:1.15rem;">Pay via Link</h2>
+        <div id="payment-link-error" role="alert" aria-live="assertive" hidden
+             style="margin-bottom:1rem;padding:0.75rem 1rem;border:1.5px solid #c0392b;border-radius:8px;background:#fdecea;color:#922b21;font-weight:600;"></div>
+        <form id="payment-link-form" novalidate>
+          <div style="margin-bottom:0.75rem;">
+            <label for="pay-merchant" style="display:block;font-weight:600;margin-bottom:0.25rem;">Merchant address</label>
+            <input id="pay-merchant" name="merchant" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="G…" aria-describedby="pay-merchant-hint"
+                   style="width:100%;padding:0.5rem;border:1.5px solid #ccc;border-radius:8px;box-sizing:border-box;" />
+            <small id="pay-merchant-hint" style="color:#666;">Stellar account address starting with G.</small>
+          </div>
+          <div style="margin-bottom:0.75rem;">
+            <label for="pay-amount" style="display:block;font-weight:600;margin-bottom:0.25rem;">Amount (optional)</label>
+            <input id="pay-amount" name="amount" type="text" inputmode="decimal" autocomplete="off"
+                   placeholder="0.00"
+                   style="width:100%;padding:0.5rem;border:1.5px solid #ccc;border-radius:8px;box-sizing:border-box;" />
+          </div>
+          <div style="margin-bottom:0.75rem;">
+            <label for="pay-memo" style="display:block;font-weight:600;margin-bottom:0.25rem;">Memo (optional)</label>
+            <input id="pay-memo" name="memo" type="text" autocomplete="off" maxlength="28"
+                   placeholder="Payment reference"
+                   style="width:100%;padding:0.5rem;border:1.5px solid #ccc;border-radius:8px;box-sizing:border-box;" />
+          </div>
+          <button id="pay-submit" type="submit"
+                  style="font-weight:600;color:#fff;background:#6c47ff;border:none;border-radius:8px;padding:0.55rem 1.25rem;cursor:pointer;">
+            Pay
+          </button>
+        </form>
+      </section>
     </main>
-    <script>
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker
-            .register('./sw.js', { scope: './' })
-            .catch((err) => console.warn('[PWA] Service worker registration failed:', err));
-        });
-      }
-    </script>
+    <script src="sw-register.js"></script>
   </body>
 </html>

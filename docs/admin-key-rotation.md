@@ -23,7 +23,8 @@ and co-signed by a second authorized operator before execution.**
 9. [Post-Rotation Verification](#9-post-rotation-verification)
 10. [Boundary Cases and Error Reference](#10-boundary-cases-and-error-reference)
 11. [Two-Person Integrity Checklist](#11-two-person-integrity-checklist)
-12. [Record Keeping](#12-record-keeping)
+12. [Admin API IP Allowlisting](#12-admin-api-ip-allowlisting)
+13. [Record Keeping](#13-record-keeping)
 
 ---
 
@@ -686,7 +687,104 @@ Store the completed log in your organization's secure audit trail system.
 
 ---
 
-## 12. Record Keeping
+## 12. Admin API IP Allowlisting
+
+Admin API endpoints (contract pause, emergency withdrawal, merchant
+suspension, and the other privileged operations listed in section 3) are
+protected by an IP allowlist middleware. Requests that do not originate from
+an allowlisted CIDR are rejected with **HTTP 403 Forbidden** before any
+authentication check runs — a non-allowlisted caller never receives `401`, so
+no information about credential validity is leaked.
+
+### Configuration
+
+The allowlist is configured with a single environment variable holding a
+comma-separated list of CIDR ranges:
+
+| Variable | Format | Example |
+|----------|--------|---------|
+| `ADMIN_API_IP_ALLOWLIST` | Comma-separated IPv4/IPv6 CIDRs | `10.0.0.0/8,192.168.10.0/24,203.0.113.7/32` |
+
+Notes:
+
+- A bare address without a prefix is treated as a single-host range
+  (`203.0.113.7` ≡ `203.0.113.7/32`).
+- Whitespace around entries is ignored.
+- If the variable is **unset or empty**, the middleware fails closed: all
+  admin API requests are rejected with `403`. Never deploy admin endpoints
+  without an explicit allowlist.
+- Changes take effect on service restart (or config reload, where supported);
+  the allowlist is not hot-reloaded from the environment.
+
+Example deployment configuration:
+
+```bash
+# .env / secrets manager entry
+ADMIN_API_IP_ALLOWLIST="10.0.0.0/8,192.168.10.0/24,203.0.113.7/32"
+```
+
+### Expected behaviour
+
+| Caller IP | Result |
+|-----------|--------|
+| Inside an allowlisted CIDR, valid credentials | Request processed normally |
+| Inside an allowlisted CIDR, invalid credentials | `401 Unauthorized` |
+| Outside every allowlisted CIDR | `403 Forbidden` (regardless of credentials) |
+| Allowlist unset/empty | `403 Forbidden` for all callers |
+
+### Adding an operator IP range
+
+1. Obtain the new operator's egress IP or VPN range from the operator and
+   confirm it is a static, dedicated range (not a shared consumer ISP pool).
+2. Add the CIDR to `ADMIN_API_IP_ALLOWLIST` in the secrets manager — never
+   commit it to the repository.
+3. Roll the service so the new value is loaded.
+4. Verify from the new range:
+
+   ```bash
+   curl -s -o /dev/null -w "%{http_code}\n" \
+     -H "Authorization: Bearer $ADMIN_TOKEN" \
+     https://api.example.com/admin/health
+   # Expected: 200
+   ```
+
+5. Verify a non-allowlisted source is still blocked (see below).
+
+### Removing an operator IP range
+
+1. Remove the CIDR from `ADMIN_API_IP_ALLOWLIST` and roll the service.
+2. Confirm the removed range now receives `403`:
+
+   ```bash
+   curl -s -o /dev/null -w "%{http_code}\n" \
+     -H "Authorization: Bearer $ADMIN_TOKEN" \
+     https://api.example.com/admin/health
+   # Expected: 403
+   ```
+
+3. Record the removal in the rotation log (section 11) with the operator name
+   and reason (departure, device change, VPN re-IP, etc.).
+
+### Rotating the allowlist
+
+Treat allowlist changes like key rotation: two-person review, logged, and
+verified from both an allowed and a denied source.
+
+- [ ] Change reviewed by a second operator
+- [ ] Updated in the secrets manager (not in source control)
+- [ ] Service rolled and healthy
+- [ ] Allowed source returns `200`/`401` (not `403`)
+- [ ] Denied source returns `403`
+- [ ] Change recorded in the rotation log
+
+> **Tip:** When migrating between operator ranges, add the new range first,
+> verify access, then remove the old range in a separate change. This avoids
+> locking all operators out if a CIDR is mistyped.
+
+---
+
+## 13. Record Keeping
+=======
 
 - All key rotation events must be logged with date, operator, witness,
   transaction hash, and reason.
