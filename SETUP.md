@@ -71,7 +71,40 @@ Download from [docker.com/products/docker-desktop](https://www.docker.com/produc
 
 ---
 
+## Repository Setup (Maintainers)
+
+Branch protection on `main` is enforced by a script. Run it after any change to repository settings, and whenever branch protection may have been altered:
+
+```bash
+./scripts/apply-branch-protection.sh
+```
+
+The script applies the following rules to `main`:
+
+- **Required status checks** (must pass before merge):
+  - `CI`
+  - `coverage`
+  - `security scan`
+  - `OpenAPI validation`
+- **Require at least 1 approving review** before merging
+- **Dismiss stale reviews** when new commits are pushed
+- **No force pushes** (force push disabled on `main`)
+
+### Verifying protection
+
+Confirm the rules are in place with the GitHub CLI:
+
+```bash
+gh api repos/:owner/:repo/branches/main/protection \
+  --jq '{checks: .required_status_checks.contexts, reviews: .required_pull_request_reviews.required_approving_review_count, dismiss_stale: .required_pull_request_reviews.dismiss_stale_reviews, force_push: .allow_force_pushes.enabled}'
+```
+
+Expected output: all four required checks listed, `reviews` = `1`, `dismiss_stale` = `true`, `force_push` = `false`.
+
+---
+
 ## Environment Variables
+=======
 
 Copy the example below into a `.env` file in the project root (git-ignored) and fill in your values:
 

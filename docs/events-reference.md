@@ -131,6 +131,51 @@ The merchant address is emitted as **`topic[2]`** (filterable) so subscribers ca
 
 ---
 
+### `payment_processed_diagnostic`
+Emitted alongside `payment_processed` on the performance-critical payment path to provide off-chain monitoring telemetry. Unlike `payment_processed`, this event is intended for observability tooling (e.g., `lumenflow_exporter.py`) rather than end-user indexers.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful call to `process_payment_with_signature` (emitted immediately after `payment_processed`). |
+| **Topics** | `["lumenflow", "payment_processed_diagnostic"]` |
+| **Data** | `(order_id: String, ledger_sequence_delta: u32)` |
+
+**Data Details:**
+- `order_id`: The unique identifier for the order, matching the corresponding `payment_processed` event.
+- `ledger_sequence_delta`: The number of ledgers elapsed between the start of the operation and event emission (duration-equivalent). Used to derive per-operation latency metrics.
+
+---
+
+### `refund_issued_diagnostic`
+Emitted alongside `refund_executed` when an approved refund transfer completes, providing off-chain monitoring telemetry.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful call to `execute_refund` (emitted immediately after `refund_executed`). |
+| **Topics** | `["lumenflow", "refund_issued_diagnostic"]` |
+| **Data** | `(refund_id: String, ledger_sequence_delta: u32)` |
+
+**Data Details:**
+- `refund_id`: The unique refund identifier, matching the corresponding `refund_executed` event.
+- `ledger_sequence_delta`: The number of ledgers elapsed between the start of the operation and event emission (duration-equivalent). Used to derive per-operation latency metrics.
+
+---
+
+### `batch_payment_completed_diagnostic`
+Emitted once per `batch_payment` call after all payments in the batch have been processed, providing off-chain monitoring telemetry.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful call to `batch_payment` (emitted after all per-payment `payment_processed` events). |
+| **Topics** | `["lumenflow", "batch_payment_completed_diagnostic"]` |
+| **Data** | `(batch_size: u32, ledger_sequence_delta: u32)` |
+
+**Data Details:**
+- `batch_size`: The number of payments processed in the batch.
+- `ledger_sequence_delta`: The number of ledgers elapsed between the start of the batch operation and event emission (duration-equivalent). Used to derive per-batch latency metrics and average payments per ledger.
+
+---
+
 ### `suspicious_activity`
 Emitted when a transaction exceeds defined safety thresholds (e.g., large payment).
 
@@ -448,6 +493,20 @@ const parsed = parseLumenFlowEvent({
 });
 // { name: 'payment_processed', merchant: <merchantXdr>,
 //   data: { order_id: 'ORDER_123', payer: <payerAddr>, amount: 1000n } }
+```
+
+Cross-asset payments decode the same way, with the conversion details in `data`:
+
+```ts
+const parsed = parseLumenFlowEvent({
+  topic: ['lumenflow', 'cross_asset_payment', merchantXdr],
+  value: ['ORDER_123', payerAddr, sendAssetAddr, 10500000n, destAssetAddr, 10000000n, 9523809n],
+});
+// { name: 'cross_asset_payment', merchant: <merchantXdr>,
+//   data: { order_id: 'ORDER_123', payer: <payerAddr>,
+//           send_asset: <sendAssetAddr>, send_amount: 10500000n,
+//           dest_asset: <destAssetAddr>, dest_amount: 10000000n,
+//           exchange_rate: 9523809n } }
 ```
 
 `parseLumenFlowEvent` throws `EventCompatError` for events that aren't in the

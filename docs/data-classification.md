@@ -42,7 +42,7 @@ Data stored in Soroban contract storage is replicated across all Stellar network
 | Field | Type | Classification | Anonymisable | Notes |
 |-------|------|----------------|-------------|-------|
 | `order_id` | `String` | Tier 4 — Non-Personal | No | Merchant-assigned unique identifier |
-| `payer` | `Address` | Tier 2 — Pseudonymous | No | Blockchain-immutable |
+| `payer` | `Address` | Tier 2 — Pseudonymous | No | Blockchain-immutable; see [Payer Data](#payer-data-on-chain-vs-off-chain) |
 | `merchant_address` | `Address` | Tier 2 — Pseudonymous | No | Blockchain-immutable |
 | `token_address` | `Address` | Tier 4 — Non-Personal | No | SAC token contract address |
 | `amount` | `i128` | Tier 4 — Non-Personal | No | Amount in stroops |
@@ -84,6 +84,39 @@ Data stored in Soroban contract storage is replicated across all Stellar network
 | `amount` | `i128` | Tier 4 — Non-Personal | No | Requested amount |
 | `memo` | `Option<String>` | Tier 3 — Potentially Personal | No | Avoid storing PII in memo |
 | `ttl` | `u64` | Tier 4 — Non-Personal | No | Time-to-live in seconds |
+
+### Payer Data (On-Chain vs. Off-Chain)
+
+Payer-related data is split between the Soroban ledger (immutable) and off-chain systems (deletable). The table below is the authoritative summary; the full GDPR erasure procedure is in [PRIVACY.md § 5](../PRIVACY.md#5-right-to-erasure-right-to-be-forgotten).
+
+#### On-Chain Payer Data — **Not Deletable**
+
+| Data element | Location | Classification | Deletable | Notes |
+|--------------|----------|----------------|-----------|-------|
+| Payer address (`PaymentOrder.payer`) | Contract storage | Tier 2 — Pseudonymous | **No** | Blockchain-immutable; retained for financial record-keeping (GDPR Art. 6(1)(c)) |
+| Payer nonce (`Nonce` storage key) | Contract storage | Tier 2 — Pseudonymous | **No** | Required for replay protection; integrity-critical |
+| Payer index entries (`PayerIndex` / payer→order mappings) | Contract storage | Tier 2 — Pseudonymous | **No** | Reference-integrity anchor; cannot be removed from the ledger |
+| Payer address in event logs (`payment_processed`, etc.) | Horizon archive | Tier 2 — Pseudonymous | **No** | Permanently immutable on-chain event history |
+
+> **Important:** On-chain payer data cannot be erased from the Soroban ledger. Erasure requests therefore apply only to off-chain copies. This limitation is disclosed to data subjects in [PRIVACY.md](../PRIVACY.md).
+
+#### Off-Chain Payer Data — **Deletable Within 30 Days**
+
+| Data element | Location | Classification | Deletable | Mechanism |
+|--------------|----------|----------------|-----------|-----------|
+| Off-chain nonce stores / caches | Backend services | Tier 2 — Pseudonymous | **Yes** | `dataDeletion.ts` erasure workflow |
+| Payer index caches | Backend services | Tier 2 — Pseudonymous | **Yes** | `dataDeletion.ts` erasure workflow |
+| Receipts (off-chain copies) | Backend / storage | Tier 2 + Tier 3 | **Yes** | `dataDeletion.ts` erasure workflow |
+| Application logs containing payer identifiers | Log aggregation | Tier 2 — Pseudonymous | **Yes** | `dataDeletion.ts` erasure workflow (log purge) |
+
+**Deletion guarantees:**
+
+- A valid right-to-erasure request triggers off-chain payer data deletion via `sdk/src/security/dataDeletion.ts`.
+- Deletion is completed **within 30 days** of a validated request.
+- Every deletion is confirmed by an **audit log entry** recording the request ID, the data categories deleted, and the completion timestamp. No deletion is considered complete without its audit log entry.
+- On-chain payer data (address, nonce, payer index entries) is explicitly excluded and documented as non-deletable.
+
+For the implementation, see `sdk/src/security/dataDeletion.ts`. For the data subject request procedure, see [PRIVACY.md § 5](../PRIVACY.md#5-right-to-erasure-right-to-be-forgotten).
 
 ---
 
@@ -129,6 +162,8 @@ Events emitted by LumenFlow are recorded on the Stellar blockchain and indexed b
 | Multi-signature payments | 30 days (expiry duration) | `set_multisig_expiry_duration` (admin) | Automatically expired; not queryable after expiry |
 | Payment requests | TTL set by merchant at creation | Per-request `ttl` field | Automatically expired after TTL |
 | Merchant nonce | Indefinite | Not configurable | Not deletable; integrity requirement |
+| Payer nonce | Indefinite | Not configurable | Not deletable; replay-protection integrity requirement |
+| Payer index entries | Indefinite | Not configurable | Not deletable; reference-integrity anchor |
 | Global stats | Indefinite | Not configurable | Not deletable; aggregate counters |
 
 ### Off-Chain / Infrastructure Retention
@@ -143,6 +178,10 @@ Events emitted by LumenFlow are recorded on the Stellar blockchain and indexed b
 | Horizon event stream (historical) | Stellar archive nodes | Subject to Stellar Foundation policy | Stellar Foundation |
 | GitHub Actions logs | GitHub | 90 days (GitHub default) | GitHub |
 | Testnet deployment secrets | GitHub Secrets | Until manually rotated or deleted | Smart Contract Team |
+| Off-chain nonce stores / caches | Backend services | Deleted within 30 days of valid erasure request | Backend Team |
+| Payer index caches | Backend services | Deleted within 30 days of valid erasure request | Backend Team |
+| Off-chain receipts | Backend / storage | Deleted within 30 days of valid erasure request | Backend Team |
+| Application logs with payer identifiers | Log aggregation | Deleted within 30 days of valid erasure request | Backend Team |
 
 ---
 
@@ -171,7 +210,7 @@ For the full deletion procedure, see [PRIVACY.md § 5](../PRIVACY.md#5-right-to-
 | Tier | Read access | Write / update access | Delete / anonymise access |
 |------|-------------|----------------------|--------------------------|
 | Tier 1 — Personal (`name`, `description`, `contact_info`) | Merchant (own record), Admin | Merchant (own record via `update_merchant`) | Admin (`confirm_merchant_data_deletion`) |
-| Tier 2 — Pseudonymous (wallet addresses) | Any caller (public blockchain) | N/A (immutable after set) | Not deletable |
+| Tier 2 — Pseudonymous (wallet addresses) | Any caller (public blockchain) | N/A (immutable after set) | Not deletable on-chain; off-chain copies deleted via `dataDeletion.ts` within 30 days |
 | Tier 3 — Potentially Personal (`memo`, `reason`) | Merchant + Payer (via `get_payment_by_id`), Admin | Set at creation only | Not deletable; avoid placing PII here |
 | Tier 4 — Non-Personal (amounts, timestamps, stats) | Public | Contract functions per permission model | Admin (`cleanup_expired_payments`, `archive_payment_record`) |
 
@@ -183,7 +222,7 @@ For the complete permission matrix, see [docs/access-control.md](access-control.
 
 - **Do not store PII in `memo` or `reason` fields.** These fields are non-anonymisable. Use opaque reference IDs (e.g., invoice numbers) instead of names or email addresses.
 - **Treat all wallet addresses as pseudonymous (Tier 2)**, not anonymous. With additional data (KYC records, IP logs), addresses can potentially be linked to natural persons.
-- **Off-chain systems that index Horizon events** must apply their own retention and deletion policies to comply with GDPR and equivalent regulations. LumenFlow's on-contract deletion procedure does not extend to off-chain copies.
+- **Off-chain systems that index Horizon events** must apply their own retention and deletion policies to comply with GDPR and equivalent regulations. LumenFlow's on-contract deletion procedure does not extend to off-chain copies. Off-chain payer data (nonce stores, payer index caches, receipts, logs) must be deleted within 30 days of a valid erasure request via `sdk/src/security/dataDeletion.ts`, with each deletion confirmed by an audit log entry.
 - **Replay script output** (`replay-db-*.sqlite`, `replay-output-*.csv`) contains pseudonymous identifiers. Delete these files after use or store them in a secure, access-controlled location.
 - **Test data:** Never use real personal data in test environments. Use generated/synthetic merchant profiles when testing against local or testnet deployments.
 
@@ -196,3 +235,5 @@ For the complete permission matrix, see [docs/access-control.md](access-control.
 - [docs/access-control.md](access-control.md) — contract permission matrix
 - [docs/storage-schema.md](storage-schema.md) — storage key design and TTL configuration
 - [docs/merchant-onboarding.md](merchant-onboarding.md) — data deletion step-by-step guide
+- [docs/receipt-privacy-audit.md](receipt-privacy-audit.md) — receipt privacy audit
+- `sdk/src/security/dataDeletion.ts` — off-chain payer data deletion implementation

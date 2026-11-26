@@ -26,3 +26,33 @@ name = "fuzz_verify_signature"
 path = "fuzz_targets/fuzz_verify_signature.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "fuzz_process_payment"
+path = "fuzz_targets/fuzz_process_payment.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_register_merchant"
+path = "fuzz_targets/fuzz_register_merchant.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_create_escrow"
+path = "fuzz_targets/fuzz_create_escrow.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_initiate_dispute"
+path = "fuzz_targets/fuzz_initiate_dispute.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_refund_payment"
+path = "fuzz_targets/fuzz_refund_payment.rs"
+test = false
+doc = false

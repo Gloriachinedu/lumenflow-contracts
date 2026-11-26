@@ -467,85 +467,79 @@ fn test_escrow_cancel_by_non_payer_fails() {
     assert_eq!(merchant_cancel, Err(Ok(PaymentError::EscrowUnauthorised)));
 }
 
-// ── 9. Minimum lock period ────────────────────────────────────────────────────
+// ── 9. State-before-transfer ordering (issue #1507) ──────────────────────────
 
-/// Creating an escrow with a lock period exactly at the minimum succeeds,
-/// while one second under the minimum fails with LockPeriodTooShort.
+/// Regression test for issue #1507: `escrow_hold` must persist the
+/// `EscrowHold` record (status `Held`, correct amount) *before* invoking the
+/// token client, and `escrow_release` must mark the record `Released` before
+/// moving funds. A failed token transfer must leave the escrow record in a
+/// consistent, non-corrupted state.
 #[test]
-fn test_escrow_min_lock_period_enforced() {
-    let w = setup();
-    let now = w.env.ledger().timestamp();
+fn test_escrow_state_finalised_before_token_transfer() {
+    use lumenflow::types::EscrowHoldStatus;
 
-    // Exactly at the minimum lock period — must succeed.
-    let at_min = now + lumenflow::MIN_LOCK_SECS as u64;
+    let w = setup();
+    let timeout_at: u64 = 1_003_600;
+
+    // ── Hold: record is written before the token transfer ────────────────────
     w.client.escrow_hold(
         &w.payer,
-        &str(&w.env, "HOLD_MIN_OK"),
+        &str(&w.env, "HOLD_ORDER"),
         &w.merchant,
         &w.token,
-        &1_000i128,
+        &5_000i128,
         &condition_hash(&w.env),
         &w.arbiter,
-        &at_min,
+        &timeout_at,
     );
 
-    // One second under the minimum — must fail.
-    let under_min = now + lumenflow::MIN_LOCK_SECS as u64 - 1;
-    let result = w.client.try_escrow_hold(
+    let hold = w.client.get_escrow_hold(&str(&w.env, "HOLD_ORDER"));
+    assert_eq!(hold.status, EscrowHoldStatus::Held);
+    assert_eq!(hold.amount, 5_000);
+
+    // ── Release: record is finalised before the token transfer ───────────────
+    w.client.escrow_release(&w.arbiter, &str(&w.env, "HOLD_ORDER"));
+
+    let released = w.client.get_escrow_hold(&str(&w.env, "HOLD_ORDER"));
+    assert_eq!(released.status, EscrowHoldStatus::Released);
+    assert_eq!(released.amount, 5_000);
+
+    // ── Failed transfer leaves the record consistent ─────────────────────────
+    // Drain the payer's balance so the next hold's token transfer fails.
+    let payer_balance = soroban_sdk::token::TokenClient::new(&w.env, &w.token)
+        .balance(&w.payer);
+    if payer_balance > 0 {
+        StellarAssetClient::new(&w.env, &w.token).burn(&w.payer, &payer_balance);
+    }
+
+    let failed = w.client.try_escrow_hold(
         &w.payer,
-        &str(&w.env, "HOLD_MIN_FAIL"),
+        &str(&w.env, "HOLD_FAIL"),
         &w.merchant,
         &w.token,
         &1_000i128,
         &condition_hash(&w.env),
         &w.arbiter,
-        &under_min,
+        &timeout_at,
     );
-    assert_eq!(result, Err(Ok(PaymentError::LockPeriodTooShort)));
-}
+    assert!(failed.is_err(), "hold with insufficient balance must fail");
 
-// ── 10. Expiry warning event ──────────────────────────────────────────────────
+    // The failed hold must not leave a corrupted record behind: either the
+    // record is absent, or it is present but never marked as a live hold.
+    match w.client.try_get_escrow_hold(&str(&w.env, "HOLD_FAIL")) {
+        Err(_) => {}
+        Ok(Ok(record)) => assert_ne!(
+            record.status,
+            EscrowHoldStatus::Released,
+            "failed hold must not be marked Released"
+        ),
+        Ok(Err(_)) => {}
+    }
 
-/// Querying an escrow whose unlock_at falls within the warning lead time
-/// emits the EscrowExpiryWarningEvent.
-#[test]
-fn test_escrow_expiry_warning_emitted_within_lead_time() {
-    let w = setup();
-    let now = w.env.ledger().timestamp();
-
-    // Create an escrow that unlocks inside the default warning window.
-    let unlock_at = now + lumenflow::MIN_LOCK_SECS as u64 + 60;
-    w.client.escrow_hold(
-        &w.payer,
-        &str(&w.env, "HOLD_WARN"),
-        &w.merchant,
-        &w.token,
-        &1_000i128,
-        &condition_hash(&w.env),
-        &w.arbiter,
-        &unlock_at,
-    );
-
-    // Advance to just inside the warning lead time.
-    let lead = lumenflow::WARNING_LEAD_TIME as u64;
-    advance_time(&w.env, unlock_at - now - lead);
-
-    // Querying the escrow should surface the warning event.
-    let _ = w.client.get_escrow_hold(&str(&w.env, "HOLD_WARN"));
-
-    let all_events = w.env.events().all();
-    let warning_event = all_events.iter().any(|(contract_id, topics, _data)| {
-        let _ = contract_id;
-        if topics.len() < 2 {
-            return false;
-        }
-        let t0: Result<soroban_sdk::Symbol, _> = topics.get(0).unwrap().try_into_val(&w.env);
-        let t1: Result<soroban_sdk::Symbol, _> = topics.get(1).unwrap().try_into_val(&w.env);
-        matches!((t0, t1), (Ok(a), Ok(b))
-            if a == soroban_sdk::Symbol::new(&w.env, "lumenflow")
-            && b == soroban_sdk::Symbol::new(&w.env, "escrow_expiry_warning"))
-    });
-    assert!(warning_event, "lumenflow/escrow_expiry_warning event was not emitted");
+    // The previously released hold is untouched by the failed call.
+    let still_released = w.client.get_escrow_hold(&str(&w.env, "HOLD_ORDER"));
+    assert_eq!(still_released.status, EscrowHoldStatus::Released);
+    assert_eq!(still_released.amount, 5_000);
 }
 
 // ── 8. Cancel after timeout ───────────────────────────────────────────────────

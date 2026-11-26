@@ -194,3 +194,41 @@ fn test_admin_transfer_no_admin_set_rejected() {
     let result = client.try_transfer_admin(&pretend_admin, &target);
     assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
+
+/// `transfer_admin` must append an `AdminAuditEntry` with
+/// `AdminActionType::TransferAdmin`, and the audit log must remain append-only
+/// across the handover (prior entries are preserved, never overwritten).
+#[test]
+fn test_admin_transfer_appends_audit_entry() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+
+    client.set_admin(&admin);
+
+    // Snapshot the audit log length before the handover.
+    let before = client.get_admin_audit_log(&0u32, &100u32);
+    let before_len = before.len();
+
+    // Perform the handover.
+    client.transfer_admin(&admin, &new_admin);
+
+    // The log must have grown by exactly one entry.
+    let after = client.get_admin_audit_log(&0u32, &100u32);
+    assert_eq!(after.len(), before_len + 1);
+
+    // The newest entry must record the transfer action by the old admin.
+    let entry = after.get(after.len() - 1).unwrap();
+    assert_eq!(entry.action, AdminActionType::TransferAdmin);
+    assert_eq!(entry.admin, admin);
+
+    // Append-only: every prior entry is still present and unchanged.
+    for i in 0..before_len {
+        assert_eq!(after.get(i).unwrap(), before.get(i).unwrap());
+    }
+
+    // Pagination must expose the same entries.
+    let page = client.get_admin_audit_log(&0u32, &1u32);
+    assert_eq!(page.len(), 1);
+    assert_eq!(page.get(0).unwrap(), before.get(0).unwrap());
+}

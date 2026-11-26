@@ -3,6 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- Theme bootstrap: apply stored/system theme before first paint to avoid FOUC (issue #1529) -->
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem('lf-theme');
+        var theme = stored === 'dark' || stored === 'light'
+          ? stored
+          : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', theme);
+      } catch (e) {
+        // Storage or matchMedia unavailable — fall back to light without breaking the page
+        document.documentElement.setAttribute('data-theme', 'light');
+      }
+    })();
+  </script>
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://horizon.stellar.org; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none';" />
   <title>Payment History (Paginated) – LumenFlow</title>
   <link rel="manifest" href="manifest.json" />
@@ -53,6 +68,29 @@
       white-space: nowrap;
     }
 
+    /* Sortable header buttons */
+    .sort-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      background: none;
+      border: none;
+      padding: 0;
+      margin: 0;
+      font: inherit;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #555;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    .sort-btn:hover { color: #6c47ff; }
+    .sort-btn:focus-visible { outline: 2px solid #6c47ff; outline-offset: 2px; }
+    .sort-indicator { font-size: 0.7rem; color: #6c47ff; }
+    .sort-indicator[hidden] { display: none; }
+=======
+
     tbody tr { border-bottom: 1px solid #f4f4f4; transition: background 0.1s; }
     tbody tr:last-child { border-bottom: none; }
     tbody tr:hover { background: #faf8ff; }
@@ -78,6 +116,48 @@
       color: #aaa;
       font-size: 0.9rem;
     }
+
+    /* ── Empty state ───────────────────────────────────────────────────── */
+    .empty-state {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 2px 16px rgba(0,0,0,0.07);
+      padding: 3rem 1.5rem;
+      text-align: center;
+      margin-bottom: 1rem;
+    }
+    .empty-state[hidden] { display: none; }
+    .empty-state-illustration {
+      width: 160px;
+      height: 160px;
+      margin: 0 auto 1.25rem;
+      display: block;
+    }
+    .empty-state-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #1a1a2e;
+      margin-bottom: 0.5rem;
+    }
+    .empty-state-text {
+      color: #666;
+      font-size: 0.875rem;
+      margin-bottom: 1.5rem;
+    }
+    .empty-state-cta {
+      display: inline-block;
+      padding: 0.6rem 1.25rem;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      text-decoration: none;
+      background: #6c47ff;
+      color: #fff;
+      transition: background 0.15s;
+    }
+    .empty-state-cta:hover { background: #5636d6; }
+    .empty-state-cta:focus-visible { outline: 2px solid #1a1a2e; outline-offset: 2px; }
+=======
 
     /* ── Pagination bar ────────────────────────────────────────────────── */
     .pagination-bar {
@@ -108,12 +188,14 @@
       gap: 0.35rem;
     }
     .btn:hover:not(:disabled) { background: #f0ecff; }
+    .btn:focus-visible { outline: 2px solid #6c47ff; outline-offset: 2px; }
     .btn:disabled {
-      opacity: 0.35;
+      opacity: 0.6;
       cursor: not-allowed;
-      border-color: #ccc;
-      color: #999;
+      border-color: #767676;
+      color: #595959;
     }
+=======
 
     .page-size-wrap { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #555; }
     .page-size-wrap select {
@@ -123,7 +205,36 @@
       font-size: 0.85rem;
       outline: none;
     }
-    .page-size-wrap select:focus { border-color: #6c47ff; }
+    .page-size-wrap select:focus-visible { border-color: #6c47ff; outline: 2px solid #6c47ff; outline-offset: 2px; }
+=======
+
+    /* ── Filter bar ────────────────────────────────────────────────────── */
+    .filter-bar {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      padding: 0.75rem 0;
+      margin-bottom: 0.5rem;
+    }
+
+    .filter-control { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #555; }
+
+    .filter-select {
+      padding: 0.35rem 0.6rem;
+      border: 1.5px solid #dde1e7;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      outline: none;
+    }
+    .filter-select:focus { border-color: #6c47ff; }
+
+    .filter-select:focus-visible,
+    .filter-apply-btn:focus-visible,
+    .filter-clear-btn:focus-visible {
+      outline: 2px solid #6c47ff;
+      outline-offset: 2px;
+    }
 
     /* Loading overlay */
     .loading-msg {
@@ -174,14 +285,35 @@
 <p class="subtitle">Browse paginated payment records.</p>
 
 <div class="table-wrap">
-  <table id="history-table">
+  <table id="history-table" aria-describedby="history-caption">
+    <caption id="history-caption" class="visually-hidden">Paginated payment history records</caption>
     <thead>
       <tr>
-        <th>Order ID</th>
-        <th>Merchant</th>
-        <th>Amount</th>
-        <th>Status</th>
-        <th>Date</th>
+        <th scope="col" aria-sort="none">
+          <button type="button" class="sort-btn" data-sort-key="order_id" aria-label="Sort by order ID">
+            Order ID <span class="sort-indicator" aria-hidden="true" hidden></span>
+          </button>
+        </th>
+        <th scope="col" aria-sort="none">
+          <button type="button" class="sort-btn" data-sort-key="merchant_address" aria-label="Sort by merchant">
+            Merchant <span class="sort-indicator" aria-hidden="true" hidden></span>
+          </button>
+        </th>
+        <th scope="col" aria-sort="none">
+          <button type="button" class="sort-btn" data-sort-key="amount" aria-label="Sort by amount">
+            Amount <span class="sort-indicator" aria-hidden="true" hidden></span>
+          </button>
+        </th>
+        <th scope="col" aria-sort="none">
+          <button type="button" class="sort-btn" data-sort-key="status" aria-label="Sort by status">
+            Status <span class="sort-indicator" aria-hidden="true" hidden></span>
+          </button>
+        </th>
+        <th scope="col" aria-sort="none">
+          <button type="button" class="sort-btn" data-sort-key="paid_at" aria-label="Sort by date">
+            Date <span class="sort-indicator" aria-hidden="true" hidden></span>
+          </button>
+        </th>
       </tr>
     </thead>
     <tbody id="table-body">
@@ -189,25 +321,61 @@
     </tbody>
   </table>
 </div>
+=======
 
 <!-- Pagination controls and infinite-scroll status -->
 <div class="pagination-bar" id="pagination-bar">
   <div class="page-meta" id="page-meta" aria-live="polite" aria-atomic="true"></div>
 
   <div class="page-controls">
-    <button class="btn load-more-btn" id="load-more-btn" type="button" onclick="loadNextPage()">
+    <button class="btn" id="prev-btn" type="button" aria-label="Go to previous page" disabled>
+      <span aria-hidden="true">←</span> Prev
+    </button>
+    <button class="btn" id="next-btn" type="button" aria-label="Go to next page" disabled>
+      Next <span aria-hidden="true">→</span>
+    </button>
+    <button class="btn load-more-btn" id="load-more-btn" type="button" aria-label="Load more payments" onclick="loadNextPage()">
       Load more
     </button>
-  </div>
+  </nav>
 
   <div class="page-size-wrap">
     <label for="page-size">Per page:</label>
-    <select id="page-size" onchange="changePageSize()">
+    <select id="page-size" aria-label="Payments per page" onchange="changePageSize()">
       <option value="5" selected>5</option>
       <option value="10">10</option>
       <option value="25">25</option>
     </select>
   </div>
+</div>
+
+<!-- Keyboard-accessible filter controls -->
+<div class="filter-bar" id="filter-bar" role="group" aria-label="Payment filters">
+  <div class="filter-control">
+    <label for="filter-status">Status:</label>
+    <select id="filter-status" class="filter-select" data-filter="status" aria-haspopup="listbox">
+      <option value="">All statuses</option>
+      <option value="Completed">Completed</option>
+      <option value="PartiallyRefunded">Partial Refund</option>
+      <option value="FullyRefunded">Fully Refunded</option>
+    </select>
+  </div>
+
+  <div class="filter-control">
+    <label for="filter-merchant">Merchant:</label>
+    <select id="filter-merchant" class="filter-select" data-filter="merchant" aria-haspopup="listbox">
+      <option value="">All merchants</option>
+      <option value="GDUT...XZ1A">GDUT...XZ1A</option>
+      <option value="GCMR...Y9KP">GCMR...Y9KP</option>
+    </select>
+  </div>
+
+  <button class="btn filter-apply-btn" id="filter-apply-btn" type="button" onclick="applyFilters()">
+    Apply filters
+  </button>
+  <button class="btn filter-clear-btn" id="filter-clear-btn" type="button" onclick="clearFilters()">
+    Clear
+  </button>
 </div>
 <div id="loading-indicator" class="loading-indicator" role="status" aria-live="polite" hidden>
   <span class="spinner" aria-hidden="true"></span>
@@ -220,6 +388,7 @@
   window.LF = window.LF || {};
   window.LF.formatNumber = formatNumber;
 </script>
+<script src="filter-keyboard.js"></script>
 <script>
   // ── Format helper ──────────────────────────────────────────────────────────
   function fmtAmount(amount) {
@@ -319,6 +488,15 @@
     }
   }
 
+  // ── Screen-reader announcements ────────────────────────────────────────────
+  function announce(message) {
+    const el = document.getElementById('page-announcer');
+    if (!el) return;
+    el.textContent = '';
+    // Force a re-announcement even when the message is unchanged.
+    window.setTimeout(() => { el.textContent = message; }, 50);
+  }
+
   // ── Loading state ──────────────────────────────────────────────────────────
   function showLoadingState() {
     const tbody = document.getElementById('table-body');
@@ -329,10 +507,13 @@
           <span aria-live="polite" role="status">⏳ Loading page ${currentIdx + 1}…</span>
         </td>
       </tr>`;
-    document.getElementById('prev-btn').disabled = true;
-    document.getElementById('next-btn').disabled = true;
+    const prevBtn = document.getElementById('prev-btn');
+    const nextBtn = document.getElementById('next-btn');
+    if (prevBtn) prevBtn.disabled = true;
+    if (nextBtn) nextBtn.disabled = true;
     document.getElementById('page-meta').textContent = `Page ${currentIdx + 1} · loading…`;
   }
+=======
 
   // ── Main load ──────────────────────────────────────────────────────────────
   async function loadPage() {
@@ -357,9 +538,19 @@
       return true;
     });
 
+    const emptyState = document.getElementById('empty-state');
+    const tableWrap  = document.getElementById('table-wrap');
+    const paginationBar = document.getElementById('pagination-bar');
+
     if (newPayments.length === 0 && loadedOrderIds.size === 0) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No payments found.</td></tr>';
+      tbody.innerHTML = '';
+      emptyState.hidden = false;
+      tableWrap.hidden = true;
+      paginationBar.hidden = true;
     } else {
+      emptyState.hidden = true;
+      tableWrap.hidden = false;
+      paginationBar.hidden = false;
       tbody.innerHTML = payments.map(p => `
         <tr>
           <td><span class="order-id">${p.order_id}</span></td>
@@ -372,20 +563,27 @@
 
     // Page indicator: "Page 2 · 5 records"
     const pageNum = currentIdx + 1;
-    document.getElementById('page-meta').textContent =
+    const metaText =
       loadedOrderIds.size === 0
         ? 'No records'
         : `Page ${pageNum} · ${payments.length} record${payments.length !== 1 ? 's' : ''}`;
+    document.getElementById('page-meta').textContent = metaText;
 
     // Update navigation button states
-    document.getElementById('prev-btn').disabled = currentIdx === 0;
-    document.getElementById('next-btn').disabled = !next_cursor;
+    const prevBtn = document.getElementById('prev-btn');
+    const nextBtn = document.getElementById('next-btn');
+    if (prevBtn) prevBtn.disabled = currentIdx === 0;
+    if (nextBtn) nextBtn.disabled = !next_cursor;
+
+    // Announce the page change to screen readers
+    announce(metaText);
 
     // Sync URL so the current page is bookmarkable
     syncUrl();
 
     isLoading = false;
   }
+=======
 
   // Track whether the initial load has completed (we don't move focus on first load)
   let _focusMgmtInitialized = false;
@@ -414,15 +612,79 @@
     loadNextPage();
   }
 
+  // ── Filters ────────────────────────────────────────────────────────────────
+  let activeFilters = { status: '', merchant: '' };
+
+  /**
+   * Reads the current filter dropdown values and applies them to the table.
+   * Called by the Apply button and by filter-keyboard.js on Enter/Space.
+   */
+  function applyFilters() {
+    const statusEl   = document.getElementById('filter-status');
+    const merchantEl = document.getElementById('filter-merchant');
+    activeFilters = {
+      status:   statusEl ? statusEl.value : '',
+      merchant: merchantEl ? merchantEl.value : '',
+    };
+    renderFilteredRows();
+  }
+
+  /**
+   * Clears all filters and restores the unfiltered table.
+   */
+  function clearFilters() {
+    const statusEl   = document.getElementById('filter-status');
+    const merchantEl = document.getElementById('filter-merchant');
+    if (statusEl)   statusEl.value = '';
+    if (merchantEl) merchantEl.value = '';
+    activeFilters = { status: '', merchant: '' };
+    renderFilteredRows();
+  }
+
+  /**
+   * Renders rows from ALL_PAYMENTS honouring the active filters.
+   */
+  function renderFilteredRows() {
+    const tbody = document.getElementById('table-body');
+    if (!tbody) return;
+
+    const filtered = ALL_PAYMENTS.filter(p => {
+      if (activeFilters.status && p.status !== activeFilters.status) return false;
+      if (activeFilters.merchant && p.merchant_address !== activeFilters.merchant) return false;
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No payments match the selected filters.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = filtered.map(p => `
+      <tr>
+        <td><span class="order-id">${p.order_id}</span></td>
+        <td>${p.merchant_address}</td>
+        <td class="amount">${fmtAmount(p.amount)}</td>
+        <td>${statusBadge(p.status)}</td>
+        <td>${p.paid_at}</td>
+      </tr>`).join('');
+  }
+
+  // Expose filter helpers for filter-keyboard.js
+  window.applyFilters = applyFilters;
+  window.clearFilters = clearFilters;
+
   // ── Browser back/forward button support ───────────────────────────────────
   window.addEventListener('popstate', () => {
     initFromUrl();
     loadPage();
   });
+=======
 
   // ── Init ───────────────────────────────────────────────────────────────────
   initFromUrl();
+  updateSortHeaders();
   loadPage();
+=======
 </script>
 <script>
   if ('serviceWorker' in navigator) {

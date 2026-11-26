@@ -404,14 +404,38 @@ The dashboard opens with the following panels:
 
 ### Alerts
 
-Three alert rules are embedded in the dashboard JSON:
+Alert rules are provisioned from `monitoring/grafana-alerting.json` (Grafana
+provisioning format). The earlier claim that alert rules are embedded in the
+dashboard JSON is **superseded** — the dashboard file now contains only panels,
+and all alerting lives in the provisioning file so rules can be version
+controlled, reviewed, and deployed independently of the dashboard.
 
-| Alert | Condition | Severity |
-|-------|-----------|----------|
-| High Error Rate | Error rate > 5% for 5 min | Critical |
-| Payment Volume Drop 50% | Volume this hour < 50% of last hour | Warning |
-| Contract Paused | `lumenflow_contract_paused == 1` for 1 min | Critical |
+| Alert | PromQL expression | Window | Threshold | Severity | Routing |
+|-------|-------------------|--------|-----------|----------|---------|
+| Payment Failure Rate High | `sum(rate(lumenflow_payments_failed_total[5m])) / clamp_min(sum(rate(lumenflow_payments_total[5m])), 1) * 100` | 5m | > 5% | Critical | PagerDuty + Slack |
+| Webhook Delivery Failure Rate High | `sum(rate(lumenflow_webhook_deliveries_failed_total[5m])) / clamp_min(sum(rate(lumenflow_webhook_deliveries_total[5m])), 1) * 100` | 5m | > 1% | Critical | PagerDuty + Slack |
+| RPC Error Rate High | `sum(rate(lumenflow_rpc_errors_total[2m])) / clamp_min(sum(rate(lumenflow_rpc_requests_total[2m])), 1) * 100` | 2m | > 2% | Critical | PagerDuty + Slack |
 
-To enable alerts, configure a **Contact point** (Slack, PagerDuty, email, etc.)
-in Grafana under **Alerting → Contact points**, then link it to a
-**Notification policy**.
+All three rules use `for: 0m` so that, combined with the short evaluation
+windows above, on-call is paged within the 2-minute target.
+
+#### Threshold justification
+
+- **Payment failure rate > 5% over 5m.** A sustained 5% failure rate across a
+  5-minute window indicates systemic breakage (bad contract state, token
+  misconfiguration, or a broken payment path) rather than isolated user errors.
+  Lower thresholds produce noise from individual failed attempts; 5% over 5m
+  reliably separates real incidents from background failures.
+- **Webhook delivery failure rate > 1% over 5m.** Webhook delivery is covered by
+  a 99% delivery SLO, so a 1% failure rate sustained for 5 minutes means the SLO
+  is actively being breached. The 5-minute window avoids paging on transient
+  single-delivery retries while still catching degradation quickly.
+- **RPC error rate > 2% over 2m.** RPC errors typically signal a provider outage
+  or rate-limiting. A 2% error rate over a 2-minute window is high enough to
+  exclude normal transient errors but short enough to detect an outage fast
+  enough to meet the 2-minute paging target.
+
+To enable alerts, apply the provisioning file (or mount it into Grafana's
+`provisioning/alerting/` directory), then configure the **PagerDuty** and
+**Slack** contact points referenced by the rules under
+**Alerting → Contact points** and link them via the **Notification policy**.

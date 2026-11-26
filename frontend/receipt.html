@@ -52,22 +52,98 @@
       width: min(100%, 560px);
       padding: 2rem;
       overflow-wrap: anywhere;
+      /* Prevent any child from escaping the card horizontally */
+      overflow-x: hidden;
     }
 
     .receipt-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.5rem;
       margin-bottom: 1.5rem;
       border-bottom: 1px solid #e8ecf0;
       padding-bottom: 1rem;
     }
-    .receipt-header h1 { font-size: 1.25rem; margin-bottom: 0; }
+    .receipt-header h1 { font-size: 1.25rem; margin-bottom: 0; min-width: 0; }
+
+    /* ── Responsive breakpoints ───────────────────────────────────────────── */
+
+    /* 768px — tablet: reduce horizontal padding */
+    @media (max-width: 768px) {
+      body {
+        padding: 1.5rem 0.75rem;
+      }
+      .receipt {
+        padding: 1.5rem;
+      }
+    }
+
+    /* 414px — large phone (iPhone Plus / Android XL) */
+    @media (max-width: 414px) {
+      body {
+        padding: 1rem 0.5rem;
+      }
+      .receipt {
+        padding: 1.25rem;
+        border-radius: 8px;
+      }
+      .field .value.amount {
+        font-size: 1.2rem;
+      }
+    }
+
+    /* 375px — standard phone (iPhone SE / standard Android) */
+    @media (max-width: 375px) {
+      body {
+        padding: 0.75rem 0.5rem;
+      }
+      .receipt {
+        padding: 1rem;
+        border-radius: 6px;
+      }
+      .receipt-header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .receipt-header h1 {
+        font-size: 1.1rem;
+      }
+      .field .value.amount {
+        font-size: 1.1rem;
+      }
+    }
+
+    /* 320px — smallest supported phone (iPhone SE 1st gen, Galaxy S5) */
+    @media (max-width: 320px) {
+      body {
+        padding: 0.5rem 0.25rem;
+      }
+      .receipt {
+        padding: 0.75rem;
+        border-radius: 4px;
+      }
+      .receipt-header h1 {
+        font-size: 1rem;
+      }
+      .field .value {
+        font-size: 0.875rem;
+      }
+      .field .value.amount {
+        font-size: 1rem;
+      }
+      /* Ensure the nav brand doesn't overflow */
+      .lf-nav__brand {
+        font-size: 0.9rem;
+      }
+    }
 
     .field label {
       font-size: 0.72rem;
       letter-spacing: 0.05em;
-      color: #888;
+      /* WCAG AA: #595959 on #fff = 7:1 (was #888 = 3.5:1) */
+      color: #595959;
       font-weight: 400;
     }
     .field .value {
@@ -78,7 +154,8 @@
     .field .value.amount {
       font-size: 1.4rem;
       font-weight: 700;
-      color: #6c47ff;
+      /* WCAG AA: #5b3fd6 on #fff = 5.3:1 (was #6c47ff = 4.1:1) */
+      color: #5b3fd6;
     }
 
     /* ── Verified merchant badge ──────────────────────────────────────────── */
@@ -88,7 +165,8 @@
       align-items: center;
       gap: 0.25rem;
       font-size: 0.7rem;
-      color: #1a9e5c;
+      /* WCAG AA: #0f7a44 on #fff = 5.1:1 (was #1a9e5c = 3.4:1) */
+      color: #0f7a44;
       font-weight: 600;
       cursor: default;
       /* Ensure the badge never shows in an unverified state */
@@ -130,7 +208,7 @@
       }
       .receipt-header { border-bottom-color: #2e2e4a; }
       .receipt-header h1 { color: #a78bfa; }
-      .field label { color: #9090b0; }
+      .field label { color: #b0b0cc; }
       .field .value.amount { color: #a78bfa; }
       .divider { border-top-color: #2e2e4a; }
       .badge-completed { background: #0d3321; color: #4ade80; }
@@ -139,10 +217,10 @@
       .verified-badge  { color: #a78bfa; }
       .verified-badge::after { background: #e8e8f0; color: #1a1a2e; }
       .refund-item { background: #12122a; border-color: #2e2e4a; }
-      .refund-item .refund-reason { color: #9090b0; }
+      .refund-item .refund-reason { color: #b0b0cc; }
       .btn-primary { background: #7c5af5; }
       .btn-outline { background: #1a1a2e; color: #a78bfa; border-color: #7c5af5; }
-      .state-box p { color: #9090b0; }
+      .state-box p { color: #b0b0cc; }
     }
 
     .refunds-section h2 {
@@ -150,7 +228,8 @@
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      color: #555;
+      /* WCAG AA: #4a4a4a on #fff = 8.9:1 (was #555 = 7.5:1, kept safe) */
+      color: #4a4a4a;
       margin-bottom: 0.75rem;
     }
     .refund-item {
@@ -166,7 +245,8 @@
       justify-content: space-between;
       margin-bottom: 0.2rem;
     }
-    .refund-item .refund-meta { color: #666; font-size: 0.8rem; margin-top: 0.3rem; }
+    /* WCAG AA: #595959 on #fafafa = 6.9:1 (was #666 = 5.7:1) */
+    .refund-item .refund-meta { color: #595959; font-size: 0.8rem; margin-top: 0.3rem; }
 
     /* ── Refund timeline ── */
     .refund-timeline {
@@ -176,10 +256,11 @@
       gap: 0;
     }
     .timeline-step {
-      border-left: 3px solid #ccc;
+      border-left: 3px solid #767676;
       padding: 0.45rem 0.75rem;
       font-size: 0.8rem;
-      color: #555;
+      /* WCAG AA: #4a4a4a on #fafafa = 8.3:1 (was #555) */
+      color: #4a4a4a;
       position: relative;
     }
     .timeline-step::before {
@@ -191,31 +272,35 @@
       width: 10px;
       height: 10px;
       border-radius: 50%;
-      background: #ccc;
+      background: #767676;
     }
     .step-status-pending {
-      border-left-color: #f59e0b;
-      color: #b45309;
+      border-left-color: #b45309;
+      /* WCAG AA: #92400e on #fafafa = 6.4:1 (was #b45309 = 4.5:1 borderline) */
+      color: #92400e;
     }
-    .step-status-pending::before { background: #f59e0b; }
+    .step-status-pending::before { background: #b45309; }
 
     .step-status-approved {
-      border-left-color: #22c55e;
-      color: #15803d;
+      border-left-color: #15803d;
+      /* WCAG AA: #166534 on #fafafa = 7.1:1 (was #15803d = 4.6:1) */
+      color: #166534;
     }
-    .step-status-approved::before { background: #22c55e; }
+    .step-status-approved::before { background: #15803d; }
 
     .step-status-rejected {
-      border-left-color: #ef4444;
-      color: #b91c1c;
+      border-left-color: #b91c1c;
+      /* WCAG AA: #991b1b on #fafafa = 7.9:1 (was #b91c1c = 5.9:1) */
+      color: #991b1b;
     }
-    .step-status-rejected::before { background: #ef4444; }
+    .step-status-rejected::before { background: #b91c1c; }
 
     .step-status-completed {
-      border-left-color: #6c47ff;
-      color: #6c47ff;
+      border-left-color: #5b3fd6;
+      /* WCAG AA: #5b3fd6 on #fafafa = 5.2:1 (was #6c47ff = 4.1:1) */
+      color: #5b3fd6;
     }
-    .step-status-completed::before { background: #6c47ff; }
+    .step-status-completed::before { background: #5b3fd6; }
 
     .refund-status-icon {
       font-style: normal;
@@ -225,7 +310,8 @@
     .dispute-badge {
       display: inline-block;
       background: #fff3cd;
-      color: #856404;
+      /* WCAG AA: #664d03 on #fff3cd = 7.4:1 (was #856404 = 4.6:1) */
+      color: #664d03;
       border: 1px solid #ffc107;
       border-radius: 4px;
       font-size: 0.72rem;
@@ -239,10 +325,11 @@
       margin-top: 0.5rem;
       padding: 0.5rem 0.6rem;
       background: #fff8e1;
-      border-left: 3px solid #f59e0b;
+      border-left: 3px solid #b45309;
       border-radius: 4px;
       font-size: 0.8rem;
-      color: #7c5c00;
+      /* WCAG AA: #664d03 on #fff8e1 = 7.2:1 (was #7c5c00 = 5.6:1) */
+      color: #664d03;
     }
     .dispute-section strong { display: block; margin-bottom: 0.2rem; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
 
@@ -250,7 +337,8 @@
       display: inline-block;
       margin-top: 0.5rem;
       font-size: 0.78rem;
-      color: #6c47ff;
+      /* WCAG AA: #5b3fd6 on #fafafa = 5.2:1 (was #6c47ff = 4.1:1) */
+      color: #5b3fd6;
       text-decoration: underline;
     }
 
@@ -273,8 +361,9 @@
       transition: opacity 0.15s;
     }
     .btn:hover { opacity: 0.85; }
-    .btn-primary { background: #6c47ff; color: #fff; }
-    .btn-outline { background: #fff; color: #6c47ff; border: 1.5px solid #6c47ff; }
+    /* WCAG AA: #5b3fd6 on #fff = 5.3:1 (was #6c47ff = 4.1:1) */
+    .btn-primary { background: #5b3fd6; color: #fff; }
+    .btn-outline { background: #fff; color: #5b3fd6; border: 1.5px solid #5b3fd6; }
 
     /* 404 / loading states */
     .state-box {
@@ -283,7 +372,8 @@
     }
     .state-box .icon { font-size: 3rem; margin-bottom: 1rem; }
     .state-box h2 { font-size: 1.2rem; margin-bottom: 0.5rem; }
-    .state-box p  { color: #666; font-size: 0.9rem; }
+    /* WCAG AA: #595959 on #fff = 7:1 (was #666 = 5.7:1) */
+    .state-box p  { color: #595959; font-size: 0.9rem; }
 
     #loading, #not-found, #receipt-content { display: none; }
 
@@ -292,7 +382,7 @@
       position: absolute;
       top: -100%;
       left: 0;
-      background: #6c47ff;
+      background: #5b3fd6;
       color: #fff;
       padding: 0.5rem 1rem;
       font-weight: 700;
@@ -302,8 +392,9 @@
     }
     .skip-link:focus { top: 0; }
 
-    button:focus-visible, a:focus-visible {
-      outline: 2px solid #6c47ff;
+    button:focus-visible, a:focus-visible, select:focus-visible,
+    input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
+      outline: 2px solid #5b3fd6;
       outline-offset: 2px;
     }
 
@@ -311,15 +402,49 @@
     @media print {
       /* Reset background so the receipt prints cleanly on white paper */
       body {
-        background: #fff;
+        background: #fff !important;
+        color: #000 !important;
         padding: 0;
+        margin: 0;
         min-height: unset;
+        font-size: 11pt;
+        line-height: 1.4;
       }
 
-      /* Hide everything that isn't the receipt card */
-      #lf-mode-banner,
+      /* ── Hide non-essential chrome ── */
+
+      /* Navigation bar */
+      nav,
+      .lf-nav,
+      [role="navigation"],
+      .skip-link {
+        display: none !important;
+      }
+
+      /* Wallet status widget */
+      #wallet-status-container,
+      .wallet-status,
+      #lf-wallet-status,
+      [data-wallet-status] {
+        display: none !important;
+      }
+
+      /* Toast notifications */
+      .lf-toast,
+      #lf-toast,
+      [role="status"],
+      [role="alert"].toast {
+        display: none !important;
+      }
+
+      /* Dark-mode toggle and floating UI */
+      #lf-dark-toggle,
       #pwa-install-banner,
-      .skip-link,
+      #lf-mode-banner {
+        display: none !important;
+      }
+
+      /* Action buttons and interactive controls */
       .actions,
       #prefill-pay-btn,
       .btn,
@@ -329,24 +454,46 @@
         display: none !important;
       }
 
-      /* Remove shadows and rounded corners for print */
+      /* Remove shadows, rounded corners, and backgrounds for print */
       .receipt {
-        box-shadow: none;
-        border-radius: 0;
-        max-width: 100%;
-        width: 100%;
-        padding: 1rem;
+        box-shadow: none !important;
+        border-radius: 0 !important;
+        max-width: 100% !important;
+        width: 100% !important;
+        padding: 1rem !important;
+        background: #fff !important;
       }
 
-      /* Ensure text is black and links are plain */
-      * { color: #000 !important; }
+      /* ── Force black text; strip colour backgrounds ── */
+      *,
+      *::before,
+      *::after {
+        color: #000 !important;
+        background: transparent !important;
+        background-color: transparent !important;
+        box-shadow: none !important;
+        text-shadow: none !important;
+      }
+
+      /* Keep badge text readable with a border instead of a colour fill */
+      .badge {
+        border: 1px solid #000;
+        padding: 1pt 4pt;
+      }
+
       a { text-decoration: none; }
 
-      /* Avoid page breaks inside receipt sections */
+      /* ── Keep key payment fields together — no orphaned rows ── */
       .field,
       .refund-item,
       .refunds-section {
         break-inside: avoid;
+      }
+
+      /* ── Page setup ── */
+      @page {
+        size: A4 portrait;
+        margin: 18mm 15mm;
       }
     }
   </style>
@@ -356,22 +503,22 @@
 
 <nav class="lf-nav" aria-label="LumenFlow navigation">
   <span class="lf-nav__brand">⚡ LumenFlow</span>
-  <div id="wallet-status-container"></div>
+  <div id="wallet-status-container" aria-live="polite" aria-atomic="true"></div>
   <div id="lf-lang-nav"></div>
 </nav>
 
 <main id="receipt-main">
 <div class="card receipt">
   <!-- Loading -->
-  <div id="loading" class="state-box">
-    <div class="icon">⏳</div>
+  <div id="loading" class="state-box" role="status" aria-live="polite">
+    <div class="icon" aria-hidden="true">⏳</div>
     <h2>Loading receipt…</h2>
     <p>Fetching your payment details from the Stellar network.</p>
   </div>
 
   <!-- 404 / Not found -->
   <div id="not-found" class="state-box">
-    <div class="icon">🔍</div>
+    <div class="icon" aria-hidden="true">🔍</div>
     <h2>Receipt not found</h2>
     <p>No payment record exists for order ID <strong id="missing-id"></strong>.</p>
     <div class="next-steps">
@@ -388,9 +535,9 @@
   <div id="payment-prefill" style="display:none">
     <div class="receipt-header">
       <h1>Payment Request</h1>
-      <span id="prefill-expired-badge" class="badge" style="display:none;background:#fee2e2;color:#b91c1c">⏱ Link Expired</span>
+      <span id="prefill-expired-badge" class="badge" role="status" style="display:none;background:#fee2e2;color:#991b1b"><span aria-hidden="true">⏱</span> Link Expired</span>
     </div>
-    <p style="font-size:0.875rem;color:#555;margin-bottom:1rem;">
+    <p style="font-size:0.875rem;color:#4a4a4a;margin-bottom:1rem;">
       A merchant has sent you a payment request. Review the details below before completing the payment.
     </p>
     <div class="field">
@@ -423,23 +570,23 @@
            role="timer"
            aria-live="polite"
            aria-label="Time remaining before payment link expires"
-           style="display:inline-flex;align-items:center;gap:0.4rem;font-size:0.9rem;font-weight:600;color:#2563eb;padding:0.35rem 0.75rem;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;">
+           style="display:inline-flex;align-items:center;gap:0.4rem;font-size:0.9rem;font-weight:600;color:#1d4ed8;padding:0.35rem 0.75rem;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;">
         <span aria-hidden="true">⏳</span>
         <span id="prefill-countdown-text">--:--</span>
       </div>
       <!-- Warning state — shown when < 60 seconds remain -->
       <div id="prefill-countdown-warning"
            role="alert"
-           style="display:none;margin-top:0.4rem;font-size:0.8rem;color:#b45309;font-weight:500;">
-        ⚠ Less than 1 minute remaining — complete your payment now.
+           style="display:none;margin-top:0.4rem;font-size:0.8rem;color:#92400e;font-weight:500;">
+        <span aria-hidden="true">⚠</span> Less than 1 minute remaining — complete your payment now.
       </div>
     </div>
     <div class="actions">
       <button class="btn btn-primary" id="prefill-pay-btn">Pay with Freighter</button>
-      <button class="btn btn-outline" onclick="copyLink()">🔗 Copy Link</button>
+      <button class="btn btn-outline" onclick="copyLink()" aria-label="Copy payment link to clipboard"><span aria-hidden="true">🔗</span> Copy Link</button>
     </div>
-    <p id="prefill-pay-note" style="font-size:0.78rem;color:#888;margin-top:0.75rem;display:none">
-      ⚠ This payment link has expired. Please ask the merchant for a new link.
+    <p id="prefill-pay-note" style="font-size:0.78rem;color:#595959;margin-top:0.75rem;display:none">
+      <span aria-hidden="true">⚠</span> This payment link has expired. Please ask the merchant for a new link.
     </p>
   </div>
 
@@ -447,7 +594,7 @@
   <div id="receipt-content">
     <div class="receipt-header">
       <h1>Payment Receipt</h1>
-      <span id="status-badge" class="badge"></span>
+      <span id="status-badge" class="badge" role="status" aria-live="polite"></span>
     </div>
 
     <div class="field">
@@ -468,7 +615,7 @@
             data-tooltip="Platform-verified merchant"
             tabindex="0"
             style="display:none"
-          >&#10003; Verified</span>
+          ><span aria-hidden="true">&#10003;</span> Verified</span>
       </div>
       <div class="help-text">The business that received this payment.</div>
     </div>
@@ -476,7 +623,7 @@
     <div class="field">
       <label>Amount Paid</label>
       <div class="value amount" id="field-amount"></div>
-      <div id="field-amount-xlm-eq" style="display:none;font-size:0.8rem;color:#888;margin-top:0.25rem;"></div>
+      <div id="field-amount-xlm-eq" style="display:none;font-size:0.8rem;color:#595959;margin-top:0.25rem;"></div>
       <div class="help-text">Total amount transferred in this transaction.</div>
     </div>
 
@@ -521,7 +668,7 @@
     <!-- Refund history -->
     <div id="refunds-section" class="refunds-section" style="display:none">
       <h2>Refund History</h2>
-      <p style="font-size:0.82rem;color:#666;margin-bottom:0.75rem;">
+      <p style="font-size:0.82rem;color:#595959;margin-bottom:0.75rem;">
         Each entry below shows a refund request associated with this payment.
       </p>
       <div id="refunds-list"></div>
@@ -529,16 +676,16 @@
     </div>
 
     <div class="actions">
-      <label for="currency-display-select" style="display:flex;align-items:center;gap:0.5rem;flex:1 1 140px;font-size:0.8rem;font-weight:600;color:#555;">
+      <label for="currency-display-select" style="display:flex;align-items:center;gap:0.5rem;flex:1 1 140px;font-size:0.8rem;font-weight:600;color:#4a4a4a;">
         Display as:
-        <select id="currency-display-select" style="flex:1;padding:0.4rem 0.6rem;border:1px solid #e0e0e0;border-radius:6px;font-size:0.85rem;outline:none;" aria-label="Currency display format">
+        <select id="currency-display-select" style="flex:1;padding:0.4rem 0.6rem;border:1px solid #767676;border-radius:6px;font-size:0.85rem;outline:none;" aria-label="Currency display format">
           <option value="native">Native Token</option>
           <option value="xlm">XLM Equivalent</option>
         </select>
       </label>
-      <button class="btn btn-outline no-print" onclick="downloadPdf()" id="btn-download-pdf" aria-label="Download receipt as PDF">⬇ Download PDF</button>
-      <button class="btn btn-outline no-print" onclick="window.print()">🖨 Print</button>
-      <button class="btn btn-primary no-print" onclick="copyLink()">🔗 Copy Link</button>
+      <button class="btn btn-outline no-print" onclick="downloadPdf()" id="btn-download-pdf" aria-label="Download receipt as PDF"><span aria-hidden="true">⬇</span> Download PDF</button>
+      <button class="btn btn-outline no-print" onclick="window.print()" aria-label="Print receipt"><span aria-hidden="true">🖨</span> Print</button>
+      <button class="btn btn-primary no-print" onclick="copyLink()" aria-label="Copy receipt link to clipboard"><span aria-hidden="true">🔗</span> Copy Link</button>
     </div>
 
     <!-- ── Inline refund initiation (issue #1280) ──────────────────────── -->
@@ -558,7 +705,7 @@
           aria-expanded="false"
           aria-controls="refund-form-panel"
           onclick="toggleRefundForm()"
-        >↩ Request Refund</button>
+        ><span aria-hidden="true">↩</span> Request Refund</button>
       </div>
 
       <!-- Inline refund form panel -->
@@ -566,7 +713,7 @@
         id="refund-form-panel"
         role="region"
         aria-label="Refund request form"
-        style="display:none; margin-top:1rem; padding:1rem; background:#fafafa; border:1px solid #e0e0e0; border-radius:8px;"
+        style="display:none; margin-top:1rem; padding:1rem; background:#fafafa; border:1px solid #767676; border-radius:8px;"
       >
         <h2 style="font-size:0.95rem;font-weight:700;margin-bottom:0.75rem;">Request a Refund</h2>
 
@@ -577,7 +724,7 @@
             id="refund-order-id-display"
             class="value"
             readonly
-            style="width:100%;padding:0.4rem 0.6rem;border:1px solid #e0e0e0;border-radius:6px;font-size:0.85rem;background:#f5f5f5;"
+            style="width:100%;padding:0.4rem 0.6rem;border:1px solid #767676;border-radius:6px;font-size:0.85rem;background:#f5f5f5;"
             aria-readonly="true"
           />
         </div>
@@ -590,14 +737,14 @@
             class="value"
             min="0.0000001"
             step="any"
-            style="width:100%;padding:0.4rem 0.6rem;border:1px solid #e0e0e0;border-radius:6px;font-size:0.85rem;"
+            style="width:100%;padding:0.4rem 0.6rem;border:1px solid #767676;border-radius:6px;font-size:0.85rem;"
             aria-describedby="refund-amount-hint"
             required
           />
-          <div id="refund-amount-hint" style="font-size:0.75rem;color:#888;margin-top:0.2rem;">
+          <div id="refund-amount-hint" style="font-size:0.75rem;color:#595959;margin-top:0.2rem;">
             Enter a partial amount or leave as-is for a full refund.
           </div>
-          <div id="refund-amount-error" role="alert" style="display:none;color:#b91c1c;font-size:0.78rem;margin-top:0.2rem;"></div>
+          <div id="refund-amount-error" role="alert" style="display:none;color:#991b1b;font-size:0.78rem;margin-top:0.2rem;"></div>
         </div>
 
         <div class="field" style="margin-bottom:1rem;">
@@ -606,7 +753,7 @@
             id="refund-reason-input"
             rows="2"
             maxlength="200"
-            style="width:100%;padding:0.4rem 0.6rem;border:1px solid #e0e0e0;border-radius:6px;font-size:0.85rem;resize:vertical;"
+            style="width:100%;padding:0.4rem 0.6rem;border:1px solid #767676;border-radius:6px;font-size:0.85rem;resize:vertical;"
             placeholder="Describe the reason for your refund request…"
           ></textarea>
         </div>
@@ -636,6 +783,10 @@
 </main>
 
 <script src="./toast.js"></script>
+<script type="module">
+  import { initWalletStatus } from './wallet-status.js';
+  initWalletStatus(document.getElementById('wallet-status-container'));
+</script>
 <script type="module">
   import { i18n } from './i18n.js';
   i18n.init().then(() => {
@@ -689,28 +840,28 @@
 
     // Step 1 — always present: submitted
     steps.push(`<div class="timeline-step step-status-approved">
-      <em class="refund-status-icon">📩</em> Submitted — ${formatDate(r.created_at)}
+      <em class="refund-status-icon" aria-hidden="true">📩</em> Submitted — ${formatDate(r.created_at)}
     </div>`);
 
     // Step 2 — middle state
     if (r.status === 'Completed' || r.status === 'Approved') {
       steps.push(`<div class="timeline-step step-status-approved">
-        <em class="refund-status-icon">✔</em> Approved
+        <em class="refund-status-icon" aria-hidden="true">✔</em> Approved
       </div>`);
     } else if (r.status === 'Rejected') {
       steps.push(`<div class="timeline-step step-status-rejected">
-        <em class="refund-status-icon">✗</em> Rejected
+        <em class="refund-status-icon" aria-hidden="true">✗</em> Rejected
       </div>`);
     } else {
       steps.push(`<div class="timeline-step step-status-pending">
-        <em class="refund-status-icon">⏳</em> Awaiting merchant review
+        <em class="refund-status-icon" aria-hidden="true">⏳</em> Awaiting merchant review
       </div>`);
     }
 
     // Step 3 — completed transfer
     if (r.status === 'Completed' && r.executed_at) {
       steps.push(`<div class="timeline-step step-status-completed">
-        <em class="refund-status-icon">✅</em> Refund transferred — ${formatDate(r.executed_at)}
+        <em class="refund-status-icon" aria-hidden="true">✅</em> Refund transferred — ${formatDate(r.executed_at)}
       </div>`);
     }
 
@@ -732,6 +883,9 @@
     // in a static preview without a live contract.
     if (!CONTRACT_ID) return getDemoData(orderId);
 
+    // SRI note: dynamic ES module imports cannot carry an `integrity` attribute.
+    // The pinned version below is the trust anchor; see docs/SRI.md for the
+    // process to regenerate/verify CDN dependency hashes on upgrade.
     const { SorobanRpc, Contract, nativeToScVal, scValToNative, Networks } =
       await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
 
@@ -1223,7 +1377,6 @@
   (async () => {
     renderModeBanner();
     initCopyButtons(document.body);
-    initWalletStatus(document.getElementById('wallet-status-container'));
 
     // Dark mode
     import('./dark-mode.js').then(m => m.initDarkMode());
