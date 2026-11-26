@@ -100,6 +100,48 @@
   </aside>
 
   <main id="main-content" class="dashboard-main">
+    <!-- Merchant category filter -->
+    <section class="filter-bar" aria-labelledby="category-filter-title">
+      <fieldset id="category-filter" class="category-filter" aria-describedby="category-filter-hint">
+        <legend id="category-filter-title" class="filter-title">Merchant Category</legend>
+        <span id="category-filter-hint" class="filter-hint">Filter all panels by merchant category.</span>
+        <div class="category-options">
+          <label class="category-option">
+            <input type="checkbox" name="category" value="all" data-category="all" checked />
+            <span class="category-label">All categories</span>
+          </label>
+          <label class="category-option">
+            <input type="checkbox" name="category" value="gambling" data-category="gambling" />
+            <span class="category-label">Gambling</span>
+          </label>
+          <label class="category-option">
+            <input type="checkbox" name="category" value="digital_goods" data-category="digital_goods" />
+            <span class="category-label">Digital Goods</span>
+          </label>
+          <label class="category-option">
+            <input type="checkbox" name="category" value="retail" data-category="retail" />
+            <span class="category-label">Retail</span>
+          </label>
+          <label class="category-option">
+            <input type="checkbox" name="category" value="travel" data-category="travel" />
+            <span class="category-label">Travel</span>
+          </label>
+          <label class="category-option">
+            <input type="checkbox" name="category" value="food_beverage" data-category="food_beverage" />
+            <span class="category-label">Food &amp; Beverage</span>
+          </label>
+          <label class="category-option">
+            <input type="checkbox" name="category" value="services" data-category="services" />
+            <span class="category-label">Services</span>
+          </label>
+          <label class="category-option">
+            <input type="checkbox" name="category" value="other" data-category="other" />
+            <span class="category-label">Other</span>
+          </label>
+        </div>
+      </fieldset>
+    </section>
+
     <!-- KPI summary row -->
     <section class="kpi-row" aria-label="Key metrics">
       <div class="kpi-card">

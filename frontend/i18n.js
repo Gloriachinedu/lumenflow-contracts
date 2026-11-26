@@ -112,6 +112,35 @@ function resolvePath(obj, path) {
 }
 
 /**
+ * Deep-merge source objects into a new target object.
+ * Values from later sources override earlier ones; nested plain objects
+ * are merged recursively. Arrays and primitives are replaced wholesale.
+ *
+ * @param {...object} sources
+ * @returns {object}
+ */
+function deepMerge(...sources) {
+  const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+  const result = {};
+
+  for (const source of sources) {
+    if (!isPlainObject(source)) continue;
+    for (const key of Object.keys(source)) {
+      const value = source[key];
+      if (isPlainObject(value) && isPlainObject(result[key])) {
+        result[key] = deepMerge(result[key], value);
+      } else if (isPlainObject(value)) {
+        result[key] = deepMerge({}, value);
+      } else {
+        result[key] = value;
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
  * Detect the best-matching supported locale from the browser's language list.
  * Falls back to DEFAULT_LOCALE if nothing matches.
  *
