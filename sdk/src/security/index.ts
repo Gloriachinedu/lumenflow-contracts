@@ -9,19 +9,13 @@ export * from "./dataDeletion";
 export * from "./csrfProtection";
 export * from "./logRedaction";
 
-// GDPR right-to-erasure workflow (issue #1602).
-// `export * from "./dataDeletion"` above already re-exports the erasure
-// workflow (requestErasure, executeErasure, and related types) since they are
-// declared as top-level named exports in that module. The explicit re-exports
-// below guarantee the public surface stays stable even if those symbols are
-// later moved under a namespace or re-exported indirectly.
+// Server-side CSRF enforcement entry points. These helpers are used by the
+// webhook relay and dashboard API to apply CSRF middleware to all
+// state-changing (POST/PUT/DELETE) routes, set the CSRF token cookie with
+// SameSite=Strict, and validate tokens using constant-time comparison via
+// cryptoSubtle. Import them from `@lumenflow/sdk/security`.
 export {
-  requestErasure,
-  executeErasure,
-} from "./dataDeletion";
-export type {
-  ErasureRequest,
-  ErasureRequestStatus,
-  ErasureResult,
-  ErasureAuditLogEntry,
-} from "./dataDeletion";
+  csrfMiddleware,
+  setCsrfCookie,
+  csrfCookieOptions,
+} from "./csrfProtection";

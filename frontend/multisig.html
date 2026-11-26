@@ -15,6 +15,26 @@
     })();
   </script>
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://horizon.stellar.org; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none';" />
+  <!--
+    Subresource Integrity (SRI) — issue #1557
+    ─────────────────────────────────────────────────────────────────────────
+    Every external <script>/<link rel="stylesheet"> MUST carry an `integrity`
+    attribute plus `crossorigin="anonymous"`. The Stellar SDK is loaded via a
+    dynamic `import()` from https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm
+    inside the module below; its SRI hash is pinned in the constant
+    STELLAR_SDK_SRI and verified at runtime before the module is used.
+
+    Regenerating hashes on a CDN dependency upgrade:
+      1. Pin the exact version (never use a floating tag).
+      2. Download the asset and compute its digest, e.g.:
+           curl -sSL https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm \
+             | openssl dgst -sha384 -binary | openssl base64 -A
+      3. Update the `integrity` attribute / STELLAR_SDK_SRI constant below
+         with the value prefixed by `sha384-`.
+      4. Run `npm run verify:sri` (CI step) to confirm every external
+         resource has a matching integrity attribute.
+  -->
+=======
   <title>Multisig Payment – LumenFlow</title>
   <meta name="description" content="Initiate and manage multi-signature payments on LumenFlow. Requires threshold approvals before funds are released." />
   <meta property="og:title" content="Multisig Payment – LumenFlow" />
@@ -380,6 +400,45 @@
   import { validateOrderId, validateAmount, validateAddress, isValidStellarKey } from './validation.js';
   import { initWalletStatus } from './wallet-status.js';
 
+  // ── Subresource Integrity for the CDN-loaded Stellar SDK (issue #1557) ────
+  // The SDK is fetched dynamically from jsDelivr. Browsers do not apply SRI to
+  // dynamic import() automatically, so we pin the expected digest here and
+  // verify the fetched bytes before evaluating the module. Regenerate this
+  // value whenever the SDK version is bumped (see the SRI note in <head>).
+  const STELLAR_SDK_URL = 'https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm';
+  const STELLAR_SDK_SRI = 'sha384-REPLACE_WITH_REGENERATED_HASH_ON_UPGRADE';
+
+  let _stellarSdkPromise = null;
+  async function loadStellarSdk() {
+    if (_stellarSdkPromise) return _stellarSdkPromise;
+    _stellarSdkPromise = (async () => {
+      const res = await fetch(STELLAR_SDK_URL, { mode: 'cors', credentials: 'omit' });
+      if (!res.ok) throw new Error(`Failed to fetch Stellar SDK (HTTP ${res.status}).`);
+      const bytes = new Uint8Array(await res.arrayBuffer());
+
+      // Compute the SHA-384 digest and compare against the pinned SRI value.
+      const digest = await crypto.subtle.digest('SHA-384', bytes);
+      const b64 = btoa(String.fromCharCode(...new Uint8Array(digest)));
+      const actual = `sha384-${b64}`;
+      if (actual !== STELLAR_SDK_SRI) {
+        throw new Error(
+          'Stellar SDK integrity check failed — the CDN asset does not match the pinned SRI hash. ' +
+          'Refusing to load. If you upgraded the SDK, regenerate STELLAR_SDK_SRI.'
+        );
+      }
+
+      // Evaluate the verified module source via a blob URL.
+      const blob = new Blob([bytes], { type: 'text/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      try {
+        return await import(/* @vite-ignore */ blobUrl);
+      } finally {
+        URL.revokeObjectURL(blobUrl);
+      }
+    })();
+    return _stellarSdkPromise;
+  }
+
   // ── State ──────────────────────────────────────────────────────────────────
 
   let state = null; // { paymentId, merchantAddress, tokenAddress, amount, signers, required, signatures: Set }
@@ -704,7 +763,7 @@ feat/sdk-rpc-retry-integration
     }
     try {
       const { SorobanRpc, Contract, nativeToScVal, Networks, TransactionBuilder, BASE_FEE } =
-        await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
+        await loadStellarSdk();
       const server   = new SorobanRpc.Server(RPC_URL);
       const contract = new Contract(CONTRACT_ID);
       const account  = await server.getAccount(connectedPublicKey);
@@ -745,7 +804,7 @@ feat/sdk-rpc-retry-integration
     }
     try {
       const { SorobanRpc, Contract, nativeToScVal, Networks, TransactionBuilder, BASE_FEE } =
-        await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
+        await loadStellarSdk();
       const server   = new SorobanRpc.Server(RPC_URL);
       const contract = new Contract(CONTRACT_ID);
       const account  = await server.getAccount(connectedPublicKey);
@@ -785,7 +844,7 @@ feat/sdk-rpc-retry-integration
     }
     try {
       const { SorobanRpc, Contract, nativeToScVal, Networks, TransactionBuilder, BASE_FEE } =
-        await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
+        await loadStellarSdk();
       const server   = new SorobanRpc.Server(RPC_URL);
       const contract = new Contract(CONTRACT_ID);
       const account  = await server.getAccount(connectedPublicKey);
@@ -832,7 +891,7 @@ feat/sdk-rpc-retry-integration
     }
     try {
       const { SorobanRpc, Contract, nativeToScVal, Networks, TransactionBuilder, BASE_FEE, scValToNative } =
-        await import('https://cdn.jsdelivr.net/npm/@stellar/stellar-sdk@12/+esm');
+        await loadStellarSdk();
       const server   = new SorobanRpc.Server(RPC_URL);
       const contract = new Contract(CONTRACT_ID);
       const account  = await server.getAccount(connectedPublicKey);

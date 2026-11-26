@@ -99,6 +99,74 @@ if [[ -f "$SCRIPT" ]]; then
     { echo "  ❌  FAIL: terraform-drift-check.sh has syntax errors"; FAIL=$((FAIL + 1)); }
 fi
 
+# ── CI invocation: .github/workflows/terraform-drift-check.yml ────────────────
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+WORKFLOW="$REPO_ROOT/.github/workflows/terraform-drift-check.yml"
+
+if [[ -f "$WORKFLOW" ]]; then
+  echo "  ✅  PASS: terraform-drift-check.yml workflow exists"; PASS=$((PASS + 1))
+
+  if grep -qE "cron:[[:space:]]*['\"]?0 6 \* \* \*" "$WORKFLOW"; then
+    echo "  ✅  PASS: workflow runs daily at 06:00 UTC"; PASS=$((PASS + 1))
+  else
+    echo "  ❌  FAIL: workflow missing daily 06:00 UTC cron schedule"; FAIL=$((FAIL + 1))
+  fi
+
+  if grep -q "scripts/terraform-drift-check.sh" "$WORKFLOW"; then
+    echo "  ✅  PASS: workflow invokes scripts/terraform-drift-check.sh"; PASS=$((PASS + 1))
+  else
+    echo "  ❌  FAIL: workflow does not invoke scripts/terraform-drift-check.sh"; FAIL=$((FAIL + 1))
+  fi
+
+  if grep -qE "exit code 2|exit_code.*2|drift.*2|2.*drift" "$WORKFLOW"; then
+    echo "  ✅  PASS: workflow fails the job on drift (exit code 2)"; PASS=$((PASS + 1))
+  else
+    echo "  ❌  FAIL: workflow does not handle drift exit code 2"; FAIL=$((FAIL + 1))
+  fi
+
+  if grep -qE "SLACK_WEBHOOK|slack.*webhook|webhook.*slack" "$WORKFLOW"; then
+    echo "  ✅  PASS: workflow references Slack webhook secret"; PASS=$((PASS + 1))
+  else
+    echo "  ❌  FAIL: workflow does not reference Slack webhook secret"; FAIL=$((FAIL + 1))
+  fi
+else
+  echo "  ❌  FAIL: .github/workflows/terraform-drift-check.yml not found"; FAIL=$((FAIL + 1))
+fi
+
+# ── Drift-check script exits non-zero (2) when plan reports changes ───────────
+
+if [[ -f "$SCRIPT" ]]; then
+  TMPDIR_MOCK="$(mktemp -d)"
+  trap 'rm -rf "$TMPDIR_MOCK"' EXIT
+
+  # Mock terraform binary: `plan -detailed-exitcode` reports drift (exit 2)
+  cat > "$TMPDIR_MOCK/terraform" <<'MOCK'
+#!/usr/bin/env bash
+case "$1" in
+  plan)
+    echo "Plan: 1 to add, 0 to change, 0 to destroy."
+    exit 2
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+MOCK
+  chmod +x "$TMPDIR_MOCK/terraform"
+
+  set +e
+  PATH="$TMPDIR_MOCK:$PATH" bash "$SCRIPT" >/dev/null 2>&1
+  drift_rc=$?
+  set -e
+
+  if [[ "$drift_rc" -ne 0 ]]; then
+    echo "  ✅  PASS: drift-check script exits non-zero ($drift_rc) on planned changes"; PASS=$((PASS + 1))
+  else
+    echo "  ❌  FAIL: drift-check script exited 0 despite planned changes"; FAIL=$((FAIL + 1))
+  fi
+fi
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 echo ""
