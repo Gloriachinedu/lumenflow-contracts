@@ -7,7 +7,10 @@
     "dev": "browser-sync start --server . --files '**/*.html,**/*.css,**/*.js' --no-notify --port 3000",
     "serve": "npx serve . --listen 3000",
     "test:unit": "node --test \"tests/unit/*.test.mjs\"",
-    "test:lighthouse": "lhci autorun --config=../lighthouserc.json"
+    "test:security": "node --test \"tests/security/*.test.mjs\""
+  },
+  "dependencies": {
+    "dompurify": "^3.1.6"
   },
   "devDependencies": {
     "@lhci/cli": "^0.14.0",
