@@ -147,6 +147,7 @@ import {
 } from "./types";
 import { LumenFlowError, PaymentErrorCode } from "./errors";
 import { withIdempotency, IdempotentResult } from "./idempotency";
+import { withRetry, RetryConfig, DEFAULT_RETRY_CONFIG } from "./retry";
 
 /**
  * A function that signs a Stellar transaction.
@@ -309,11 +310,13 @@ export interface ClientConfig {
    */
   strictVersionCheck?: boolean;
   /**
-   * Alias for {@link strictVersionCheck}. When `true`, an incompatible
-   * contract version throws instead of logging a warning.
-   * Defaults to `false`.
+   * Optional overrides for the automatic RPC retry behaviour.
+   *
+   * Defaults: 3 attempts, 500 ms base delay, exponential backoff, ±100 ms jitter.
+   * Non-retryable errors (auth failures, validation errors, contract errors)
+   * bypass retry immediately.
    */
-  strict?: boolean;
+  retryConfig?: Partial<RetryConfig>;
 }
 
 /**
@@ -346,6 +349,7 @@ export class LumenFlowClient {
   private walletAddress?: string;
   private skipVersionCheck: boolean;
   private strictVersionCheck: boolean;
+  private retryConfig: RetryConfig;
 
   /**
    * Creates a new {@link LumenFlowClient}.
@@ -368,8 +372,15 @@ export class LumenFlowClient {
     this.signer = config.signer;
     this.walletAddress = config.walletAddress;
     this.skipVersionCheck = config.skipVersionCheck ?? false;
-    this.strictVersionCheck =
-      config.strictVersionCheck ?? config.strict ?? false;
+    this.strictVersionCheck = config.strictVersionCheck ?? false;
+    this.retryConfig = { ...DEFAULT_RETRY_CONFIG, ...config.retryConfig };
+  }
+
+  /**
+   * Returns a copy of the retry configuration currently used for RPC calls.
+   */
+  getRetryConfig(): RetryConfig {
+    return { ...this.retryConfig };
   }
 
   /**
@@ -1542,92 +1553,96 @@ export class LumenFlowClient {
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   private async call(method: string, args: any[] = []): Promise<any> {
-    const tx = new TransactionBuilder(
-      new SorobanRpc.Account("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", "0"),
-      {
-        fee: "100",
-        networkPassphrase: this.networkPassphrase,
+    return withRetry(async () => {
+      const tx = new TransactionBuilder(
+        new SorobanRpc.Account("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", "0"),
+        {
+          fee: "100",
+          networkPassphrase: this.networkPassphrase,
+        }
+      )
+        .addOperation(this.contract.call(method, ...args.map(a => nativeToScVal(a))))
+        .setTimeout(TimeoutInfinite)
+        .build();
+
+      const simulation = await this.server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(simulation)) {
+        throw this.wrapError(simulation);
       }
-    )
-      .addOperation(this.contract.call(method, ...args.map(a => nativeToScVal(a))))
-      .setTimeout(TimeoutInfinite)
-      .build();
 
-    const simulation = await this.server.simulateTransaction(tx);
-    if (SorobanRpc.Api.isSimulationError(simulation)) {
-      throw this.wrapError(simulation);
-    }
-
-    if (simulation.result) {
-      return scValToNative(simulation.result.retval);
-    }
-    return null;
+      if (simulation.result) {
+        return scValToNative(simulation.result.retval);
+      }
+      return null;
+    }, this.retryConfig);
   }
 
   private async invoke(method: string, args: any[] = []): Promise<any> {
+    return this.withLogging(`invoke:${method}`, () => this.executeInvoke(method, args));
+  }
+
+  private async executeInvoke(method: string, args: any[] = []): Promise<any> {
     if (!this.signer) {
       throw new Error("A signer is required for state-changing operations.");
     }
 
-    const sourceAccount = await this.server.getAccount("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"); // Dummy for simulation if needed, but we need real one for execution
-    // Actually, we should probably get the account from the signer or pass it in.
-    // For now, let's assume we can use a dummy for simulation to get the footprint.
+    return withRetry(async () => {
+      const dummyAccount = new SorobanRpc.Account("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", "0");
+      let tx = new TransactionBuilder(dummyAccount, {
+        fee: "100",
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(this.contract.call(method, ...args.map(a => nativeToScVal(a))))
+        .setTimeout(TimeoutInfinite)
+        .build();
 
-    const dummyAccount = new SorobanRpc.Account("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", "0");
-    let tx = new TransactionBuilder(dummyAccount, {
-      fee: "100",
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(this.contract.call(method, ...args.map(a => nativeToScVal(a))))
-      .setTimeout(TimeoutInfinite)
-      .build();
-
-    const simulation = await this.server.simulateTransaction(tx);
-    if (SorobanRpc.Api.isSimulationError(simulation)) {
-      throw this.wrapError(simulation);
-    }
-
-    // Prepare for real execution
-    // We need the actual source account to build the real transaction
-    // Let's assume the first arg is often the "caller/admin/payer/merchant" address if it's an Address.
-    let realSourceAddress = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
-    if (args.length > 0 && args[0] instanceof Address) {
-      // This is a heuristic, but often the first param is the one requiring auth
-      // In Soroban, any account can pay for fees, but the contract usually checks require_auth() on params.
-    }
-
-    // For simplicity in this SDK, we might need a way to specify the fee payer.
-    // Let's just use the simulation's results and let the signer handle the final steps if it's a wallet.
-    // But standard way is to assemble it here.
-
-    tx = SorobanRpc.assembleTransaction(tx, simulation).build();
-    const signedTx = await this.signer(tx);
-    const response = await this.server.sendTransaction(signedTx);
-
-    if (response.status === "ERROR") {
-      throw new Error(`Transaction failed: ${JSON.stringify(response)}`);
-    }
-
-    // Poll for status
-    let statusResponse = await this.server.getTransaction(response.hash);
-    while (statusResponse.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND || 
-           statusResponse.status === SorobanRpc.Api.GetTransactionStatus.PROCESSING) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      statusResponse = await this.server.getTransaction(response.hash);
-    }
-
-    if (statusResponse.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-      if (statusResponse.resultMetaXdr) {
-        // Parse result from meta if needed
-        const result = statusResponse.returnValue;
-        if (result) {
-          return scValToNative(result);
-        }
+      const simulation = await this.server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(simulation)) {
+        throw this.wrapError(simulation);
       }
-      return null;
-    } else {
-      throw new Error(`Transaction failed with status ${statusResponse.status}: ${JSON.stringify(statusResponse)}`);
-    }
+
+      // Prepare for real execution
+      // We need the actual source account to build the real transaction
+      // Let's assume the first arg is often the "caller/admin/payer/merchant" address if it's an Address.
+      let realSourceAddress = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+      if (args.length > 0 && args[0] instanceof Address) {
+        // This is a heuristic, but often the first param is the one requiring auth
+        // In Soroban, any account can pay for fees, but the contract usually checks require_auth() on params.
+      }
+
+      // For simplicity in this SDK, we might need a way to specify the fee payer.
+      // Let's just use the simulation's results and let the signer handle the final steps if it's a wallet.
+      // But standard way is to assemble it here.
+
+      tx = SorobanRpc.assembleTransaction(tx, simulation).build();
+      const signedTx = await this.signer!(tx);
+      const response = await this.server.sendTransaction(signedTx);
+
+      if (response.status === "ERROR") {
+        throw new Error(`Transaction failed: ${JSON.stringify(response)}`);
+      }
+
+      // Poll for status
+      let statusResponse = await this.server.getTransaction(response.hash);
+      while (statusResponse.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND ||
+             statusResponse.status === SorobanRpc.Api.GetTransactionStatus.PROCESSING) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        statusResponse = await this.server.getTransaction(response.hash);
+      }
+
+      if (statusResponse.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+        if (statusResponse.resultMetaXdr) {
+          // Parse result from meta if needed
+          const result = statusResponse.returnValue;
+          if (result) {
+            return scValToNative(result);
+          }
+        }
+        return null;
+      } else {
+        throw new Error(`Transaction failed with status ${statusResponse.status}: ${JSON.stringify(statusResponse)}`);
+      }
+    }, this.retryConfig);
   }
 
   private wrapError(simulation: SorobanRpc.Api.SimulateTransactionErrorResponse): Error {

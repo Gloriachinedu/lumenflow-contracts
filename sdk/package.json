@@ -2,18 +2,18 @@
   "name": "@lumenflow/sdk",
   "version": "0.2.0",
   "description": "LumenFlow TypeScript SDK — Node.js wrapper for the LumenFlow Soroban contract",
-  "main": "dist/cjs/index.js",
-  "module": "dist/esm/index.js",
-  "types": "dist/cjs/index.d.ts",
+  "main": "dist/index.cjs",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
   "exports": {
     ".": {
       "import": {
-        "types": "./dist/esm/index.d.ts",
-        "default": "./dist/esm/index.js"
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
       },
       "require": {
-        "types": "./dist/cjs/index.d.ts",
-        "default": "./dist/cjs/index.js"
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.cjs"
       }
     }
   },
@@ -26,6 +26,9 @@
     "build:esm": "tsup --format esm",
     "test": "jest",
     "test:cjs": "CJS_BUILD=1 jest",
+    "smoke:esm": "node scripts/smoke-test-esm.mjs",
+    "smoke:cjs": "node scripts/smoke-test-cjs.cjs",
+    "verify:exports": "node scripts/verify-exports-map.mjs",
     "prepublishOnly": "npm run build"
   },
   "keywords": ["stellar", "soroban", "lumenflow", "payments", "sdk"],

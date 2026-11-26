@@ -178,6 +178,26 @@ export class MultisigAlreadySignedError extends ContractError { constructor(deta
 export class MultisigAlreadyExecutedError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.MultisigAlreadyExecuted, details); } }
 export class InsufficientSignaturesError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.InsufficientSignatures, details); } }
 export class InvalidInputError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.InvalidInput, details); } }
+
+/**
+ * Thrown when a public SDK method receives invalid input, before any network
+ * call is made. Carries the name of the offending field so callers can
+ * highlight the exact parameter that failed validation.
+ */
+export class LumenFlowValidationError extends LumenFlowError {
+  public readonly field: string;
+
+  constructor(field: string, message?: string, details?: unknown) {
+    const baseMessage = message ?? ERROR_MESSAGES[PaymentErrorCode.InvalidInput];
+    super(PaymentErrorCode.InvalidInput, {
+      field,
+      ...(details === undefined ? {} : { details }),
+    });
+    this.name = "LumenFlowValidationError";
+    this.field = field;
+    this.message = `Invalid input for "${field}": ${baseMessage}`;
+  }
+}
 export class PaginationLimitExceededError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.PaginationLimitExceeded, details); } }
 export class BatchSizeExceededError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.BatchSizeExceeded, details); } }
 export class InvalidTagsError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.InvalidTags, details); } }

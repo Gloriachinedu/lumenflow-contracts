@@ -9,7 +9,9 @@
     (function() {
       try {
         var stored = localStorage.getItem('lf-theme');
-        var theme = stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        var theme = (stored === 'dark' || stored === 'light')
+          ? stored
+          : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
         document.documentElement.setAttribute('data-theme', theme);
       } catch (e) {}
     })();
@@ -18,6 +20,12 @@
   <title>Merchant Onboarding – LumenFlow</title>
   <meta name="description" content="Register your business on LumenFlow in a few simple steps." />
   <link rel="stylesheet" href="styles.css" />
+  <!--
+    SRI policy: every external (CDN) <script>/<link rel="stylesheet"> MUST carry
+    integrity="sha384-…" and crossorigin="anonymous". CI verifies this.
+    To regenerate hashes after a CDN dependency upgrade, see
+    docs/sri-update-process.md (e.g. `npm run sri:update`).
+  -->
   <style>
     body { align-items: center; }
 

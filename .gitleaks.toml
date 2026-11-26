@@ -6,8 +6,18 @@
 #
 # Install: https://github.com/gitleaks/gitleaks#installing
 # Run:     gitleaks detect --source . --config .gitleaks.toml
+# Pre-commit hook (installed by scripts/install_hooks.sh):
+#          gitleaks protect --staged --config .gitleaks.toml
+# CI (PR diff scan):
+#          gitleaks detect --source . --config .gitleaks.toml --redact --verbose
 
 title = "LumenFlow Secrets Scanning"
+
+# Extend the default gitleaks ruleset so built-in detectors (AWS, GCP, Slack,
+# Stripe, generic API keys, etc.) stay active alongside the custom rules below.
+[extend]
+useDefault = true
+=======
 
 # ── Custom rules ──────────────────────────────────────────────────────────────
 
@@ -92,6 +102,68 @@ regex       = '''AKIA[0-9A-Z]{16}'''
 tags        = ["aws", "key", "high"]
 severity    = "HIGH"
 
+[[rules]]
+id          = "aws-secret-access-key"
+description = "AWS secret access key assigned to a variable"
+regex       = '''(?i)aws_?secret_?access_?key\s*[:=]\s*["\']?[A-Za-z0-9/+=]{40}["\']?'''
+tags        = ["aws", "secret", "critical"]
+severity    = "CRITICAL"
+
+[[rules]]
+id          = "generic-api-token"
+description = "Generic API token / bearer token assignment"
+regex       = '''(?i)(?:api[_-]?token|bearer[_-]?token|access[_-]?token|auth[_-]?token)\s*[:=]\s*["\']?[A-Za-z0-9._\-]{20,}["\']?'''
+tags        = ["token", "api", "high"]
+severity    = "HIGH"
+
+  [rules.allowlist]
+  description = "Exclude placeholder token values"
+  regexTarget = "line"
+  regexes = [
+    '''<[^>]+>''',
+    '''your[_-]''',
+    '''REPLACE_ME''',
+    '''example''',
+    '''dummy''',
+    '''placeholder''',
+    '''changeme''',
+  ]
+
+[[rules]]
+id          = "webhook-secret"
+description = "Webhook signing secret or URL with embedded credentials"
+regex       = '''(?i)(?:webhook[_-]?secret|signing[_-]?secret)\s*[:=]\s*["\']?[A-Za-z0-9._\-]{16,}["\']?'''
+tags        = ["webhook", "secret", "high"]
+severity    = "HIGH"
+
+  [rules.allowlist]
+  description = "Exclude placeholder webhook secrets"
+  regexTarget = "line"
+  regexes = [
+    '''<[^>]+>''',
+    '''your[_-]''',
+    '''REPLACE_ME''',
+    '''example''',
+    '''dummy''',
+    '''placeholder''',
+    '''changeme''',
+  ]
+
+[[rules]]
+id          = "slack-token"
+description = "Slack bot/user/app token"
+regex       = '''xox[baprs]-[A-Za-z0-9-]{10,}'''
+tags        = ["slack", "token", "high"]
+severity    = "HIGH"
+
+[[rules]]
+id          = "stripe-secret-key"
+description = "Stripe live secret key"
+regex       = '''sk_live_[A-Za-z0-9]{16,}'''
+tags        = ["stripe", "key", "critical"]
+severity    = "CRITICAL"
+=======
+
 # ── Global allowlist ──────────────────────────────────────────────────────────
 # Paths and patterns that are known-safe and should never trigger alerts.
 
@@ -116,6 +188,14 @@ paths = [
   '''scripts/seed.sh''',
   '''scripts/deploy.sh''',
   '''scripts/local_up.sh''',
+  # Hook installer and CI workflow reference tool names, not secrets
+  '''scripts/install_hooks.sh''',
+  '''.github/workflows/''',
+  # Lockfiles and vendored dependencies
+  '''package-lock.json''',
+  '''Cargo.lock''',
+  '''target/''',
+  '''node_modules/''',
 ]
 
 # Global regex patterns that are never secrets regardless of context

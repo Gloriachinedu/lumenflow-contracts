@@ -126,3 +126,66 @@ describe("Non-retryable errors", () => {
     expect(rpcFetch).toHaveBeenCalledTimes(1);
   });
 });
+
+// ─── Retry behaviour (issue #1522) ────────────────────────────────────────────
+
+describe("Retry behaviour", () => {
+  it("succeeds on the second attempt after a transient failure", async () => {
+    const rpcFetch = jest
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("temporary glitch"), { code: "ECONNRESET" })
+      )
+      .mockResolvedValue({ result: null });
+
+    const client = new LumenFlowClient(rpcFetch);
+    await expect(client.registerMerchant(MERCHANT_PARAMS)).resolves.toBeUndefined();
+    expect(rpcFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("surfaces the last error once retries are exhausted", async () => {
+    const rpcFetch = jest
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("first failure"), { code: "ETIMEDOUT" }))
+      .mockRejectedValueOnce(Object.assign(new Error("second failure"), { code: "ETIMEDOUT" }))
+      .mockRejectedValueOnce(Object.assign(new Error("third failure"), { code: "ETIMEDOUT" }))
+      .mockRejectedValueOnce(Object.assign(new Error("final failure"), { code: "ETIMEDOUT" }));
+
+    const client = new LumenFlowClient(rpcFetch);
+    await expect(client.registerMerchant(MERCHANT_PARAMS)).rejects.toThrow(
+      "final failure"
+    );
+    // 1 initial attempt + 3 retries
+    expect(rpcFetch).toHaveBeenCalledTimes(4);
+  });
+
+  it("fails fast on auth errors without retrying", async () => {
+    const rpcFetch = jest
+      .fn()
+      .mockRejectedValue(new LumenFlowError(PaymentErrorCode.Unauthorized));
+    const client = new LumenFlowClient(rpcFetch);
+
+    await expect(client.processPayment({
+      payer: "G1",
+      order_id: "O1",
+      merchant_address: "G2",
+      amount: 100,
+    })).rejects.toBeInstanceOf(LumenFlowError);
+    expect(rpcFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails fast on validation errors without retrying", async () => {
+    const rpcFetch = jest
+      .fn()
+      .mockRejectedValue(new LumenFlowError(PaymentErrorCode.InvalidAmount));
+    const client = new LumenFlowClient(rpcFetch);
+
+    await expect(client.processPayment({
+      payer: "G1",
+      order_id: "O1",
+      merchant_address: "G2",
+      amount: 100,
+    })).rejects.toBeInstanceOf(LumenFlowError);
+    expect(rpcFetch).toHaveBeenCalledTimes(1);
+  });
+});

@@ -5,6 +5,10 @@
 # payment payload, then prints environment variable exports for SMOKE_SIG,
 # SMOKE_PUBKEY, and SMOKE_NONCE for consumption by smoke_test.sh.
 #
+# A fresh keypair is generated on every invocation, for every environment.
+# No hardcoded keys are ever read. The private key is never persisted to disk;
+# only the public key and nonce are written to an environment-specific file.
+#
 # Usage (called by smoke_test.sh automatically, or run standalone):
 #
 #   eval "$(./scripts/generate_smoke_keypair.sh \
@@ -29,6 +33,11 @@
 #   export SMOKE_PUBKEY=<64-char hex>
 #   export SMOKE_NONCE=<decimal u64>
 #
+# Side effect: writes <output-dir>/smoke_keypair_<network>.env containing
+#   SMOKE_PUBKEY=<64-char hex>
+#   SMOKE_NONCE=<decimal u64>
+# The private key is NEVER written to disk.
+#
 set -euo pipefail
 
 # ── argument parsing ──────────────────────────────────────────────────────────
@@ -38,11 +47,12 @@ ORDER_ID=""
 AMOUNT="1"
 NETWORK="testnet"
 STELLAR_RPC_URL=""
+OUTPUT_DIR=""
 
 usage() {
   echo "Usage: $0 --contract-id <id> --merchant <address> --order-id <id>" >&2
   echo "          [--amount <int>] [--network testnet|mainnet|local]" >&2
-  echo "          [--rpc-url <url>]" >&2
+  echo "          [--rpc-url <url>] [--output-dir <dir>]" >&2
   exit 1
 }
 
@@ -54,6 +64,7 @@ while [[ $# -gt 0 ]]; do
     --amount)       AMOUNT="$2";           shift 2 ;;
     --network)      NETWORK="$2";          shift 2 ;;
     --rpc-url)      STELLAR_RPC_URL="$2";  shift 2 ;;
+    --output-dir)   OUTPUT_DIR="$2";       shift 2 ;;
     *) echo "Unknown argument: $1" >&2; usage ;;
   esac
 done
@@ -67,20 +78,28 @@ case "$NETWORK" in
   testnet)
     PASSPHRASE="Test SDF Network ; September 2015"
     DEFAULT_RPC="https://soroban-testnet.stellar.org"
+    NETWORK_SLUG="testnet"
     ;;
   mainnet|public)
     PASSPHRASE="Public Global Stellar Network ; September 2015"
     DEFAULT_RPC="https://mainnet.sorobanrpc.com"
+    NETWORK_SLUG="mainnet"
     ;;
   local|standalone)
     PASSPHRASE="Standalone Network ; February 2017"
     DEFAULT_RPC="http://localhost:8000/soroban/rpc"
+    NETWORK_SLUG="local"
     ;;
   *)
     echo "ERROR: unknown network '$NETWORK'" >&2; exit 1 ;;
 esac
 
 STELLAR_RPC_URL="${STELLAR_RPC_URL:-$DEFAULT_RPC}"
+
+# ── resolve script dir & output dir ──────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OUTPUT_DIR="${OUTPUT_DIR:-${SCRIPT_DIR}/.smoke_keys}"
+mkdir -p "$OUTPUT_DIR"
 
 # ── check for Node.js ────────────────────────────────────────────────────────
 if ! command -v node &>/dev/null; then
@@ -96,7 +115,6 @@ if [[ "$NODE_MAJOR" -lt 18 ]]; then
 fi
 
 # ── install @stellar/stellar-sdk if not cached ───────────────────────────────
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SMOKE_NODE_DIR="${SCRIPT_DIR}/.smoke_node_modules"
 
 if [[ ! -d "${SMOKE_NODE_DIR}/node_modules/@stellar/stellar-sdk" ]]; then
@@ -123,6 +141,7 @@ const [,, networkPassphrase, contractId, merchantAddress, nonce, orderId, amount
   process.argv;
 
 // ── 1. Generate throwaway ed25519 keypair ─────────────────────────────────
+// A fresh keypair is generated on every invocation. No hardcoded key is read.
 const { privateKey, publicKey } = generateKeyPairSync('ed25519');
 
 // Export raw 32-byte public key
@@ -192,12 +211,38 @@ fi
 NONCE=$(( CURRENT_NONCE + 1 ))
 
 # ── run the Node.js signer ───────────────────────────────────────────────────
-NODE_PATH="${SMOKE_NODE_DIR}/node_modules" \
-  node "${TMPDIR_SMOKE}/sign.mjs" \
-    "$PASSPHRASE" \
-    "$CONTRACT_ID" \
-    "$MERCHANT_ADDRESS" \
-    "$NONCE" \
-    "$ORDER_ID" \
-    "$AMOUNT" \
-    "$STELLAR_RPC_URL"
+SIGNER_OUTPUT="$(
+  NODE_PATH="${SMOKE_NODE_DIR}/node_modules" \
+    node "${TMPDIR_SMOKE}/sign.mjs" \
+      "$PASSPHRASE" \
+      "$CONTRACT_ID" \
+      "$MERCHANT_ADDRESS" \
+      "$NONCE" \
+      "$ORDER_ID" \
+      "$AMOUNT" \
+      "$STELLAR_RPC_URL"
+)"
+
+# ── persist environment-specific public metadata (never the private key) ────
+PUBKEY_LINE="$(echo "$SIGNER_OUTPUT" | grep '^export SMOKE_PUBKEY=' || true)"
+NONCE_LINE="$(echo "$SIGNER_OUTPUT" | grep '^export SMOKE_NONCE=' || true)"
+
+if [[ -n "$PUBKEY_LINE" && -n "$NONCE_LINE" ]]; then
+  KEYPAIR_ENV_FILE="${OUTPUT_DIR}/smoke_keypair_${NETWORK_SLUG}.env"
+  {
+    echo "# Throwaway smoke-test keypair metadata for network: ${NETWORK_SLUG}"
+    echo "# Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "# WARNING: These keys are throwaway. Never fund them or commit them."
+    echo "# The private key is intentionally NOT persisted."
+    echo "${PUBKEY_LINE#export }"
+    echo "${NONCE_LINE#export }"
+  } > "$KEYPAIR_ENV_FILE"
+fi
+
+# ── emit exports to stdout for eval ─────────────────────────────────────────
+echo "$SIGNER_OUTPUT"
+
+# ── warn about throwaway keys ───────────────────────────────────────────────
+echo "# WARNING: Generated smoke-test keys are throwaway and MUST NOT be funded," >&2
+echo "#          reused, or committed to version control. A fresh keypair is" >&2
+echo "#          generated on every invocation for network '${NETWORK_SLUG}'." >&2

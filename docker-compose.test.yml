@@ -8,6 +8,9 @@
 #   docker compose -f docker-compose.test.yml down
 #
 # Services:
+#   stellar        – Local Stellar node (stellar/quickstart) used by the
+#                    onboarding E2E test for wallet connect / registration /
+#                    payment flows.
 #   mock-contract  – Lightweight HTTP API that mimics the LumenFlow Soroban
 #                    contract RPC responses so tests run without a live node.
 #   frontend       – Static file server for the /frontend directory.
@@ -15,6 +18,25 @@
 version: "3.9"
 
 services:
+  # ---------------------------------------------------------------------------
+  # Local Stellar node
+  #
+  # Exposes the Horizon API on :8000 and Soroban RPC on :8000/soroban/rpc.
+  # The onboarding E2E test targets this node via STELLAR_HORIZON_URL /
+  # STELLAR_RPC_URL (see tests/playwright/onboarding.spec.ts).
+  # ---------------------------------------------------------------------------
+  stellar:
+    image: stellar/quickstart:latest
+    command: --local --enable-soroban-rpc
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
   # ---------------------------------------------------------------------------
   # Mock contract API
   #
@@ -62,5 +84,7 @@ services:
       timeout: 5s
       retries: 10
     depends_on:
+      stellar:
+        condition: service_healthy
       mock-contract:
         condition: service_healthy
