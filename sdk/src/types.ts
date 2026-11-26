@@ -44,6 +44,51 @@ export interface Merchant {
   verified: boolean;
   registeredAt: bigint;
   totalReceived: bigint;
+  /**
+   * Optional maximum payment amount enforced during `process_payment`.
+   * Maps the Rust `Option<i128>`; `null`/`undefined` means no limit.
+   */
+  maxPaymentAmount?: bigint | null;
+}
+
+/**
+ * Arguments for the `set_merchant_payment_limit` admin entrypoint.
+ * `limit` of `null` clears the limit (no maximum).
+ */
+export interface SetMerchantPaymentLimitArgs {
+  merchant: string;
+  limit: bigint | null;
+}
+
+/**
+ * Merchant profile as stored by the smart contract.
+ *
+ * `refundWindowSecs` is the merchant-specific refund window in seconds.
+ * When omitted (or `undefined`), the contract falls back to the global
+ * default refund window.  Mirrors the Rust `MerchantProfile` struct.
+ */
+export interface MerchantProfile {
+  address: string;
+  name: string;
+  description: string;
+  contactInfo: string;
+  category: MerchantCategory;
+  active: boolean;
+  verified: boolean;
+  registeredAt: bigint;
+  totalReceived: bigint;
+  refundWindowSecs?: bigint;
+}
+
+/**
+ * Arguments for the `set_refund_window` contract entrypoint.
+ *
+ * Callable by the merchant to configure their own refund period.
+ * `refundWindowSecs` must be a non-negative number of seconds.
+ */
+export interface SetRefundWindowArgs {
+  merchant: string;
+  refundWindowSecs: bigint;
 }
 
 export enum PaymentStatus {

@@ -8,6 +8,8 @@
 
 import { CspNonceManager, cspNonceManager } from "./cspAssetPolicy";
 import { LumenFlowClient } from "./client";
+import * as fs from "fs";
+import * as path from "path";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -138,5 +140,109 @@ describe("LumenFlowClient.setCspNonce()", () => {
     const client = new LumenFlowClient();
     client.setCspNonce("page-nonce-xyz");
     expect(cspNonceManager.getNonce()).toBe("page-nonce-xyz");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Frontend CSP policy enforcement
+// ---------------------------------------------------------------------------
+
+/**
+ * The CSP policy that must be present in every frontend HTML page via a
+ * `<meta http-equiv="Content-Security-Policy" content="...">` tag.
+ *
+ * Keep this in sync with the meta tags in the frontend HTML files.
+ */
+const FRONTEND_CSP_POLICY =
+  "default-src 'self'; " +
+  "script-src 'self'; " +
+  "style-src 'self'; " +
+  "img-src 'self' data:; " +
+  "connect-src 'self'; " +
+  "font-src 'self'; " +
+  "object-src 'none'; " +
+  "base-uri 'self'; " +
+  "frame-ancestors 'none'; " +
+  "form-action 'self'";
+
+/** Frontend HTML pages that must carry the CSP meta tag. */
+const FRONTEND_HTML_PAGES = [
+  "index.html",
+  "dashboard.html",
+  "receipt.html",
+];
+
+/** Resolve the frontend directory relative to the repository root. */
+function frontendDir(): string {
+  // sdk/src -> sdk -> repo root -> frontend
+  return path.resolve(__dirname, "..", "..", "frontend");
+}
+
+/** Extract the CSP meta tag content from an HTML document, if present. */
+function extractCspMetaContent(html: string): string | null {
+  const metaTagRegex = /<meta\b[^>]*>/gi;
+  const tags = html.match(metaTagRegex) ?? [];
+  for (const tag of tags) {
+    const isCsp = /http-equiv\s*=\s*["']Content-Security-Policy["']/i.test(tag);
+    if (!isCsp) continue;
+    const contentMatch = tag.match(/content\s*=\s*["']([^"']*)["']/i);
+    if (contentMatch) return contentMatch[1];
+  }
+  return null;
+}
+
+describe("Frontend CSP policy", () => {
+  it("restricts script-src to 'self' with no 'unsafe-inline'", () => {
+    const scriptSrcMatch = FRONTEND_CSP_POLICY.match(/script-src([^;]*)/i);
+    expect(scriptSrcMatch).not.toBeNull();
+    const scriptSrc = scriptSrcMatch![1].trim();
+    expect(scriptSrc).toBe("'self'");
+    expect(FRONTEND_CSP_POLICY).not.toMatch(/script-src[^;]*'unsafe-inline'/i);
+    expect(FRONTEND_CSP_POLICY).not.toMatch(/script-src[^;]*'unsafe-eval'/i);
+  });
+
+  it("includes object-src 'none'", () => {
+    expect(FRONTEND_CSP_POLICY).toMatch(/object-src\s+'none'/i);
+  });
+
+  it("includes frame-ancestors 'none'", () => {
+    expect(FRONTEND_CSP_POLICY).toMatch(/frame-ancestors\s+'none'/i);
+  });
+
+  it("does not allow 'unsafe-inline' anywhere in the policy", () => {
+    expect(FRONTEND_CSP_POLICY).not.toMatch(/'unsafe-inline'/i);
+  });
+
+  describe.each(FRONTEND_HTML_PAGES)("%s", (page) => {
+    const filePath = path.join(frontendDir(), page);
+    let html: string;
+
+    beforeAll(() => {
+      html = fs.readFileSync(filePath, "utf8");
+    });
+
+    it("exists", () => {
+      expect(fs.existsSync(filePath)).toBe(true);
+    });
+
+    it("contains a Content-Security-Policy meta tag", () => {
+      expect(extractCspMetaContent(html)).not.toBeNull();
+    });
+
+    it("meta tag content matches the frontend CSP policy", () => {
+      const content = extractCspMetaContent(html);
+      expect(content).not.toBeNull();
+      // Normalise whitespace so formatting differences don't cause failures.
+      const normalise = (s: string) => s.replace(/\s+/g, " ").trim();
+      expect(normalise(content!)).toBe(normalise(FRONTEND_CSP_POLICY));
+    });
+
+    it("meta tag restricts script-src to 'self'", () => {
+      const content = extractCspMetaContent(html) ?? "";
+      const scriptSrcMatch = content.match(/script-src([^;]*)/i);
+      expect(scriptSrcMatch).not.toBeNull();
+      expect(scriptSrcMatch![1].trim()).toBe("'self'");
+      expect(content).not.toMatch(/script-src[^;]*'unsafe-inline'/i);
+    });
   });
 });

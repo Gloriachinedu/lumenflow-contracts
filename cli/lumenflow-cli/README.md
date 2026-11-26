@@ -237,6 +237,37 @@ cargo build -p lumenflow-cli --release
 
 The binary is output to `target/release/lumenflow`.
 
+### Windows (pre-built binaries)
+
+If you don't have a C linker toolchain (MSVC Build Tools) installed, you can
+download a pre-built `x86_64-pc-windows-msvc` binary from the
+[GitHub Releases](https://github.com/lumenflow/lumenflow/releases) page instead
+of building from source. Each release ships `lumenflow-x86_64-pc-windows-msvc.zip`
+alongside a SHA256 checksum listed in
+[`docs/release-hashes.md`](../../docs/release-hashes.md).
+
+Download and extract with PowerShell:
+
+```powershell
+$version = "v0.1.0"  # replace with the desired release tag
+$asset   = "lumenflow-x86_64-pc-windows-msvc.zip"
+$url     = "https://github.com/lumenflow/lumenflow/releases/download/$version/$asset"
+
+Invoke-WebRequest -Uri $url -OutFile $asset
+Expand-Archive -Path $asset -DestinationPath "$env:LOCALAPPDATA\lumenflow" -Force
+```
+
+Verify the checksum before running the binary (compare against the value in
+`docs/release-hashes.md`):
+
+```powershell
+$expected = "<sha256-from-docs-release-hashes.md>"
+$actual   = (Get-FileHash -Algorithm SHA256 -Path $asset).Hash.ToLower()
+if ($actual -ne $expected) { throw "Checksum mismatch: $actual" }
+```
+
+Then add `%LOCALAPPDATA%\lumenflow` to your `PATH` and run `lumenflow --help`.
+
 ## Secrets and local config
 
 Keep secret keys and environment-specific config out of version control. Recommended practices:

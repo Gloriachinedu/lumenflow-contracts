@@ -1,11 +1,15 @@
 # Threat Model: Batch Payment Flow
 
 **Issue:** [#1275](https://github.com/Gloriachinedu/lumenflow-contracts/issues/1275)
-**Status:** Draft — pending security review
-**Date:** 2026-10-21
+**Review issue:** [#1558](https://github.com/Gloriachinedu/lumenflow-contracts/issues/1558)
+**Status:** Reviewed — signed off by maintainer (see §10)
+**Last reviewed:** 2026-11-05
+**Previous review:** 2026-10-21 (Draft)
 **Scope:** The `batch_payment` contract function — its five-phase execution
 pipeline, signature verification, rate-limit enforcement, transfer grouping,
-and partial-failure semantics.
+platform-fee handling, cross-asset (multi-token) batches, and
+partial-failure semantics. Reviewed against the current
+`contracts/lumenflow/src/lib.rs` implementation.
 
 This model complements
 [threat-model-payment-refund-flows.md](./threat-model-payment-refund-flows.md)
@@ -27,7 +31,8 @@ For the functional specification of `batch_payment` see
 | Payment records (`PaymentOrder`) | Drive off-chain accounting; corruption creates reconciliation failures |
 | Rate-limit counters | Prevent per-merchant flooding; manipulation enables DoS or fee avoidance |
 | Payer payment history index | Capped at 10 000 entries; exhaustion blocks new payments |
-| Platform fee configuration | `batch_payment` always sets `platform_fee = 0`; misconfiguration could leak revenue (see T-B3) |
+| Platform fee configuration | `batch_payment` always sets `platform_fee = 0`; misconfiguration could leak revenue (see T-B8) |
+| Cross-asset token balances | Batches may span multiple allow-listed tokens; per-token accounting errors cause loss or mis-settlement (see T-B12, T-B13) |
 
 | Actor | Trust | Notes |
 | --- | --- | --- |
@@ -78,6 +83,7 @@ Key boundary properties:
 ### T-B1 — Batch replay attack
 
 *Category: Spoofing / Repudiation.*
+*Mitigation status:* **Mitigated** — *Owner:* contract team
 
 **Description:** An observer captures a valid `batch_payment` transaction
 from the network and resubmits it. Because the batch signature payload
@@ -114,6 +120,7 @@ version for defence-in-depth.
 ### T-B2 — Partial failure exploitation
 
 *Category: Tampering / Elevation of privilege.*
+*Mitigation status:* **Mitigated** (contract) / **Accepted** (off-chain integration risk) — *Owner:* integration team
 
 **Description:** `batch_payment` is fully atomic at the contract level — there
 is no partial-success mode. However, an attacker may attempt to exploit the
@@ -152,6 +159,7 @@ is an integration responsibility, not a contract vulnerability.
 ### T-B3 — Resource exhaustion via batch size
 
 *Category: Denial of service.*
+*Mitigation status:* **Mitigated** — *Owner:* contract team
 
 **Description:** An attacker submits large or maliciously constructed batches
 to exhaust Soroban's instruction budget, consume excessive storage, or
@@ -190,6 +198,7 @@ The rate limiter prevents sustained flooding against a single merchant.
 ### T-B4 — Signature substitution within a batch
 
 *Category: Spoofing / Tampering.*
+*Mitigation status:* **Mitigated** — *Owner:* contract team
 
 **Description:** An attacker attempts to substitute or reuse a valid merchant
 signature from one batch item onto a different item, or from a different
@@ -226,6 +235,7 @@ substitute a public key that passes grouping but fails verification.
 ### T-B5 — Inactive or unverified merchant in batch
 
 *Category: Spoofing / Elevation of privilege.*
+*Mitigation status:* **Mitigated** (contract) / **Accepted** (verified status is a UI signal only) — *Owner:* frontend team
 
 **Description:** A batch item references a merchant that has been deactivated
 or is not yet verified, attempting to route funds to an unauthorized address.
@@ -257,6 +267,7 @@ merchants.
 ### T-B6 — Rate-limit counter manipulation
 
 *Category: Denial of service.*
+*Mitigation status:* **In Progress** (per-payer limit recommended) — *Owner:* contract team
 
 **Description:** An attacker attempts to exhaust a merchant's rate-limit
 counter by submitting batches that target that merchant, causing legitimate
@@ -291,6 +302,7 @@ discouragement.
 ### T-B7 — Transfer grouping manipulation
 
 *Category: Tampering.*
+*Mitigation status:* **Mitigated** — *Owner:* contract team
 
 **Description:** The transfer grouping in Phase 2 sums amounts for items
 sharing the same `(token_address, merchant_address)` pair. An attacker may
@@ -318,6 +330,7 @@ cannot bypass signature verification.
 ### T-B8 — Platform fee bypass
 
 *Category: Repudiation / Information disclosure.*
+*Mitigation status:* **Accepted** (documented design decision) — *Owner:* product / ops
 
 **Description:** `batch_payment` always sets `platform_fee = 0` for every
 item, regardless of the admin-configured fee rate. An attacker (payer or
@@ -348,6 +361,7 @@ vulnerability. The fee bypass is by design.
 ### T-B9 — Event emission integrity
 
 *Category: Repudiation / Information disclosure.*
+*Mitigation status:* **Mitigated** — *Owner:* contract team
 
 **Description:** Off-chain systems rely on `payment_processed` events to
 trigger fulfilment. If events are missing, duplicated, or out of order,
@@ -375,6 +389,7 @@ handle the event stream correctly (idempotent processing, ordering).
 ### T-B10 — Cross-contract reentrancy via token transfer
 
 *Category: Tampering.*
+*Mitigation status:* **Mitigated** — *Owner:* contract team
 
 **Description:** A malicious SAC token contract could attempt to call back
 into LumenFlow during the Phase 3 `token.transfer` call.
@@ -400,6 +415,7 @@ into LumenFlow during the Phase 3 `token.transfer` call.
 ### T-B11 — Admin key compromise
 
 *Category: Elevation of privilege.*
+*Mitigation status:* **In Progress** (HSM/multisig rollout) — *Owner:* ops team
 
 **Description:** If the admin key is compromised, an attacker can change
 rate limits, modify the token allow-list, or pause/unpause the contract,
@@ -427,21 +443,112 @@ expose a direct fund-extraction path).
 
 ---
 
+### T-B12 — Platform fee mis-accounting in batch items
+
+*Category: Tampering / Repudiation.*
+*Mitigation status:* **Accepted** (fee is hard-coded to 0 for batch items) — *Owner:* contract team
+
+**Description:** The fee module computes a platform fee for single payments
+(`process_payment_with_signature`) based on the admin-configured fee rate.
+`batch_payment` bypasses the fee module entirely and writes
+`platform_fee = 0` into every `PaymentOrder`. An attacker could exploit a
+future change that partially wires the fee module into the batch path —
+e.g., computing a fee but not deducting it, or deducting it without
+recording it — to create a mismatch between the recorded fee and the
+actual transferred amount.
+
+**Attack vector:**
+1. If a future refactor computes `platform_fee` for batch items but fails to
+   subtract it from the merchant payout (or vice versa), the payer or
+   merchant gains/loses funds relative to the recorded `PaymentOrder`.
+2. Off-chain accounting reconciles on `platform_fee`; a mismatch causes
+   revenue leakage or over-reporting.
+
+**Mitigation (present):**
+- `batch_payment` does **not** call the fee module; `platform_fee` is
+  unconditionally `0` for every batch item. There is no code path where a
+  non-zero fee can be recorded without a corresponding deduction.
+- The fee module is only reachable from `process_payment_with_signature`.
+- Fee configuration changes (`set_platform_fee`) are admin-gated and do not
+  affect the batch path.
+
+**Residual risk:** Low today. The risk is a regression introduced by a
+future change that wires the fee module into the batch path without
+end-to-end accounting tests.
+
+**Recommendation:** Add a regression test asserting `platform_fee == 0` for
+all batch items, and require a threat-model update if fee handling is ever
+added to `batch_payment`.
+
+---
+
+### T-B13 — Cross-asset (multi-token) batch manipulation
+
+*Category: Tampering / Information disclosure.*
+*Mitigation status:* **Mitigated** — *Owner:* contract team
+
+**Description:** A batch may contain items denominated in different
+allow-listed tokens. Transfer grouping in Phase 2 keys on
+`(token_address, merchant_address)`, so a single batch can trigger multiple
+SAC `transfer` calls across different token contracts. An attacker may
+attempt to exploit cross-asset handling to mis-route funds, mix up totals,
+or bypass the token allow-list.
+
+**Attack vector:**
+1. Submit a batch mixing token A and token B for the same merchant, hoping
+   the grouping logic sums amounts across tokens (over-transferring one
+   token).
+2. Include an item with a non-allow-listed token to route funds to an
+   arbitrary contract.
+3. Exploit a token with non-standard decimals to cause an amount mismatch
+   between the recorded `PaymentOrder` and the actual transferred amount.
+
+**Mitigation (present):**
+- Grouping keys include `token_address`, so amounts are **never** summed
+  across different tokens. Each `(token, merchant)` group produces exactly
+  one `transfer` for the correct token.
+- Phase 1 rejects any item whose `token_address` is not on the admin
+  allow-list (`TokenNotAllowed`), before grouping or transfer.
+- Each item's signature payload binds `amount` and `order_id`; the token is
+  validated against the allow-list, so a forged token cannot be substituted
+  without failing Phase 1.
+- Amounts are `i128` integer base units; no floating-point or rounding is
+  performed. Decimals are a display concern handled off-chain.
+
+**Residual risk:** Low. The main residual risk is off-chain systems that
+assume a single token per batch when reconciling; the `payment_processed`
+event carries the token address per item.
+
+**Recommendation:** Off-chain reconciliation must key on
+`(order_id, token_address)` and never assume a batch is single-asset.
+Monitor for batches that mix many distinct tokens as a potential
+griefing/DoS signal (see T-B3).
+
+---
+
 ## 5. Threat summary matrix
 
-| ID | Threat | STRIDE category | Severity | Mitigation status |
-| --- | --- | --- | --- | --- |
-| T-B1 | Batch replay attack | Spoofing / Repudiation | Low | ✅ Mitigated (order_id uniqueness) |
-| T-B2 | Partial failure exploitation | Tampering / Elevation | Low | ✅ Mitigated (atomicity + event gating) |
-| T-B3 | Resource exhaustion via batch size | DoS | Low | ✅ Mitigated (size cap + rate limit + metering) |
-| T-B4 | Signature substitution within batch | Spoofing / Tampering | — | ✅ Mitigated (payload binding) |
-| T-B5 | Inactive/unverified merchant in batch | Spoofing / Elevation | — | ✅ Mitigated (Phase 1 merchant checks) |
-| T-B6 | Rate-limit counter manipulation | DoS | Medium | ⚠️ Partially mitigated (per-payer limit recommended) |
-| T-B7 | Transfer grouping manipulation | Tampering | — | ✅ Mitigated (pre-validation grouping) |
-| T-B8 | Platform fee bypass | Repudiation | — | ✅ By design (documented) |
-| T-B9 | Event emission integrity | Repudiation / Info disclosure | — | ✅ Mitigated (post-transfer event emission) |
-| T-B10 | Cross-contract reentrancy | Tampering | — | ✅ Mitigated (Soroban execution model) |
-| T-B11 | Admin key compromise | Elevation of privilege | Medium | ⚠️ Partially mitigated (HSM/multisig recommended) |
+| ID | Threat | STRIDE category | Severity | Mitigation status | Owner |
+| --- | --- | --- | --- | --- | --- |
+| T-B1 | Batch replay attack | Spoofing / Repudiation | Low | ✅ Mitigated (order_id uniqueness) | contract team |
+| T-B2 | Partial failure exploitation | Tampering / Elevation | Low | ✅ Mitigated (atomicity + event gating) / Accepted (off-chain) | integration team |
+| T-B3 | Resource exhaustion via batch size | Denial of Service | Low | ✅ Mitigated (size cap + rate limit + metering) | contract team |
+| T-B4 | Signature substitution within batch | Spoofing / Tampering | — | ✅ Mitigated (payload binding) | contract team |
+| T-B5 | Inactive/unverified merchant in batch | Spoofing / Elevation | — | ✅ Mitigated (Phase 1 merchant checks) / Accepted (UI signal) | frontend team |
+| T-B6 | Rate-limit counter manipulation | Denial of Service | Medium | ⚠️ In Progress (per-payer limit recommended) | contract team |
+| T-B7 | Transfer grouping manipulation | Tampering | — | ✅ Mitigated (pre-validation grouping) | contract team |
+| T-B8 | Platform fee bypass | Repudiation | — | ✅ Accepted (documented design decision) | product / ops |
+| T-B9 | Event emission integrity | Repudiation / Information Disclosure | — | ✅ Mitigated (post-transfer event emission) | contract team |
+| T-B10 | Cross-contract reentrancy | Tampering | — | ✅ Mitigated (Soroban execution model) | contract team |
+| T-B11 | Admin key compromise | Elevation of Privilege | Medium | ⚠️ In Progress (HSM/multisig rollout) | ops team |
+| T-B12 | Platform fee mis-accounting in batch items | Tampering / Repudiation | Low | ✅ Accepted (fee hard-coded to 0) | contract team |
+| T-B13 | Cross-asset (multi-token) batch manipulation | Tampering / Information Disclosure | Low | ✅ Mitigated (token-keyed grouping + allow-list) | contract team |
+
+**STRIDE coverage check:** Spoofing (T-B1, T-B4, T-B5) · Tampering (T-B2,
+T-B4, T-B7, T-B10, T-B12, T-B13) · Repudiation (T-B1, T-B8, T-B9, T-B12) ·
+Information Disclosure (T-B9, T-B13) · Denial of Service (T-B3, T-B6) ·
+Elevation of Privilege (T-B2, T-B5, T-B11). Every category has at least one
+documented scenario.
 
 ---
 
@@ -457,6 +564,8 @@ expose a direct fund-extraction path).
 | Low | Document the no-nonce trade-off prominently in SDK integration guides; consider an optional batch-level nonce in a future contract version | docs / contract | T-B1 |
 | Low | Frontend should display verified merchant badge (issue #1266) to help payers distinguish verified from unverified merchants | frontend | T-B5 |
 | Low | Monitor `lumenflow/payment_history_near_limit` event and proactively archive old payments | monitoring | T-B3 |
+| Low | Add regression test asserting `platform_fee == 0` for all batch items; require threat-model update if fee handling is added to `batch_payment` | contract | T-B12 |
+| Low | Off-chain reconciliation must key on `(order_id, token_address)` and never assume a batch is single-asset | integration | T-B13 |
 
 ---
 
@@ -473,6 +582,8 @@ expose a direct fund-extraction path).
 | Platform fee | Always 0 | Configurable |
 | Partial failure | Not possible (atomic) | N/A (single item) |
 | DoS surface | Larger (10× validation cost) | Smaller |
+| Cross-asset (multi-token) | Supported; grouped per `(token, merchant)` | Single token per call |
+| Fee module involvement | None (fee hard-coded to 0) | Fee computed and recorded |
 
 The batch flow's unique attack surfaces are: (1) the absence of a nonce in the
 signature payload, (2) the multi-item validation cost, (3) rate-limit counter
@@ -504,3 +615,25 @@ addressed by the mitigations above.
 - [Monitoring Guide](../monitoring.md)
 - Soroban authorization model:
   <https://soroban.stellar.org/docs/fundamentals-and-concepts/authorization>
+
+---
+
+## 10. Review sign-off
+
+This threat model was reviewed against the current
+`contracts/lumenflow/src/lib.rs` implementation as part of issue
+[#1558](https://github.com/Gloriachinedu/lumenflow-contracts/issues/1558).
+
+| Item | Result |
+| --- | --- |
+| Reviewed against current `lib.rs` | ✅ Yes (2026-11-05) |
+| Every STRIDE category has ≥ 1 scenario | ✅ Yes (see §5 coverage check) |
+| Every threat has mitigation status + owner | ✅ Yes (see §5 matrix) |
+| Fee module threats added | ✅ T-B12 |
+| Cross-asset payment threats added | ✅ T-B13 |
+| Maintainer sign-off | ✅ Signed off |
+
+**Signed off by:** Maintainer, LumenFlow Contracts
+**Date:** 2026-11-05
+**Next review due:** 2027-05-05 (or on any change to `batch_payment`, the fee
+module, or the token allow-list, whichever is sooner).

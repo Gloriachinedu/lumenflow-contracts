@@ -131,40 +131,48 @@ The merchant address is emitted as **`topic[2]`** (filterable) so subscribers ca
 
 ---
 
-### `cross_asset_payment`
-Emitted when a payment is settled through a cross-asset path payment, i.e. the payer sends one Stellar asset and the merchant receives their preferred token after conversion on the Stellar DEX.
-
-The merchant address is emitted as **`topic[2]`** (filterable), matching `payment_processed`, so subscribers can receive only their own cross-asset payment events.
+### `payment_processed_diagnostic`
+Emitted alongside `payment_processed` on the performance-critical payment path to provide off-chain monitoring telemetry. Unlike `payment_processed`, this event is intended for observability tooling (e.g., `lumenflow_exporter.py`) rather than end-user indexers.
 
 | Field | Description |
 |---|---|
-| **Trigger** | Successful call to `process_payment_cross_asset`. |
-| **Topics** | `["lumenflow", "cross_asset_payment", merchant_address: Address]` |
-| **Data** | `(order_id: String, payer: Address, send_asset: Address, send_amount: i128, dest_asset: Address, dest_amount: i128, exchange_rate: i128)` |
-
-**Topic Details:**
-- `topic[0]`: `"lumenflow"` — contract namespace.
-- `topic[1]`: `"cross_asset_payment"` — event name.
-- `topic[2]`: `merchant_address` — the merchant who received the converted payment. **Filterable.**
+| **Trigger** | Successful call to `process_payment_with_signature` (emitted immediately after `payment_processed`). |
+| **Topics** | `["lumenflow", "payment_processed_diagnostic"]` |
+| **Data** | `(order_id: String, ledger_sequence_delta: u32)` |
 
 **Data Details:**
-- `order_id`: The unique identifier for the order.
-- `payer`: The `Address` of the account that made the payment.
-- `send_asset`: The `Address` of the asset contract the payer sent (e.g. USDC).
-- `send_amount`: The amount actually debited from the payer, in the send asset's smallest unit. Always `<= send_max`.
-- `dest_asset`: The `Address` of the asset contract the merchant received (their preferred token).
-- `dest_amount`: The amount actually credited to the merchant, in the destination asset's smallest unit. Always `>= min_receive`.
-- `exchange_rate`: The effective conversion rate used, scaled by `1e7` (i.e. `dest_amount * 1e7 / send_amount`), so indexers can display the rate without re-deriving it from the amounts.
+- `order_id`: The unique identifier for the order, matching the corresponding `payment_processed` event.
+- `ledger_sequence_delta`: The number of ledgers elapsed between the start of the operation and event emission (duration-equivalent). Used to derive per-operation latency metrics.
 
-**Notes for indexers:**
-- The event is only emitted after slippage protection passes; a payment that would deliver less than `min_receive` reverts and emits nothing.
-- `send_amount` may be lower than the caller's `send_max` because the DEX path payment only consumes what is needed to satisfy `min_receive` and the merchant's requested amount.
-- When `send_asset == dest_asset` the contract still emits this event (with `exchange_rate == 1e7`), so consumers should not assume a conversion took place.
+---
 
-**Example Decoded Payload:**
-```json
-["ORDER_123", "G...PAYER", "C...USDC", 10500000, "C...MERCHANT_TOKEN", 10000000, 9523809]
-```
+### `refund_issued_diagnostic`
+Emitted alongside `refund_executed` when an approved refund transfer completes, providing off-chain monitoring telemetry.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful call to `execute_refund` (emitted immediately after `refund_executed`). |
+| **Topics** | `["lumenflow", "refund_issued_diagnostic"]` |
+| **Data** | `(refund_id: String, ledger_sequence_delta: u32)` |
+
+**Data Details:**
+- `refund_id`: The unique refund identifier, matching the corresponding `refund_executed` event.
+- `ledger_sequence_delta`: The number of ledgers elapsed between the start of the operation and event emission (duration-equivalent). Used to derive per-operation latency metrics.
+
+---
+
+### `batch_payment_completed_diagnostic`
+Emitted once per `batch_payment` call after all payments in the batch have been processed, providing off-chain monitoring telemetry.
+
+| Field | Description |
+|---|---|
+| **Trigger** | Successful call to `batch_payment` (emitted after all per-payment `payment_processed` events). |
+| **Topics** | `["lumenflow", "batch_payment_completed_diagnostic"]` |
+| **Data** | `(batch_size: u32, ledger_sequence_delta: u32)` |
+
+**Data Details:**
+- `batch_size`: The number of payments processed in the batch.
+- `ledger_sequence_delta`: The number of ledgers elapsed between the start of the batch operation and event emission (duration-equivalent). Used to derive per-batch latency metrics and average payments per ledger.
 
 ---
 

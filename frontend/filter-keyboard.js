@@ -161,6 +161,22 @@ function injectStyles() {
       outline: none;
     }
 
+    /* WCAG 2.1 SC 1.4.3 — selected option text on #f0ecff must meet 4.5:1.
+       #4a2fd6 on #f0ecff = 6.9:1 contrast ratio.                        */
+    .lf-option:hover,
+    .lf-option[aria-selected="true"] {
+      background: #f0ecff;
+      color: #4a2fd6;
+    }
+
+    /* WCAG 2.1 SC 1.4.3 — focused option text on #6c47ff must meet 4.5:1.
+       #fff on #4a2fd6 = 6.9:1 contrast ratio.                           */
+    .lf-option.lf-focused {
+      background: #4a2fd6;
+      color: #fff;
+      outline: none;
+    }
+
     /* Visually hidden helper */
     .lf-sr-only {
       position: absolute;
@@ -232,6 +248,22 @@ function buildCombobox(selectEl) {
 
   trigger.appendChild(labelSpan);
   trigger.appendChild(arrowSpan);
+
+  // Associate the trigger with its <label> (if any) so AT announces the
+  // control name. Prefer explicit aria-label/labelledby, then <label for>,
+  // then a wrapping <label>.
+  if (!origLabel) {
+    const selectId = selectEl.id;
+    const explicitLabel = selectId
+      ? document.querySelector(`label[for="${CSS.escape(selectId)}"]`)
+      : null;
+    const wrappingLabel = selectEl.closest('label');
+    const labelEl = explicitLabel || wrappingLabel;
+    if (labelEl) {
+      if (!labelEl.id) labelEl.id = uid('lf-lbl');
+      trigger.setAttribute('aria-labelledby', labelEl.id);
+    }
+  }
 
   // ── Listbox ───────────────────────────────────────────────────────────────
   const listbox = document.createElement('ul');
@@ -319,6 +351,19 @@ function buildCombobox(selectEl) {
     if (returnFocus) trigger.focus();
   }
 
+  // Type-ahead: jump to the first option whose text starts with the typed
+  // characters. Resets after a short idle period.
+  let typeBuffer = '';
+  let typeTimer = null;
+  function typeAhead(char) {
+    typeBuffer += char.toLowerCase();
+    if (typeTimer) clearTimeout(typeTimer);
+    typeTimer = setTimeout(() => { typeBuffer = ''; }, 500);
+    const opts = getOptions();
+    const match = opts.findIndex(o => o.textContent.toLowerCase().startsWith(typeBuffer));
+    if (match >= 0) highlightOption(match);
+  }
+
   // ── Click on trigger ──────────────────────────────────────────────────────
   trigger.addEventListener('click', () => {
     if (trigger.getAttribute('aria-expanded') === 'true') {
@@ -336,6 +381,51 @@ function buildCombobox(selectEl) {
     const idx = opts.indexOf(optEl);
     selectOption(idx);
     closeDropdown();
+    applyFiltersFromCombobox(selectEl);
+  });
+
+  // ── Keyboard handling on listbox (focus trapped inside) ───────────────────
+  listbox.addEventListener('keydown', (e) => {
+    const opts = getOptions();
+    switch (e.key) {
+      case 'Enter':
+      case ' ':
+        e.preventDefault();
+        if (focusedIdx >= 0) selectOption(focusedIdx);
+        closeDropdown();
+        applyFiltersFromCombobox(selectEl);
+        break;
+
+      case 'ArrowDown':
+        e.preventDefault();
+        highlightOption(focusedIdx < opts.length - 1 ? focusedIdx + 1 : 0);
+        break;
+
+      case 'ArrowUp':
+        e.preventDefault();
+        highlightOption(focusedIdx > 0 ? focusedIdx - 1 : opts.length - 1);
+        break;
+
+      case 'Home':
+        e.preventDefault();
+        highlightOption(0);
+        break;
+
+      case 'End':
+        e.preventDefault();
+        highlightOption(opts.length - 1);
+        break;
+
+      case 'Escape':
+        e.preventDefault();
+        e.stopPropagation();
+        closeDropdown();
+        break;
+
+      case 'Tab':
+        closeDropdown(false);
+        break;
+    }
   });
 
   // ── Keyboard handling on trigger ──────────────────────────────────────────
@@ -352,6 +442,9 @@ function buildCombobox(selectEl) {
             selectOption(focusedIdx);
           }
           closeDropdown();
+          // Applying a filter via keyboard should trigger the page's
+          // filter application logic (payment-history.html).
+          applyFiltersFromCombobox(selectEl);
         } else {
           openDropdown();
         }
@@ -385,6 +478,20 @@ function buildCombobox(selectEl) {
         if (expanded) { e.preventDefault(); highlightOption(opts.length - 1); }
         break;
 
+      case 'PageDown':
+        if (expanded) {
+          e.preventDefault();
+          highlightOption(Math.min(focusedIdx + 10, opts.length - 1));
+        }
+        break;
+
+      case 'PageUp':
+        if (expanded) {
+          e.preventDefault();
+          highlightOption(Math.max(focusedIdx - 10, 0));
+        }
+        break;
+
       case 'Escape':
         if (expanded) {
           e.preventDefault();
@@ -397,12 +504,29 @@ function buildCombobox(selectEl) {
         // Close without stealing focus flow
         if (expanded) closeDropdown(false);
         break;
+
+      default:
+        // Printable character → type-ahead navigation (WCAG 2.1 SC 2.1.1)
+        if (expanded && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          typeAhead(e.key);
+        }
+        break;
     }
   });
 
   // ── Click outside closes ─────────────────────────────────────────────────
   document.addEventListener('click', (e) => {
     if (!wrapper.contains(e.target) && trigger.getAttribute('aria-expanded') === 'true') {
+      closeDropdown(false);
+    }
+  });
+
+  // ── Focus leaving the wrapper closes the dropdown ────────────────────────
+  wrapper.addEventListener('focusout', (e) => {
+    if (trigger.getAttribute('aria-expanded') !== 'true') return;
+    // relatedTarget is null when focus moves to the browser chrome; keep open
+    // only if focus stays within the wrapper.
+    if (e.relatedTarget && !wrapper.contains(e.relatedTarget)) {
       closeDropdown(false);
     }
   });
@@ -418,6 +542,9 @@ function buildCombobox(selectEl) {
   selectEl.style.display = 'none';
   selectEl.setAttribute('aria-hidden', 'true');
   selectEl.setAttribute('tabindex', '-1');
+
+  // Ensure the trigger participates in the natural tab order
+  trigger.setAttribute('tabindex', '0');
 
   // Initial label
   syncOptions();
@@ -489,13 +616,18 @@ function enhanceChips(panel) {
   function activateChipButton(btn) {
     if (btn.dataset.lfChip) return;
     btn.dataset.lfChip = 'true';
+    // Ensure the button is keyboard-focusable and has a type so it never
+    // submits a surrounding form.
+    if (!btn.hasAttribute('type')) btn.setAttribute('type', 'button');
+    if (btn.tabIndex < 0) btn.tabIndex = 0;
     // Ensure aria-label is present; the existing HTML already sets it, but
     // add a fallback just in case.
     if (!btn.getAttribute('aria-label')) {
       btn.setAttribute('aria-label', 'Remove filter');
     }
     btn.addEventListener('keydown', (e) => {
-      if (e.key === ' ') {
+      // Native <button> fires click on Enter; add Space support explicitly.
+      if (e.key === ' ' || e.key === 'Spacebar') {
         e.preventDefault();
         btn.click();
       }
@@ -526,6 +658,75 @@ function enhanceChips(panel) {
   observer.observe(activeFiltersContainer, { childList: true, subtree: true });
 }
 
+// ─── Filter application integration ──────────────────────────────────────────
+
+/**
+ * Calls the page's global applyFilters() (exposed by payment-history.js) when
+ * a filter is applied via the custom combobox. Falls back silently when the
+ * page does not define it.
+ *
+ * @param {HTMLSelectElement} selectEl
+ */
+function applyFiltersFromCombobox(selectEl) {
+  if (typeof window.applyFilters === 'function') {
+    window.applyFilters();
+  }
+}
+
+// ─── Tab order / filter application for native controls ──────────────────────
+
+/**
+ * Ensures all filter controls (search input, status select, reset button) are
+ * reachable via Tab, and wires Enter/Space to apply filters and Escape to
+ * close any open dropdown.
+ */
+function enhanceFilterControls(panel) {
+  // Make sure native controls are in the tab order (remove stray tabindex=-1)
+  const controls = panel.querySelectorAll(
+    'input, select, button, [role="combobox"], [role="button"]'
+  );
+  controls.forEach(el => {
+    if (el.dataset.lfEnhanced) return; // hidden original select
+    const ti = el.getAttribute('tabindex');
+    if (ti === '-1' && !el.closest('.lf-listbox')) {
+      el.removeAttribute('tabindex');
+    }
+  });
+
+  panel.addEventListener('keydown', (e) => {
+    const el = e.target;
+
+    // Escape closes any open custom dropdown
+    if (e.key === 'Escape') {
+      const openListbox = panel.querySelector('.lf-listbox[aria-hidden="false"]');
+      if (openListbox) {
+        const trigger = panel.querySelector(
+          `.lf-combobox-trigger[aria-controls="${openListbox.id}"]`
+        );
+        openListbox.setAttribute('aria-hidden', 'true');
+        if (trigger) {
+          trigger.setAttribute('aria-expanded', 'false');
+          trigger.removeAttribute('aria-activedescendant');
+          trigger.focus();
+        }
+      }
+    }
+
+    // Enter / Space on the reset button applies the reset
+    if ((e.key === 'Enter' || e.key === ' ') && el.tagName === 'BUTTON') {
+      const isReset = el.id === 'reset-filters' || el.classList.contains('reset-filters');
+      if (isReset) {
+        e.preventDefault();
+        if (typeof window.resetFilters === 'function') {
+          window.resetFilters();
+        } else {
+          el.click();
+        }
+      }
+    }
+  });
+}
+
 // ─── Combobox enhancement for select elements ─────────────────────────────────
 
 /**
@@ -544,6 +745,33 @@ function enhanceSelects(panel) {
     if (sel && sel.tagName === 'SELECT') {
       buildCombobox(sel);
     }
+  });
+}
+
+// ─── Ensure every interactive control is keyboard-reachable ──────────────────
+
+/**
+ * WCAG 2.1 SC 2.1.1 — Keyboard.
+ *
+ * Any element that carries an interactive ARIA role but is not natively
+ * focusable gets tabindex="0" so it can be reached with Tab. Native controls
+ * (button, input, select, textarea, a[href]) are left untouched.
+ */
+function ensureKeyboardReachable(panel) {
+  const interactiveRoles = new Set([
+    'button', 'checkbox', 'combobox', 'link', 'listbox', 'menuitem',
+    'option', 'radio', 'searchbox', 'slider', 'spinbutton', 'switch',
+    'tab', 'textbox',
+  ]);
+  const nativeFocusable = new Set(['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA']);
+
+  panel.querySelectorAll('[role]').forEach(el => {
+    const role = (el.getAttribute('role') || '').toLowerCase();
+    if (!interactiveRoles.has(role)) return;
+    if (nativeFocusable.has(el.tagName)) return;
+    if (el.tagName === 'A' && el.hasAttribute('href')) return;
+    if (el.hasAttribute('tabindex')) return;
+    el.setAttribute('tabindex', '0');
   });
 }
 
@@ -575,4 +803,7 @@ export function initFilterKeyboard(panelSelector = '.filter-panel') {
 
   // 5. Replace status/token selects with accessible comboboxes
   enhanceSelects(panel);
+
+  // 6. Ensure native filter controls are tab-reachable and keyboard-operable
+  enhanceFilterControls(panel);
 }

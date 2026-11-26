@@ -22,6 +22,8 @@ error()   { echo "[ERROR] $*" >&2; }
 FAILURES=0
 
 # ── Source .env if present ─────────────────────────────────────────────────────
+# The .env file is not committed; it holds local overrides for the runtime
+# configuration injected into containers (see .env.example).
 if [[ -f ".env" ]]; then
   info "Sourcing .env..."
   # shellcheck disable=SC1091
@@ -86,6 +88,40 @@ validate_stellar_address() {
   fi
 }
 
+validate_contract_id() {
+  local name="$1"
+  local value="${!name:-}"
+
+  if [[ -z "$value" ]]; then
+    return  # caught by check_secret
+  fi
+
+  # Soroban contract IDs: 'C' followed by 55 uppercase base32 chars
+  if [[ ! "$value" =~ ^C[A-Z2-7]{55}$ ]]; then
+    error "Variable '$name' does not look like a valid Soroban contract ID."
+    error "  Expected: C + 55 uppercase base32 chars (A-Z2-7), total 56 chars."
+    FAILURES=$((FAILURES + 1))
+  else
+    success "$name has valid contract ID format"
+  fi
+}
+
+validate_url() {
+  local name="$1"
+  local value="${!name:-}"
+
+  if [[ -z "$value" ]]; then
+    return  # caught by check_secret
+  fi
+
+  if [[ ! "$value" =~ ^https?:// ]]; then
+    error "Variable '$name' does not look like a valid URL (must start with http:// or https://)."
+    FAILURES=$((FAILURES + 1))
+  else
+    success "$name has valid URL format"
+  fi
+}
+
 # ── Testnet validation ─────────────────────────────────────────────────────────
 
 validate_testnet() {
@@ -140,6 +176,60 @@ validate_mainnet() {
   validate_stellar_secret  "MAINNET_SOURCE_ACCOUNT"
 }
 
+# ── Local / container runtime validation ───────────────────────────────────────
+#
+# These variables are injected into the container at startup (see
+# docker-compose.yml and .env.example) so the same image can be deployed to
+# any environment without rebuilding.
+
+validate_local() {
+  echo ""
+  echo "=== Local / Container Runtime Validation ==="
+  echo ""
+
+  # Required runtime configuration
+  check_secret "NETWORK"            "true"
+  check_secret "RPC_URL"            "true"
+  check_secret "NETWORK_PASSPHRASE" "true"
+  check_secret "SOURCE_ACCOUNT"     "true"
+  check_secret "CONTRACT_ID"        "true"
+  check_secret "ADMIN_ADDRESS"      "true"
+
+  # Required seed keys used by docker-compose.yml
+  check_secret "DEPLOYER_KEY" "true"
+  check_secret "ADMIN_KEY"    "true"
+
+  # Optional seed keys (needed for smoke tests)
+  check_secret "MERCHANT_KEY" "false"
+  check_secret "PAYER_KEY"    "false"
+
+  echo ""
+  echo "--- Format checks ---"
+
+  validate_url             "RPC_URL"
+  validate_stellar_address "SOURCE_ACCOUNT"
+  validate_stellar_address "ADMIN_ADDRESS"
+  validate_contract_id     "CONTRACT_ID"
+
+  validate_stellar_secret  "DEPLOYER_KEY"
+  validate_stellar_secret  "ADMIN_KEY"
+
+  if [[ -n "${MERCHANT_KEY:-}" ]]; then validate_stellar_secret "MERCHANT_KEY"; fi
+  if [[ -n "${PAYER_KEY:-}" ]];    then validate_stellar_secret "PAYER_KEY";    fi
+
+  if [[ -n "${NETWORK:-}" ]]; then
+    case "$NETWORK" in
+      testnet|mainnet|futurenet|local)
+        success "NETWORK is a recognised network ('$NETWORK')"
+        ;;
+      *)
+        error "NETWORK has unrecognised value '$NETWORK' (expected testnet, mainnet, futurenet or local)."
+        FAILURES=$((FAILURES + 1))
+        ;;
+    esac
+  fi
+}
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 echo "============================================"
@@ -150,8 +240,9 @@ echo "============================================"
 case "$ENVIRONMENT" in
   testnet) validate_testnet ;;
   mainnet) validate_mainnet ;;
+  local)   validate_local ;;
   *)
-    error "Unknown environment: '$ENVIRONMENT'. Use 'testnet' or 'mainnet'."
+    error "Unknown environment: '$ENVIRONMENT'. Use 'testnet', 'mainnet' or 'local'."
     exit 1
     ;;
 esac
@@ -165,6 +256,9 @@ if [[ "$FAILURES" -gt 0 ]]; then
   echo "Add missing secrets to your .env file (for local use) or to the"
   echo "GitHub repository secrets at:"
   echo "  Settings > Secrets and variables > Actions"
+  echo ""
+  echo "For container deployments, set the required runtime variables in the"
+  echo "environment (see .env.example and docs/secrets-and-local-env.md)."
   exit 1
 else
   echo "  ✅ All checks passed for '$ENVIRONMENT'."

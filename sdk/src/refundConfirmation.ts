@@ -21,6 +21,130 @@
 
 export type RefundActionType = 'execute' | 'reject' | 'dispute';
 
+/** Status of a refund as reported by the backend / chain. */
+export type RefundStatus = 'Pending' | 'Processing' | 'Completed' | 'Failed' | 'Rejected';
+
+/** Minimal refund record returned by the status fetcher. */
+export interface RefundRecord {
+  refundId: string;
+  status: RefundStatus;
+  [key: string]: unknown;
+}
+
+/** Thrown by {@link waitForRefundConfirmation} when the timeout elapses. */
+export class TimeoutError extends Error {
+  constructor(message = 'Refund confirmation timed out') {
+    super(message);
+    this.name = 'TimeoutError';
+    Object.setPrototypeOf(this, TimeoutError.prototype);
+  }
+}
+
+export interface WaitForRefundConfirmationOptions {
+  /** Maximum time in milliseconds to wait for completion. Defaults to 30_000. */
+  timeout?: number;
+  /** Polling interval in milliseconds. Defaults to 2_000. */
+  interval?: number;
+  /**
+   * Injected async fetcher that returns the current {@link RefundRecord}.
+   * Errors thrown by this function are surfaced immediately unless they are
+   * marked retryable via a truthy `retryable` property.
+   */
+  getRefundStatus: (refundId: string) => Promise<RefundRecord>;
+}
+
+/** Statuses that will never transition to `Completed`; polling stops. */
+const NON_RETRYABLE_STATUSES: ReadonlySet<RefundStatus> = new Set<RefundStatus>([
+  'Failed',
+  'Rejected',
+]);
+
+function isRetryableError(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { retryable?: unknown }).retryable === true;
+}
+
+/**
+ * Poll for a refund's on-chain confirmation.
+ *
+ * Resolves with the {@link RefundRecord} once its status is `Completed`.
+ * Rejects with {@link TimeoutError} if the status is not `Completed` within
+ * `timeout` milliseconds.  Non-retryable errors (and terminal statuses such as
+ * `Failed` / `Rejected`) surface immediately without further polling.
+ *
+ * @example
+ * ```ts
+ * const record = await waitForRefundConfirmation(refundId, {
+ *   timeout: 30_000,
+ *   interval: 2_000,
+ *   getRefundStatus: (id) => api.getRefund(id),
+ * });
+ * ```
+ */
+export function waitForRefundConfirmation(
+  refundId: string,
+  options: WaitForRefundConfirmationOptions,
+): Promise<RefundRecord> {
+  const { timeout = 30_000, interval = 2_000, getRefundStatus } = options;
+
+  return new Promise<RefundRecord>((resolve, reject) => {
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+
+    const cleanup = () => {
+      if (pollTimer !== undefined) {
+        clearTimeout(pollTimer);
+        pollTimer = undefined;
+      }
+      if (timeoutTimer !== undefined) {
+        clearTimeout(timeoutTimer);
+        timeoutTimer = undefined;
+      }
+    };
+
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn();
+    };
+
+    timeoutTimer = setTimeout(() => {
+      finish(() =>
+        reject(new TimeoutError(`Refund ${refundId} was not completed within ${timeout}ms`)),
+      );
+    }, timeout);
+
+    const poll = async () => {
+      if (settled) return;
+      try {
+        const record = await getRefundStatus(refundId);
+        if (settled) return;
+        if (record.status === 'Completed') {
+          finish(() => resolve(record));
+          return;
+        }
+        if (NON_RETRYABLE_STATUSES.has(record.status)) {
+          finish(() =>
+            reject(new Error(`Refund ${refundId} reached terminal status: ${record.status}`)),
+          );
+          return;
+        }
+      } catch (err) {
+        if (settled) return;
+        if (!isRetryableError(err)) {
+          finish(() => reject(err));
+          return;
+        }
+      }
+      if (settled) return;
+      pollTimer = setTimeout(poll, interval);
+    };
+
+    void poll();
+  });
+}
+
 /** Human-readable data surfaced in the confirmation dialog. */
 export interface RefundConfirmationPrompt {
   /** Unique ID of the refund being acted upon. */

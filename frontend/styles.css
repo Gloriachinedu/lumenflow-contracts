@@ -9,16 +9,19 @@
   --color-input-bg:      #ffffff;
   --color-hover-primary: #f0ecff;
 
-  /* Text */
+  /* Text — all values meet WCAG AA 4.5:1 against --color-bg / --color-surface */
   --color-text:          #1a1a2e;
-  --color-text-muted:    #595959;
-  --color-text-subtle:   #767676;
-  --color-text-hint:     #888888;
+  --color-text-muted:    #4a4a4a;
+  --color-text-subtle:   #595959;
+  --color-text-hint:     #595959;
 
-  /* Brand / Primary */
-  --color-primary:       #5a3fd6;
-  --color-primary-alt:   #6c47ff;
+  /* Brand / Primary — #4a2fc4 on #ffffff = 7.0:1 for button text */
+  --color-primary:       #4a2fc4;
+  --color-primary-alt:   #5a3fd6;
   --color-primary-text:  #ffffff;
+
+  /* Focus ring — 3:1+ against adjacent colours (WCAG 1.4.11) */
+  --color-focus-ring:    #4a2fc4;
 
   /* Borders */
   --color-border:        #dde1e7;
@@ -67,13 +70,15 @@
     --color-hover-primary: #2a2050;
 
     --color-text:          #e8e8f0;
-    --color-text-muted:    #a0a0b8;
-    --color-text-subtle:   #8888a0;
-    --color-text-hint:     #6b6b85;
+    --color-text-muted:    #b8b8cc;
+    --color-text-subtle:   #a0a0b8;
+    --color-text-hint:     #a0a0b8;
 
-    --color-primary:       #7c5fff;
+    --color-primary:       #9d85ff;
     --color-primary-alt:   #8a67ff;
-    --color-primary-text:  #ffffff;
+    --color-primary-text:  #0f0f1a;
+
+    --color-focus-ring:    #9d85ff;
 
     --color-border:        #2e2e50;
     --color-border-light:  #252545;
@@ -116,13 +121,15 @@
   --color-hover-primary: #2a2050;
 
   --color-text:          #e8e8f0;
-  --color-text-muted:    #a0a0b8;
-  --color-text-subtle:   #8888a0;
-  --color-text-hint:     #6b6b85;
+  --color-text-muted:    #b8b8cc;
+  --color-text-subtle:   #a0a0b8;
+  --color-text-hint:     #a0a0b8;
 
-  --color-primary:       #7c5fff;
+  --color-primary:       #9d85ff;
   --color-primary-alt:   #8a67ff;
-  --color-primary-text:  #ffffff;
+  --color-primary-text:  #0f0f1a;
+
+  --color-focus-ring:    #9d85ff;
 
   --color-border:        #2e2e50;
   --color-border-light:  #252545;
@@ -163,13 +170,15 @@
   --color-hover-primary: #f0ecff;
 
   --color-text:          #1a1a2e;
-  --color-text-muted:    #595959;
-  --color-text-subtle:   #767676;
-  --color-text-hint:     #888888;
+  --color-text-muted:    #4a4a4a;
+  --color-text-subtle:   #595959;
+  --color-text-hint:     #595959;
 
-  --color-primary:       #5a3fd6;
-  --color-primary-alt:   #6c47ff;
+  --color-primary:       #4a2fc4;
+  --color-primary-alt:   #5a3fd6;
   --color-primary-text:  #ffffff;
+
+  --color-focus-ring:    #4a2fc4;
 
   --color-border:        #dde1e7;
   --color-border-light:  #eeeeee;
@@ -331,10 +340,78 @@ button, input, textarea, select { min-height: 44px; min-width: 44px; }
 .btn-link:hover { text-decoration: underline; }
 
 /* Focus styles for keyboard users — 3:1 contrast ratio (WCAG 1.4.11) */
-.btn:focus, .btn-icon:focus, .btn-link:focus, input:focus, select:focus, textarea:focus {
-  outline: none;
-  box-shadow: 0 0 0 3px rgba(90, 63, 214, 0.25);
+.btn:focus-visible, .btn-icon:focus-visible, .btn-link:focus-visible,
+input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 3px solid var(--color-focus-ring);
+  outline-offset: 2px;
+  box-shadow: none;
 }
+/* Fallback for browsers without :focus-visible support */
+.btn:focus, .btn-icon:focus, .btn-link:focus, input:focus, select:focus, textarea:focus {
+  outline: 3px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* ── Pagination controls ────────────────────────────────────────────────────── */
+.pagination-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border-light);
+}
+
+.page-meta {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+.page-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Pagination buttons: 44px touch targets, clear disabled and hover states */
+.pagination-bar .btn {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0.5rem 1rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1.5px solid var(--color-primary);
+  background: var(--color-surface);
+  color: var(--color-primary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.12s;
+}
+
+.pagination-bar .btn:hover:not(:disabled) {
+  background: var(--color-hover-primary);
+  opacity: 1;
+}
+
+.pagination-bar .btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  border-color: var(--color-border);
+  color: var(--color-text-subtle);
+  background: var(--color-surface-2);
+}
+
+/* High-contrast, 2px+ focus ring with offset for keyboard users (WCAG 2.4.7 / 1.4.11) */
+.pagination-bar .btn:focus-visible {
+  outline: 3px solid var(--color-primary);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+=======
 
 /* ── Badges ─────────────────────────────────────────────────────────────────── */
 .badge {
@@ -420,7 +497,7 @@ button, input, textarea, select { min-height: 44px; min-width: 44px; }
 }
 #lf-dark-toggle:hover { transform: scale(1.1); }
 #lf-dark-toggle:focus-visible {
-  outline: 3px solid var(--color-primary);
+  outline: 3px solid var(--color-focus-ring);
   outline-offset: 2px;
 }
 

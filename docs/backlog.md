@@ -8,7 +8,8 @@ This document tracks planned features and proposals for future development.
 **Priority:** Low  
 **Estimated Effort:** Large  
 **Dependencies:** Product planning  
-**Labels:** product, feature, planning
+**Labels:** product, feature, planning  
+**Design Decision:** [ADR-009: Subscription Payment On-Chain Scheduling](adr/ADR-009-subscription-scheduling.md)
 
 ### Proposal
 

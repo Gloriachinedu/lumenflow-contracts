@@ -11,89 +11,97 @@
  */
 
 import { PaymentEvent } from './types';
+import {
+  LumenFlowValidationError,
+  validateProcessPaymentInput,
+  validateRegisterMerchantInput,
+} from './validation';
 
 /** Callback invoked for each incoming payment event. */
 export type PaymentCallback = (event: PaymentEvent) => void;
 
-/**
- * Parameters for building a cross-asset path payment payload.
- *
- * Mirrors the arguments accepted by the on-chain
- * `process_payment_cross_asset` entrypoint.
- */
-export interface CrossAssetPaymentParams {
-  /** Asset the payer sends, e.g. `"USDC:GISSUER..."` or `"native"`. */
-  send_asset: string;
-  /** Maximum amount of `send_asset` the payer is willing to spend (in stroops). */
-  send_max: bigint;
-  /** Asset the merchant receives, e.g. `"XLM"` or `"native"`. */
-  dest_asset: string;
-  /** Ordered list of intermediate assets for the DEX path (may be empty). */
-  path: string[];
-  /** Minimum amount of `dest_asset` the merchant must receive (in stroops). */
-  min_receive: bigint;
+/** Parameters accepted by `processPayment`. */
+export interface ProcessPaymentParams {
+  /** Merchant order identifier; must be a non-empty string. */
+  orderId: string;
+  /** Payment amount in stroops; must be positive. */
+  amount: number | bigint;
+  /** Stellar address of the token (or `native`); must be a valid address. */
+  tokenAddress: string;
+}
+
+/** Parameters accepted by `registerMerchant`. */
+export interface RegisterMerchantParams {
+  /** Human-readable merchant name; must be a non-empty string. */
+  name: string;
+  /** Stellar account address of the merchant; must be valid. */
+  address: string;
+}
+
+/** Minimal RPC client surface used by the public payment methods. */
+export interface PaymentRpcClient {
+  submitTransaction(envelope: Record<string, unknown>): Promise<unknown>;
+  registerMerchant?(payload: RegisterMerchantParams): Promise<unknown>;
+}
+
+/** Options for the public payment methods. */
+export interface PaymentMethodOptions {
+  /** RPC client used to submit requests. */
+  rpc?: PaymentRpcClient;
 }
 
 /**
- * Payload for the `process_payment_cross_asset` contract entrypoint.
+ * Submits a payment request to the RPC layer.
  *
- * All amounts are expressed in stroops (7-decimal fixed point) as `bigint`
- * so they can be passed directly to Soroban's `i128` arguments.
+ * All inputs are validated before any network call is made; invalid input
+ * throws a `LumenFlowValidationError` identifying the offending field.
+ *
+ * @param params  - Payment parameters (`orderId`, `amount`, `tokenAddress`).
+ * @param options - Optional RPC client override.
+ * @returns The RPC submission result.
+ * @throws {LumenFlowValidationError} When any input parameter is invalid.
  */
-export interface CrossAssetPaymentPayload {
-  send_asset: string;
-  send_max: bigint;
-  dest_asset: string;
-  path: string[];
-  min_receive: bigint;
+export async function processPayment(
+  params: ProcessPaymentParams,
+  options: PaymentMethodOptions = {},
+): Promise<unknown> {
+  validateProcessPaymentInput(params);
+
+  const rpc = options.rpc;
+  if (!rpc) {
+    throw new LumenFlowValidationError('rpc', 'An RPC client is required to process a payment');
+  }
+
+  return rpc.submitTransaction({
+    orderId: params.orderId,
+    amount: params.amount.toString(),
+    tokenAddress: params.tokenAddress,
+  });
 }
 
 /**
- * Builds a cross-asset path payment payload for `process_payment_cross_asset`.
+ * Registers a merchant with the RPC layer.
  *
- * Validates the inputs and normalises the asset identifiers so the resulting
- * object can be passed straight to the contract invocation helper.
+ * All inputs are validated before any network call is made; invalid input
+ * throws a `LumenFlowValidationError` identifying the offending field.
  *
- * @param params - Cross-asset payment parameters.
- * @returns A validated `CrossAssetPaymentPayload`.
- * @throws {Error} If amounts are non-positive or `send_max < min_receive`
- *   when sending and receiving the same asset (no conversion possible).
- *
- * @example
- * ```typescript
- * import { buildCrossAssetPaymentPayload } from '@lumenflow/sdk';
- *
- * const payload = buildCrossAssetPaymentPayload({
- *   send_asset: 'USDC:GISSUER...',
- *   send_max: 10_000_000n,   // 1 USDC
- *   dest_asset: 'native',
- *   path: ['XLM'],
- *   min_receive: 9_500_000n, // 0.95 XLM minimum
- * });
- * ```
+ * @param params  - Merchant parameters (`name`, `address`).
+ * @param options - Optional RPC client override.
+ * @returns The RPC submission result.
+ * @throws {LumenFlowValidationError} When any input parameter is invalid.
  */
-export function buildCrossAssetPaymentPayload(
-  params: CrossAssetPaymentParams,
-): CrossAssetPaymentPayload {
-  const { send_asset, send_max, dest_asset, path, min_receive } = params;
+export async function registerMerchant(
+  params: RegisterMerchantParams,
+  options: PaymentMethodOptions = {},
+): Promise<unknown> {
+  validateRegisterMerchantInput(params);
 
-  if (send_max <= 0n) {
-    throw new Error('send_max must be greater than zero');
-  }
-  if (min_receive <= 0n) {
-    throw new Error('min_receive must be greater than zero');
-  }
-  if (send_asset === dest_asset && send_max < min_receive) {
-    throw new Error('send_max must be >= min_receive for same-asset payments');
+  const rpc = options.rpc;
+  if (!rpc || typeof rpc.registerMerchant !== 'function') {
+    throw new LumenFlowValidationError('rpc', 'An RPC client is required to register a merchant');
   }
 
-  return {
-    send_asset,
-    send_max,
-    dest_asset,
-    path: [...path],
-    min_receive,
-  };
+  return rpc.registerMerchant({ name: params.name, address: params.address });
 }
 
 /** Object returned by `subscribeToPayments`. Call `unsubscribe()` to close. */
