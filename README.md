@@ -9,6 +9,7 @@
 [![Stellar](https://img.shields.io/badge/Stellar-Soroban-blueviolet)](https://soroban.stellar.org)
 [![Audited by](https://img.shields.io/badge/Audited%20By-TBD-lightgrey)](docs/audit/audit-report.md)
 [![Discord](https://img.shields.io/discord/123456789012345678?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/lumenflow)
+[![Run in Postman](https://run.pstmn.io/button.svg)](https://www.postman.com/lumenflow/workspace/lumenflow-public/collection/lumenflow-api)
 
 [English](README.md) | [Español](README.es.md) | [Português](README.pt.md)
 
@@ -146,6 +147,8 @@ LumenFlow is a production-grade payment processing smart contract for the [Stell
 - Testing guidance available in `docs/testing-guide.md`
 - Multisig payment flow guide available in `docs/multisig-guide.md`
 - Contributor onboarding video script available in [docs/onboarding-video-script.md](docs/onboarding-video-script.md)
+- **SDK integration walkthrough video** (Node.js): [watch on YouTube](https://www.youtube.com/watch?v=lumenflow-sdk-integration) · [read the transcript](docs/sdk-integration-transcript.md)
+- **Postman collection** for the public API: [Run in Postman](https://www.postman.com/lumenflow/workspace/lumenflow-public/collection/lumenflow-api) · source file [`docs/lumenflow.postman_collection.json`](docs/lumenflow.postman_collection.json)
 - Secrets and secure local environment setup in [`docs/secrets-and-local-env.md`](docs/secrets-and-local-env.md)
 - Payment link generator guide in [`docs/payment-link-guide.md`](docs/payment-link-guide.md)
 - **SDK quickstart guide** (install → init → register merchant → submit payment → check history): [`sdk/README.md#quick-start`](sdk/README.md#quick-start)

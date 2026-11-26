@@ -82,6 +82,17 @@ Confirms successful registration and provides next steps:
 3. **Set up webhook notifications** — follow the [webhook integration guide](webhook-integration.md).
 4. **Monitor activity** — use the [fraud analytics dashboard](../dashboard/fraud-analytics/index.html) to review suspicious activity.
 
+### Integrating the SDK (Recommended for Developers)
+
+If you are a developer integrating the LumenFlow SDK (Node.js) after merchant registration, the **recommended path** is to watch the SDK integration walkthrough video below. It follows the script in [`docs/sdk-integration-video-script.md`](sdk-integration-video-script.md) and covers installation, client setup, and processing your first payment end-to-end.
+
+[![LumenFlow SDK Integration Walkthrough (Node.js)](https://img.youtube.com/vi/VIDEO_ID/maxresdefault.jpg)](https://www.youtube.com/watch?v=VIDEO_ID)
+
+> **Video:** [LumenFlow SDK Integration Walkthrough (Node.js)](https://www.youtube.com/watch?v=VIDEO_ID) — hosted on the LumenFlow YouTube channel.
+>
+> **Accessibility:** A full text transcript is available in [`docs/sdk-integration-transcript.md`](sdk-integration-transcript.md).
+=======
+
 ---
 
 ## Troubleshooting
@@ -103,6 +114,9 @@ Confirms successful registration and provides next steps:
 
 ## Related Resources
 
+- [SDK Integration Walkthrough Video (Node.js)](https://www.youtube.com/watch?v=VIDEO_ID) — recommended starting point for developers integrating the SDK
+- [SDK Integration Walkthrough — Transcript](sdk-integration-transcript.md) — accessible text version of the video
+- [SDK Integration Video Script](sdk-integration-video-script.md)
 - [Contract API — Merchant Management](../README.md#merchant-management)
 - [CLI Usage](../README.md#cli-usage)
 - [Developer Onboarding Guide](ONBOARDING.md)
