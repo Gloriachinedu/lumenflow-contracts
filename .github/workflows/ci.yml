@@ -363,6 +363,63 @@ jobs:
             });
 
   # ---------------------------------------------------------------------------
+  # Security: secret scanning (gitleaks)
+  # Scans the PR diff (or the pushed commit range) for committed credentials.
+  # ---------------------------------------------------------------------------
+  secret-scan:
+    name: Secret Scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history is required so gitleaks can diff against the base ref.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: "8.18.4"
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Scan PR diff for secrets
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gitleaks detect \
+            --source . \
+            --log-opts "${BASE_SHA}..${HEAD_SHA}" \
+            --redact \
+            --verbose \
+            --exit-code 1
+
+      - name: Scan pushed commits for secrets
+        if: github.event_name == 'push'
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          if [ -z "$BEFORE_SHA" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            # New branch: scan the full history reachable from the pushed commit.
+            gitleaks detect --source . --redact --verbose --exit-code 1
+          else
+            gitleaks detect \
+              --source . \
+              --log-opts "${BEFORE_SHA}..${AFTER_SHA}" \
+              --redact \
+              --verbose \
+              --exit-code 1
+          fi
+
+      - name: Scan full history (scheduled audit)
+        if: github.event_name == 'schedule'
+        run: gitleaks detect --source . --redact --verbose --exit-code 1
+
+  # ---------------------------------------------------------------------------
   # Security: licence / duplicate / yanked crate check (cargo-deny)
   # ---------------------------------------------------------------------------
   security-deny:

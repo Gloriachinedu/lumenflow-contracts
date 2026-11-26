@@ -24,6 +24,8 @@ import {
   RelayEvent,
   idempotencyKey,
 } from '../webhookRelay';
+import { Logger, LogLevel } from '../logging';
+import { redact } from '../logRedaction';
 
 const noSleep = () => Promise.resolve();
 
@@ -260,6 +262,104 @@ describe('WebhookRelay — boundary conditions', () => {
     );
     expect(fn).not.toHaveBeenCalled();
     expect(idempotencyKey({})).toBeNull();
+  });
+});
+
+/** Captures structured log lines emitted by the relay. */
+function captureLogger() {
+  const lines: Array<Record<string, unknown>> = [];
+  const logger: Logger = {
+    log: (line) => {
+      lines.push(line as unknown as Record<string, unknown>);
+    },
+  };
+  return { logger, lines };
+}
+
+describe('WebhookRelay — structured logging', () => {
+  it('emits a JSON log line with level, correlationId, operation and duration_ms', async () => {
+    const { fn } = scriptedWebhook([], 200);
+    const { logger, lines } = captureLogger();
+    const relay = new WebhookRelay({ deliver: fn, sleep: noSleep, logger });
+
+    await relay.relay(event(), { correlationId: 'corr-123' });
+
+    expect(lines).toHaveLength(1);
+    const line = lines[0];
+    expect(line.level).toBe('info');
+    expect(line.correlationId).toBe('corr-123');
+    expect(line.operation).toBe('webhook.relay');
+    expect(typeof line.duration_ms).toBe('number');
+    expect(line.duration_ms as number).toBeGreaterThanOrEqual(0);
+    // The line must be JSON-serialisable.
+    expect(() => JSON.stringify(line)).not.toThrow();
+  });
+
+  it('auto-generates a UUID v4 correlation ID when the caller does not supply one', async () => {
+    const { fn } = scriptedWebhook([], 200);
+    const { logger, lines } = captureLogger();
+    const relay = new WebhookRelay({ deliver: fn, sleep: noSleep, logger });
+
+    await relay.relay(event());
+
+    const uuidV4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    expect(lines[0].correlationId).toMatch(uuidV4);
+  });
+
+  it('propagates the correlation ID across every attempt of a retried delivery', async () => {
+    const { fn } = scriptedWebhook([503, 503], 200);
+    const { logger, lines } = captureLogger();
+    const relay = new WebhookRelay({ deliver: fn, sleep: noSleep, logger });
+
+    await relay.relay(event(), { correlationId: 'corr-retry' });
+
+    expect(lines.length).toBeGreaterThanOrEqual(1);
+    for (const line of lines) {
+      expect(line.correlationId).toBe('corr-retry');
+    }
+  });
+
+  it('logs at the configured level', async () => {
+    const { fn } = scriptedWebhook([], 200);
+    const { logger, lines } = captureLogger();
+    const relay = new WebhookRelay({ deliver: fn, sleep: noSleep, logger, logLevel: LogLevel.DEBUG });
+
+    await relay.relay(event(), { correlationId: 'corr-debug' });
+
+    expect(lines.length).toBeGreaterThanOrEqual(1);
+    expect(lines[0].level).toBe('debug');
+  });
+
+  it('redacts sensitive fields in logged payloads', async () => {
+    const { fn } = scriptedWebhook([], 200);
+    const { logger, lines } = captureLogger();
+    const relay = new WebhookRelay({ deliver: fn, sleep: noSleep, logger });
+
+    await relay.relay(
+      event({
+        value: {
+          order_id: 'ORDER-1',
+          private_key: 'SABCDEFGHIJKLMNOPQRSTUVWXYZ234567',
+          secret: 'super-secret',
+        },
+      }),
+      { correlationId: 'corr-redact' },
+    );
+
+    const serialised = JSON.stringify(lines);
+    expect(serialised).not.toContain('SABCDEFGHIJKLMNOPQRSTUVWXYZ234567');
+    expect(serialised).not.toContain('super-secret');
+    expect(serialised).toContain('[REDACTED]');
+  });
+
+  it('uses logRedaction to redact raw payloads before logging', () => {
+    const redacted = redact({
+      private_key: 'SABCDEFGHIJKLMNOPQRSTUVWXYZ234567',
+      payload: { amount: 1000 },
+    }) as Record<string, unknown>;
+
+    expect(redacted.private_key).toBe('[REDACTED]');
+    expect(JSON.stringify(redacted)).not.toContain('SABCDEFGHIJKLMNOPQRSTUVWXYZ234567');
   });
 });
 

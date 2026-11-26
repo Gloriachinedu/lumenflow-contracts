@@ -396,18 +396,49 @@ function showFilterError(id, message) {
   document.getElementById(id).classList.toggle('input-error', !!message);
 }
 
+// Applies a single filter value, validating it first. Returns true when the
+// value was accepted so keyboard handlers can decide whether to close menus.
+function applyFilter(id, key, value) {
+  const validator = filterValidators[id];
+  if (validator) {
+    const message = validator(value);
+    showFilterError(id, message);
+    if (message) return false; // invalid values are never applied or sent to the contract
+  }
+  filters[key] = value;
+  updateUrl();
+  renderActiveFilters();
+  updateResults();
+  return true;
+}
+
+// Applies every filter from the current DOM state (used by Enter/Space on
+// filter controls and by the "Apply filters" button).
+function applyAllFilters() {
+  inputBindings.forEach(({ id, key }) => {
+    const el = document.getElementById(id);
+    if (el) applyFilter(id, key, el.value);
+  });
+}
+
 inputBindings.forEach(({ id, key }) => {
-  document.getElementById(id).addEventListener('change', e => {
-    const validator = filterValidators[id];
-    if (validator) {
-      const message = validator(e.target.value);
-      showFilterError(id, message);
-      if (message) return; // invalid values are never applied or sent to the contract
+  const el = document.getElementById(id);
+  el.addEventListener('change', e => {
+    applyFilter(id, key, e.target.value);
+  });
+  // Enter/Space applies the selected filter immediately; Escape reverts the
+  // control to the last applied value and closes any open dropdown.
+  el.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+      e.preventDefault();
+      applyFilter(id, key, el.value);
+      if (el.tagName === 'SELECT') el.blur();
+    } else if (e.key === 'Escape' || e.key === 'Esc') {
+      e.preventDefault();
+      el.value = filters[key] || (key === 'status' ? 'Any' : '');
+      showFilterError(id, '');
+      if (el.tagName === 'SELECT') el.blur();
     }
-    filters[key] = e.target.value;
-    updateUrl();
-    renderActiveFilters();
-    updateResults();
   });
 });
 

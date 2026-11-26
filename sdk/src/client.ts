@@ -1475,6 +1475,10 @@ export class LumenFlowClient {
   }
 
   private async invoke(method: string, args: any[] = []): Promise<any> {
+    return this.withLogging(`invoke:${method}`, () => this.executeInvoke(method, args));
+  }
+
+  private async executeInvoke(method: string, args: any[] = []): Promise<any> {
     if (!this.signer) {
       throw new Error("A signer is required for state-changing operations.");
     }
