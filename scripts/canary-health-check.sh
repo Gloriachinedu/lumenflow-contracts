@@ -17,6 +17,11 @@
 #   deployment status API (requires GITHUB_TOKEN, GITHUB_REPOSITORY,
 #   GITHUB_DEPLOYMENT_ID to be set).
 #
+#   Before promotion, the smoke test suite (scripts/smoke_test.sh) is run.
+#   Promotion only proceeds when every smoke test exits 0. If any smoke test
+#   fails, the canary is rolled back via rollback-canary.sh and a Slack alert
+#   is emitted (when SLACK_DEPLOY_WEBHOOK is set).
+#
 # Environment variables (all configurable):
 #   NETWORK                — Stellar network: local | testnet | mainnet (default: testnet)
 #   CANARY_CONTRACT_ID     — Canary contract ID (default: read from canary-contract-id.txt)
@@ -30,6 +35,8 @@
 #   GRAFANA_URL            — Grafana base URL (required when METRIC_BACKEND=grafana)
 #   GRAFANA_API_KEY        — Grafana API key (required when METRIC_BACKEND=grafana)
 #   GRAFANA_DATASOURCE_UID — Grafana datasource UID for Prometheus queries
+#   SMOKE_TEST_SCRIPT      — Path to smoke test suite (default: scripts/smoke_test.sh)
+#   SLACK_DEPLOY_WEBHOOK   — Slack incoming webhook URL for deploy alerts (optional)
 #   GITHUB_TOKEN           — GitHub PAT for posting deployment status (optional)
 #   GITHUB_REPOSITORY      — owner/repo (optional, e.g. Gloriachinedu/lumenflow-contracts)
 #   GITHUB_DEPLOYMENT_ID   — GitHub deployment ID to update (optional)
@@ -48,6 +55,7 @@ METRIC_BACKEND="${METRIC_BACKEND:-cloudwatch}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 CW_NAMESPACE="${CW_NAMESPACE:-LumenFlow/canary}"
 CW_METRIC_NAME="${CW_METRIC_NAME:-ErrorRate}"
+SMOKE_TEST_SCRIPT="${SMOKE_TEST_SCRIPT:-$SCRIPT_DIR/smoke_test.sh}"
 
 # ── Resolve canary contract ID ────────────────────────────────────────────────
 
@@ -103,6 +111,43 @@ post_deployment_status() {
     > /dev/null \
   && info "GitHub deployment status posted: $state — $description" \
   || warn "Failed to post GitHub deployment status (non-fatal)"
+}
+
+# Emit a Slack alert describing an auto-rollback (non-fatal if unset/fails).
+# Args: <reason>
+send_slack_alert() {
+  local reason="$1"
+
+  if [[ -z "${SLACK_DEPLOY_WEBHOOK:-}" ]]; then
+    info "Slack alert skipped (SLACK_DEPLOY_WEBHOOK not set)"
+    return 0
+  fi
+
+  local text=":rotating_light: *Canary auto-rollback* on \`${NETWORK}\`
+Contract: \`${CANARY_CONTRACT_ID}\`
+Reason: ${reason}"
+
+  curl -sf \
+    -X POST \
+    -H "Content-Type: application/json" \
+    "$SLACK_DEPLOY_WEBHOOK" \
+    -d "$(jq -n --arg text "$text" '{text: $text}')" \
+    > /dev/null \
+  && info "Slack alert sent" \
+  || warn "Failed to send Slack alert (non-fatal)"
+}
+
+# Run the smoke test suite. Returns 0 only if every smoke test exits 0.
+run_smoke_tests() {
+  if [[ ! -x "$SMOKE_TEST_SCRIPT" && ! -f "$SMOKE_TEST_SCRIPT" ]]; then
+    err "Smoke test suite not found: $SMOKE_TEST_SCRIPT"
+    return 1
+  fi
+
+  info "Running smoke test suite: $SMOKE_TEST_SCRIPT"
+  NETWORK="$NETWORK" \
+  CANARY_CONTRACT_ID="$CANARY_CONTRACT_ID" \
+    bash "$SMOKE_TEST_SCRIPT"
 }
 
 # Fetch the current error rate (0–100) from CloudWatch.
@@ -195,6 +240,8 @@ for (( i=1; i<=TOTAL_CHECKS; i++ )); do
     post_deployment_status "failure" \
       "Canary error rate ${CURRENT_RATE}% exceeded ${ERROR_RATE_THRESHOLD}% — rolling back"
 
+    send_slack_alert "Error rate ${CURRENT_RATE}% exceeded threshold ${ERROR_RATE_THRESHOLD}% (check ${i}/${TOTAL_CHECKS})"
+
     NETWORK="$NETWORK" \
     CANARY_CONTRACT_ID="$CANARY_CONTRACT_ID" \
       "$SCRIPT_DIR/rollback-canary.sh"
@@ -214,20 +261,43 @@ for (( i=1; i<=TOTAL_CHECKS; i++ )); do
   fi
 done
 
-# ── All checks passed → promote ───────────────────────────────────────────────
+# ── All checks passed → run smoke tests → promote ─────────────────────────────
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-info "All ${TOTAL_CHECKS} health checks passed. Promoting canary to stable."
+info "All ${TOTAL_CHECKS} health checks passed. Running smoke tests before promotion."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-post_deployment_status "in_progress" "All ${TOTAL_CHECKS} checks passed — promoting canary"
+post_deployment_status "in_progress" "All ${TOTAL_CHECKS} checks passed — running smoke tests"
+
+if ! run_smoke_tests; then
+  err "Smoke tests failed — blocking promotion and rolling back."
+  echo ""
+
+  post_deployment_status "failure" \
+    "Smoke tests failed — rolling back canary"
+
+  send_slack_alert "Smoke tests failed — promotion blocked, canary rolled back"
+
+  NETWORK="$NETWORK" \
+  CANARY_CONTRACT_ID="$CANARY_CONTRACT_ID" \
+    "$SCRIPT_DIR/rollback-canary.sh"
+
+  post_deployment_status "error" \
+    "Canary rolled back after smoke test failure"
+
+  exit 1
+fi
+
+info "All smoke tests passed. Promoting canary to stable."
+
+post_deployment_status "in_progress" "Smoke tests passed — promoting canary"
 
 NETWORK="$NETWORK" \
 CANARY_CONTRACT_ID="$CANARY_CONTRACT_ID" \
   "$SCRIPT_DIR/promote-canary.sh"
 
 post_deployment_status "success" \
-  "Canary promoted to stable after ${TOTAL_CHECKS} passing health checks (error rate < ${ERROR_RATE_THRESHOLD}%)"
+  "Canary promoted to stable after ${TOTAL_CHECKS} passing health checks and smoke tests (error rate < ${ERROR_RATE_THRESHOLD}%)"
 
 info "✅ Canary auto-promotion complete."

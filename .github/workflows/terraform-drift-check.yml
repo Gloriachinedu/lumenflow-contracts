@@ -1,0 +1,201 @@
+name: Terraform Drift Check
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment to check for drift'
+        required: false
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: terraform-drift-check-${{ github.event.inputs.environment || 'production' }}
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: '1.7.5'
+  TARGET_ENV: ${{ github.event.inputs.environment || 'production' }}
+  AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  drift-check:
+    name: Terraform Drift Check (${{ github.event.inputs.environment || 'production' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DRIFT_CHECK_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: terraform-drift-check-${{ github.run_id }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Run Terraform drift check
+        id: drift
+        shell: bash
+        run: |
+          set +e
+          chmod +x scripts/terraform-drift-check.sh
+          scripts/terraform-drift-check.sh "${{ env.TARGET_ENV }}"
+          exit_code=$?
+          echo "exit_code=${exit_code}" >> "$GITHUB_OUTPUT"
+          echo "Drift check script exited with code ${exit_code}"
+          exit 0
+
+      - name: Collect drift summary
+        id: summary
+        if: steps.drift.outputs.exit_code == '2'
+        shell: bash
+        run: |
+          set -euo pipefail
+          plan_file=""
+          for candidate in \
+            "terraform/${TARGET_ENV}/drift.tfplan" \
+            "terraform/drift.tfplan" \
+            "drift.tfplan" \
+            "tfplan"; do
+            if [ -f "$candidate" ]; then
+              plan_file="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$plan_file" ]; then
+            plan_file="$(find . -name '*.tfplan' -o -name 'tfplan' 2>/dev/null | head -n 1 || true)"
+          fi
+
+          if [ -z "$plan_file" ] || [ ! -f "$plan_file" ]; then
+            echo "No plan file found; cannot generate summary."
+            echo "plan_file=" >> "$GITHUB_OUTPUT"
+            echo "add=0" >> "$GITHUB_OUTPUT"
+            echo "change=0" >> "$GITHUB_OUTPUT"
+            echo "destroy=0" >> "$GITHUB_OUTPUT"
+            echo "excerpt=No plan file was produced by the drift check." >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "plan_file=${plan_file}" >> "$GITHUB_OUTPUT"
+
+          plan_json="$(terraform show -json "$plan_file" 2>/dev/null || echo '{}')"
+
+          add=$(echo "$plan_json" | jq -r '[.resource_changes[]? | select(.change.actions | index("create"))] | length' 2>/dev/null || echo 0)
+          change=$(echo "$plan_json" | jq -r '[.resource_changes[]? | select(.change.actions == ["update"] or .change.actions == ["create","update"] or .change.actions == ["update","create"])] | length' 2>/dev/null || echo 0)
+          destroy=$(echo "$plan_json" | jq -r '[.resource_changes[]? | select(.change.actions | index("delete"))] | length' 2>/dev/null || echo 0)
+
+          excerpt="$(terraform show -no-color "$plan_file" 2>/dev/null | head -n 60 || true)"
+          if [ -z "$excerpt" ]; then
+            excerpt="(unable to render plan excerpt)"
+          fi
+
+          echo "add=${add}" >> "$GITHUB_OUTPUT"
+          echo "change=${change}" >> "$GITHUB_OUTPUT"
+          echo "destroy=${destroy}" >> "$GITHUB_OUTPUT"
+          {
+            echo "excerpt<<EOF"
+            echo "$excerpt"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload plan artifact
+        if: steps.drift.outputs.exit_code == '2' && steps.summary.outputs.plan_file != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-drift-plan-${{ env.TARGET_ENV }}-${{ github.run_id }}
+          path: ${{ steps.summary.outputs.plan_file }}
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Notify Slack on drift
+        if: steps.drift.outputs.exit_code == '2'
+        shell: bash
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          ADD_COUNT: ${{ steps.summary.outputs.add }}
+          CHANGE_COUNT: ${{ steps.summary.outputs.change }}
+          DESTROY_COUNT: ${{ steps.summary.outputs.destroy }}
+          PLAN_EXCERPT: ${{ steps.summary.outputs.excerpt }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then
+            echo "::warning::SLACK_WEBHOOK_URL secret is not set; skipping Slack notification."
+            exit 0
+          fi
+
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          excerpt_truncated="$(printf '%s' "${PLAN_EXCERPT}" | head -c 2500)"
+
+          payload="$(jq -n \
+            --arg env "${TARGET_ENV}" \
+            --arg add "${ADD_COUNT:-0}" \
+            --arg change "${CHANGE_COUNT:-0}" \
+            --arg destroy "${DESTROY_COUNT:-0}" \
+            --arg run_url "${run_url}" \
+            --arg excerpt "${excerpt_truncated}" \
+            '{
+              text: (":warning: Terraform drift detected in *" + $env + "*"),
+              blocks: [
+                {
+                  type: "header",
+                  text: { type: "plain_text", text: ":warning: Terraform Drift Detected", emoji: true }
+                },
+                {
+                  type: "section",
+                  fields: [
+                    { type: "mrkdwn", text: ("*Environment:*\n" + $env) },
+                    { type: "mrkdwn", text: ("*To add:*\n" + $add) },
+                    { type: "mrkdwn", text: ("*To change:*\n" + $change) },
+                    { type: "mrkdwn", text: ("*To destroy:*\n" + $destroy) }
+                  ]
+                },
+                {
+                  type: "section",
+                  text: { type: "mrkdwn", text: ("*Plan excerpt:*\n```" + $excerpt + "```") }
+                },
+                {
+                  type: "actions",
+                  elements: [
+                    {
+                      type: "button",
+                      text: { type: "plain_text", text: "View workflow run", emoji: true },
+                      url: $run_url
+                    }
+                  ]
+                }
+              ]
+            }')"
+
+          curl -sS -X POST -H 'Content-type: application/json' \
+            --data "${payload}" \
+            "${SLACK_WEBHOOK_URL}"
+
+      - name: Fail on drift or error
+        if: steps.drift.outputs.exit_code != '0'
+        shell: bash
+        run: |
+          code="${{ steps.drift.outputs.exit_code }}"
+          if [ "$code" = "2" ]; then
+            echo "::error::Terraform drift detected in environment '${TARGET_ENV}'. See plan artifact and Slack notification."
+            exit 1
+          fi
+          echo "::error::Terraform drift check failed with exit code ${code}."
+          exit 1

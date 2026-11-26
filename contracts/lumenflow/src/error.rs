@@ -50,8 +50,15 @@ pub enum PaymentError {
     RefundNotFound = 30,
     /// A refund with the given ID already exists. Remediation: Use a unique refund ID.
     RefundAlreadyExists = 31,
-    /// The allowed time window for initiating a refund has passed. Remediation: Refunds must be initiated within 30 days of the payment.
+    /// The allowed time window for initiating a refund has passed. Remediation: Refunds must be
+    /// initiated within the merchant's configured `refund_window_secs` (set via
+    /// `set_refund_window`) or, if the merchant has not configured one, within the global
+    /// default refund window.
     RefundWindowExpired = 32,
+    /// The merchant-specific refund window value passed to `set_refund_window` is invalid
+    /// (e.g. zero or negative). Remediation: Provide a positive number of seconds, or pass
+    /// `None` to clear the override and fall back to the global default.
+    InvalidRefundWindow = 38,
     /// The total refund amount exceeds the original payment amount. Remediation: Ensure the refund amount (or cumulative partial refunds) does not exceed the original payment.
     RefundExceedsOriginal = 33,
     /// The refund has not been approved yet. Remediation: The merchant or admin must approve the refund before it can be executed.
@@ -106,6 +113,8 @@ pub enum PaymentError {
     CommitmentNotFound = 85,
     CommitmentExpired = 86,
     CommitmentHashMismatch = 87,
+    Reentrancy = 90,
+    Overflow = 91,
 
     // General
     /// The provided input parameters are invalid. Remediation: Check the input values and format.
@@ -163,6 +172,14 @@ pub enum PaymentError {
     EscrowUnauthorised = 104,
     /// The escrow unlock time has already passed; it can no longer be cancelled. Remediation: Call release_escrow instead.
     EscrowLockExpired = 105,
+    /// The emergency lock period has not yet elapsed. Remediation: Wait until the escrow is older than EMERGENCY_LOCK_PERIOD (default 90 days) before calling emergency_withdraw.
+    EmergencyLockPeriodNotMet = 106,
+    /// Not enough admin approvals to execute an emergency withdrawal. Remediation: Collect the required number of admin approvals via approve_emergency_withdrawal before calling emergency_withdraw.
+    EmergencyMultisigNotMet = 107,
+    /// The treasury address has not been configured. Remediation: An admin must call set_treasury_address before emergency withdrawals can be performed.
+    TreasuryNotSet = 108,
+    /// The admin has already approved this emergency withdrawal. Remediation: Wait for other admins to approve.
+    EmergencyAlreadyApproved = 109,
 
     // Disputes
     /// The requested dispute was not found. Remediation: Verify the dispute ID.
