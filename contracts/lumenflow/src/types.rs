@@ -354,6 +354,21 @@ pub struct EscrowCancelledEvent {
     pub amount: i128,
 }
 
+/// Data payload for `lumenflow/emergency_withdrawal`.
+///
+/// Emitted when an admin triggers an emergency withdrawal of stuck escrow
+/// funds to the governance treasury after the emergency lock period.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmergencyWithdrawalEvent {
+    /// The escrow order_id from which funds were withdrawn.
+    pub escrow_id: String,
+    /// Amount transferred to the treasury in stroops.
+    pub amount: i128,
+    /// The treasury address that received the funds.
+    pub recipient: Address,
+}
+
 // ── Dispute ───────────────────────────────────────────────────────────────────
 
 /// Full lifecycle state machine for a dispute.

@@ -163,6 +163,14 @@ pub enum PaymentError {
     EscrowUnauthorised = 104,
     /// The escrow unlock time has already passed; it can no longer be cancelled. Remediation: Call release_escrow instead.
     EscrowLockExpired = 105,
+    /// The emergency lock period has not yet elapsed. Remediation: Wait until the escrow is older than EMERGENCY_LOCK_PERIOD (default 90 days) before calling emergency_withdraw.
+    EmergencyLockPeriodNotMet = 106,
+    /// Not enough admin approvals to execute an emergency withdrawal. Remediation: Collect the required number of admin approvals via approve_emergency_withdrawal before calling emergency_withdraw.
+    EmergencyMultisigNotMet = 107,
+    /// The treasury address has not been configured. Remediation: An admin must call set_treasury_address before emergency withdrawals can be performed.
+    TreasuryNotSet = 108,
+    /// The admin has already approved this emergency withdrawal. Remediation: Wait for other admins to approve.
+    EmergencyAlreadyApproved = 109,
 
     // Disputes
     /// The requested dispute was not found. Remediation: Verify the dispute ID.
