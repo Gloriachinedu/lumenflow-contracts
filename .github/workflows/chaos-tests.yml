@@ -29,7 +29,7 @@ jobs:
           RPC_URL: http://localhost:18000
       - name: Upload chaos results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rpc-chaos-results
           path: chaos-results.log

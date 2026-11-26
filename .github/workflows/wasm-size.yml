@@ -200,7 +200,7 @@ jobs:
 
       # ── Upload chart as CI artifact ───────────────────────────────────────────
       - name: Upload size trend chart
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wasm-size-trend-chart
           path: wasm-size-chart/
