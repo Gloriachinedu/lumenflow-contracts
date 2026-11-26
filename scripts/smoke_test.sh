@@ -42,6 +42,21 @@
 #   all-zero signatures will be rejected with InvalidSignature.  Do NOT
 #   set SMOKE_SIG / SMOKE_PUBKEY to zeroes against a live deployment.
 #
+# Exit code & machine-readable summary:
+#   On success this script exits 0 and prints a machine-readable summary
+#   line to stdout:
+#
+#     SMOKE_TEST_RESULT=passed
+#     SMOKE_TEST_CONTRACT_ID=<contract id>
+#     SMOKE_TEST_NETWORK=<network>
+#     SMOKE_TEST_TIMESTAMP=<ISO-8601 UTC timestamp>
+#
+#   The automated mainnet approval gate (see
+#   docs/mainnet-approval-gates.md and .github/workflows/deploy-mainnet.yml)
+#   relies on BOTH the exit code and the `SMOKE_TEST_RESULT=passed` summary
+#   line to unambiguously confirm that a testnet smoke test passed within
+#   the last 24 hours.  Do not change or suppress these lines.
+#
 set -euo pipefail
 
 NETWORK="${NETWORK:-testnet}"
@@ -125,3 +140,9 @@ echo "    OK"
 
 echo ""
 echo "✅ Smoke test passed."
+
+# ── Machine-readable summary (consumed by the mainnet approval gate) ─────────
+echo "SMOKE_TEST_RESULT=passed"
+echo "SMOKE_TEST_CONTRACT_ID=$CONTRACT_ID"
+echo "SMOKE_TEST_NETWORK=$NETWORK"
+echo "SMOKE_TEST_TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)"

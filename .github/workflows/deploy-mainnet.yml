@@ -113,31 +113,233 @@ jobs:
           echo "## ✅ Audit Readiness Check Passed" >> "$GITHUB_STEP_SUMMARY"
           echo "No Critical or High findings blocking mainnet deployment." >> "$GITHUB_STEP_SUMMARY"
 
+  # ── Automated approval gates ─────────────────────────────────────────────────
+  # Enforces the checklist in docs/mainnet-approval-gates.md automatically:
+  #   (a) release notes must link to an audit report
+  #   (b) a successful testnet smoke test must have run within the last 24h
+  #       on the same commit SHA (or on develop)
+  validate-gates:
+    name: Validate Mainnet Approval Gates
+    runs-on: ubuntu-latest
+    needs: audit-readiness
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Verify audit report is linked in release notes
+        id: audit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Fetch release notes for the current tag/ref. Fall back to the
+          # annotated tag message if no GitHub release exists.
+          NOTES=""
+          if gh release view "$REF_NAME" --json body --jq '.body' > /tmp/release-notes.md 2>/dev/null; then
+            NOTES=$(cat /tmp/release-notes.md)
+          else
+            echo "::warning::No GitHub release found for '$REF_NAME'; falling back to tag message"
+            NOTES=$(git tag -l --format='%(contents)' "$REF_NAME" 2>/dev/null || true)
+          fi
+
+          if [[ -z "$NOTES" ]]; then
+            echo "::error::No release notes found for '$REF_NAME'. Cannot verify audit report link."
+            exit 1
+          fi
+
+          # Match a markdown link whose text or URL path contains 'audit'.
+          AUDIT_LINK=$(printf '%s\n' "$NOTES" \
+            | grep -Eoi '\[[^]]*audit[^]]*\]\([^)]+\)|\[[^]]+\]\([^)]*audit[^)]*\)' \
+            | head -n1 || true)
+
+          if [[ -z "$AUDIT_LINK" ]]; then
+            echo "::error::Release notes for '$REF_NAME' do not link to an audit report."
+            echo "::error::Add a markdown link such as [Audit Report](https://.../audit-....pdf) to the release notes."
+            exit 1
+          fi
+
+          AUDIT_URL=$(printf '%s' "$AUDIT_LINK" | sed -E 's/.*\]\(([^)]+)\).*/\1/')
+          echo "audit_link=$AUDIT_URL" >> "$GITHUB_OUTPUT"
+          echo "## ✅ Audit Report Linked" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Release: \`$REF_NAME\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Audit report: $AUDIT_URL" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify recent testnet smoke test passed
+        id: smoke
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          CUTOFF=$(date -u -d '24 hours ago' '+%Y-%m-%dT%H:%M:%SZ')
+
+          gh api "repos/${REPO}/actions/workflows/testnet-smoke.yml/runs?status=success&per_page=20" \
+            > /tmp/smoke-runs.json
+
+          # Qualifying runs: successful, completed within the last 24h, and on
+          # the same commit SHA or on the develop branch.
+          QUALIFYING=$(jq -r --arg cutoff "$CUTOFF" --arg sha "$COMMIT_SHA" '
+            [ .workflow_runs[]
+              | select(.conclusion == "success")
+              | select(.updated_at >= $cutoff)
+              | select(.head_sha == $sha or .head_branch == "develop")
+            ]
+            | sort_by(.updated_at)
+            | reverse
+            | .[]
+            | "\(.html_url)\t\(.head_sha)\t\(.head_branch)\t\(.updated_at)"
+          ' /tmp/smoke-runs.json)
+
+          if [[ -z "$QUALIFYING" ]]; then
+            echo "::error::No successful testnet smoke test run found in the last 24 hours on commit $COMMIT_SHA or on develop."
+            echo "::error::Run the testnet smoke workflow (testnet-smoke.yml) and re-trigger this deploy."
+            exit 1
+          fi
+
+          # Capture the most recent qualifying run URL and all qualifying URLs.
+          LATEST_URL=$(printf '%s\n' "$QUALIFYING" | head -n1 | cut -f1)
+          ALL_URLS=$(printf '%s\n' "$QUALIFYING" | cut -f1 | paste -sd ',' -)
+          echo "smoke_run_url=$LATEST_URL" >> "$GITHUB_OUTPUT"
+          echo "smoke_run_urls=$ALL_URLS" >> "$GITHUB_OUTPUT"
+
+          echo "## ✅ Recent Testnet Smoke Test Passed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Qualifying runs (last 24h, commit \`$COMMIT_SHA\` or \`develop\`):" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "$QUALIFYING" | while IFS=$'\t' read -r url sha branch updated; do
+            echo "- $url (commit \`$sha\`, branch \`$branch\`, $updated)" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Write gates.json
+        env:
+          AUDIT_LINK: ${{ steps.audit.outputs.audit_link }}
+          SMOKE_RUN_URL: ${{ steps.smoke.outputs.smoke_run_url }}
+          SMOKE_RUN_URLS: ${{ steps.smoke.outputs.smoke_run_urls }}
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg audit_link "$AUDIT_LINK" \
+            --arg smoke_run_url "$SMOKE_RUN_URL" \
+            --arg smoke_run_urls "$SMOKE_RUN_URLS" \
+            --arg commit "${{ github.sha }}" \
+            --arg ref "${{ github.ref_name }}" \
+            --arg validated_at "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+            '{
+              audit_report_link: $audit_link,
+              testnet_smoke_run_url: $smoke_run_url,
+              testnet_smoke_run_urls: ($smoke_run_urls | split(",")),
+              commit: $commit,
+              ref: $ref,
+              validated_at: $validated_at
+            }' > gates.json
+          cat gates.json
+
+      - name: Upload gates.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: mainnet-gates-${{ github.run_id }}
+          path: gates.json
+          retention-days: 90
+
   # ── Human approval gate ──────────────────────────────────────────────────────
-  # This job uses the "mainnet" GitHub Environment which must be configured with
-  # required reviewers. The deploy job below will not run until approved.
-  # NOTE: The audit-readiness job must pass before approval can be requested.
+  # This job uses the "mainnet-production" GitHub Environment which MUST be
+  # configured with protection rules in repo settings:
+  #   Settings → Environments → mainnet-production → Required reviewers
+  #     - Add at least 2 maintainers as required reviewers
+  #     - Enable "Prevent self-review"
+  # The deploy job below will not run until the environment is approved by the
+  # required reviewers. The audit-readiness and validate-gates jobs must pass
+  # before approval can be requested.
   await-approval:
     name: Await Mainnet Approval
     runs-on: ubuntu-latest
-    needs: audit-readiness
+    needs: validate-gates
     timeout-minutes: 1440  # 24 hours — expire unapproved deploys
+    permissions:
+      contents: read
+      actions: read
     environment:
-      name: mainnet
+      name: mainnet-production
 
     steps:
-      - name: Approval received
+      - name: Capture approval metadata
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          AUDIT_LINK: ${{ needs.validate-gates.outputs.audit_link }}
+          SMOKE_RUN_URLS: ${{ needs.validate-gates.outputs.smoke_run_urls }}
         run: |
-          echo "✅ Mainnet deploy approved by ${{ github.actor }}"
+          set -euo pipefail
+          # Query the environment approval metadata for this workflow run.
+          gh api "repos/${REPO}/actions/runs/${RUN_ID}/approvals" > /tmp/approvals.json 2>/dev/null || echo '[]' > /tmp/approvals.json
+
+          # Extract distinct approver logins and their approval timestamps.
+          APPROVERS=$(jq -r '
+            [ .[] | select(.state == "approved") ]
+            | map({ login: .user.login, approved_at: .created_at })
+            | unique_by(.login)
+          ' /tmp/approvals.json)
+
+          APPROVER_COUNT=$(printf '%s' "$APPROVERS" | jq 'length')
+          if [[ "$APPROVER_COUNT" -lt 2 ]]; then
+            echo "::error::Fewer than 2 distinct approvers recorded ($APPROVER_COUNT)."
+            echo "::error::Ensure the 'mainnet-production' environment requires 2 maintainer approvals."
+            exit 1
+          fi
+
+          APPROVER_NAMES=$(printf '%s' "$APPROVERS" | jq -r '.[].login' | paste -sd ',' -)
+          echo "approvers=$APPROVER_NAMES" >> "$GITHUB_OUTPUT"
+
           echo "## ✅ Approval Gate Passed" >> "$GITHUB_STEP_SUMMARY"
-          echo "Approved by: @${{ github.actor }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "Approval time: $(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Approvers" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s' "$APPROVERS" | jq -r '.[] | "- @\(.login) — approved at \(.approved_at)"' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Audit Report" >> "$GITHUB_STEP_SUMMARY"
+          echo "- $AUDIT_LINK" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Qualifying Testnet Smoke Test Runs" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s' "$SMOKE_RUN_URLS" | tr ',' '\n' | while read -r url; do
+            [[ -n "$url" ]] && echo "- $url" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+          # Persist the deploy log for downstream jobs and as an artifact.
+          jq -n \
+            --argjson approvers "$APPROVERS" \
+            --arg audit_link "$AUDIT_LINK" \
+            --arg smoke_run_urls "$SMOKE_RUN_URLS" \
+            --arg commit "${{ github.sha }}" \
+            --arg ref "${{ github.ref_name }}" \
+            --arg captured_at "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+            '{
+              approvers: $approvers,
+              audit_report_link: $audit_link,
+              testnet_smoke_run_urls: ($smoke_run_urls | split(",")),
+              commit: $commit,
+              ref: $ref,
+              captured_at: $captured_at
+            }' > deploy-log.json
+          cat deploy-log.json
+
+      - name: Upload deploy-log.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: mainnet-deploy-log-${{ github.run_id }}
+          path: deploy-log.json
+          retention-days: 90
 
   # ── Mainnet deploy ────────────────────────────────────────────────────────────
   deploy:
     name: Deploy to Mainnet
     runs-on: ubuntu-latest
-    needs: await-approval
+    needs: [await-approval, validate-gates]
     timeout-minutes: 20
 
     steps:
@@ -365,3 +567,61 @@ jobs:
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
           SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      # ── Deploy log (approvers, timestamps, audit + test run links) ────────────
+      - name: Append approval metadata to deploy log
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          AUDIT_LINK: ${{ needs.validate-gates.outputs.audit_link }}
+          SMOKE_RUN_URLS: ${{ needs.validate-gates.outputs.smoke_run_urls }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${REPO}/actions/runs/${RUN_ID}/approvals" > /tmp/approvals.json 2>/dev/null || echo '[]' > /tmp/approvals.json
+
+          APPROVERS=$(jq -r '
+            [ .[] | select(.state == "approved") ]
+            | map({ login: .user.login, approved_at: .created_at })
+            | unique_by(.login)
+          ' /tmp/approvals.json)
+
+          jq -n \
+            --argjson approvers "$APPROVERS" \
+            --arg audit_link "$AUDIT_LINK" \
+            --arg smoke_run_urls "$SMOKE_RUN_URLS" \
+            --arg contract_id "${{ steps.deploy.outputs.contract_id }}" \
+            --arg commit "${{ github.sha }}" \
+            --arg ref "${{ github.ref_name }}" \
+            --arg logged_at "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+            '{
+              approvers: $approvers,
+              audit_report_link: $audit_link,
+              testnet_smoke_run_urls: ($smoke_run_urls | split(",")),
+              contract_id: $contract_id,
+              commit: $commit,
+              ref: $ref,
+              logged_at: $logged_at
+            }' > deploy-log.json
+          cat deploy-log.json
+
+          echo "## 📋 Mainnet Deploy Log" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Approvers" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s' "$APPROVERS" | jq -r '.[] | "- @\(.login) — approved at \(.approved_at)"' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Audit Report" >> "$GITHUB_STEP_SUMMARY"
+          echo "- $AUDIT_LINK" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Qualifying Testnet Smoke Test Runs" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s' "$SMOKE_RUN_URLS" | tr ',' '\n' | while read -r url; do
+            [[ -n "$url" ]] && echo "- $url" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Upload deploy log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mainnet-deploy-log-${{ github.run_id }}
+          path: deploy-log.json
+          retention-days: 90
