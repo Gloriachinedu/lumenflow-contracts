@@ -8,12 +8,27 @@
  * All operations are fully async and non-blocking on the main thread.
  *
  * Public API:
- *   receiptCache.get(orderId)            → Promise<object|null>
+ *   receiptCache.get(orderId)            → Promise<{data, cached_at, stale}|null>
  *   receiptCache.set(orderId, data)      → Promise<void>
  *   receiptCache.delete(orderId)         → Promise<void>
  *   receiptCache.clear()                 → Promise<void>
  *   receiptCache.size()                  → Promise<number>
  *   receiptCache.keys()                  → Promise<string[]>
+ *   receiptCache.getWithRevalidate(orderId, fetcher, onRevalidated)
+ *                                        → Promise<{data, cached_at, stale}|null>
+ *   receiptCache.subscribeToRefunds(emitter)
+ *                                        → () => void  (unsubscribe)
+ *   receiptCache.initRefundInvalidation(emitter)
+ *                                        → () => void  (unsubscribe)
+ *
+ * Stale-while-revalidate:
+ *   Entries older than TTL_MS (5 minutes) are considered stale.  get() marks
+ *   them with `stale: true`; getWithRevalidate() returns the stale entry
+ *   immediately and refreshes it in the background via the supplied fetcher.
+ *
+ * Refund invalidation:
+ *   When a 'refund_payment' event is received for an order, that order's
+ *   cache entry is deleted so the next view fetches fresh data.
  *
  * Cache entry shape stored in IndexedDB:
  *   {
@@ -28,6 +43,16 @@ const DB_NAME    = 'lumenflow-receipts';
 const DB_VERSION = 1;
 const STORE_NAME = 'receipts';
 const MAX_ENTRIES = 50;
+const TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Returns true when a cached_at timestamp is older than TTL_MS.
+ * @param {number} cachedAt
+ * @returns {boolean}
+ */
+function isStale(cachedAt) {
+  return (Date.now() - cachedAt) > TTL_MS;
+}
 
 // ── Internal DB handle ────────────────────────────────────────────────────────
 
@@ -148,8 +173,9 @@ export const receiptCache = {
    * Updates accessed_at to mark it as recently used (LRU touch).
    *
    * @param {string} orderId
-   * @returns {Promise<{data: object, cached_at: number}|null>}
-   *   Returns the stored entry (with `data` and `cached_at`) or null if absent.
+   * @returns {Promise<{data: object, cached_at: number, stale: boolean}|null>}
+   *   Returns the stored entry (with `data`, `cached_at` and `stale`) or null
+   *   if absent.  `stale` is true when the entry is older than TTL_MS.
    */
   async get(orderId) {
     try {
@@ -165,11 +191,117 @@ export const receiptCache = {
       store.put(entry);
 
       await awaitTx(tx);
-      return { data: entry.data, cached_at: entry.cached_at };
+      return {
+        data:      entry.data,
+        cached_at: entry.cached_at,
+        stale:     isStale(entry.cached_at),
+      };
     } catch (err) {
       console.warn('[receiptCache] get failed:', err);
       return null;
     }
+  },
+
+  /**
+   * Stale-while-revalidate retrieval.
+   *
+   * - Cache miss: awaits fetcher(), stores the result, returns it (stale:false).
+   * - Fresh hit:  returns the cached entry immediately (stale:false).
+   * - Stale hit:  returns the cached entry immediately (stale:true) and kicks
+   *               off a background fetcher(); on success the fresh data is
+   *               stored via set() and onRevalidated(freshData) is invoked.
+   *
+   * @param {string} orderId
+   * @param {() => Promise<object>} fetcher  Resolves with fresh receipt data.
+   * @param {(freshData: object) => void} [onRevalidated]
+   * @returns {Promise<{data: object, cached_at: number, stale: boolean}|null>}
+   */
+  async getWithRevalidate(orderId, fetcher, onRevalidated) {
+    const entry = await this.get(orderId);
+
+    if (!entry) {
+      try {
+        const fresh = await fetcher();
+        await this.set(orderId, fresh);
+        return { data: fresh, cached_at: Date.now(), stale: false };
+      } catch (err) {
+        console.warn('[receiptCache] revalidate fetch failed:', err);
+        return null;
+      }
+    }
+
+    if (!entry.stale) return entry;
+
+    // Stale — return cached data now, refresh in the background.
+    Promise.resolve()
+      .then(() => fetcher())
+      .then(async (fresh) => {
+        await this.set(orderId, fresh);
+        if (typeof onRevalidated === 'function') {
+          try { onRevalidated(fresh); } catch (e) {
+            console.warn('[receiptCache] onRevalidated callback failed:', e);
+          }
+        }
+      })
+      .catch((err) => {
+        console.warn('[receiptCache] background revalidation failed:', err);
+      });
+
+    return entry;
+  },
+
+  /**
+   * Subscribe to 'refund_payment' events and invalidate the matching order's
+   * cache entry.  Accepts either a DOM EventTarget (e.g. window) or an event
+   * emitter exposing addEventListener/removeEventListener or on/off.
+   *
+   * The event payload may be the event itself (with `detail.order_id` or
+   * `order_id`) or a plain object with an `order_id` field.
+   *
+   * @param {EventTarget|object} [emitter=window]
+   * @returns {() => void} unsubscribe function
+   */
+  subscribeToRefunds(emitter) {
+    const target = emitter || (typeof window !== 'undefined' ? window : null);
+    if (!target) return () => {};
+
+    const handler = (event) => {
+      const payload = (event && event.detail) ? event.detail : event;
+      const orderId = payload && (payload.order_id || payload.orderId);
+      if (orderId) {
+        this.delete(orderId).catch((err) => {
+          console.warn('[receiptCache] refund invalidation failed:', err);
+        });
+      }
+    };
+
+    if (typeof target.addEventListener === 'function') {
+      target.addEventListener('refund_payment', handler);
+      return () => target.removeEventListener('refund_payment', handler);
+    }
+
+    if (typeof target.on === 'function') {
+      target.on('refund_payment', handler);
+      return () => {
+        if (typeof target.off === 'function') target.off('refund_payment', handler);
+        else if (typeof target.removeListener === 'function') {
+          target.removeListener('refund_payment', handler);
+        }
+      };
+    }
+
+    return () => {};
+  },
+
+  /**
+   * Convenience alias for subscribeToRefunds() — initialises refund-driven
+   * cache invalidation and returns the unsubscribe function.
+   *
+   * @param {EventTarget|object} [emitter=window]
+   * @returns {() => void} unsubscribe function
+   */
+  initRefundInvalidation(emitter) {
+    return this.subscribeToRefunds(emitter);
   },
 
   /**

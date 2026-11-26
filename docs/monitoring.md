@@ -18,6 +18,9 @@ All events are emitted under the `lumenflow` topic prefix. See [events-reference
 | `lumenflow/merchant_registered` | New merchant registered |
 | `lumenflow/admin_set` | Admin initialised |
 | `lumenflow/admin_transferred` | Admin privileges transferred |
+| `lumenflow/escrow_expiry_warning` | Escrow approaching `unlock_at` (emitted at the configured warning lead time, default 24 h, before auto-cancellation) |
+
+> **Escrow expiry warnings:** the contract emits `escrow_expiry_warning` whenever an escrow is queried and `unlock_at - current_time <= WARNING_LEAD_TIME`. The lead time is configurable by the admin (default 24 hours). Treat these events as a prompt to release funds proactively before the escrow auto-cancels. The off-chain event poller forwards them as webhook events.
 
 ---
 
@@ -120,6 +123,71 @@ Configure these thresholds in your alerting tool (PagerDuty, Grafana, etc.) by f
 3. **Deduplicate** on `id` — Horizon may re-deliver events after a reconnect.
 4. **Alert on stream errors** — a broken SSE connection means missed events.
 5. **Rotate monitoring keys** — use a read-only Stellar account for the Horizon API; never use a signing key.
+
+---
+
+## Health Check Endpoint
+
+The backend exposes a structured `GET /health` endpoint for Kubernetes probes and dashboards.
+
+### Response shape
+
+```json
+{
+  "status": "ok",
+  "rpc": { "ok": true, "latency_ms": 42 },
+  "redis": { "ok": true },
+  "webhookRelay": { "ok": true }
+}
+```
+
+- `status` is `"ok"` when every dependency is healthy, otherwise `"degraded"`.
+- `rpc` reports reachability of the Stellar RPC node and the measured round-trip latency in milliseconds.
+- `redis` reports the cache/queue connection status.
+- `webhookRelay` reports the webhook relay status.
+
+### Status codes
+
+| Condition | HTTP status |
+|---|---|
+| All dependencies healthy | `200` |
+| Any dependency degraded | `503` |
+
+### Timeout budget
+
+Each dependency check runs with its own timeout so the whole response is computed within **500 ms**:
+
+| Dependency | Timeout |
+|---|---|
+| RPC node | 300 ms |
+| Redis | 100 ms |
+| Webhook relay | 100 ms |
+
+Checks run concurrently; a dependency that times out is reported as `{ "ok": false }` and causes a `503`.
+
+### Kubernetes probes
+
+Point both probes at `/health`. Readiness fails fast on a degraded dependency, while liveness uses a more tolerant threshold to avoid restart loops during brief dependency blips.
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  periodSeconds: 30
+  timeoutSeconds: 1
+  failureThreshold: 5
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  periodSeconds: 10
+  timeoutSeconds: 1
+  failureThreshold: 2
+```
+
+The dashboard `/health` badge polls the same endpoint and displays the real-time status of each dependency.
 
 ---
 
@@ -336,14 +404,38 @@ The dashboard opens with the following panels:
 
 ### Alerts
 
-Three alert rules are embedded in the dashboard JSON:
+Alert rules are provisioned from `monitoring/grafana-alerting.json` (Grafana
+provisioning format). The earlier claim that alert rules are embedded in the
+dashboard JSON is **superseded** — the dashboard file now contains only panels,
+and all alerting lives in the provisioning file so rules can be version
+controlled, reviewed, and deployed independently of the dashboard.
 
-| Alert | Condition | Severity |
-|-------|-----------|----------|
-| High Error Rate | Error rate > 5% for 5 min | Critical |
-| Payment Volume Drop 50% | Volume this hour < 50% of last hour | Warning |
-| Contract Paused | `lumenflow_contract_paused == 1` for 1 min | Critical |
+| Alert | PromQL expression | Window | Threshold | Severity | Routing |
+|-------|-------------------|--------|-----------|----------|---------|
+| Payment Failure Rate High | `sum(rate(lumenflow_payments_failed_total[5m])) / clamp_min(sum(rate(lumenflow_payments_total[5m])), 1) * 100` | 5m | > 5% | Critical | PagerDuty + Slack |
+| Webhook Delivery Failure Rate High | `sum(rate(lumenflow_webhook_deliveries_failed_total[5m])) / clamp_min(sum(rate(lumenflow_webhook_deliveries_total[5m])), 1) * 100` | 5m | > 1% | Critical | PagerDuty + Slack |
+| RPC Error Rate High | `sum(rate(lumenflow_rpc_errors_total[2m])) / clamp_min(sum(rate(lumenflow_rpc_requests_total[2m])), 1) * 100` | 2m | > 2% | Critical | PagerDuty + Slack |
 
-To enable alerts, configure a **Contact point** (Slack, PagerDuty, email, etc.)
-in Grafana under **Alerting → Contact points**, then link it to a
-**Notification policy**.
+All three rules use `for: 0m` so that, combined with the short evaluation
+windows above, on-call is paged within the 2-minute target.
+
+#### Threshold justification
+
+- **Payment failure rate > 5% over 5m.** A sustained 5% failure rate across a
+  5-minute window indicates systemic breakage (bad contract state, token
+  misconfiguration, or a broken payment path) rather than isolated user errors.
+  Lower thresholds produce noise from individual failed attempts; 5% over 5m
+  reliably separates real incidents from background failures.
+- **Webhook delivery failure rate > 1% over 5m.** Webhook delivery is covered by
+  a 99% delivery SLO, so a 1% failure rate sustained for 5 minutes means the SLO
+  is actively being breached. The 5-minute window avoids paging on transient
+  single-delivery retries while still catching degradation quickly.
+- **RPC error rate > 2% over 2m.** RPC errors typically signal a provider outage
+  or rate-limiting. A 2% error rate over a 2-minute window is high enough to
+  exclude normal transient errors but short enough to detect an outage fast
+  enough to meet the 2-minute paging target.
+
+To enable alerts, apply the provisioning file (or mount it into Grafana's
+`provisioning/alerting/` directory), then configure the **PagerDuty** and
+**Slack** contact points referenced by the rules under
+**Alerting → Contact points** and link them via the **Notification policy**.

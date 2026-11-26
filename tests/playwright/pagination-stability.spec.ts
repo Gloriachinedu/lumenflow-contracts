@@ -173,3 +173,119 @@ test('cursor-invalidation: no records duplicated across pages after mid-session 
   const unique = new Set(collected);
   expect(unique.size).toBe(collected.length);
 });
+
+// ── Pagination controls & deep-linking (issue #1537) ──────────────────────────
+//
+// Verifies the rendered page controls (Prev/Next, page indicator), cursor-based
+// deep links, keyboard accessibility, and browser history integration.
+
+/** Read the current `?cursor=` value from the address bar (null when absent). */
+function cursorParam(page): string | null {
+  return new URL(page.url()).searchParams.get('cursor');
+}
+
+test('controls: Next/Prev navigate three pages and show correct records', async ({ page }) => {
+  await page.goto(PAGE_URL);
+
+  // Page 1 (default page size 5): ORDER_001 … ORDER_005.
+  await expect(page.locator('#page-meta')).toHaveText(/Page 1 · \d+ record/);
+  expect(await visibleIds(page)).toEqual(ALL_IDS.slice(0, 5));
+  await expect(page.locator('#prev-btn')).toBeDisabled();
+  await expect(page.locator('#next-btn')).toBeEnabled();
+
+  // Page 2: ORDER_006 … ORDER_010.
+  await page.locator('#next-btn').click();
+  await expect(page.locator('#page-meta')).toHaveText(/Page 2 · \d+ record/);
+  expect(await visibleIds(page)).toEqual(ALL_IDS.slice(5, 10));
+  await expect(page.locator('#prev-btn')).toBeEnabled();
+
+  // Page 3: ORDER_011 … ORDER_012.
+  await page.locator('#next-btn').click();
+  await expect(page.locator('#page-meta')).toHaveText(/Page 3 · \d+ record/);
+  expect(await visibleIds(page)).toEqual(ALL_IDS.slice(10));
+  await expect(page.locator('#next-btn')).toBeDisabled();
+});
+
+test('controls: page indicator shows current page and total records', async ({ page }) => {
+  await page.goto(PAGE_URL);
+  await expect(page.locator('#page-meta')).toHaveText(
+    new RegExp(`Page 1 · ${ALL_IDS.length} record`)
+  );
+
+  await page.locator('#next-btn').click();
+  await expect(page.locator('#page-meta')).toHaveText(
+    new RegExp(`Page 2 · ${ALL_IDS.length} record`)
+  );
+});
+
+test('controls: URL is updated with the cursor on navigation', async ({ page }) => {
+  await page.goto(PAGE_URL);
+  expect(cursorParam(page)).toBeNull();
+
+  await page.locator('#next-btn').click();
+  await expect(page.locator('#page-meta')).toHaveText(/Page 2 · \d+ record/);
+  expect(cursorParam(page)).toBe('ORDER_006');
+
+  await page.locator('#next-btn').click();
+  await expect(page.locator('#page-meta')).toHaveText(/Page 3 · \d+ record/);
+  expect(cursorParam(page)).toBe('ORDER_011');
+});
+
+test('controls: deep link with ?cursor= loads at the correct position', async ({ page }) => {
+  await page.goto(`${PAGE_URL}?cursor=ORDER_006`);
+
+  const ids = await visibleIds(page);
+  expect(ids[0]).toBe('ORDER_006');
+  expect(ids).toEqual(ALL_IDS.slice(5, 10));
+  await expect(page.locator('#page-meta')).toHaveText(/Page 1 · \d+ record/);
+});
+
+test('controls: Prev/Next are keyboard accessible (Tab + Enter/Space)', async ({ page }) => {
+  await page.goto(PAGE_URL);
+
+  // Focus the Next button directly and activate with Enter.
+  await page.locator('#next-btn').focus();
+  await expect(page.locator('#next-btn')).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#page-meta')).toHaveText(/Page 2 · \d+ record/);
+  expect(await visibleIds(page)).toEqual(ALL_IDS.slice(5, 10));
+
+  // Activate Prev with Space.
+  await page.locator('#prev-btn').focus();
+  await expect(page.locator('#prev-btn')).toBeFocused();
+  await page.keyboard.press('Space');
+  await expect(page.locator('#page-meta')).toHaveText(/Page 1 · \d+ record/);
+  expect(await visibleIds(page)).toEqual(ALL_IDS.slice(0, 5));
+});
+
+test('controls: browser back/forward navigates cursor history', async ({ page }) => {
+  await page.goto(PAGE_URL);
+  const page1 = await visibleIds(page);
+
+  await page.locator('#next-btn').click();
+  await expect(page.locator('#page-meta')).toHaveText(/Page 2 · \d+ record/);
+  const page2 = await visibleIds(page);
+
+  await page.locator('#next-btn').click();
+  await expect(page.locator('#page-meta')).toHaveText(/Page 3 · \d+ record/);
+  const page3 = await visibleIds(page);
+
+  // Back → page 2.
+  await page.goBack();
+  await expect(page.locator('#page-meta')).toHaveText(/Page 2 · \d+ record/);
+  expect(await visibleIds(page)).toEqual(page2);
+
+  // Back → page 1.
+  await page.goBack();
+  await expect(page.locator('#page-meta')).toHaveText(/Page 1 · \d+ record/);
+  expect(await visibleIds(page)).toEqual(page1);
+
+  // Forward → page 2, then page 3.
+  await page.goForward();
+  await expect(page.locator('#page-meta')).toHaveText(/Page 2 · \d+ record/);
+  expect(await visibleIds(page)).toEqual(page2);
+
+  await page.goForward();
+  await expect(page.locator('#page-meta')).toHaveText(/Page 3 · \d+ record/);
+  expect(await visibleIds(page)).toEqual(page3);
+});

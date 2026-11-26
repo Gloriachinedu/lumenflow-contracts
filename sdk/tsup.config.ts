@@ -3,48 +3,53 @@ import { defineConfig } from 'tsup';
 /**
  * tsup build configuration for @lumenflow/sdk
  *
- * Produces two output formats:
- *   - dist/esm/  — ES module build (tree-shakeable, for modern bundlers)
- *   - dist/cjs/  — CommonJS build  (for Node.js require() and legacy tooling)
+ * Produces two output formats at the package root of dist/:
+ *   - dist/index.mjs  — ES module build (tree-shakeable, for modern bundlers)
+ *   - dist/index.cjs  — CommonJS build  (for Node.js require() and legacy tooling)
  *
- * Both formats include TypeScript declaration files (.d.ts).
+ * Both formats include TypeScript declaration files:
+ *   - dist/index.d.ts  — declarations for both formats (single copy)
  *
- * Issue #1039: Publish ESM and CJS dual-format builds
+ * Issue #1526: Publish ESM and CJS dual-format builds via tsup
  */
 export default defineConfig({
   entry: ['src/index.ts'],
   format: ['esm', 'cjs'],
   outDir: 'dist',
   /**
-   * Output ESM to dist/esm/ and CJS to dist/cjs/ so consumers can explicitly
-   * reference either format without relying solely on the exports map.
+   * Use .mjs for ESM and .cjs for CJS so Node.js and bundlers
+   * can unambiguously determine the module format without relying
+   * solely on the exports map.
    */
   outExtension({ format }) {
     return {
-      js: format === 'esm' ? '.js' : '.js',
+      js: format === 'esm' ? '.mjs' : '.cjs',
     };
   },
   /**
    * Generate TypeScript declaration files (.d.ts) for both formats.
-   * The declarations are placed alongside their respective JS outputs.
-   *
-   * Issue #1114: declarationMap:true causes tsup to also emit .d.ts.map files
-   * so that IDE 'Go to Definition' navigates to the original .ts source rather
-   * than the compiled .d.ts stub.
+   * A single dist/index.d.ts is sufficient; the exports map points
+   * both import and require conditions to the same declarations.
    */
   dts: {
     resolve: true,
   },
+
   /**
-   * Split output into separate directories per format.
+   * Do not bundle dependencies — consumers install them via package.json.
+   * This keeps the output lean and avoids duplicate copies of stellar-sdk.
    */
-  esbuildOptions(options, context) {
-    if (context.format === 'esm') {
-      options.outdir = 'dist/esm';
-    } else {
-      options.outdir = 'dist/cjs';
-    }
-  },
+  external: ['@stellar/stellar-sdk', 'tweetnacl'],
+  /**
+   * Issue #1619: Enable code splitting so dynamically imported modules
+   * (e.g. the lazy-loaded contract wrapper) are emitted as separate chunks
+   * instead of being inlined into the entry bundle. This keeps the initial
+   * SDK payload small; the contract wrapper chunk is fetched on first use.
+   *
+   * Code splitting is only supported for the ESM output; the CJS build
+   * inlines dynamic imports (Node.js require() consumers are unaffected).
+   */
+  splitting: true,
   /**
    * Do not bundle dependencies — consumers install them via package.json.
    * This keeps the output lean and avoids duplicate copies of stellar-sdk.

@@ -44,6 +44,51 @@ export interface Merchant {
   verified: boolean;
   registeredAt: bigint;
   totalReceived: bigint;
+  /**
+   * Optional maximum payment amount enforced during `process_payment`.
+   * Maps the Rust `Option<i128>`; `null`/`undefined` means no limit.
+   */
+  maxPaymentAmount?: bigint | null;
+}
+
+/**
+ * Arguments for the `set_merchant_payment_limit` admin entrypoint.
+ * `limit` of `null` clears the limit (no maximum).
+ */
+export interface SetMerchantPaymentLimitArgs {
+  merchant: string;
+  limit: bigint | null;
+}
+
+/**
+ * Merchant profile as stored by the smart contract.
+ *
+ * `refundWindowSecs` is the merchant-specific refund window in seconds.
+ * When omitted (or `undefined`), the contract falls back to the global
+ * default refund window.  Mirrors the Rust `MerchantProfile` struct.
+ */
+export interface MerchantProfile {
+  address: string;
+  name: string;
+  description: string;
+  contactInfo: string;
+  category: MerchantCategory;
+  active: boolean;
+  verified: boolean;
+  registeredAt: bigint;
+  totalReceived: bigint;
+  refundWindowSecs?: bigint;
+}
+
+/**
+ * Arguments for the `set_refund_window` contract entrypoint.
+ *
+ * Callable by the merchant to configure their own refund period.
+ * `refundWindowSecs` must be a non-negative number of seconds.
+ */
+export interface SetRefundWindowArgs {
+  merchant: string;
+  refundWindowSecs: bigint;
 }
 
 export enum PaymentStatus {
@@ -165,10 +210,67 @@ export interface PaymentFilter {
   tag?: string;
 }
 
+/**
+ * Generic page shape used by paginated list endpoints.
+ *
+ * `nextCursor` is `null` when there are no further pages; consumers should
+ * treat both `null` and `undefined` as "end of results".
+ */
+export interface PaginatedPage<T> {
+  items: T[];
+  nextCursor?: string | null;
+  total: number;
+}
+
 export interface PaymentPage {
   payments: PaymentOrder[];
-  nextCursor?: string;
+  nextCursor?: string | null;
   total: number;
+}
+
+/** Event types emitted by the smart contract that can be subscribed to. */
+export type LumenFlowEventType =
+  | "PaymentReceived"
+  | "RefundInitiated"
+  | "RefundCompleted"
+  | "DisputeOpened"
+  | "DisputeResolved"
+  | "MerchantRegistered"
+  | "SubscriptionCharged";
+
+/** Map of event type to its decoded payload shape. */
+export interface LumenFlowEventPayloadMap {
+  PaymentReceived: PaymentSummary;
+  RefundInitiated: RefundRecord;
+  RefundCompleted: RefundRecord;
+  DisputeOpened: DisputeRecord;
+  DisputeResolved: DisputeRecord;
+  MerchantRegistered: Merchant;
+  SubscriptionCharged: Subscription;
+}
+
+/**
+ * Typed event payload delivered to subscription handlers.
+ *
+ * `payload` is the decoded, strongly-typed event body (never raw XDR).
+ */
+export interface TypedEventPayload<T extends LumenFlowEventType> {
+  type: T;
+  payload: LumenFlowEventPayloadMap[T];
+  ledger: number;
+  txHash: string;
+  timestamp: bigint;
+}
+
+/** Handler invoked for each event received by a subscription. */
+export type EventHandler<T extends LumenFlowEventType> = (
+  event: TypedEventPayload<T>,
+) => void | Promise<void>;
+
+/** Options controlling event subscription polling. */
+export interface SubscribeOptions {
+  /** Polling interval in milliseconds. Defaults to 5000 (5 s). */
+  intervalMs?: number;
 }
 
 export interface GlobalStats {
@@ -211,62 +313,49 @@ export interface Subscription {
 }
 
 /**
- * Options for building a shareable payment link.
+ * Protocol fee configuration.
  *
- * `merchant` is required; `amount` and `memo` are optional.  The resulting URL
- * follows the `/pay?merchant=X&amount=Y&memo=Z` schema and pre-fills the
- * payment form in `index.html` without requiring SDK integration.
+ * `bps` is expressed in basis points (1 bps = 0.01%).  A value of `0`
+ * disables the fee module entirely, meaning no extra token transfer occurs.
  */
-export interface PaymentLinkOptions {
-  /** Merchant address (or identifier) the payment is directed to. */
-  merchant: string;
-  /** Optional payment amount, as a decimal string (e.g. "12.5"). */
-  amount?: string;
-  /** Optional memo attached to the payment. */
-  memo?: string;
-  /** Optional base URL override (defaults to the current origin / `/pay`). */
-  baseUrl?: string;
+export interface FeeConfig {
+  /** Address that receives the deducted protocol fee. */
+  recipient: string;
+  /** Fee in basis points (0–10000). `0` disables the fee module. */
+  bps: number;
 }
 
-/** Result returned by `generatePaymentLink`. */
-export interface PaymentLinkResult {
-  /** The fully-qualified shareable payment URL. */
-  url: string;
-  /** The parsed/validated options encoded in the URL. */
-  options: PaymentLinkOptions;
+/**
+ * Parameters for a cross-asset payment.
+ *
+ * The payer sends `sendAsset` (up to `sendMax`) and the merchant receives
+ * `destAsset` via a Stellar DEX path payment.  `path` lists intermediate
+ * assets used for conversion; pass an empty array for a direct conversion.
+ */
+export interface CrossAssetPaymentParams {
+  /** Asset the payer sends (e.g. "native" or "CODE:ISSUER"). */
+  sendAsset: string;
+  /** Maximum amount of `sendAsset` the payer is willing to spend. */
+  sendMax: bigint;
+  /** Asset the merchant receives. */
+  destAsset: string;
+  /** Intermediate assets used for the conversion path. */
+  path: string[];
+  /** Minimum amount of `destAsset` the merchant must receive (slippage guard). */
+  minReceive: bigint;
 }
 
-/** Error raised when payment link options are invalid. */
-export class PaymentLinkError extends Error {
-  /** The option field that failed validation, if applicable. */
-  readonly field?: keyof PaymentLinkOptions;
-
-  constructor(message: string, field?: keyof PaymentLinkOptions) {
-    super(message);
-    this.name = "PaymentLinkError";
-    this.field = field;
-  }
-}
-
-/** Assignment of a third-party arbiter to a dispute. */
-export interface ArbiterAssignment {
-  refundId: string;
-  arbiter: string;
-  assignedAt: bigint;
-  /** Address of the admin who performed the assignment. */
-  assignedBy: string;
-}
-
-/** A binding vote cast by the assigned arbiter. */
-export interface ArbiterVote {
-  refundId: string;
-  arbiter: string;
-  outcome: ArbiterVoteOutcome;
-  votedAt: bigint;
-}
-
-/** Outcome of an arbiter vote; determines fund release or refund. */
-export enum ArbiterVoteOutcome {
-  FavorPayer = "FavorPayer",
-  FavorMerchant = "FavorMerchant",
+/** Event emitted after a successful cross-asset payment conversion. */
+export interface CrossAssetPaymentEvent {
+  orderId: string;
+  merchantAddress: string;
+  payer: string;
+  sendAsset: string;
+  sendAmount: bigint;
+  destAsset: string;
+  destAmount: bigint;
+  /** Exchange rate used, expressed as destAmount / sendAmount. */
+  exchangeRate: number;
+  path: string[];
+  timestamp: bigint;
 }

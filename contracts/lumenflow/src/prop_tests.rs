@@ -352,6 +352,190 @@ proptest! {
     }
 }
 
+// ── Refund invariant property tests (Issue #1513) ────────────────────────────
+//
+// These properties verify the two core refund invariants for arbitrary inputs:
+//
+//   1. Cumulative refunds never exceed the original payment amount.
+//   2. The number of refunds per payment never exceeds `MAX_REFUNDS_PER_PAYMENT`.
+//
+// Strategies deliberately use small refund counts and small sequences so that
+// proptest's shrinking produces minimal counterexamples on failure.
+
+#[cfg(feature = "proptest")]
+mod refund_invariants {
+    use super::*;
+    use crate::MAX_REFUNDS_PER_PAYMENT;
+
+    /// Generates a payment amount across the full positive i128 range.
+    fn payment_amount() -> impl Strategy<Value = i128> {
+        prop_oneof![
+            Just(1i128),
+            Just(2i128),
+            Just(i128::MAX),
+            Just(i128::MAX - 1),
+            (1i128..=1_000_000i128),
+            (1i128..=i128::MAX),
+        ]
+    }
+
+    /// Generates a small sequence (0..=4) of refund amounts, each in
+    /// [1, i128::MAX].  Keeping the sequence short keeps shrunk
+    /// counterexamples minimal.
+    fn refund_sequence() -> impl Strategy<Value = std::vec::Vec<i128>> {
+        prop::collection::vec(1i128..=i128::MAX, 0..=4)
+    }
+
+    proptest! {
+        /// Invariant 1: for any payment amount and any sequence of refund
+        /// amounts, the cumulative refunded total never exceeds the original
+        /// payment amount.  Any refund that would push the total past the
+        /// original must be rejected with `RefundExceedsOriginal`.
+        #[test]
+        fn prop_cumulative_refunds_never_exceed_payment(
+            pay_amount in payment_amount(),
+            refunds in refund_sequence(),
+        ) {
+            let f = setup_fuzz();
+            let order_id = SorobanString::from_str(&f.env, "FUZZ_CUM_REF");
+
+            f.client.process_payment_with_signature(
+                &f.payer,
+                &order_id,
+                &f.merchant,
+                &f.token,
+                &pay_amount,
+                &SorobanString::from_str(&f.env, ""),
+                &None,
+                &dummy_sig(&f.env),
+                &dummy_pub_key(&f.env),
+            );
+
+            let mut expected_total: i128 = 0;
+            let mut accepted: u32 = 0;
+
+            for (i, refund_amount) in refunds.iter().enumerate() {
+                // Once the refund limit is reached, further refunds are
+                // rejected by the count invariant, not the amount invariant.
+                if accepted >= MAX_REFUNDS_PER_PAYMENT {
+                    break;
+                }
+
+                let refund_id = SorobanString::from_str(&f.env, "FUZZ_CUM_REF_R");
+                let result = f.client.try_initiate_refund(
+                    &f.payer,
+                    &refund_id,
+                    &order_id,
+                    refund_amount,
+                    &SorobanString::from_str(&f.env, "fuzz"),
+                );
+
+                let would_exceed = expected_total
+                    .checked_add(*refund_amount)
+                    .map_or(true, |total| total > pay_amount);
+
+                if would_exceed {
+                    prop_assert_eq!(
+                        result,
+                        Err(Ok(PaymentError::RefundExceedsOriginal)),
+                        "Refund #{} of {} on payment {} (already refunded {}) must be rejected",
+                        i,
+                        refund_amount,
+                        pay_amount,
+                        expected_total
+                    );
+                    // Rejected refunds do not change the cumulative total.
+                } else {
+                    prop_assert!(
+                        result.is_ok(),
+                        "Refund #{} of {} on payment {} (already refunded {}) must succeed, got: {:?}",
+                        i,
+                        refund_amount,
+                        pay_amount,
+                        expected_total,
+                        result
+                    );
+                    expected_total += refund_amount;
+                    accepted += 1;
+                }
+
+                // Core invariant: cumulative refunds never exceed the payment.
+                prop_assert!(
+                    expected_total <= pay_amount,
+                    "Cumulative refunds {} exceeded payment amount {}",
+                    expected_total,
+                    pay_amount
+                );
+            }
+        }
+
+        /// Invariant 2: the number of refunds per payment never exceeds
+        /// `MAX_REFUNDS_PER_PAYMENT`.  The (MAX+1)-th refund must be rejected
+        /// with `RefundLimitExceeded`.
+        #[test]
+        fn prop_refund_count_bounded(
+            pay_amount in payment_amount(),
+            refund_count in 0u32..=(MAX_REFUNDS_PER_PAYMENT + 2),
+        ) {
+            let f = setup_fuzz();
+            let order_id = SorobanString::from_str(&f.env, "FUZZ_CNT_REF");
+
+            f.client.process_payment_with_signature(
+                &f.payer,
+                &order_id,
+                &f.merchant,
+                &f.token,
+                &pay_amount,
+                &SorobanString::from_str(&f.env, ""),
+                &None,
+                &dummy_sig(&f.env),
+                &dummy_pub_key(&f.env),
+            );
+
+            // Each refund is 1 unit so the amount invariant never interferes
+            // with the count invariant (pay_amount >= 1).
+            let mut accepted: u32 = 0;
+            for i in 0..refund_count {
+                let refund_id = SorobanString::from_str(&f.env, "FUZZ_CNT_REF_R");
+                let result = f.client.try_initiate_refund(
+                    &f.payer,
+                    &refund_id,
+                    &order_id,
+                    &1i128,
+                    &SorobanString::from_str(&f.env, "fuzz"),
+                );
+
+                if accepted < MAX_REFUNDS_PER_PAYMENT {
+                    prop_assert!(
+                        result.is_ok(),
+                        "Refund #{} (limit {}) must succeed, got: {:?}",
+                        i,
+                        MAX_REFUNDS_PER_PAYMENT,
+                        result
+                    );
+                    accepted += 1;
+                } else {
+                    prop_assert_eq!(
+                        result,
+                        Err(Ok(PaymentError::RefundLimitExceeded)),
+                        "Refund #{} exceeds MAX_REFUNDS_PER_PAYMENT ({}) and must be rejected",
+                        i,
+                        MAX_REFUNDS_PER_PAYMENT
+                    );
+                }
+
+                // Core invariant: accepted refund count is always bounded.
+                prop_assert!(
+                    accepted <= MAX_REFUNDS_PER_PAYMENT,
+                    "Accepted refunds {} exceeded MAX_REFUNDS_PER_PAYMENT ({})",
+                    accepted,
+                    MAX_REFUNDS_PER_PAYMENT
+                );
+            }
+        }
+    }
+}
+
 // ── Fixed reproduction tests for fuzzer-discovered edge cases ─────────────────
 
 /// Reproduces the i128::MAX boundary case required by acceptance criteria.

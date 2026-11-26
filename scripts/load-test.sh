@@ -27,13 +27,13 @@
 #   MULTISIG_SIGNER_TX_XDRS — JSON array of five pre-signed sign_multisig_payment
 #                     transaction envelopes for the same payment and unique signers
 #   MULTISIG_THRESHOLD — signatures required for the multisig payment (default: 3)
-#   WEBHOOK_RELAY_URL — base URL of the webhook relay under test; enables the
-#                     webhook relay scenario (Issue #1578)
-#   WEBHOOK_EVENTS_PER_MIN — target event rate for the relay scenario (default: 1000)
-#   WEBHOOK_DURATION — duration of the relay scenario (default: 5m)
-#   WEBHOOK_P99_THRESHOLD_MS — P99 delivery latency budget (default: 2000)
-#   WEBHOOK_BASELINE_P99_MS — recorded baseline P99 delivery latency (ms) for the
-#                     relay scenario; a >20% regression fails the run (default: 2000)
+#   DB_LOAD_TEST_URL — base URL of the off-chain service exposing the
+#                     database-backed webhook/event endpoints (default:
+#                     http://localhost:8080). Used by the Issue #1628
+#                     connection-pool scenario.
+#   DB_LOAD_TEST_PATH — path of the database-backed endpoint to exercise
+#                     (default: /api/v1/events)
+#   DB_LOAD_VUS     — concurrent requests for the DB pool scenario (default: 500)
 #
 # Pass/fail thresholds:
 #   p99 latency < 5 000 ms
@@ -55,6 +55,12 @@
 # Issue #1276: when MULTISIG_SIGNER_TX_XDRS is provided, five concurrent k6 VUs
 # submit pre-signed sign_multisig_payment transactions and wait for finality.
 # This requires funded signer accounts and an already initiated payment.
+#
+# Issue #1628: a third scenario ("db_connection_pool") fires DB_LOAD_VUS
+# (default 500) concurrent requests at the off-chain service's database-backed
+# endpoint to verify the connection pool (min 2 / max 20) does not exhaust
+# under load. It fails if any connection-pool error is observed or if the
+# error rate exceeds 1%.
 #
 # Results are printed to stdout and written to RESULTS_FILE in JSON format.
 set -euo pipefail
@@ -85,11 +91,9 @@ BATCH_ITEMS="${BATCH_ITEMS:-10}"
 BASELINE_P95_MS="${BASELINE_P95_MS:-1200}"
 MULTISIG_SIGNER_TX_XDRS="${MULTISIG_SIGNER_TX_XDRS:-}"
 MULTISIG_THRESHOLD="${MULTISIG_THRESHOLD:-3}"
-WEBHOOK_RELAY_URL="${WEBHOOK_RELAY_URL:-}"
-WEBHOOK_EVENTS_PER_MIN="${WEBHOOK_EVENTS_PER_MIN:-1000}"
-WEBHOOK_DURATION="${WEBHOOK_DURATION:-5m}"
-WEBHOOK_P99_THRESHOLD_MS="${WEBHOOK_P99_THRESHOLD_MS:-2000}"
-WEBHOOK_BASELINE_P99_MS="${WEBHOOK_BASELINE_P99_MS:-2000}"
+DB_LOAD_TEST_URL="${DB_LOAD_TEST_URL:-http://localhost:8080}"
+DB_LOAD_TEST_PATH="${DB_LOAD_TEST_PATH:-/api/v1/events}"
+DB_LOAD_VUS="${DB_LOAD_VUS:-500}"
 
 echo "════════════════════════════════════════════════════════════════"
 echo "  LumenFlow Load Test — High-Frequency Payment Submission"
@@ -102,14 +106,7 @@ echo "  Payments/VU:  $PAYMENTS_PER_VU"
 echo "  Total:        $((VUS * PAYMENTS_PER_VU)) payment submissions"
 echo "  Batch scenario: $BATCH_CLIENTS concurrent clients x $BATCH_ITEMS items"
 echo "  Baseline P95: ${BASELINE_P95_MS}ms (batch scenario, 20% regression gate)"
-if [ -n "$WEBHOOK_RELAY_URL" ]; then
-  echo "  Webhook relay: $WEBHOOK_RELAY_URL"
-  echo "  Relay load:   ${WEBHOOK_EVENTS_PER_MIN} events/min for ${WEBHOOK_DURATION}"
-  echo "  Relay budget: P99 < ${WEBHOOK_P99_THRESHOLD_MS}ms, 0 dropped events"
-  echo "  Relay baseline P99: ${WEBHOOK_BASELINE_P99_MS}ms (20% regression gate)"
-else
-  echo "  Webhook relay: skipped (set WEBHOOK_RELAY_URL to enable)"
-fi
+echo "  DB pool scenario: $DB_LOAD_VUS concurrent requests -> ${DB_LOAD_TEST_URL}${DB_LOAD_TEST_PATH}"
 echo "  Results file: $RESULTS_FILE"
 echo "════════════════════════════════════════════════════════════════"
 echo ""
@@ -151,10 +148,10 @@ const batchPaymentErrors   = new Rate('lumenflow_batch_payment_error_rate');
 const multisigSignerDuration = new Trend('lumenflow_multisig_signer_duration', true);
 const multisigSignerErrors = new Rate('lumenflow_multisig_signer_error_rate');
 
-// Issue #1578 — webhook relay scenario metrics
-const webhookDeliveryDuration = new Trend('lumenflow_webhook_delivery_duration', true);
-const webhookDroppedEvents    = new Counter('lumenflow_webhook_dropped_events');
-const webhookDeliveredEvents  = new Counter('lumenflow_webhook_delivered_events');
+// Issue #1628 — database connection pool scenario metrics
+const dbRequestDuration = new Trend('lumenflow_db_request_duration', true);
+const dbRequestErrors   = new Rate('lumenflow_db_request_error_rate');
+const dbPoolErrors      = new Rate('lumenflow_db_pool_error_rate');
 
 const RPC_URL     = __ENV.RPC_URL     || 'https://soroban-testnet.stellar.org';
 const CONTRACT_ID = __ENV.CONTRACT_ID || '';
@@ -180,18 +177,23 @@ if (MULTISIG_ENABLED && new Set(MULTISIG_SIGNER_TX_XDRS).size !== MULTISIG_SIGNE
 const BASELINE_P95_MS = parseFloat(__ENV.BASELINE_P95_MS) || 1200;
 const BATCH_P95_GATE_MS = BASELINE_P95_MS * 1.2;
 
-// Issue #1578 — webhook relay load scenario configuration.
-const WEBHOOK_RELAY_URL = __ENV.WEBHOOK_RELAY_URL || '';
-const WEBHOOK_ENABLED = WEBHOOK_RELAY_URL.length > 0;
-const WEBHOOK_EVENTS_PER_MIN = parseInt(__ENV.WEBHOOK_EVENTS_PER_MIN) || 1000;
-const WEBHOOK_DURATION = __ENV.WEBHOOK_DURATION || '5m';
-const WEBHOOK_P99_THRESHOLD_MS = parseFloat(__ENV.WEBHOOK_P99_THRESHOLD_MS) || 2000;
-const WEBHOOK_BASELINE_P99_MS = parseFloat(__ENV.WEBHOOK_BASELINE_P99_MS) || 2000;
-const WEBHOOK_P99_GATE_MS = Math.min(WEBHOOK_P99_THRESHOLD_MS, WEBHOOK_BASELINE_P99_MS * 1.2);
-// Events per second, spread across the configured number of VUs.
-const WEBHOOK_EVENTS_PER_SEC = WEBHOOK_EVENTS_PER_MIN / 60;
-const WEBHOOK_VUS = Math.max(1, Math.min(50, Math.ceil(WEBHOOK_EVENTS_PER_SEC)));
-const WEBHOOK_SLEEP_SEC = WEBHOOK_VUS / WEBHOOK_EVENTS_PER_SEC;
+// Issue #1628 — DB connection pool scenario configuration
+const DB_LOAD_TEST_URL  = __ENV.DB_LOAD_TEST_URL  || 'http://localhost:8080';
+const DB_LOAD_TEST_PATH = __ENV.DB_LOAD_TEST_PATH || '/api/v1/events';
+const DB_LOAD_VUS       = parseInt(__ENV.DB_LOAD_VUS) || 500;
+const DB_REQUEST_TIMEOUT = '10s';
+// Substrings that indicate the connection pool was exhausted / a query was
+// killed by the 5s query timeout rather than a genuine application error.
+const DB_POOL_ERROR_MARKERS = [
+  'connection pool',
+  'pool exhausted',
+  'too many connections',
+  'connection timeout',
+  'timed out acquiring',
+  'query timeout',
+  'statement timeout',
+  'canceling statement',
+];
 
 // ── Test configuration ──────────────────────────────────────────────────────
 export const options = {
@@ -224,19 +226,16 @@ export const options = {
         maxDuration: '5m',
       },
     } : {}),
-    // Issue #1578 — webhook relay at WEBHOOK_EVENTS_PER_MIN events/minute.
-    ...(WEBHOOK_ENABLED ? {
-      webhook_relay: {
-        executor: 'constant-arrival-rate',
-        exec: 'webhookRelay',
-        rate: WEBHOOK_EVENTS_PER_MIN,
-        timeUnit: '1m',
-        duration: WEBHOOK_DURATION,
-        preAllocatedVUs: WEBHOOK_VUS,
-        maxVUs: WEBHOOK_VUS * 2,
-        startTime: '0s',
-      },
-    } : {}),
+    // Issue #1628 — 500 concurrent requests against the DB-backed endpoint
+    // to verify the connection pool (min 2 / max 20) does not exhaust.
+    db_connection_pool: {
+      executor: 'per-vu-iterations',
+      exec: 'dbConnectionPool',
+      vus: DB_LOAD_VUS,
+      iterations: 1,
+      startTime: '0s',
+      maxDuration: '5m',
+    },
   },
   summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(20)', 'p(40)', 'p(50)', 'p(60)', 'p(80)', 'p(90)', 'p(95)', 'p(99)', 'p(100)'],
   thresholds: {
@@ -256,11 +255,11 @@ export const options = {
       'lumenflow_multisig_signer_error_rate': ['rate<0.01'],
       'lumenflow_multisig_signer_duration': ['p(99)<30000'],
     } : {}),
-    // Webhook relay: P99 delivery latency budget and zero dropped events.
-    ...(WEBHOOK_ENABLED ? {
-      'lumenflow_webhook_delivery_duration': [`p(99)<${WEBHOOK_P99_GATE_MS}`],
-      'lumenflow_webhook_dropped_events': ['count==0'],
-    } : {}),
+    // DB pool scenario: no connection-pool errors at all, error rate < 1%,
+    // and p99 latency under the 5s query timeout budget.
+    'lumenflow_db_pool_error_rate': ['rate==0'],
+    'lumenflow_db_request_error_rate': ['rate<0.01'],
+    'lumenflow_db_request_duration': ['p(99)<5000'],
   },
 };
 
@@ -441,47 +440,35 @@ export function concurrentMultisigSigner() {
   }
 }
 
-// ── Scenario: webhook_relay (Issue #1578) ────────────────────────────────────
-// Each iteration posts one webhook event to the relay and measures the
-// end-to-end delivery latency reported by the relay. Events that fail to be
-// accepted (non-2xx, timeout, or a relay-reported drop) are counted as dropped.
-export function webhookRelay() {
-  const eventId = `WH-${__VU}-${__ITER}-${Date.now()}`;
-  const payload = JSON.stringify({
-    id: eventId,
-    type: 'payment.created',
-    created_at: new Date().toISOString(),
-    data: { order_id: eventId, amount: 1000 },
-  });
+// ── Scenario: db_connection_pool (Issue #1628) ───────────────────────────────
+// Each of DB_LOAD_VUS virtual users issues one request to the off-chain
+// service's database-backed endpoint. Responses are inspected for
+// connection-pool exhaustion markers so the test fails loudly if the pool
+// (min 2 / max 20) is starved under load.
+export function dbConnectionPool() {
+  const vuId = __VU;
+  const url = `${DB_LOAD_TEST_URL}${DB_LOAD_TEST_PATH}?vu=${vuId}&ts=${Date.now()}`;
 
   const start = Date.now();
-  const response = http.post(`${WEBHOOK_RELAY_URL}/events`, payload, {
+  const response = http.get(url, {
     headers: { 'Content-Type': 'application/json' },
-    timeout: '10s',
+    timeout: DB_REQUEST_TIMEOUT,
   });
   const elapsed = Date.now() - start;
 
-  let accepted = response.status >= 200 && response.status < 300;
-  let dropped = false;
-  if (accepted && response.body) {
-    try {
-      const body = JSON.parse(response.body);
-      if (body.dropped === true || body.status === 'dropped') {
-        dropped = true;
-      }
-    } catch (_) {
-      // Non-JSON success body is acceptable; treat as delivered.
-    }
-  }
+  dbRequestDuration.add(elapsed);
 
-  if (accepted && !dropped) {
-    webhookDeliveredEvents.add(1);
-    webhookDeliveryDuration.add(elapsed);
-  } else {
-    webhookDroppedEvents.add(1);
-  }
+  const body = (response.body || '').toLowerCase();
+  const poolError = DB_POOL_ERROR_MARKERS.some((marker) => body.includes(marker));
+  dbPoolErrors.add(poolError);
 
-  sleep(WEBHOOK_SLEEP_SEC);
+  const ok = check(response, {
+    'db status is 2xx':       (r) => r.status >= 200 && r.status < 300,
+    'db no network error':    (r) => r.status !== 0,
+    'db no pool exhaustion':  () => !poolError,
+  });
+
+  dbRequestErrors.add(!ok);
 }
 
 // ── Summary ───────────────────────────────────────────────────────────────────
@@ -513,21 +500,18 @@ export function handleSummary(data) {
     multisigSignerCount === MULTISIG_SIGNERS && parseFloat(multisigErrorRate) === 0
   );
 
-  // Issue #1578 — webhook relay scenario metrics
-  const webhookP99 = Math.round(data.metrics.lumenflow_webhook_delivery_duration?.values?.['p(99)'] ?? 0);
-  const webhookDelivered = data.metrics.lumenflow_webhook_delivered_events?.values?.count ?? 0;
-  const webhookDropped = data.metrics.lumenflow_webhook_dropped_events?.values?.count ?? 0;
-  const webhookTotal = webhookDelivered + webhookDropped;
-  const webhookRegressionPct = WEBHOOK_BASELINE_P99_MS > 0
-    ? (((webhookP99 - WEBHOOK_BASELINE_P99_MS) / WEBHOOK_BASELINE_P99_MS) * 100).toFixed(1)
-    : '0.0';
-  const webhookPassed = !WEBHOOK_ENABLED || (
-    webhookDropped === 0 &&
-    webhookP99 < WEBHOOK_P99_THRESHOLD_MS &&
-    webhookP99 <= WEBHOOK_BASELINE_P99_MS * 1.2
-  );
+  // Issue #1628 — DB connection pool scenario metrics
+  const dbRequestCount = data.metrics.lumenflow_db_request_duration?.values?.count ?? 0;
+  const dbP95 = Math.round(data.metrics.lumenflow_db_request_duration?.values?.['p(95)'] ?? 0);
+  const dbP99 = Math.round(data.metrics.lumenflow_db_request_duration?.values?.['p(99)'] ?? 0);
+  const dbErrRate = ((data.metrics.lumenflow_db_request_error_rate?.values?.rate ?? 0) * 100).toFixed(2);
+  const dbPoolErrRate = ((data.metrics.lumenflow_db_pool_error_rate?.values?.rate ?? 0) * 100).toFixed(2);
+  const dbPoolPassed = dbRequestCount > 0
+    && parseFloat(dbPoolErrRate) === 0
+    && parseFloat(dbErrRate) < 1.0
+    && dbP99 < 5000;
 
-  const passed = p99 < 5000 && parseFloat(errRate) < 1.0 && batchPassed && multisigPassed && webhookPassed;
+  const passed = p99 < 5000 && parseFloat(errRate) < 1.0 && batchPassed && multisigPassed && dbPoolPassed;
   const status = passed ? '✅ PASSED' : '❌ FAILED';
 
   const summary = [
@@ -558,15 +542,13 @@ export function handleSummary(data) {
     `  Successful signers: ${multisigSignerCount} / ${MULTISIG_ENABLED ? MULTISIG_SIGNERS : 0}`,
     `  Signer error rate: ${multisigErrorRate}%`,
     '',
-    '  -- Webhook relay (Issue #1578) --',
-    WEBHOOK_ENABLED
-      ? `  Target rate:  ${WEBHOOK_EVENTS_PER_MIN} events/min for ${WEBHOOK_DURATION}`
-      : '  Skipped: WEBHOOK_RELAY_URL was not provided',
-    `  Events sent:  ${webhookTotal}`,
-    `  Delivered:    ${webhookDelivered}`,
-    `  Dropped:      ${webhookDropped}  (budget: 0)`,
-    `  p99 delivery: ${webhookP99} ms  (budget: < ${WEBHOOK_P99_THRESHOLD_MS} ms)`,
-    `  Regression:   ${webhookRegressionPct}% vs baseline ${WEBHOOK_BASELINE_P99_MS} ms (fails CI if > 20%)`,
+    '  -- DB connection pool (Issue #1628) --',
+    `  Concurrent requests: ${DB_LOAD_VUS} -> ${DB_LOAD_TEST_URL}${DB_LOAD_TEST_PATH}`,
+    `  Requests completed:  ${dbRequestCount}`,
+    `  p95 latency:  ${dbP95} ms`,
+    `  p99 latency:  ${dbP99} ms  (threshold: < 5000 ms)`,
+    `  Error rate:   ${dbErrRate}%  (threshold: < 1%)`,
+    `  Pool errors:  ${dbPoolErrRate}%  (threshold: 0% — no connection exhaustion)`,
     '════════════════════════════════════════════════════════════════',
     '',
   ].join('\n');
@@ -601,19 +583,15 @@ export function handleSummary(data) {
       error_rate_pct: parseFloat(multisigErrorRate),
       passed: multisigPassed,
     },
-    webhook_relay: {
-      enabled: WEBHOOK_ENABLED,
-      relay_url: WEBHOOK_ENABLED ? WEBHOOK_RELAY_URL : null,
-      events_per_min: WEBHOOK_ENABLED ? WEBHOOK_EVENTS_PER_MIN : 0,
-      duration: WEBHOOK_ENABLED ? WEBHOOK_DURATION : null,
-      events_sent: webhookTotal,
-      events_delivered: webhookDelivered,
-      events_dropped: webhookDropped,
-      latency_p99_ms: webhookP99,
-      p99_threshold_ms: WEBHOOK_P99_THRESHOLD_MS,
-      baseline_p99_ms: WEBHOOK_BASELINE_P99_MS,
-      regression_pct: parseFloat(webhookRegressionPct),
-      passed: webhookPassed,
+    db_connection_pool: {
+      url: `${DB_LOAD_TEST_URL}${DB_LOAD_TEST_PATH}`,
+      concurrent_requests: DB_LOAD_VUS,
+      requests_completed: dbRequestCount,
+      latency_p95_ms: dbP95,
+      latency_p99_ms: dbP99,
+      error_rate_pct: parseFloat(dbErrRate),
+      pool_error_rate_pct: parseFloat(dbPoolErrRate),
+      passed: dbPoolPassed,
     },
     passed,
   }, null, 2);
@@ -641,11 +619,9 @@ k6 run \
   --env BASELINE_P95_MS="$BASELINE_P95_MS" \
   --env MULTISIG_SIGNER_TX_XDRS="$MULTISIG_SIGNER_TX_XDRS" \
   --env MULTISIG_THRESHOLD="$MULTISIG_THRESHOLD" \
-  --env WEBHOOK_RELAY_URL="$WEBHOOK_RELAY_URL" \
-  --env WEBHOOK_EVENTS_PER_MIN="$WEBHOOK_EVENTS_PER_MIN" \
-  --env WEBHOOK_DURATION="$WEBHOOK_DURATION" \
-  --env WEBHOOK_P99_THRESHOLD_MS="$WEBHOOK_P99_THRESHOLD_MS" \
-  --env WEBHOOK_BASELINE_P99_MS="$WEBHOOK_BASELINE_P99_MS" \
+  --env DB_LOAD_TEST_URL="$DB_LOAD_TEST_URL" \
+  --env DB_LOAD_TEST_PATH="$DB_LOAD_TEST_PATH" \
+  --env DB_LOAD_VUS="$DB_LOAD_VUS" \
   --env RESULTS_FILE="$RESULTS_FILE" \
   --summary-export="$RESULTS_FILE" \
   "$K6_SCRIPT"

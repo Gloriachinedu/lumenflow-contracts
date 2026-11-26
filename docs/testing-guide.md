@@ -16,6 +16,16 @@ CHAOS_TESTS=1 node --test tests/chaos/rpc-chaos.test.mjs
 
 The tests inject RPC timeouts, 5-second latency, and truncated responses. The SDK retry suite covers recovery from transient failures and the CLI reports persistent failures in its result table. HTTP 503 responses should be supplied by a fault-injecting RPC fixture; Toxiproxy itself is a transport proxy and does not generate application-layer status codes. True 50% packet loss requires host network emulation such as `tc netem` and is intentionally kept outside the default Docker setup.
 
+## Test wallet keys
+
+Test wallet keypairs must be generated fresh for each environment with
+`scripts/generate_smoke_keypair.sh`; never reuse a keypair across environments
+or copy one from another document. Any secret keys previously shown in this
+repository's docs or test fixtures are **deprecated and unfunded** — do not
+fund them or use them for anything beyond local experimentation. Hardcoded
+secret keys must never appear in tests, fixtures, or documentation; use
+obviously fake placeholders such as `S_EXAMPLE...` instead.
+
 ## Soroban testutils overview
 
 Soroban provides a `testutils` module for contract unit testing in Rust. It includes:

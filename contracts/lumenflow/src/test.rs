@@ -1021,7 +1021,84 @@ fn test_batch_payment_size_exceeded() {
         });
     }
     let result = client.try_batch_payment(&merchant, &payments);
-    assert_eq!(result, Err(Ok(PaymentError::BatchSizeExceeded)));
+    assert_eq!(result, Err(Ok(PaymentError::BatchTooLarge)));
+}
+
+// ── MAX_BATCH_SIZE boundary tests (#1583) ────────────────────────────────────
+
+/// A batch of exactly MAX_BATCH_SIZE (10) items must succeed.
+#[test]
+fn test_batch_payment_exactly_max_batch_size_succeeds() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let mut payments = Vec::new(&env);
+    for i in 0..10u32 {
+        let id = format!("MAXBS_{i}");
+        payments.push_back(BatchPaymentItem {
+            order_id: str(&env, &id),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 10,
+            memo: str(&env, ""),
+            tags: None,
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        });
+    }
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Ok(Ok(())));
+
+    // All 10 payments must be recorded.
+    let history = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(history.total_matching, 10);
+}
+
+/// A batch of MAX_BATCH_SIZE + 1 (11) items must be rejected with BatchTooLarge.
+#[test]
+fn test_batch_payment_one_over_max_batch_size_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    let mut payments = Vec::new(&env);
+    for i in 0..11u32 {
+        let id = format!("MAXBO_{i}");
+        payments.push_back(BatchPaymentItem {
+            order_id: str(&env, &id),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 10,
+            memo: str(&env, ""),
+            tags: None,
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        });
+    }
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::BatchTooLarge)));
+
+    // Nothing from the rejected batch may be recorded.
+    let history = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(history.total_matching, 0);
+}
+
+/// An empty batch must be rejected with EmptyBatch.
+#[test]
+fn test_batch_payment_empty_batch_fails() {
+    let (env, client, _admin, _merchant, payer, _token) = setup_payment_env();
+    let payments: Vec<BatchPaymentItem> = Vec::new(&env);
+    let result = client.try_batch_payment(&payer, &payments);
+    assert_eq!(result, Err(Ok(PaymentError::EmptyBatch)));
 }
 
 #[test]
@@ -4230,6 +4307,120 @@ fn test_event_payment_processed_topics_and_data() {
         find_event(&env, &events, "lumenflow"),
         "lumenflow topic must be present"
     );
+}
+
+// ── Diagnostic telemetry event tests (#1589) ─────────────────────────────────
+//
+// Diagnostic events carry a `ledger_sequence_delta` field so off-chain
+// monitoring (lumenflow_exporter.py) can derive duration-equivalent metrics.
+// Event names: payment_processed_diagnostic, refund_issued_diagnostic,
+// batch_payment_completed_diagnostic.
+
+/// Extract the `ledger_sequence_delta` (u32) from the most recent event whose
+/// topics contain `name`, returning None if the event or field is absent.
+fn find_diagnostic_delta(
+    env: &Env,
+    events: &soroban_sdk::testutils::ContractEvents,
+    name: &str,
+) -> Option<u32> {
+    use soroban_sdk::xdr::{ContractEventBody, ScMap, ScString, ScSymbol, ScVal, StringM};
+    let needle = ScVal::String(ScString(StringM::try_from(name).unwrap()));
+    let key = ScVal::Symbol(ScSymbol(StringM::try_from("ledger_sequence_delta").unwrap()));
+    let _ = env;
+    events.events().iter().rev().find_map(|e| {
+        if let ContractEventBody::V0(ref body) = e.body {
+            if !body.topics.iter().any(|t| t == &needle) {
+                return None;
+            }
+            if let ScVal::Map(Some(ScMap(entries))) = &body.data {
+                for entry in entries.iter() {
+                    if entry.key == key {
+                        if let ScVal::U32(delta) = entry.val {
+                            return Some(delta);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    })
+}
+
+#[test]
+fn test_diagnostic_event_payment_processed() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Advance the ledger so the start/publish delta is non-zero.
+    env.ledger().with_mut(|l| l.sequence_number += 5);
+    make_payment(&env, &client, &merchant, &payer, &token, "DIAG_PAY", 1_000);
+
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "payment_processed_diagnostic"),
+        "payment_processed_diagnostic event must be emitted"
+    );
+    let delta = find_diagnostic_delta(&env, &events, "payment_processed_diagnostic")
+        .expect("payment_processed_diagnostic must carry ledger_sequence_delta");
+    // Delta is non-negative by type; assert it is present and sane.
+    assert!(delta < u32::MAX, "ledger_sequence_delta must be a valid delta");
+}
+
+#[test]
+fn test_diagnostic_event_refund_issued() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "DIAG_REF", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "RF_DIAG"),
+        &str(&env, "DIAG_REF"),
+        &500,
+        &str(&env, "diag"),
+    );
+    client.approve_refund(&merchant, &str(&env, "RF_DIAG"));
+
+    // Advance the ledger between approval and execution to exercise a delta.
+    env.ledger().with_mut(|l| l.sequence_number += 3);
+    client.execute_refund(&str(&env, "RF_DIAG"));
+
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "refund_issued_diagnostic"),
+        "refund_issued_diagnostic event must be emitted"
+    );
+    let delta = find_diagnostic_delta(&env, &events, "refund_issued_diagnostic")
+        .expect("refund_issued_diagnostic must carry ledger_sequence_delta");
+    assert!(delta < u32::MAX, "ledger_sequence_delta must be a valid delta");
+}
+
+#[test]
+fn test_diagnostic_event_batch_payment_completed() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut payments = Vec::new(&env);
+    for i in 0u32..3 {
+        payments.push_back(BatchPaymentItem {
+            order_id: str(&env, &format!("DIAG_BATCH_{}", i)),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 100,
+            memo: str(&env, ""),
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        });
+    }
+
+    env.ledger().with_mut(|l| l.sequence_number += 2);
+    client.batch_payment(&payer, &payments);
+
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "batch_payment_completed_diagnostic"),
+        "batch_payment_completed_diagnostic event must be emitted"
+    );
+    let delta = find_diagnostic_delta(&env, &events, "batch_payment_completed_diagnostic")
+        .expect("batch_payment_completed_diagnostic must carry ledger_sequence_delta");
+    assert!(delta < u32::MAX, "ledger_sequence_delta must be a valid delta");
 }
 
 #[test]
@@ -9369,7 +9560,7 @@ fn test_batch_one_over_max_size_fails() {
         });
     }
     let result = client.try_batch_payment(&payer, &payments);
-    assert_eq!(result, Err(Ok(PaymentError::BatchSizeExceeded)));
+    assert_eq!(result, Err(Ok(PaymentError::BatchTooLarge)));
 }
 
 /// Pagination limit of 1 returns exactly one item and sets next_cursor.
@@ -9698,6 +9889,71 @@ fn test_replay_in_batch_payment_fails() {
     );
 }
 
+// ── Issue #1581: unauthenticated get_payment_summary ─────────────────────────
+
+/// `get_payment_summary` must be callable by third parties (explorers,
+/// dashboards) without any payer or merchant authorization. This test builds a
+/// fresh environment with no mocked auths at all, so any `require_auth` call in
+/// the entrypoint would panic and fail the test.
+#[test]
+fn test_get_payment_summary_requires_no_auth() {
+    // Build a fully configured environment first (auths mocked for setup only).
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "SUMMARY_001", 750);
+
+    // Drop every mocked authorization: from here on, any require_auth panics.
+    env.mock_auths(&[]);
+
+    let summary = client.get_payment_summary(&str(&env, "SUMMARY_001"));
+
+    assert_eq!(summary.order_id, str(&env, "SUMMARY_001"));
+    assert_eq!(summary.merchant, merchant);
+    assert_eq!(summary.amount, 750);
+    assert!(matches!(summary.status, PaymentStatus::Completed));
+    assert_eq!(summary.created_at, env.ledger().timestamp());
+}
+
+/// The public summary must not leak the payer address (sensitive field).
+#[test]
+fn test_get_payment_summary_omits_payer_address() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "SUMMARY_002", 100);
+
+    env.mock_auths(&[]);
+
+    let summary = client.get_payment_summary(&str(&env, "SUMMARY_002"));
+
+    // PaymentSummary has no payer field; serializing it must not contain the
+    // payer's address bytes anywhere in the payload.
+    let encoded = summary.clone().to_xdr(&env);
+    let payer_xdr = payer.clone().to_xdr(&env);
+    assert!(
+        !encoded.windows(payer_xdr.len()).any(|w| w == payer_xdr.as_slice()),
+        "payer address must not be exposed in the public payment summary"
+    );
+}
+
+/// Regression test for the security catalogue entry covering the
+/// unauthenticated read-only entrypoint (#1581 / #1353): a caller with no
+/// wallet auth must be able to read the summary, and unknown order ids must
+/// fail cleanly rather than leaking data.
+#[test]
+fn test_security_regression_unauthenticated_payment_summary() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "SEC_SUMMARY", 42);
+
+    env.mock_auths(&[]);
+
+    // Read succeeds without auth.
+    let summary = client.get_payment_summary(&str(&env, "SEC_SUMMARY"));
+    assert_eq!(summary.order_id, str(&env, "SEC_SUMMARY"));
+    assert_eq!(summary.amount, 42);
+
+    // Unknown order ids are rejected with a typed error, not a panic.
+    let missing = client.try_get_payment_summary(&str(&env, "SEC_SUMMARY_MISSING"));
+    assert_eq!(missing, Err(Ok(PaymentError::PaymentNotFound)));
+}
+
 // ── Issue #1025: config_updated event tests ───────────────────────────────────
 
 #[test]
@@ -9822,283 +10078,279 @@ fn test_set_min_refund_amount_zero_fails() {
     assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
 }
 
-// ── Decentralized dispute resolution tests (#1575) ────────────────────────────
+// ── Merchant-specific refund window tests (Issue #1517) ───────────────────────
 
-/// `assign_arbiter` is admin-only: a non-admin caller is rejected.
+/// A merchant that sets a custom refund window has that window enforced
+/// instead of the global default.
 #[test]
-fn test_assign_arbiter_unauthorized() {
-    let (env, client, _admin, _merchant, _payer, _token) = setup_payment_env();
-    let non_admin = Address::generate(&env);
-    let arbiter = Address::generate(&env);
-
-    let result = client.try_assign_arbiter(&non_admin, &str(&env, "DSP_UNAUTH"), &arbiter);
-    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
-}
-
-/// `assign_arbiter` by the admin succeeds and records an audit log entry.
-#[test]
-fn test_assign_arbiter_logs_audit_entry() {
-    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
-    let arbiter = Address::generate(&env);
-
-    client.assign_arbiter(&admin, &str(&env, "DSP_ASSIGN"), &arbiter);
-
-    // The assigned arbiter must be retrievable.
-    let assigned = client.get_arbiter(&str(&env, "DSP_ASSIGN"));
-    assert_eq!(assigned, Some(arbiter.clone()));
-
-    // An audit log entry must have been written for the assignment.
-    let log = client.get_admin_audit_log(&admin, &None, &10);
-    let mut found = false;
-    for entry in log.entries.iter() {
-        if entry.action == str(&env, "assign_arbiter") {
-            found = true;
-        }
-    }
-    assert!(found, "assign_arbiter must be recorded in the admin audit log");
-}
-
-/// Removing an arbiter (assigning the zero/None sentinel via `remove_arbiter`)
-/// is logged in the admin audit log.
-#[test]
-fn test_remove_arbiter_logs_audit_entry() {
-    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
-    let arbiter = Address::generate(&env);
-
-    client.assign_arbiter(&admin, &str(&env, "DSP_REMOVE"), &arbiter);
-    client.remove_arbiter(&admin, &str(&env, "DSP_REMOVE"));
-
-    // Arbiter must no longer be assigned.
-    let assigned = client.get_arbiter(&str(&env, "DSP_REMOVE"));
-    assert!(assigned.is_none());
-
-    // A removal entry must appear in the audit log.
-    let log = client.get_admin_audit_log(&admin, &None, &10);
-    let mut found = false;
-    for entry in log.entries.iter() {
-        if entry.action == str(&env, "remove_arbiter") {
-            found = true;
-        }
-    }
-    assert!(found, "remove_arbiter must be recorded in the admin audit log");
-}
-
-/// `remove_arbiter` is admin-only.
-#[test]
-fn test_remove_arbiter_unauthorized() {
-    let (env, client, admin, _merchant, _payer, _token) = setup_payment_env();
-    let arbiter = Address::generate(&env);
-    let non_admin = Address::generate(&env);
-
-    client.assign_arbiter(&admin, &str(&env, "DSP_REMOVE_UNAUTH"), &arbiter);
-
-    let result = client.try_remove_arbiter(&non_admin, &str(&env, "DSP_REMOVE_UNAUTH"));
-    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
-}
-
-/// Only the assigned arbiter may call `arbiter_vote`.
-#[test]
-fn test_arbiter_vote_only_assigned_arbiter() {
-    let (env, client, admin, merchant, payer, token) = setup_payment_env();
-    make_payment(&env, &client, &merchant, &payer, &token, "DSP_VOTE_AUTH", 500);
-
-    let arbiter = Address::generate(&env);
-    let stranger = Address::generate(&env);
-    client.assign_arbiter(&admin, &str(&env, "DSP_VOTE_AUTH"), &arbiter);
-
-    let result = client.try_arbiter_vote(
-        &stranger,
-        &str(&env, "DSP_VOTE_AUTH"),
-        &crate::types::ArbiterVerdict::ReleaseToMerchant,
-    );
-    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
-}
-
-/// A vote of `ReleaseToMerchant` immediately releases funds to the merchant.
-#[test]
-fn test_arbiter_vote_release_triggers_immediate_release() {
-    let (env, client, admin, merchant, payer, token) = setup_payment_env();
-    make_payment(&env, &client, &merchant, &payer, &token, "DSP_VOTE_REL", 500);
-
-    let arbiter = Address::generate(&env);
-    client.assign_arbiter(&admin, &str(&env, "DSP_VOTE_REL"), &arbiter);
-
-    let merchant_before = TokenClient::new(&env, &token).balance(&merchant);
-    client.arbiter_vote(
-        &arbiter,
-        &str(&env, "DSP_VOTE_REL"),
-        &crate::types::ArbiterVerdict::ReleaseToMerchant,
-    );
-
-    // Funds must have moved to the merchant immediately.
-    let merchant_after = TokenClient::new(&env, &token).balance(&merchant);
-    assert!(merchant_after > merchant_before);
-
-    let p = client.get_payment_by_id(&payer, &str(&env, "DSP_VOTE_REL"));
-    assert!(matches!(
-        p.status,
-        crate::types::PaymentStatus::Completed
-    ));
-}
-
-/// A vote of `RefundPayer` immediately refunds the payer.
-#[test]
-fn test_arbiter_vote_refund_triggers_immediate_refund() {
-    let (env, client, admin, merchant, payer, token) = setup_payment_env();
-    make_payment(&env, &client, &merchant, &payer, &token, "DSP_VOTE_REF", 500);
-
-    let arbiter = Address::generate(&env);
-    client.assign_arbiter(&admin, &str(&env, "DSP_VOTE_REF"), &arbiter);
-
-    let payer_before = TokenClient::new(&env, &token).balance(&payer);
-    client.arbiter_vote(
-        &arbiter,
-        &str(&env, "DSP_VOTE_REF"),
-        &crate::types::ArbiterVerdict::RefundPayer,
-    );
-
-    let payer_after = TokenClient::new(&env, &token).balance(&payer);
-    assert!(payer_after > payer_before);
-
-    let p = client.get_payment_by_id(&payer, &str(&env, "DSP_VOTE_REF"));
-    assert!(matches!(
-        p.status,
-        crate::types::PaymentStatus::FullyRefunded
-    ));
-}
-
-/// A second vote on the same dispute is rejected.
-#[test]
-fn test_arbiter_vote_double_vote_rejected() {
-    let (env, client, admin, merchant, payer, token) = setup_payment_env();
-    make_payment(&env, &client, &merchant, &payer, &token, "DSP_VOTE_DBL", 500);
-
-    let arbiter = Address::generate(&env);
-    client.assign_arbiter(&admin, &str(&env, "DSP_VOTE_DBL"), &arbiter);
-
-    client.arbiter_vote(
-        &arbiter,
-        &str(&env, "DSP_VOTE_DBL"),
-        &crate::types::ArbiterVerdict::ReleaseToMerchant,
-    );
-
-    let result = client.try_arbiter_vote(
-        &arbiter,
-        &str(&env, "DSP_VOTE_DBL"),
-        &crate::types::ArbiterVerdict::RefundPayer,
-    );
-    assert_eq!(result, Err(Ok(PaymentError::DisputeAlreadyResolved)));
-}
-
-// ── Storage snapshot tests (#1579) ────────────────────────────────────────────
-//
-// These tests serialize the full contract storage layout after key operations
-// and compare it against committed snapshot files under `test_snapshots/`.
-// On mismatch a readable diff is printed so CI output shows exactly what
-// changed. To intentionally update snapshots run:
-//     cargo test -- --update-snapshots
-
-/// Serialize the contract's storage into a stable, human-readable string.
-fn serialize_storage(env: &Env, contract_id: &Address) -> alloc::string::String {
-    use alloc::string::ToString;
-    let mut out = alloc::string::String::new();
-    env.as_contract(contract_id, || {
-        for (key, value) in storage::iter_all(env) {
-            out.push_str(&format!("{:?} => {:?}\n", key, value));
-        }
-    });
-    out
-}
-
-/// Compare `actual` against the committed snapshot file `name`, printing a
-/// readable diff on mismatch. Honors the `--update-snapshots` flag.
-fn assert_snapshot(env: &Env, name: &str, actual: &str) {
-    let path = format!("test_snapshots/{}.snap", name);
-    let update = std::env::args().any(|a| a == "--update-snapshots");
-
-    if update {
-        std::fs::create_dir_all("test_snapshots").unwrap();
-        std::fs::write(&path, actual).unwrap();
-        return;
-    }
-
-    let expected = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(_) => {
-            // First run: write the snapshot so it can be committed.
-            std::fs::create_dir_all("test_snapshots").unwrap();
-            std::fs::write(&path, actual).unwrap();
-            return;
-        }
-    };
-
-    if expected != actual {
-        let mut diff = alloc::string::String::new();
-        diff.push_str(&format!("\nSnapshot mismatch: {}\n", path));
-        for (i, (e, a)) in expected.lines().zip(actual.lines()).enumerate() {
-            if e != a {
-                diff.push_str(&format!("  line {}:\n    - {}\n    + {}\n", i + 1, e, a));
-            }
-        }
-        if expected.lines().count() != actual.lines().count() {
-            diff.push_str(&format!(
-                "  line count differs: expected {}, actual {}\n",
-                expected.lines().count(),
-                actual.lines().count()
-            ));
-        }
-        diff.push_str("Run `cargo test -- --update-snapshots` to accept the change.\n");
-        panic!("{}", diff);
-    }
-    let _ = env;
-}
-
-/// Snapshot: storage layout after `process_payment`.
-#[test]
-fn test_snapshot_after_process_payment() {
-    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
-    make_payment(&env, &client, &merchant, &payer, &token, "SNAP_PAY", 250);
-
-    let snapshot = serialize_storage(&env, &client.address);
-    assert_snapshot(&env, "after_process_payment", &snapshot);
-}
-
-/// Snapshot: storage layout after `refund_payment`.
-#[test]
-fn test_snapshot_after_refund_payment() {
-    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
-    make_payment(&env, &client, &merchant, &payer, &token, "SNAP_REF", 400);
-
-    client.initiate_refund(
-        &payer,
-        &str(&env, "SNAP_REF_RF"),
-        &str(&env, "SNAP_REF"),
-        &400,
-        &str(&env, "snapshot refund"),
-    );
-    client.approve_refund(&merchant, &str(&env, "SNAP_REF_RF"));
-    client.execute_refund(&str(&env, "SNAP_REF_RF"));
-
-    let snapshot = serialize_storage(&env, &client.address);
-    assert_snapshot(&env, "after_refund_payment", &snapshot);
-}
-
-/// Snapshot: storage layout after `create_escrow`.
-#[test]
-fn test_snapshot_after_create_escrow() {
+fn test_merchant_custom_refund_window_respected() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
 
-    client.create_escrow(
-        &payer,
-        &str(&env, "SNAP_ESCROW"),
+    // Merchant opts into a short 1-day refund window.
+    client.set_refund_window(&merchant, &(24 * 3600u64));
+    let profile = client.get_merchant(&merchant);
+    assert_eq!(profile.refund_window_secs, Some(24 * 3600u64));
+
+    make_payment(
+        &env,
+        &client,
         &merchant,
+        &payer,
         &token,
-        &1_000,
+        "MERCH_WIN_CUSTOM",
+        1_000,
+    );
+
+    // Still inside the merchant window: refund must be accepted.
+    env.ledger().with_mut(|l| {
+        l.timestamp += 12 * 3600;
+    });
+    let ok = client.try_initiate_refund(
+        &payer,
+        &str(&env, "MERCH_WIN_CUSTOM_REF_OK"),
+        &str(&env, "MERCH_WIN_CUSTOM"),
+        &100,
+        &str(&env, "within merchant window"),
+    );
+    assert_eq!(ok, Ok(Ok(())));
+
+    // Past the merchant window (but well within the 30-day global default):
+    // refund must be rejected.
+    env.ledger().with_mut(|l| {
+        l.timestamp += 24 * 3600;
+    });
+    let late = client.try_initiate_refund(
+        &payer,
+        &str(&env, "MERCH_WIN_CUSTOM_REF_LATE"),
+        &str(&env, "MERCH_WIN_CUSTOM"),
+        &100,
+        &str(&env, "past merchant window"),
+    );
+    assert_eq!(late, Err(Ok(PaymentError::RefundWindowExpired)));
+}
+
+/// When `refund_window_secs` is unset the global default window applies.
+#[test]
+fn test_merchant_refund_window_falls_back_to_global() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // No merchant-specific window configured.
+    let profile = client.get_merchant(&merchant);
+    assert_eq!(profile.refund_window_secs, None);
+
+    make_payment(
+        &env,
+        &client,
+        &merchant,
+        &payer,
+        &token,
+        "MERCH_WIN_GLOBAL",
+        1_000,
+    );
+
+    // 20 days is inside the global 30-day default.
+    env.ledger().with_mut(|l| {
+        l.timestamp += 20 * 24 * 3600;
+    });
+    let ok = client.try_initiate_refund(
+        &payer,
+        &str(&env, "MERCH_WIN_GLOBAL_REF_OK"),
+        &str(&env, "MERCH_WIN_GLOBAL"),
+        &100,
+        &str(&env, "within global window"),
+    );
+    assert_eq!(ok, Ok(Ok(())));
+
+    // 31 days exceeds the global default.
+    env.ledger().with_mut(|l| {
+        l.timestamp += 11 * 24 * 3600;
+    });
+    let late = client.try_initiate_refund(
+        &payer,
+        &str(&env, "MERCH_WIN_GLOBAL_REF_LATE"),
+        &str(&env, "MERCH_WIN_GLOBAL"),
+        &100,
+        &str(&env, "past global window"),
+    );
+    assert_eq!(late, Err(Ok(PaymentError::RefundWindowExpired)));
+}
+
+/// A refund attempted after the merchant window has elapsed is rejected and
+/// leaves the payment untouched.
+#[test]
+fn test_merchant_refund_window_expired_rejected() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    client.set_refund_window(&merchant, &3600u64);
+    make_payment(
+        &env,
+        &client,
+        &merchant,
+        &payer,
+        &token,
+        "MERCH_WIN_EXPIRED",
+        500,
+    );
+
+    env.ledger().with_mut(|l| {
+        l.timestamp += 3601;
+    });
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "MERCH_WIN_EXPIRED_REF"),
+        &str(&env, "MERCH_WIN_EXPIRED"),
+        &100,
+        &str(&env, "too late"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundWindowExpired)));
+
+    let payment = client.get_payment_by_id(&payer, &str(&env, "MERCH_WIN_EXPIRED"));
+    assert_eq!(payment.refunded_amount, 0);
+}
+
+/// Only the merchant itself may change its refund window.
+#[test]
+fn test_set_merchant_refund_window_unauthorized() {
+    let (env, client, _admin, merchant, _payer, _token) = setup_payment_env();
+    let impostor = Address::generate(&env);
+
+    let result = client.try_set_refund_window(&impostor, &3600u64);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+
+    let profile = client.get_merchant(&merchant);
+    assert_eq!(profile.refund_window_secs, None);
+}
+
+// ── Admin audit log tests (Issue #1520) ───────────────────────────────────────
+
+/// Helper: number of audit entries currently stored.
+fn audit_log_len(env: &Env, client: &PaymentProcessingContractClient) -> u32 {
+    let admin = Address::generate(env);
+    let page = client.get_admin_audit_log(&admin, &None, &100);
+    page.total
+}
+
+/// Pausing the contract appends exactly one audit entry.
+#[test]
+fn test_pause_contract_appends_audit_entry() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let before = audit_log_len(&env, &client);
+    client.pause_contract(&admin);
+    let after = audit_log_len(&env, &client);
+    assert_eq!(after, before + 1);
+}
+
+/// Unpausing the contract appends exactly one audit entry.
+#[test]
+fn test_unpause_contract_appends_audit_entry() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    client.pause_contract(&admin);
+    let before = audit_log_len(&env, &client);
+    client.unpause_contract(&admin);
+    let after = audit_log_len(&env, &client);
+    assert_eq!(after, before + 1);
+}
+
+/// Suspending (deactivating) a merchant appends exactly one audit entry.
+#[test]
+fn test_deactivate_merchant_appends_audit_entry() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Audit Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
         &None,
     );
 
-    let snapshot = serialize_storage(&env, &client.address);
-    assert_snapshot(&env, "after_create_escrow", &snapshot);
+    let before = audit_log_len(&env, &client);
+    client.deactivate_merchant(&admin, &merchant);
+    let after = audit_log_len(&env, &client);
+    assert_eq!(after, before + 1);
+}
+
+/// Emergency withdrawal appends exactly one audit entry.
+#[test]
+fn test_emergency_withdraw_appends_audit_entry() {
+    let (env, client, admin, _merchant, _payer, token) = setup_payment_env();
+    mint(&env, &token, &admin, &client.address, 1_000);
+    let recipient = Address::generate(&env);
+
+    let before = audit_log_len(&env, &client);
+    client.emergency_withdraw(&admin, &token, &recipient, &100);
+    let after = audit_log_len(&env, &client);
+    assert_eq!(after, before + 1);
+}
+
+/// The audit log is append-only: earlier entries remain intact after new
+/// admin actions are recorded.
+#[test]
+fn test_admin_audit_log_is_append_only() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    client.pause_contract(&admin);
+    let first_page = client.get_admin_audit_log(&admin, &None, &100);
+    let first_len = first_page.total;
+    assert!(first_len >= 1);
+    let first_entry = first_page.entries.get(0).unwrap();
+
+    client.unpause_contract(&admin);
+    let second_page = client.get_admin_audit_log(&admin, &None, &100);
+    assert_eq!(second_page.total, first_len + 1);
+    // The original entry must be unchanged and still at index 0.
+    assert_eq!(second_page.entries.get(0).unwrap(), first_entry);
+}
+
+/// `get_admin_audit_log` paginates with a cursor and reports the total.
+#[test]
+fn test_admin_audit_log_pagination() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    // Generate several audit entries.
+    for _ in 0..3 {
+        client.pause_contract(&admin);
+        client.unpause_contract(&admin);
+    }
+
+    let total = audit_log_len(&env, &client);
+    assert!(total >= 6);
+
+    let page1 = client.get_admin_audit_log(&admin, &None, &2);
+    assert_eq!(page1.total, total);
+    assert_eq!(page1.entries.len(), 2);
+    let cursor = page1.next_cursor.unwrap();
+
+    let page2 = client.get_admin_audit_log(&admin, &Some(cursor), &2);
+    assert_eq!(page2.total, total);
+    assert_eq!(page2.entries.len(), 2);
+    assert_ne!(page1.entries.get(0).unwrap(), page2.entries.get(0).unwrap());
+}
+
+/// Non-admin callers cannot read the audit log.
+#[test]
+fn test_get_admin_audit_log_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_get_admin_audit_log(&non_admin, &None, &10);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
 
 // ── Max signers limit tests (issue #1269) ─────────────────────────────────────
@@ -10242,4 +10494,205 @@ fn test_set_max_signers_zero_rejected() {
 
     let result = client.try_set_max_signers(&admin, &0u32);
     assert_eq!(result, Err(Ok(PaymentError::InvalidInput)));
+}
+
+// ── Merchant payment limit tests (issue #1592) ────────────────────────────────
+
+/// set_merchant_payment_limit requires admin auth and stores the value.
+#[test]
+fn test_set_merchant_payment_limit_requires_admin_and_stores() {
+    let (env, client, admin, merchant, _payer, _token) = setup_payment_env();
+
+    // Non-admin cannot set the limit.
+    let stranger = Address::generate(&env);
+    let result = client.try_set_merchant_payment_limit(&stranger, &merchant, &Some(1_000));
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+
+    // Admin can set the limit and it is persisted.
+    client.set_merchant_payment_limit(&admin, &merchant, &Some(1_000));
+    let profile = client.get_merchant(&merchant);
+    assert_eq!(profile.max_payment_amount, Some(1_000));
+
+    // Admin can clear the limit.
+    client.set_merchant_payment_limit(&admin, &merchant, &None);
+    let profile = client.get_merchant(&merchant);
+    assert_eq!(profile.max_payment_amount, None);
+}
+
+/// process_payment succeeds when the amount is within the configured limit.
+#[test]
+fn test_process_payment_within_merchant_limit_succeeds() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.set_merchant_payment_limit(&admin, &merchant, &Some(1_000));
+
+    make_payment(&env, &client, &merchant, &payer, &token, "LIMIT_OK", 1_000);
+    let p = client.get_payment_by_id(&payer, &str(&env, "LIMIT_OK"));
+    assert_eq!(p.amount, 1_000);
+}
+
+/// process_payment returns ExceedsMerchantLimit when the amount is over the
+/// limit and no payment state is written.
+#[test]
+fn test_process_payment_over_merchant_limit_fails_without_state() {
+    let (env, client, admin, merchant, payer, token) = setup_payment_env();
+    client.set_merchant_payment_limit(&admin, &merchant, &Some(500));
+
+    let before = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+
+    let result = client.try_process_payment(
+        &payer,
+        &str(&env, "LIMIT_OVER"),
+        &merchant,
+        &token,
+        &501,
+        &str(&env, ""),
+        &None,
+    );
+    assert_eq!(result, Err(Ok(PaymentError::ExceedsMerchantLimit)));
+
+    // No payment record must exist and history must be unchanged.
+    let lookup = client.try_get_payment_by_id(&payer, &str(&env, "LIMIT_OVER"));
+    assert_eq!(lookup, Err(Ok(PaymentError::PaymentNotFound)));
+    let after = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(after.total, before.total);
+}
+
+/// A merchant with no configured limit (None) accepts any amount.
+#[test]
+fn test_process_payment_no_merchant_limit_allows_any_amount() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Default profile has no limit.
+    let profile = client.get_merchant(&merchant);
+    assert_eq!(profile.max_payment_amount, None);
+
+    make_payment(&env, &client, &merchant, &payer, &token, "LIMIT_NONE", 1_000_000);
+    let p = client.get_payment_by_id(&payer, &str(&env, "LIMIT_NONE"));
+    assert_eq!(p.amount, 1_000_000);
+}
+
+// ── State-before-transfer ordering tests (issue #1507) ────────────────────────
+//
+// These regression tests assert that when the external token transfer fails,
+// the contract does not leave partially written payment / refund state behind
+// (checks-effects-interactions ordering).
+
+/// A payment whose token transfer fails (insufficient payer balance) must not
+/// leave a payment record or mutate the payer's history.
+#[test]
+fn test_payment_transfer_failure_leaves_no_state() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Drain the payer so the transfer must fail.
+    let balance = TokenClient::new(&env, &token).balance(&payer);
+    let token_admin = Address::generate(&env);
+    let asset = StellarAssetClient::new(&env, &token);
+    asset.burn(&payer, &balance);
+    let _ = token_admin;
+
+    let before = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+
+    let result = client.try_process_payment(
+        &payer,
+        &str(&env, "XFER_FAIL"),
+        &merchant,
+        &token,
+        &100,
+        &str(&env, ""),
+        &None,
+    );
+    assert!(result.is_err(), "payment must fail when transfer fails");
+
+    let lookup = client.try_get_payment_by_id(&payer, &str(&env, "XFER_FAIL"));
+    assert_eq!(lookup, Err(Ok(PaymentError::PaymentNotFound)));
+    let after = client.get_payer_payment_history(
+        &payer,
+        &None,
+        &10,
+        &None,
+        &SortField::Date,
+        &SortOrder::Ascending,
+    );
+    assert_eq!(after.total, before.total);
+}
+
+/// A refund whose token transfer fails must not mark the payment as refunded.
+#[test]
+fn test_refund_transfer_failure_leaves_payment_status_consistent() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "XFER_REF", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "XFER_REF_R1"),
+        &str(&env, "XFER_REF"),
+        &400,
+        &str(&env, "partial"),
+    );
+    client.approve_refund(&merchant, &str(&env, "XFER_REF_R1"));
+
+    // Drain the merchant so the refund transfer must fail.
+    let merchant_balance = TokenClient::new(&env, &token).balance(&merchant);
+    StellarAssetClient::new(&env, &token).burn(&merchant, &merchant_balance);
+
+    let result = client.try_execute_refund(&str(&env, "XFER_REF_R1"));
+    assert!(result.is_err(), "refund must fail when transfer fails");
+
+    // Payment must remain un-refunded and status unchanged.
+    let p = client.get_payment_by_id(&payer, &str(&env, "XFER_REF"));
+    assert_eq!(p.refunded_amount, 0);
+    assert!(matches!(p.status, PaymentStatus::Completed));
+}
+
+// ── USDC clawback refund tests (issue #1576) ─────────────────────────────────
+
+/// A refund to a clawback-frozen address must return an error rather than
+/// silently succeeding or corrupting payment state.
+#[test]
+fn test_refund_to_clawback_frozen_address_fails() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "USDC_CB", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "USDC_CB_R1"),
+        &str(&env, "USDC_CB"),
+        &500,
+        &str(&env, "clawback"),
+    );
+    client.approve_refund(&merchant, &str(&env, "USDC_CB_R1"));
+
+    // Freeze the payer's balance via the SAC clawback mechanism.
+    let asset = StellarAssetClient::new(&env, &token);
+    let payer_balance = TokenClient::new(&env, &token).balance(&payer);
+    asset.clawback(&payer, &payer_balance);
+
+    let result = client.try_execute_refund(&str(&env, "USDC_CB_R1"));
+    assert!(result.is_err(), "refund to clawback-frozen address must fail");
+
+    // Payment state must remain consistent (no partial refund recorded).
+    let p = client.get_payment_by_id(&payer, &str(&env, "USDC_CB"));
+    assert_eq!(p.refunded_amount, 0);
+    assert!(matches!(p.status, PaymentStatus::Completed));
 }

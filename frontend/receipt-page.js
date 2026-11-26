@@ -1,5 +1,6 @@
   import { CONTRACT_ID, RPC_URL, formatAmount, formatDate, renderModeBanner, formatTokenAmount, convertToXlm, getTokenMetadata, copyButtonHtml, initCopyButtons } from './lumenflow-shared.js';
   import { validateOrderId } from './validation.js';
+  import { receiptCache } from './receipt-cache.js';
 
   // ── Routing ────────────────────────────────────────────────────────────────
   // Supports both:
@@ -212,34 +213,83 @@
       const list = document.getElementById('refunds-list');
       refunds.forEach(r => {
         const needsHelp = r.status === 'Pending' || r.status === 'Rejected';
-        const disputeHtml = r.dispute_reason
-          ? `<div class="dispute-section">
-               <strong>⚠ Dispute Note</strong>
-               ${escapeHtml(r.dispute_reason)}
-             </div>`
-          : '';
-        const helpHtml = needsHelp
-          ? `<a class="help-link" href="mailto:support@lumenflow.io?subject=Refund%20query">Need help? Contact support →</a>`
-          : '';
 
         const item = document.createElement('div');
         item.className = 'refund-item';
-        item.innerHTML = `
-          <div class="refund-row">
-            <span>
-              <em class="refund-status-icon">${refundStatusIcon(r.status)}</em>
-              <strong>${escapeHtml(refundStatusLabel(r.status))}</strong>
-              ${r.dispute_reason ? '<span class="dispute-badge">⚠ Disputed</span>' : ''}
-            </span>
-            <span><strong>${formatTokenAmount(r.amount, payment.token)}</strong></span>
-          </div>
-          <div class="refund-row" style="font-size:0.8rem;color:#666;">
-            <span><strong>Reason:</strong> ${escapeHtml(r.reason || '—')}</span>
-            <span>${formatDate(r.created_at)}</span>
-          </div>
-          ${disputeHtml}
-          ${buildRefundTimeline(r)}
-          ${helpHtml}`;
+
+        // Row 1 — status + amount (all untrusted values via textContent)
+        const row1 = document.createElement('div');
+        row1.className = 'refund-row';
+
+        const statusSpan = document.createElement('span');
+        const statusIcon = document.createElement('em');
+        statusIcon.className = 'refund-status-icon';
+        statusIcon.textContent = refundStatusIcon(r.status);
+        const statusStrong = document.createElement('strong');
+        statusStrong.textContent = refundStatusLabel(r.status);
+        statusSpan.appendChild(statusIcon);
+        statusSpan.appendChild(statusStrong);
+        if (r.dispute_reason) {
+          const disputeBadge = document.createElement('span');
+          disputeBadge.className = 'dispute-badge';
+          disputeBadge.textContent = '⚠ Disputed';
+          statusSpan.appendChild(disputeBadge);
+        }
+
+        const amountSpan = document.createElement('span');
+        const amountStrong = document.createElement('strong');
+        amountStrong.textContent = formatTokenAmount(r.amount, payment.token);
+        amountSpan.appendChild(amountStrong);
+
+        row1.appendChild(statusSpan);
+        row1.appendChild(amountSpan);
+
+        // Row 2 — reason + date
+        const row2 = document.createElement('div');
+        row2.className = 'refund-row';
+        row2.style.fontSize = '0.8rem';
+        row2.style.color = '#666';
+
+        const reasonSpan = document.createElement('span');
+        const reasonLabel = document.createElement('strong');
+        reasonLabel.textContent = 'Reason:';
+        reasonSpan.appendChild(reasonLabel);
+        reasonSpan.appendChild(document.createTextNode(' ' + (r.reason || '—')));
+
+        const dateSpan = document.createElement('span');
+        dateSpan.textContent = formatDate(r.created_at);
+
+        row2.appendChild(reasonSpan);
+        row2.appendChild(dateSpan);
+
+        item.appendChild(row1);
+        item.appendChild(row2);
+
+        // Dispute note (reason escaped via textContent)
+        if (r.dispute_reason) {
+          const disputeSection = document.createElement('div');
+          disputeSection.className = 'dispute-section';
+          const disputeTitle = document.createElement('strong');
+          disputeTitle.textContent = '⚠ Dispute Note';
+          disputeSection.appendChild(disputeTitle);
+          disputeSection.appendChild(document.createTextNode(' ' + r.dispute_reason));
+          item.appendChild(disputeSection);
+        }
+
+        // Timeline (built from trusted, formatted dates only)
+        const timelineWrap = document.createElement('div');
+        timelineWrap.innerHTML = buildRefundTimeline(r);
+        item.appendChild(timelineWrap);
+
+        // Help link (static markup)
+        if (needsHelp) {
+          const helpLink = document.createElement('a');
+          helpLink.className = 'help-link';
+          helpLink.href = 'mailto:support@lumenflow.io?subject=Refund%20query';
+          helpLink.textContent = 'Need help? Contact support →';
+          item.appendChild(helpLink);
+        }
+
         list.appendChild(item);
       });
       document.getElementById('refunds-section').style.display = 'block';
@@ -334,11 +384,46 @@
     document.title = `Receipt ${orderId} – LumenFlow`;
     document.getElementById('loading').style.display = 'block';
 
-    const data = await fetchPayment(orderId);
+    // Invalidate cached receipts whenever a refund is processed for this order.
+    if (typeof receiptCache.initRefundInvalidation === 'function') {
+      receiptCache.initRefundInvalidation();
+    } else if (typeof receiptCache.subscribeToRefunds === 'function') {
+      receiptCache.subscribeToRefunds();
+    }
+
+    const refreshingEl = document.getElementById('refreshing-indicator');
+    const showRefreshing = () => { if (refreshingEl) refreshingEl.style.display = 'inline'; };
+    const hideRefreshing = () => { if (refreshingEl) refreshingEl.style.display = 'none'; };
+
+    let data;
+    try {
+      const entry = await receiptCache.getWithRevalidate(
+        orderId,
+        () => fetchPayment(orderId),
+        {
+          onRevalidated: (fresh) => {
+            hideRefreshing();
+            if (fresh) renderReceipt(fresh);
+          },
+        }
+      );
+
+      // Support both a bare value and a { data, stale } cache entry shape.
+      if (entry && typeof entry === 'object' && 'data' in entry) {
+        data = entry.data;
+        if (entry.stale) showRefreshing();
+      } else {
+        data = entry;
+      }
+    } catch (err) {
+      hideRefreshing();
+      data = null;
+    }
 
     document.getElementById('loading').style.display = 'none';
 
     if (!data) {
+      hideRefreshing();
       document.getElementById('missing-id').textContent = orderId;
       document.getElementById('not-found').style.display = 'block';
     } else {

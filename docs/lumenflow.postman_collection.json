@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "LumenFlow Contract API",
-    "description": "Complete Postman collection for the LumenFlow Soroban smart contract on Stellar. Covers all contract function categories: admin, merchant management, payment processing, refunds, and multi-signature payments.\n\n## Setup\n1. Import this collection into Postman v10+.\n2. Create an environment and set the variables listed below.\n3. Run requests in order within each folder, or use individual requests as needed.\n\n## Environment Variables\n| Variable | Description | Example |\n|---|---|---|\n| `RPC_URL` | Soroban RPC endpoint | `https://soroban-testnet.stellar.org` |\n| `NETWORK_PASSPHRASE` | Stellar network passphrase | `Test SDF Network ; September 2015` |\n| `CONTRACT_ID` | Deployed LumenFlow contract ID | `CAAAA...` |\n| `ADMIN_ADDRESS` | Admin Stellar address | `GAAA...` |\n| `ADMIN_SECRET` | Admin secret key | `SAAA...` |\n| `MERCHANT_ADDRESS` | Merchant Stellar address | `GBBB...` |\n| `MERCHANT_SECRET` | Merchant secret key | `SBBB...` |\n| `PAYER_ADDRESS` | Payer Stellar address | `GCCC...` |\n| `PAYER_SECRET` | Payer secret key | `SCCC...` |\n| `TOKEN_ADDRESS` | SAC token contract address | `CDDD...` |\n| `ORDER_ID` | Example order ID | `ORDER_001` |\n| `REFUND_ID` | Example refund ID | `REFUND_001` |\n| `PAYMENT_ID` | Example multisig payment ID | `MS_001` |\n| `REQUEST_ID` | Example payment request ID | `REQ_001` |",
+    "description": "Complete Postman collection for the LumenFlow Soroban smart contract on Stellar. Covers all contract function categories: admin, merchant management, payment processing, refunds, multi-signature payments, and payment requests.\n\n## Published Collection\nThis collection is published to the **LumenFlow public Postman workspace**:\nhttps://www.postman.com/lumenflow/lumenflow-public/collection/lumenflow-contract-api\n\nUse the \"Run in Postman\" button in the README to fork it directly into your own workspace.\n\n## Setup\n1. Import this collection into Postman v10+ (or fork it from the public workspace link above).\n2. Create an environment and set the variables listed below.\n3. Run requests in order within each folder, or use individual requests as needed.\n\n## Environment Variables\n| Variable | Description | Example |\n|---|---|---|\n| `RPC_URL` | Soroban RPC endpoint | `https://soroban-testnet.stellar.org` |\n| `NETWORK_PASSPHRASE` | Stellar network passphrase | `Test SDF Network ; September 2015` |\n| `CONTRACT_ID` | Deployed LumenFlow contract ID | `CAAAA...` |\n| `ADMIN_ADDRESS` | Admin Stellar address | `GAAA...` |\n| `ADMIN_SECRET` | Admin secret key | `SAAA...` |\n| `MERCHANT_ADDRESS` | Merchant Stellar address | `GBBB...` |\n| `MERCHANT_SECRET` | Merchant secret key | `SBBB...` |\n| `PAYER_ADDRESS` | Payer Stellar address | `GCCC...` |\n| `PAYER_SECRET` | Payer secret key | `SCCC...` |\n| `TOKEN_ADDRESS` | SAC token contract address | `CDDD...` |\n| `ORDER_ID` | Example order ID | `ORDER_001` |\n| `REFUND_ID` | Example refund ID | `REFUND_001` |\n| `PAYMENT_ID` | Example multisig payment ID | `MS_001` |\n| `REQUEST_ID` | Example payment request ID | `REQ_001` |\n\nSecret-key variables (`ADMIN_SECRET`, `MERCHANT_SECRET`, `PAYER_SECRET`) should be stored in a Postman environment marked as secret and never committed to source control.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "version": {
       "major": 1,
@@ -14,8 +14,11 @@
     { "key": "NETWORK_PASSPHRASE", "value": "Test SDF Network ; September 2015", "type": "string" },
     { "key": "CONTRACT_ID", "value": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4", "type": "string" },
     { "key": "ADMIN_ADDRESS", "value": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", "type": "string" },
+    { "key": "ADMIN_SECRET", "value": "SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", "type": "string" },
     { "key": "MERCHANT_ADDRESS", "value": "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "type": "string" },
+    { "key": "MERCHANT_SECRET", "value": "SBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "type": "string" },
     { "key": "PAYER_ADDRESS", "value": "GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", "type": "string" },
+    { "key": "PAYER_SECRET", "value": "SCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", "type": "string" },
     { "key": "TOKEN_ADDRESS", "value": "CDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD", "type": "string" },
     { "key": "ORDER_ID", "value": "ORDER_001", "type": "string" },
     { "key": "REFUND_ID", "value": "REFUND_001", "type": "string" },
@@ -88,6 +91,48 @@
               "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 4,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account {{ADMIN_SECRET}} -- archive_payment_record --admin {{ADMIN_ADDRESS}} --order_id {{ORDER_ID}}>\"\n  }\n}"
             },
             "description": "Explicitly removes a single payment record regardless of age. Use for manual archiving.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $ADMIN_SECRET \\\n  -- archive_payment_record \\\n  --admin $ADMIN_ADDRESS \\\n  --order_id \"$ORDER_ID\"\n```\n\n**Expected response:** `null`\n\n**Errors:** `Unauthorized`, `PaymentNotFound`"
+          },
+          "response": []
+        },
+        {
+          "name": "Pause Contract",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 6,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account {{ADMIN_SECRET}} --network-passphrase '{{NETWORK_PASSPHRASE}}' --rpc-url {{RPC_URL}} -- pause --admin {{ADMIN_ADDRESS}}>\"\n  }\n}"
+            },
+            "description": "Pauses the contract. While paused, state-changing operations (payments, refunds, multisig execution, payment requests) are rejected with `ContractPaused`. Admin only.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $ADMIN_SECRET \\\n  -- pause \\\n  --admin $ADMIN_ADDRESS\n```\n\n**Expected response:** `null`\n\n**Errors:** `Unauthorized`, `NotInitialized`"
+          },
+          "response": []
+        },
+        {
+          "name": "Unpause Contract",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 7,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account {{ADMIN_SECRET}} --network-passphrase '{{NETWORK_PASSPHRASE}}' --rpc-url {{RPC_URL}} -- unpause --admin {{ADMIN_ADDRESS}}>\"\n  }\n}"
+            },
+            "description": "Resumes normal operation after a pause. Admin only.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $ADMIN_SECRET \\\n  -- unpause \\\n  --admin $ADMIN_ADDRESS\n```\n\n**Expected response:** `null`\n\n**Errors:** `Unauthorized`, `NotInitialized`"
+          },
+          "response": []
+        },
+        {
+          "name": "Is Paused",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 8,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $CALLER_SECRET -- is_paused>\"\n  }\n}"
+            },
+            "description": "Returns `true` if the contract is currently paused, `false` otherwise. Read-only.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $CALLER_SECRET \\\n  -- is_paused\n```\n\n**Expected response:** `true` or `false`"
           },
           "response": []
         },
@@ -169,6 +214,20 @@
           "response": []
         },
         {
+          "name": "Update Merchant",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 14,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $MERCHANT_SECRET -- update_merchant --merchant_address {{MERCHANT_ADDRESS}} --name 'Acme Store' --description 'Updated description' --contact_info 'contact@acme.com' --category Retail>\"\n  }\n}"
+            },
+            "description": "Updates an existing merchant profile. The merchant_address must sign the transaction.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $MERCHANT_SECRET \\\n  -- update_merchant \\\n  --merchant_address $MERCHANT_ADDRESS \\\n  --name \"Acme Store\" \\\n  --description \"Updated description\" \\\n  --contact_info \"contact@acme.com\" \\\n  --category Retail\n```\n\n**Expected response:** `null`\n\n**Errors:** `MerchantNotFound`, `InvalidInput`"
+          },
+          "response": []
+        },
+        {
           "name": "Deactivate Merchant",
           "request": {
             "method": "POST",
@@ -223,6 +282,20 @@
               "body": "{\"jsonrpc\":\"2.0\",\"id\":21,\"result\":{\"results\":[{\"xdr\":\"<batch results XDR>\"}]}}"
             }
           ]
+        },
+        {
+          "name": "Process Payment",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 25,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $PAYER_SECRET -- process_payment --payer {{PAYER_ADDRESS}} --order_id {{ORDER_ID}} --merchant_address {{MERCHANT_ADDRESS}} --token_address {{TOKEN_ADDRESS}} --amount 5000 --memo 'Invoice #001'>\"\n  }\n}"
+            },
+            "description": "Processes a single payment without a merchant signature (payer-authorised flow).\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $PAYER_SECRET \\\n  -- process_payment \\\n  --payer $PAYER_ADDRESS \\\n  --order_id \"ORDER_001\" \\\n  --merchant_address $MERCHANT_ADDRESS \\\n  --token_address $TOKEN_ADDRESS \\\n  --amount 5000 \\\n  --memo \"Invoice #001\"\n```\n\n**Expected response:** `null`\n\n**Errors:** `DuplicateOrderId`, `MerchantNotFound`, `MerchantInactive`, `InsufficientBalance`, `ContractPaused`"
+          },
+          "response": []
         },
         {
           "name": "Get Payment By ID",
@@ -640,6 +713,20 @@
           ]
         },
         {
+          "name": "Dispute Refund",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 35,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $CALLER_SECRET -- dispute_refund --caller $CALLER_ADDRESS --refund_id {{REFUND_ID}} --reason 'Item not as described'>\"\n  }\n}"
+            },
+            "description": "Marks a refund as `Disputed`. Caller must be the payer or merchant.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $CALLER_SECRET \\\n  -- dispute_refund \\\n  --caller $CALLER_ADDRESS \\\n  --refund_id \"REFUND_001\" \\\n  --reason \"Item not as described\"\n```\n\n**Expected response:** `null`\n\n**Errors:** `Unauthorized`, `RefundNotFound`, `InvalidRefundStatus`"
+          },
+          "response": []
+        },
+        {
           "name": "Get Refund",
           "request": {
             "method": "POST",
@@ -703,6 +790,20 @@
           "response": []
         },
         {
+          "name": "Cancel Multisig Payment",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 44,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $INITIATOR_SECRET -- cancel_multisig_payment --initiator $INITIATOR_ADDRESS --payment_id {{PAYMENT_ID}}>\"\n  }\n}"
+            },
+            "description": "Cancels a multisig payment that has not yet been executed. Only the initiator may cancel.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $INITIATOR_SECRET \\\n  -- cancel_multisig_payment \\\n  --initiator $INITIATOR_ADDRESS \\\n  --payment_id \"MS_001\"\n```\n\n**Expected response:** `null`\n\n**Errors:** `PaymentNotFound`, `Unauthorized`, `PaymentAlreadyExecuted`"
+          },
+          "response": []
+        },
+        {
           "name": "Get Multisig Payment",
           "request": {
             "method": "POST",
@@ -748,6 +849,20 @@
               "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 51,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $PAYER_SECRET -- pay_payment_request --payer {{PAYER_ADDRESS}} --request_id {{REQUEST_ID}}>\"\n  }\n}"
             },
             "description": "Fulfils an outstanding payment request: transfers `amount` from `payer` to the request's merchant, records the payment in history, and removes the request. Emits `lumenflow/payment_request_paid`.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $PAYER_SECRET \\\n  -- pay_payment_request \\\n  --payer $PAYER_ADDRESS \\\n  --request_id \"REQ_001\"\n```\n\n**Expected response:** `null`\n\n**Errors:** `PaymentNotFound`, `PaymentExpired` (request TTL elapsed; the request is removed as a side effect), `PaymentAlreadyExists` (an order with this ID was already recorded)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Payment Request",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{RPC_URL}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 53,\n  \"method\": \"simulateTransaction\",\n  \"params\": {\n    \"transaction\": \"<sign and encode: stellar contract invoke --id {{CONTRACT_ID}} --source-account $CALLER_SECRET -- get_payment_request --request_id {{REQUEST_ID}}>\"\n  }\n}"
+            },
+            "description": "Returns an outstanding payment request. Read-only.\n\n**CLI equivalent:**\n```bash\nstellar contract invoke \\\n  --id $CONTRACT_ID \\\n  --source-account $CALLER_SECRET \\\n  -- get_payment_request \\\n  --request_id \"REQ_001\"\n```\n\n**Expected response:**\n```json\n{\n  \"request_id\": \"REQ_001\",\n  \"merchant\": \"GBBB...\",\n  \"token\": \"CDDD...\",\n  \"amount\": 5000,\n  \"memo\": \"Invoice #001\",\n  \"expires_at\": 1706835600\n}\n```\n\n**Errors:** `PaymentNotFound`"
           },
           "response": []
         },

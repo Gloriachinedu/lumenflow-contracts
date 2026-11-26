@@ -189,6 +189,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/EmptyResponse'
+  /contract/set_escrow_min_lock:
+    post:
+      summary: Set the minimum escrow lock period, optionally per merchant.
+      description: |
+        Overrides the default `MIN_LOCK_SECS` (3600) minimum lock period enforced
+        by `create_escrow`. When `merchant` is omitted the global default applies.
+      operationId: setEscrowMinLock
+      x-soroban-contract-method: set_escrow_min_lock
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetEscrowMinLockRequest'
+      responses:
+        '200':
+          description: Minimum lock period updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
+  /contract/set_escrow_warning_lead_time:
+    post:
+      summary: Set the escrow expiry warning lead time.
+      description: |
+        Configures how long before `unlock_at` an `EscrowExpiryWarningEvent` is
+        emitted. Defaults to 24 hours.
+      operationId: setEscrowWarningLeadTime
+      x-soroban-contract-method: set_escrow_warning_lead_time
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetEscrowWarningLeadTimeRequest'
+      responses:
+        '200':
+          description: Warning lead time updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyResponse'
   /contract/pause_contract:
     post:
       summary: Pause the contract.
@@ -585,6 +627,27 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PaymentPage'
+  /contract/get_payer_payment_summary:
+    post:
+      summary: Get an aggregated payment summary for a payer.
+      description: |
+        Public read (no authorization required). Computed from live storage on
+        every call rather than cached.
+      operationId: getPayerPaymentSummary
+      x-soroban-contract-method: get_payer_payment_summary
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddressRequest'
+      responses:
+        '200':
+          description: Payer payment summary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PayerPaymentSummary'
   /contract/get_global_payment_stats:
     post:
       summary: Get aggregate payment statistics.
@@ -1035,8 +1098,141 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Subscription'
+  /admin/merchant-keys:
+    post:
+      summary: Generate a new API key for a merchant.
+      description: |
+        Creates a per-merchant API key scoped to a single merchant address.
+        The plaintext key is returned only once, at creation time; store it
+        securely. The key must be sent as `Authorization: Bearer <key>` when
+        calling the merchant dashboard API.
+      operationId: createMerchantKey
+      tags:
+        - MerchantKeys
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMerchantKeyRequest'
+      responses:
+        '201':
+          description: API key created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MerchantKey'
+        '400':
+          description: Invalid request payload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  /admin/merchant-keys/{id}:
+    delete:
+      summary: Revoke a merchant API key.
+      description: |
+        Revokes the API key with the given identifier. Once revoked, requests
+        made with the key are rejected with `401 Unauthorized`.
+      operationId: revokeMerchantKey
+      tags:
+        - MerchantKeys
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Identifier of the API key to revoke.
+          schema:
+            type: string
+      responses:
+        '204':
+          description: API key revoked.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: API key not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        Per-merchant API key issued via `POST /admin/merchant-keys`. The key is
+        scoped to a single merchant address and is rate limited to 100 requests
+        per minute per key.
+  responses:
+    Unauthorized:
+      description: Missing, invalid, or revoked API key.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    TooManyRequests:
+      description: Rate limit exceeded (100 requests per minute per API key).
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying.
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
   schemas:
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+    CreateMerchantKeyRequest:
+      type: object
+      required:
+        - merchant_address
+      properties:
+        merchant_address:
+          type: string
+          description: Merchant address the key is scoped to.
+        label:
+          type: string
+          description: Optional human-readable label for the key.
+    MerchantKey:
+      type: object
+      required:
+        - id
+        - merchant_address
+        - key
+        - created_at
+      properties:
+        id:
+          type: string
+        merchant_address:
+          type: string
+        key:
+          type: string
+          description: Plaintext API key. Returned only at creation time.
+        label:
+          type: string
+        created_at:
+          type: integer
+          format: int64
+        revoked_at:
+          type: integer
+          format: int64
+          nullable: true
     EmptyResponse:
       type: object
       nullable: true
@@ -1161,6 +1357,31 @@ components:
         admin:
           type: string
         window_secs:
+          type: integer
+          format: int64
+    SetEscrowMinLockRequest:
+      type: object
+      required:
+        - admin
+        - min_lock_secs
+      properties:
+        admin:
+          type: string
+        merchant:
+          type: string
+          description: Optional merchant address for a per-merchant override.
+        min_lock_secs:
+          type: integer
+          format: int64
+    SetEscrowWarningLeadTimeRequest:
+      type: object
+      required:
+        - admin
+        - lead_time_secs
+      properties:
+        admin:
+          type: string
+        lead_time_secs:
           type: integer
           format: int64
     SetMinRefundAmountRequest:
@@ -1628,6 +1849,21 @@ components:
         next_cursor:
           type: string
         total:
+          type: integer
+          format: int32
+    PayerPaymentSummary:
+      type: object
+      properties:
+        total_paid:
+          type: integer
+          format: int64
+        total_refunded:
+          type: integer
+          format: int64
+        total_pending:
+          type: integer
+          format: int64
+        payment_count:
           type: integer
           format: int32
     GlobalStats:

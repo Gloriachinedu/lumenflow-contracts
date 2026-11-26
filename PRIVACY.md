@@ -46,6 +46,26 @@ Payment records also store:
 
 > **Blockchain immutability notice:** Payment records are stored on the Stellar blockchain. Once confirmed, transaction data (including on-chain event logs) cannot be deleted. However, the merchant profile fields (`name`, `description`, `contact_info`) that may contain personal data **can** be anonymised through the data deletion procedure described in Section 5.
 
+### 2.1 On-chain vs. off-chain payer data
+
+Payer-related data exists in two distinct locations with very different erasure properties. The table below summarises what is stored where and whether it can be erased.
+
+| Data | Location | Erasable? | Notes |
+|------|----------|-----------|-------|
+| Payer Stellar address in payment records | On-chain (Soroban contract storage) | **No** — immutable | Pseudonymous identifier; retained for financial record-keeping and dispute resolution |
+| On-chain nonces | On-chain (Soroban contract storage) | **No** — immutable | Required for replay protection; deleting them would break transaction integrity |
+| Payer index entries | On-chain (Soroban contract storage) | **No** — immutable | Maps payer address to payment records; required to preserve ledger consistency |
+| Event logs / transaction history | On-chain (Stellar ledger, Horizon) | **No** — immutable | Outside LumenFlow's control; subject to Stellar network archive policy |
+| Off-chain nonce stores | Off-chain (SDK / operator infrastructure) | **Yes** — erasable | Deleted automatically by the SDK `dataDeletion` module |
+| Payer index caches | Off-chain (SDK / operator infrastructure) | **Yes** — erasable | Deleted automatically by the SDK `dataDeletion` module |
+| Receipts | Off-chain (operator infrastructure) | **Yes** — erasable | Deleted automatically by the SDK `dataDeletion` module |
+| Application logs | Off-chain (operator infrastructure) | **Yes** — erasable | Deleted automatically by the SDK `dataDeletion` module |
+| Backups | Off-chain (operator infrastructure) | **Yes** — erasable | Purged on the next backup rotation after deletion |
+
+On-chain nonces and payer index entries **cannot be deleted from the Soroban ledger**. They are retained on the basis of legitimate interests (Art. 6(1)(f)) — specifically fraud prevention, replay protection, and the integrity of the payment ledger — and because erasing them would corrupt the state of the contract for all other participants. The payer address is a pseudonymous identifier rather than a directly identifying attribute, which limits the impact of its retention.
+
+All off-chain copies of payer personal data are erasable and are removed through the automated deletion workflow described in Section 5.
+
 ---
 
 ## 3. Legal Basis for Processing
@@ -73,9 +93,19 @@ Admins may configure a shorter payment cleanup period using `set_payment_cleanup
 
 ## 5. Right to Erasure (Right to be Forgotten)
 
-Under GDPR Article 17, data subjects have the right to request erasure of their personal data. LumenFlow implements this right through the `request_merchant_data_deletion` contract function.
+Under GDPR Article 17, data subjects have the right to request erasure of their personal data. LumenFlow implements this right in two parts: an on-chain pseudonymisation step for merchant profile data, and an automated off-chain deletion step for payer data.
 
-### What happens when you request deletion
+### 5.1 Submitting a valid request
+
+A right-to-erasure request is valid when it:
+
+1. Identifies the data subject (merchant address or payer address) and the data to be erased;
+2. Is submitted by the data subject, or by someone able to prove authority to act on their behalf; and
+3. Is received at **privacy@lumenflow.example.com** or via a GitHub issue labelled `privacy`.
+
+On receipt, the operator records the request and acknowledges it to the data subject. Requests are actioned **within 30 days** of receipt, in line with GDPR Article 12(3).
+
+### 5.2 On-chain pseudonymisation (merchant profile)
 
 When a deletion request is confirmed, the following PII fields in the on-chain merchant profile are replaced with the placeholder value `[deleted]`:
 
@@ -87,12 +117,28 @@ The merchant's Stellar public key (`address`) is retained as a pseudonymous refe
 
 A `lumenflow/merchant_data_deleted` event is emitted on-chain when deletion is completed.
 
-### Limitations
+### 5.3 Automated off-chain deletion (payer data)
+
+Off-chain payer personal data — off-chain nonce stores, payer index caches, receipts, application logs, and backups — is deleted automatically through the SDK's `dataDeletion` module (`sdk/src/security/dataDeletion.ts`). The module:
+
+- Accepts a validated erasure request for a payer address;
+- Purges all matching off-chain records from the operator's stores;
+- Schedules backup purging on the next rotation cycle; and
+- Writes a **confirmation entry to the audit log** recording the request ID, the payer address (hashed), the data categories deleted, and the completion timestamp.
+
+Operators must run the deletion job within the 30-day deadline; the module rejects requests whose deadline has already passed so that overdue requests are escalated rather than silently dropped.
+
+### 5.4 What cannot be deleted
 
 Due to the immutable nature of the Stellar blockchain:
 
-- On-chain **event logs** and **transaction history** recorded by Stellar Horizon nodes are outside LumenFlow's control and cannot be deleted.
-- **Off-chain copies** of data (backups, analytics systems, third-party integrations) must be handled separately by the platform operator.
+- **On-chain nonces** and **payer index entries** cannot be deleted from the Soroban ledger. They are retained for replay protection, ledger integrity, and fraud prevention (Art. 6(1)(f)), and because deletion would corrupt contract state for other participants.
+- **On-chain event logs** and **transaction history** recorded by Stellar Horizon nodes are outside LumenFlow's control and cannot be deleted.
+- The payer's Stellar address in payment records is retained as a pseudonymous identifier only.
+
+### 5.5 Confirmation
+
+Once both the on-chain pseudonymisation and the off-chain deletion job have completed, the operator confirms completion to the data subject and the audit log entry produced by `dataDeletion` serves as the record of deletion. See [docs/receipt-privacy-audit.md](docs/receipt-privacy-audit.md) for the audit-log format.
 
 ### How to request deletion
 
@@ -137,6 +183,7 @@ LumenFlow uses the following technical measures to protect data:
 - The contract can be paused by an admin in response to a security incident.
 - Merchant profile updates require the merchant's own signature, preventing unauthorised modification.
 - Deletion requests require admin confirmation within 30 days.
+- Off-chain payer data deletion is automated via the SDK `dataDeletion` module and confirmed through an audit log entry.
 
 For responsible disclosure of security vulnerabilities, see [SECURITY.md](SECURITY.md).
 

@@ -635,6 +635,81 @@ fn test_escrow_cancel_by_non_payer_fails() {
     assert_eq!(merchant_cancel, Err(Ok(PaymentError::EscrowUnauthorised)));
 }
 
+// ── 9. State-before-transfer ordering (issue #1507) ──────────────────────────
+
+/// Regression test for issue #1507: `escrow_hold` must persist the
+/// `EscrowHold` record (status `Held`, correct amount) *before* invoking the
+/// token client, and `escrow_release` must mark the record `Released` before
+/// moving funds. A failed token transfer must leave the escrow record in a
+/// consistent, non-corrupted state.
+#[test]
+fn test_escrow_state_finalised_before_token_transfer() {
+    use lumenflow::types::EscrowHoldStatus;
+
+    let w = setup();
+    let timeout_at: u64 = 1_003_600;
+
+    // ── Hold: record is written before the token transfer ────────────────────
+    w.client.escrow_hold(
+        &w.payer,
+        &str(&w.env, "HOLD_ORDER"),
+        &w.merchant,
+        &w.token,
+        &5_000i128,
+        &condition_hash(&w.env),
+        &w.arbiter,
+        &timeout_at,
+    );
+
+    let hold = w.client.get_escrow_hold(&str(&w.env, "HOLD_ORDER"));
+    assert_eq!(hold.status, EscrowHoldStatus::Held);
+    assert_eq!(hold.amount, 5_000);
+
+    // ── Release: record is finalised before the token transfer ───────────────
+    w.client.escrow_release(&w.arbiter, &str(&w.env, "HOLD_ORDER"));
+
+    let released = w.client.get_escrow_hold(&str(&w.env, "HOLD_ORDER"));
+    assert_eq!(released.status, EscrowHoldStatus::Released);
+    assert_eq!(released.amount, 5_000);
+
+    // ── Failed transfer leaves the record consistent ─────────────────────────
+    // Drain the payer's balance so the next hold's token transfer fails.
+    let payer_balance = soroban_sdk::token::TokenClient::new(&w.env, &w.token)
+        .balance(&w.payer);
+    if payer_balance > 0 {
+        StellarAssetClient::new(&w.env, &w.token).burn(&w.payer, &payer_balance);
+    }
+
+    let failed = w.client.try_escrow_hold(
+        &w.payer,
+        &str(&w.env, "HOLD_FAIL"),
+        &w.merchant,
+        &w.token,
+        &1_000i128,
+        &condition_hash(&w.env),
+        &w.arbiter,
+        &timeout_at,
+    );
+    assert!(failed.is_err(), "hold with insufficient balance must fail");
+
+    // The failed hold must not leave a corrupted record behind: either the
+    // record is absent, or it is present but never marked as a live hold.
+    match w.client.try_get_escrow_hold(&str(&w.env, "HOLD_FAIL")) {
+        Err(_) => {}
+        Ok(Ok(record)) => assert_ne!(
+            record.status,
+            EscrowHoldStatus::Released,
+            "failed hold must not be marked Released"
+        ),
+        Ok(Err(_)) => {}
+    }
+
+    // The previously released hold is untouched by the failed call.
+    let still_released = w.client.get_escrow_hold(&str(&w.env, "HOLD_ORDER"));
+    assert_eq!(still_released.status, EscrowHoldStatus::Released);
+    assert_eq!(still_released.amount, 5_000);
+}
+
 // ── 8. Cancel after timeout ───────────────────────────────────────────────────
 
 /// The payer cannot cancel after timeout_at has passed — they must use

@@ -17,49 +17,45 @@ rationale behind the arbiter model.
 ```
                 ┌─────────────┐
                 │    Open     │◄── initiate_dispute / raise_dispute
-                └──────┬──────┘
-                       │ mark_dispute_under_review (admin)
-                       ▼
+                └──┬───────┬──┘
+                   │       │
+ mark_dispute_     │       │ escalate_dispute (admin)
+ under_review      │       │
+ (admin)           ▼       ▼
                 ┌─────────────┐
                 │ UnderReview │
-                └──────┬──────┘
-          ┌────────────┴───────────────┐
-          │ escalate_dispute (admin)   │ resolve_dispute (admin)
-          ▼                            ▼
-   ┌─────────────┐          ┌───────────────────────────────┐
-   │  Escalated  │          │  Resolved                     │
-   └──────┬──────┘          │  outcome: MerchantFavor       │
-          │                 │       or: PayerFavor           │
-          └────────────────►└───────────────────────────────┘
-                resolve_dispute (admin, after escalation)
+                └──┬───────┬──┘
+                   │       │
+ escalate_dispute  │       │ resolve_dispute (admin)
+ (admin)           │       │
+                   ▼       ▼
+   ┌─────────────┐   ┌───────────────────────────────┐
+   │  Escalated  │──►│  Resolved                     │
+   └─────────────┘   │  outcome: MerchantFavor       │
+     resolve_dispute │       or: PayerFavor           │
+     (admin)         └───────────────────────────────┘
 ```
 
-### Arbiter path (v1 decentralized resolution)
+### Allowed Transitions
 
-```
-   ┌─────────────┐
-   │  Escalated  │
-   └──────┬──────┘
-          │ assign_arbiter (admin)
-          ▼
-   ┌──────────────────────┐
-   │ Escalated + Arbiter  │  arbiter recorded on the DisputeRecord
-   └──────┬───────────────┘
-          │ arbiter_vote (assigned arbiter only)
-          ▼
-   ┌───────────────────────────────┐
-   │  Resolved                     │
-   │  outcome: MerchantFavor       │
-   │       or: PayerFavor          │
-   │  funds released/refunded      │
-   │  immediately on vote          │
-   └───────────────────────────────┘
-```
+| From | To | Trigger |
+|------|----|---------|
+| `Open` | `UnderReview` | `mark_dispute_under_review` (admin) |
+| `Open` | `Escalated` | `escalate_dispute` (admin) |
+| `UnderReview` | `Escalated` | `escalate_dispute` (admin) |
+| `UnderReview` | `Resolved` | `resolve_dispute` (admin) |
+| `Escalated` | `Resolved` | `resolve_dispute` (admin) |
 
-An assigned arbiter may vote on a dispute in `Escalated` state. The vote is
-binding: it transitions the dispute directly to `Resolved` and triggers the
-corresponding fund movement in the same call. No admin action is required after
-the vote.
+### Invalid Transitions
+
+Every transition not listed in the table above is rejected. This includes
+self-transitions (e.g. `Open → Open`), backward transitions
+(e.g. `UnderReview → Open`), and transitions out of a terminal state
+(e.g. `Resolved → Escalated`, `Resolved → UnderReview`, `Resolved → Open`).
+
+All invalid transitions return `PaymentError::InvalidDisputeState` and leave
+the dispute record unchanged. The full 4×4 source→target matrix is covered by
+tests, so each of the 16 possible pairs is explicitly verified.
 
 ### States
 
@@ -300,6 +296,4 @@ refund approval cycle — for example, if a merchant is unresponsive.
 | 113 | `DisputeAlreadyResolved` | Cannot modify a resolved dispute. |
 | 114 | `DisputeNotOpen` | `mark_dispute_under_review` requires `Open` state. |
 | 115 | `DisputeAlreadyEscalated` | Cannot escalate an already-escalated dispute. |
-| 116 | `ArbiterNotAssigned` | `arbiter_vote` requires an assigned arbiter. |
-| 117 | `ArbiterAlreadyAssigned` | An arbiter is already assigned to this dispute. |
-| 118 | `NotAssignedArbiter` | Caller is not the arbiter assigned to this dispute. |
+| 116 | `InvalidDisputeState` | The requested transition is not permitted from the dispute's current state (e.g. `Resolved → Escalated`). |

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://horizon.stellar.org; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none';" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'" />
     <title>LumenFlow</title>
     <link rel="manifest" href="manifest.json" />
     <meta name="theme-color" content="#6c47ff" />
@@ -12,17 +12,27 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="LumenFlow" />
     <link rel="apple-touch-icon" href="icons/icon.svg" />
+    <!--
+      SRI policy: every externally hosted <script> or <link rel="stylesheet"> MUST
+      carry `integrity` and `crossorigin="anonymous"` attributes. Same-origin
+      assets (e.g. styles.css) are covered by CSP 'self' and need no SRI.
+      When adding/upgrading a CDN dependency, regenerate its hash with:
+        curl -sSL <url> | openssl dgst -sha384 -binary | openssl base64 -A
+      then set integrity="sha384-<hash>" and crossorigin="anonymous".
+      CI enforces this via scripts/check-sri.mjs.
+    -->
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <main>
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+    <main id="main-content" tabindex="-1">
       <h1>LumenFlow</h1>
       <p>Scalable, secure, and decentralized payments on Stellar Soroban.</p>
-      <nav style="margin-top:1.5rem;display:flex;flex-wrap:wrap;gap:0.75rem;">
-        <a href="dashboard.html" style="font-weight:600;color:#6c47ff;text-decoration:none;padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:8px;">Merchant Dashboard</a>
-        <a href="history.html"   style="font-weight:600;color:#6c47ff;text-decoration:none;padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:8px;">Payment History</a>
-        <a href="receipt.html"   style="font-weight:600;color:#6c47ff;text-decoration:none;padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:8px;">View Receipt</a>
-        <a href="multisig.html"  style="font-weight:600;color:#6c47ff;text-decoration:none;padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:8px;">Multisig Payment</a>
+      <nav aria-label="Primary" style="margin-top:1.5rem;display:flex;flex-wrap:wrap;gap:0.75rem;">
+        <a href="dashboard.html" class="nav-link">Merchant Dashboard</a>
+        <a href="history.html"   class="nav-link">Payment History</a>
+        <a href="receipt.html"   class="nav-link">View Receipt</a>
+        <a href="multisig.html"  class="nav-link">Multisig Payment</a>
       </nav>
 
       <section id="payment-link-section" style="margin-top:2rem;max-width:32rem;" aria-labelledby="payment-link-heading">
@@ -56,125 +66,6 @@
         </form>
       </section>
     </main>
-    <script>
-      (function () {
-        'use strict';
-
-        var MEMO_MAX_LENGTH = 28;
-        var STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/;
-
-        function getParam(name) {
-          var params = new URLSearchParams(window.location.search);
-          return params.has(name) ? params.get(name) : null;
-        }
-
-        function validateMerchant(value) {
-          if (value === null || value.trim() === '') {
-            return 'Missing required "merchant" parameter.';
-          }
-          if (!STELLAR_ADDRESS_RE.test(value.trim())) {
-            return 'Invalid "merchant" parameter: expected a Stellar address starting with G.';
-          }
-          return null;
-        }
-
-        function validateAmount(value) {
-          if (value === null || value.trim() === '') {
-            return null; // optional
-          }
-          var trimmed = value.trim();
-          if (!/^\d+(\.\d+)?$/.test(trimmed) || !(parseFloat(trimmed) > 0)) {
-            return 'Invalid "amount" parameter: expected a positive number.';
-          }
-          return null;
-        }
-
-        function validateMemo(value) {
-          if (value === null) {
-            return null; // optional
-          }
-          if (value.length > MEMO_MAX_LENGTH) {
-            return 'Invalid "memo" parameter: must be at most ' + MEMO_MAX_LENGTH + ' characters.';
-          }
-          return null;
-        }
-
-        function showError(message) {
-          var errorEl = document.getElementById('payment-link-error');
-          var submitEl = document.getElementById('pay-submit');
-          if (errorEl) {
-            errorEl.textContent = message;
-            errorEl.hidden = false;
-          }
-          if (submitEl) {
-            submitEl.disabled = true;
-            submitEl.style.opacity = '0.5';
-            submitEl.style.cursor = 'not-allowed';
-          }
-        }
-
-        function initPaymentLink() {
-          var form = document.getElementById('payment-link-form');
-          if (!form) {
-            return;
-          }
-
-          var merchant = getParam('merchant');
-          var amount = getParam('amount');
-          var memo = getParam('memo');
-
-          var errors = [];
-          var merchantError = validateMerchant(merchant);
-          if (merchantError) { errors.push(merchantError); }
-          var amountError = validateAmount(amount);
-          if (amountError) { errors.push(amountError); }
-          var memoError = validateMemo(memo);
-          if (memoError) { errors.push(memoError); }
-
-          if (errors.length > 0) {
-            showError(errors.join(' '));
-            return;
-          }
-
-          document.getElementById('pay-merchant').value = merchant.trim();
-          if (amount !== null && amount.trim() !== '') {
-            document.getElementById('pay-amount').value = amount.trim();
-          }
-          if (memo !== null) {
-            document.getElementById('pay-memo').value = memo;
-          }
-
-          form.addEventListener('submit', function (event) {
-            event.preventDefault();
-            var submitEl = document.getElementById('pay-submit');
-            if (submitEl) {
-              submitEl.disabled = true;
-            }
-            // Payment submission is handled by the wallet/SDK integration.
-            window.dispatchEvent(new CustomEvent('lumenflow:pay', {
-              detail: {
-                merchant: document.getElementById('pay-merchant').value.trim(),
-                amount: document.getElementById('pay-amount').value.trim() || null,
-                memo: document.getElementById('pay-memo').value || null
-              }
-            }));
-          });
-        }
-
-        if (document.readyState === 'loading') {
-          document.addEventListener('DOMContentLoaded', initPaymentLink);
-        } else {
-          initPaymentLink();
-        }
-      })();
-
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker
-            .register('./sw.js', { scope: './' })
-            .catch((err) => console.warn('[PWA] Service worker registration failed:', err));
-        });
-      }
-    </script>
+    <script src="sw-register.js"></script>
   </body>
 </html>

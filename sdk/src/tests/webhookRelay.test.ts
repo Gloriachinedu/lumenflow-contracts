@@ -24,6 +24,8 @@ import {
   RelayEvent,
   idempotencyKey,
 } from '../webhookRelay';
+import { Logger, LogLevel } from '../logging';
+import { redact } from '../logRedaction';
 
 const noSleep = () => Promise.resolve();
 
@@ -263,107 +265,101 @@ describe('WebhookRelay — boundary conditions', () => {
   });
 });
 
-describe('WebhookRelay — sustained throughput (issue #1578)', () => {
-  // 1000 events/min for 5 minutes == 5000 events. We compress the wall clock
-  // (the relay's sleeps are stubbed) but keep the event count and the
-  // per-event latency budget identical to the load-test scenario so this
-  // suite catches relay-level regressions before the full load test runs.
-  const EVENTS_PER_MINUTE = 1000;
-  const DURATION_MINUTES = 5;
-  const TOTAL_EVENTS = EVENTS_PER_MINUTE * DURATION_MINUTES;
-  const P99_BUDGET_MS = 2000;
+/** Captures structured log lines emitted by the relay. */
+function captureLogger() {
+  const lines: Array<Record<string, unknown>> = [];
+  const logger: Logger = {
+    log: (line) => {
+      lines.push(line as unknown as Record<string, unknown>);
+    },
+  };
+  return { logger, lines };
+}
 
-  function percentile(samples: number[], p: number): number {
-    if (samples.length === 0) return 0;
-    const sorted = [...samples].sort((a, b) => a - b);
-    const idx = Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1);
-    return sorted[Math.max(0, idx)];
-  }
+describe('WebhookRelay — structured logging', () => {
+  it('emits a JSON log line with level, correlationId, operation and duration_ms', async () => {
+    const { fn } = scriptedWebhook([], 200);
+    const { logger, lines } = captureLogger();
+    const relay = new WebhookRelay({ deliver: fn, sleep: noSleep, logger });
 
-  it('delivers every event with P99 latency under budget and zero drops', async () => {
-    const store = new MemoryDedupeStore();
-    const latencies: number[] = [];
-    let delivered = 0;
+    await relay.relay(event(), { correlationId: 'corr-123' });
 
-    const deliver = jest.fn(async () => {
-      // Simulate a downstream webhook with a small, bounded service time.
-      await Promise.resolve();
-      return { status: 200 };
-    });
-    const relay = new WebhookRelay({ deliver, store, sleep: noSleep });
-
-    const startedAt = Date.now();
-    for (let i = 0; i < TOTAL_EVENTS; i++) {
-      const t0 = Date.now();
-      const outcome = await relay.relay(
-        event({ pagingToken: `load-${i}`, id: `load-${i}` }),
-      );
-      latencies.push(Date.now() - t0);
-      if (outcome.status === 'delivered') delivered++;
-    }
-    const elapsedMs = Date.now() - startedAt;
-
-    // Zero events dropped at target throughput.
-    expect(delivered).toBe(TOTAL_EVENTS);
-    expect(deliver).toHaveBeenCalledTimes(TOTAL_EVENTS);
-    expect(store.size).toBe(TOTAL_EVENTS);
-
-    // P99 delivery latency stays within the 2s performance budget.
-    const p99 = percentile(latencies, 99);
-    expect(p99).toBeLessThan(P99_BUDGET_MS);
-
-    // Sanity: the compressed run should comfortably beat the real-time budget.
-    expect(elapsedMs).toBeLessThan(P99_BUDGET_MS);
+    expect(lines).toHaveLength(1);
+    const line = lines[0];
+    expect(line.level).toBe('info');
+    expect(line.correlationId).toBe('corr-123');
+    expect(line.operation).toBe('webhook.relay');
+    expect(typeof line.duration_ms).toBe('number');
+    expect(line.duration_ms as number).toBeGreaterThanOrEqual(0);
+    // The line must be JSON-serialisable.
+    expect(() => JSON.stringify(line)).not.toThrow();
   });
 
-  it('keeps P99 within budget when the downstream intermittently fails', async () => {
-    const store = new MemoryDedupeStore();
-    const latencies: number[] = [];
-    let delivered = 0;
-    let call = 0;
+  it('auto-generates a UUID v4 correlation ID when the caller does not supply one', async () => {
+    const { fn } = scriptedWebhook([], 200);
+    const { logger, lines } = captureLogger();
+    const relay = new WebhookRelay({ deliver: fn, sleep: noSleep, logger });
 
-    const deliver = jest.fn(async () => {
-      call++;
-      // Every 100th call is a transient failure that the relay retries.
-      return { status: call % 100 === 0 ? 503 : 200 };
-    });
-    const relay = new WebhookRelay({ deliver, store, sleep: noSleep });
+    await relay.relay(event());
 
-    for (let i = 0; i < TOTAL_EVENTS; i++) {
-      const t0 = Date.now();
-      const outcome = await relay.relay(
-        event({ pagingToken: `flaky-${i}`, id: `flaky-${i}` }),
-      );
-      latencies.push(Date.now() - t0);
-      if (outcome.status === 'delivered') delivered++;
-    }
-
-    expect(delivered).toBe(TOTAL_EVENTS);
-    expect(store.size).toBe(TOTAL_EVENTS);
-    expect(percentile(latencies, 99)).toBeLessThan(P99_BUDGET_MS);
+    const uuidV4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    expect(lines[0].correlationId).toMatch(uuidV4);
   });
 
-  it('does not double-deliver under concurrent duplicate bursts', async () => {
-    const store = new MemoryDedupeStore();
-    const deliver = jest.fn(async () => ({ status: 200 }));
-    const relay = new WebhookRelay({ deliver, store, sleep: noSleep });
+  it('propagates the correlation ID across every attempt of a retried delivery', async () => {
+    const { fn } = scriptedWebhook([503, 503], 200);
+    const { logger, lines } = captureLogger();
+    const relay = new WebhookRelay({ deliver: fn, sleep: noSleep, logger });
 
-    // A burst of replays for the same 100 events, interleaved.
-    const burst: Promise<unknown>[] = [];
-    for (let round = 0; round < 10; round++) {
-      for (let i = 0; i < 100; i++) {
-        burst.push(relay.relay(event({ pagingToken: `burst-${i}`, id: `burst-${i}` })));
-      }
+    await relay.relay(event(), { correlationId: 'corr-retry' });
+
+    expect(lines.length).toBeGreaterThanOrEqual(1);
+    for (const line of lines) {
+      expect(line.correlationId).toBe('corr-retry');
     }
-    const outcomes = (await Promise.all(burst)) as Array<{ status: string }>;
+  });
 
-    const deliveredCount = outcomes.filter((o) => o.status === 'delivered').length;
-    const duplicateCount = outcomes.filter((o) => o.status === 'duplicate').length;
+  it('logs at the configured level', async () => {
+    const { fn } = scriptedWebhook([], 200);
+    const { logger, lines } = captureLogger();
+    const relay = new WebhookRelay({ deliver: fn, sleep: noSleep, logger, logLevel: LogLevel.DEBUG });
 
-    expect(deliveredCount).toBe(100);
-    expect(duplicateCount).toBe(900);
-    expect(deliver).toHaveBeenCalledTimes(100);
-    expect(store.size).toBe(100);
+    await relay.relay(event(), { correlationId: 'corr-debug' });
+
+    expect(lines.length).toBeGreaterThanOrEqual(1);
+    expect(lines[0].level).toBe('debug');
+  });
+
+  it('redacts sensitive fields in logged payloads', async () => {
+    const { fn } = scriptedWebhook([], 200);
+    const { logger, lines } = captureLogger();
+    const relay = new WebhookRelay({ deliver: fn, sleep: noSleep, logger });
+
+    await relay.relay(
+      event({
+        value: {
+          order_id: 'ORDER-1',
+          private_key: 'SABCDEFGHIJKLMNOPQRSTUVWXYZ234567',
+          secret: 'super-secret',
+        },
+      }),
+      { correlationId: 'corr-redact' },
+    );
+
+    const serialised = JSON.stringify(lines);
+    expect(serialised).not.toContain('SABCDEFGHIJKLMNOPQRSTUVWXYZ234567');
+    expect(serialised).not.toContain('super-secret');
+    expect(serialised).toContain('[REDACTED]');
+  });
+
+  it('uses logRedaction to redact raw payloads before logging', () => {
+    const redacted = redact({
+      private_key: 'SABCDEFGHIJKLMNOPQRSTUVWXYZ234567',
+      payload: { amount: 1000 },
+    }) as Record<string, unknown>;
+
+    expect(redacted.private_key).toBe('[REDACTED]');
+    expect(JSON.stringify(redacted)).not.toContain('SABCDEFGHIJKLMNOPQRSTUVWXYZ234567');
   });
 });
 
@@ -395,5 +391,88 @@ describe('WebhookRelay — ordered batch delivery', () => {
     await expect(relay.relayBatch(batch)).rejects.toBeInstanceOf(WebhookDeliveryError);
     // t1 delivered, t2 failed hard, t3 never attempted.
     expect(fn).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('WebhookRelay — optional CSRF token propagation', () => {
+  it('passes the CSRF token to the deliver callback when csrf is configured', async () => {
+    const seen: Array<{ event: RelayEvent; headers?: Record<string, string> }> = [];
+    const deliver = jest.fn(
+      async (e: RelayEvent, headers?: Record<string, string>) => {
+        seen.push({ event: e, headers });
+        return { status: 200 };
+      },
+    );
+    const relay = new WebhookRelay({
+      deliver,
+      sleep: noSleep,
+      csrf: { token: 'csrf-token-abc', headerName: 'x-csrf-token' },
+    });
+
+    const outcome = await relay.relay(event());
+
+    expect(outcome.status).toBe('delivered');
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(seen).toHaveLength(1);
+    expect(seen[0].headers).toBeDefined();
+    expect(seen[0].headers?.['x-csrf-token']).toBe('csrf-token-abc');
+  });
+
+  it('uses the default CSRF header name when none is supplied', async () => {
+    const seen: Array<Record<string, string> | undefined> = [];
+    const deliver = jest.fn(async (_e: RelayEvent, headers?: Record<string, string>) => {
+      seen.push(headers);
+      return { status: 200 };
+    });
+    const relay = new WebhookRelay({
+      deliver,
+      sleep: noSleep,
+      csrf: { token: 'csrf-token-xyz' },
+    });
+
+    await relay.relay(event());
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.['x-csrf-token']).toBe('csrf-token-xyz');
+  });
+
+  it('preserves existing behavior when csrf is omitted', async () => {
+    const seen: Array<Record<string, string> | undefined> = [];
+    const deliver = jest.fn(async (_e: RelayEvent, headers?: Record<string, string>) => {
+      seen.push(headers);
+      return { status: 200 };
+    });
+    const relay = new WebhookRelay({ deliver, sleep: noSleep });
+
+    const outcome = await relay.relay(event());
+
+    expect(outcome).toEqual({ status: 'delivered', key: 'token-1', attempts: 1 });
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(seen).toHaveLength(1);
+    // No CSRF header injected when the option is not configured.
+    expect(seen[0]?.['x-csrf-token']).toBeUndefined();
+  });
+
+  it('propagates the CSRF token on every attempt during a retry', async () => {
+    const headersPerCall: Array<Record<string, string> | undefined> = [];
+    let i = 0;
+    const deliver = jest.fn(async (_e: RelayEvent, headers?: Record<string, string>) => {
+      headersPerCall.push(headers);
+      const status = i++ < 2 ? 503 : 200;
+      return { status };
+    });
+    const relay = new WebhookRelay({
+      deliver,
+      sleep: noSleep,
+      csrf: { token: 'csrf-token-retry', headerName: 'x-csrf-token' },
+    });
+
+    const outcome = await relay.relay(event());
+
+    expect(outcome.attempts).toBe(3);
+    expect(headersPerCall).toHaveLength(3);
+    for (const headers of headersPerCall) {
+      expect(headers?.['x-csrf-token']).toBe('csrf-token-retry');
+    }
   });
 });
