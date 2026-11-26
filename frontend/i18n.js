@@ -25,7 +25,14 @@
 
 // ── Supported locales ────────────────────────────────────────────────────────
 
-/** Map from BCP-47 language tag (prefix) to locale code. */
+/**
+ * Map from BCP-47 language tag (prefix) to locale code.
+ *
+ * Every locale listed here MUST have a corresponding JSON file in
+ * `frontend/locales/` containing every key present in `en.json`.
+ * `scripts/check-i18n-locales.mjs` enforces this in CI — when adding a new
+ * key, add it to all locale files at the same time.
+ */
 const SUPPORTED_LOCALES = {
   en: 'en',
   es: 'es',
@@ -88,7 +95,52 @@ async function loadLocale(locale) {
   const url = `${LOCALES_PATH}/${locale}.json`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`[i18n] Failed to load locale "${locale}" from ${url}: ${resp.status}`);
-  return resp.json();
+  const messages = await resp.json();
+
+  // In development, warn about keys present in the base locale but missing
+  // from the loaded locale. CI enforces full coverage via
+  // scripts/check-i18n-locales.mjs, but this surfaces gaps at runtime too.
+  if (locale !== DEFAULT_LOCALE) {
+    try {
+      const base = await loadLocale(DEFAULT_LOCALE);
+      const missing = findMissingKeys(base, messages);
+      if (missing.length) {
+        console.warn(
+          `[i18n] Locale "${locale}" is missing ${missing.length} key(s) present in "${DEFAULT_LOCALE}":`,
+          missing
+        );
+      }
+    } catch (_) {
+      // Base locale unavailable — skip the coverage warning.
+    }
+  }
+
+  return messages;
+}
+
+/**
+ * Recursively collect dot-notation key paths that exist in `base` but not in
+ * `target`. Only leaf (non-object) values are considered keys.
+ *
+ * @param {object} base
+ * @param {object} target
+ * @param {string} [prefix]
+ * @returns {string[]}
+ */
+function findMissingKeys(base, target, prefix = '') {
+  const missing = [];
+  for (const key of Object.keys(base)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    const baseVal = base[key];
+    const targetVal = target ? target[key] : undefined;
+
+    if (baseVal !== null && typeof baseVal === 'object' && !Array.isArray(baseVal)) {
+      missing.push(...findMissingKeys(baseVal, targetVal, path));
+    } else if (targetVal === undefined) {
+      missing.push(path);
+    }
+  }
+  return missing;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
