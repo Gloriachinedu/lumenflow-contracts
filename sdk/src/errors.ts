@@ -13,6 +13,9 @@ export enum PaymentErrorCode {
   PaymentExpired = 24,
   InsufficientBalance = 25,
   TokenNotAllowed = 26,
+  AlreadyCancelled = 27,
+  PaymentAlreadyCompleted = 28,
+  SignatureExpired = 29,
   RefundNotFound = 30,
   RefundAlreadyExists = 31,
   RefundWindowExpired = 32,
@@ -39,6 +42,7 @@ export enum PaymentErrorCode {
   SubscriptionNotActive = 64,
   SubscriptionMaxCyclesReached = 65,
   SubscriptionIntervalNotElapsed = 66,
+  ExceedsMerchantLimit = 70,
 }
 
 export const ERROR_MESSAGES: Record<PaymentErrorCode, string> = {
@@ -56,6 +60,9 @@ export const ERROR_MESSAGES: Record<PaymentErrorCode, string> = {
   [PaymentErrorCode.PaymentExpired]: "The payment request has expired.",
   [PaymentErrorCode.InsufficientBalance]: "The payer has insufficient balance for this transaction.",
   [PaymentErrorCode.TokenNotAllowed]: "The specified token is not accepted by the contract.",
+  [PaymentErrorCode.AlreadyCancelled]: "This payment request has already been cancelled.",
+  [PaymentErrorCode.PaymentAlreadyCompleted]: "This payment has already been completed and cannot be cancelled.",
+  [PaymentErrorCode.SignatureExpired]: "The provided signature has expired.",
   [PaymentErrorCode.RefundNotFound]: "The specified refund record could not be found.",
   [PaymentErrorCode.RefundAlreadyExists]: "A refund with this ID already exists.",
   [PaymentErrorCode.RefundWindowExpired]: "The refund window (30 days) has expired for this payment.",
@@ -82,17 +89,20 @@ export const ERROR_MESSAGES: Record<PaymentErrorCode, string> = {
   [PaymentErrorCode.SubscriptionNotActive]: "The subscription is not active.",
   [PaymentErrorCode.SubscriptionMaxCyclesReached]: "The subscription has reached its maximum charging cycles.",
   [PaymentErrorCode.SubscriptionIntervalNotElapsed]: "The required interval between charges has not elapsed.",
+  [PaymentErrorCode.ExceedsMerchantLimit]: "The payment amount exceeds the maximum payment amount configured for this merchant.",
 };
 
 export class LumenFlowError extends Error {
-  public readonly code: PaymentErrorCode;
+  public readonly code: number;
+  public readonly retryable: boolean;
   public readonly details?: unknown;
 
-  constructor(code: PaymentErrorCode, details?: unknown) {
-    const message = ERROR_MESSAGES[code] || `An unknown error occurred (code: ${code})`;
+  constructor(code: number, details?: unknown, retryable: boolean = false) {
+    const message = ERROR_MESSAGES[code as PaymentErrorCode] || `An unknown error occurred (code: ${code})`;
     super(message);
     this.name = "LumenFlowError";
     this.code = code;
+    this.retryable = retryable;
     this.details = details;
   }
 
@@ -101,7 +111,7 @@ export class LumenFlowError extends Error {
    * `"Unknown"` when the code is not a known {@link PaymentErrorCode}.
    */
   get codeName(): string {
-    return PaymentErrorCode[this.code] ?? "Unknown";
+    return PaymentErrorCode[this.code as PaymentErrorCode] ?? "Unknown";
   }
 
   /**
@@ -118,18 +128,20 @@ export class LumenFlowError extends Error {
    */
   toJSON(): {
     name: string;
-    code: PaymentErrorCode;
+    code: number;
     codeName: string;
     message: string;
     messageKey: string;
+    retryable: boolean;
     details?: unknown;
   } {
     const json: {
       name: string;
-      code: PaymentErrorCode;
+      code: number;
       codeName: string;
       message: string;
       messageKey: string;
+      retryable: boolean;
       details?: unknown;
     } = {
       name: this.name,
@@ -137,20 +149,59 @@ export class LumenFlowError extends Error {
       codeName: this.codeName,
       message: this.message,
       messageKey: this.messageKey,
+      retryable: this.retryable,
     };
     if (this.details !== undefined) {
       json.details = this.details;
     }
     return json;
   }
-
-  toJSON() {
-    return { name: this.name, code: this.code, message: this.message, ...(this.details === undefined ? {} : { details: this.details }) };
-  }
 }
 
 abstract class ContractError extends LumenFlowError {
   protected constructor(code: PaymentErrorCode, details?: unknown) { super(code, details); }
+}
+
+/**
+ * Error raised when the SDK or contract enforces a rate limit.
+ * Retryable: the same request may succeed after a backoff.
+ */
+export class RateLimitError extends LumenFlowError {
+  constructor(details?: unknown, code: number = PaymentErrorCode.PaginationLimitExceeded) {
+    super(code, details, true);
+    this.name = "RateLimitError";
+  }
+}
+
+/**
+ * Error raised when a signature fails verification.
+ */
+export class SignatureError extends LumenFlowError {
+  constructor(details?: unknown, code: number = PaymentErrorCode.InvalidSignature) {
+    super(code, details, false);
+    this.name = "SignatureError";
+  }
+}
+
+/**
+ * Error raised when a requested resource cannot be found.
+ */
+export class NotFoundError extends LumenFlowError {
+  constructor(details?: unknown, code: number = PaymentErrorCode.PaymentNotFound) {
+    super(code, details, false);
+    this.name = "NotFoundError";
+  }
+}
+
+/**
+ * Error raised for transport / connectivity failures.
+ * Retryable: transient network failures may succeed on retry.
+ */
+export class NetworkError extends LumenFlowError {
+  constructor(details?: unknown, code: number = PaymentErrorCode.InvalidInput) {
+    super(code, details, true);
+    this.name = "NetworkError";
+  }
 }
 
 export class UnauthorizedError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.Unauthorized, details); } }
@@ -166,6 +217,9 @@ export class InvalidSignatureError extends ContractError { constructor(details?:
 export class PaymentExpiredError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.PaymentExpired, details); } }
 export class InsufficientBalanceError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.InsufficientBalance, details); } }
 export class TokenNotAllowedError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.TokenNotAllowed, details); } }
+export class AlreadyCancelledError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.AlreadyCancelled, details); } }
+export class PaymentAlreadyCompletedError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.PaymentAlreadyCompleted, details); } }
+export class SignatureExpiredError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.SignatureExpired, details); } }
 export class RefundNotFoundError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.RefundNotFound, details); } }
 export class RefundAlreadyExistsError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.RefundAlreadyExists, details); } }
 export class RefundWindowExpiredError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.RefundWindowExpired, details); } }
@@ -178,22 +232,122 @@ export class MultisigAlreadySignedError extends ContractError { constructor(deta
 export class MultisigAlreadyExecutedError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.MultisigAlreadyExecuted, details); } }
 export class InsufficientSignaturesError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.InsufficientSignatures, details); } }
 export class InvalidInputError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.InvalidInput, details); } }
+
+/**
+ * Thrown when a public SDK method receives invalid input, before any network
+ * call is made. Carries the name of the offending field so callers can
+ * highlight the exact parameter that failed validation.
+ */
+export class LumenFlowValidationError extends LumenFlowError {
+  public readonly field: string;
+
+  constructor(field: string, message?: string, details?: unknown) {
+    const baseMessage = message ?? ERROR_MESSAGES[PaymentErrorCode.InvalidInput];
+    super(PaymentErrorCode.InvalidInput, {
+      field,
+      ...(details === undefined ? {} : { details }),
+    });
+    this.name = "LumenFlowValidationError";
+    this.field = field;
+    this.message = `Invalid input for "${field}": ${baseMessage}`;
+  }
+}
 export class PaginationLimitExceededError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.PaginationLimitExceeded, details); } }
 export class BatchSizeExceededError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.BatchSizeExceeded, details); } }
 export class InvalidTagsError extends ContractError { constructor(details?: unknown) { super(PaymentErrorCode.InvalidTags, details); } }
+
+/**
+ * Thrown when the deployed contract version is incompatible with the SDK
+ * version and the client was initialized with `strict: true`.
+ *
+ * Not tied to a contract error code, so it extends {@link LumenFlowError}
+ * directly and carries the compared versions in `details`.
+ */
+export class VersionMismatchError extends LumenFlowError {
+  public readonly sdkVersion: string;
+  public readonly contractVersion: string;
+
+  constructor(
+    sdkVersion: string,
+    contractVersion: string,
+    details?: { sdkVersion?: string; contractVersion?: string; reason?: string },
+  ) {
+    super(
+      PaymentErrorCode.InvalidInput,
+      details ?? { sdkVersion, contractVersion },
+    );
+    this.name = "VersionMismatchError";
+    this.sdkVersion = sdkVersion;
+    this.contractVersion = contractVersion;
+    this.message =
+      `SDK version ${sdkVersion} is incompatible with deployed contract version ${contractVersion}. ` +
+      `The SDK and contract minor versions must match.`;
+  }
+}
 
 export const ERROR_TYPES: Record<PaymentErrorCode, new (details?: unknown) => LumenFlowError> = {
   [PaymentErrorCode.Unauthorized]: UnauthorizedError, [PaymentErrorCode.AdminAlreadySet]: AdminAlreadySetError, [PaymentErrorCode.InvalidAdminAddress]: InvalidAdminAddressError,
   [PaymentErrorCode.MerchantNotFound]: MerchantNotFoundError, [PaymentErrorCode.MerchantAlreadyRegistered]: MerchantAlreadyRegisteredError, [PaymentErrorCode.MerchantInactive]: MerchantInactiveError,
   [PaymentErrorCode.PaymentNotFound]: PaymentNotFoundError, [PaymentErrorCode.PaymentAlreadyExists]: PaymentAlreadyExistsError, [PaymentErrorCode.InvalidAmount]: InvalidAmountError,
   [PaymentErrorCode.InvalidSignature]: InvalidSignatureError, [PaymentErrorCode.PaymentExpired]: PaymentExpiredError, [PaymentErrorCode.InsufficientBalance]: InsufficientBalanceError, [PaymentErrorCode.TokenNotAllowed]: TokenNotAllowedError,
+  [PaymentErrorCode.AlreadyCancelled]: AlreadyCancelledError, [PaymentErrorCode.PaymentAlreadyCompleted]: PaymentAlreadyCompletedError, [PaymentErrorCode.SignatureExpired]: SignatureExpiredError,
   [PaymentErrorCode.RefundNotFound]: RefundNotFoundError, [PaymentErrorCode.RefundAlreadyExists]: RefundAlreadyExistsError, [PaymentErrorCode.RefundWindowExpired]: RefundWindowExpiredError,
   [PaymentErrorCode.RefundExceedsOriginal]: RefundExceedsOriginalError, [PaymentErrorCode.RefundNotApproved]: RefundNotApprovedError, [PaymentErrorCode.RefundAlreadyCompleted]: RefundAlreadyCompletedError, [PaymentErrorCode.TooManyRefunds]: TooManyRefundsError,
   [PaymentErrorCode.MultisigNotFound]: MultisigNotFoundError, [PaymentErrorCode.MultisigAlreadySigned]: MultisigAlreadySignedError, [PaymentErrorCode.MultisigAlreadyExecuted]: MultisigAlreadyExecutedError, [PaymentErrorCode.InsufficientSignatures]: InsufficientSignaturesError,
   [PaymentErrorCode.InvalidInput]: InvalidInputError, [PaymentErrorCode.PaginationLimitExceeded]: PaginationLimitExceededError, [PaymentErrorCode.BatchSizeExceeded]: BatchSizeExceededError, [PaymentErrorCode.InvalidTags]: InvalidTagsError,
 };
 
+/**
+ * Maps a contract error code to the appropriate SDK error class.
+ * Signature codes map to {@link SignatureError}, not-found codes to
+ * {@link NotFoundError}, and pagination/rate-limit codes to
+ * {@link RateLimitError}. Unknown codes fall back to {@link LumenFlowError}.
+ */
 export function errorFromCode(code: number, details?: unknown): LumenFlowError {
+  switch (code) {
+    case PaymentErrorCode.InvalidSignature:
+      return new SignatureError(details, code);
+    case PaymentErrorCode.MerchantNotFound:
+    case PaymentErrorCode.PaymentNotFound:
+    case PaymentErrorCode.RefundNotFound:
+    case PaymentErrorCode.DisputeNotFound:
+    case PaymentErrorCode.MultisigNotFound:
+    case PaymentErrorCode.SubscriptionPlanNotFound:
+    case PaymentErrorCode.SubscriptionNotFound:
+      return new NotFoundError(details, code);
+    case PaymentErrorCode.PaginationLimitExceeded:
+      return new RateLimitError(details, code);
+    default:
+      break;
+  }
   const ErrorType = ERROR_TYPES[code as PaymentErrorCode];
-  return ErrorType ? new ErrorType(details) : new LumenFlowError(code as PaymentErrorCode, details);
+  return ErrorType ? new ErrorType(details) : new LumenFlowError(code, details);
+}
+
+/**
+ * Thrown when a polling helper (e.g. `waitForRefundConfirmation`) does not
+ * observe the expected state within the configured timeout.
+ */
+export class TimeoutError extends Error {
+  public readonly timeoutMs: number;
+  public readonly details?: unknown;
+
+  constructor(timeoutMs: number, details?: unknown) {
+    super(`Operation timed out after ${timeoutMs}ms.`);
+    this.name = "TimeoutError";
+    this.timeoutMs = timeoutMs;
+    this.details = details;
+  }
+
+  toJSON(): { name: string; message: string; timeoutMs: number; details?: unknown } {
+    const json: { name: string; message: string; timeoutMs: number; details?: unknown } = {
+      name: this.name,
+      message: this.message,
+      timeoutMs: this.timeoutMs,
+    };
+    if (this.details !== undefined) {
+      json.details = this.details;
+    }
+    return json;
+  }
 }

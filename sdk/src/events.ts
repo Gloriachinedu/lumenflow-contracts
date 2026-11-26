@@ -20,6 +20,120 @@ export type LumenFlowEvent = {
   value: string;
 };
 
+/**
+ * Decoded payload of a `CrossAssetPaymentEvent` emitted by the contract when a
+ * payer pays in a different asset than the merchant's preferred token.
+ */
+export type CrossAssetPaymentEvent = {
+  /** Payer address (or identifier) that initiated the payment. */
+  payer: string;
+  /** Merchant address (or identifier) that received the payment. */
+  merchant: string;
+  /** Asset the payer sent, e.g. "native" or "CODE:ISSUER". */
+  sendAsset: string;
+  /** Asset the merchant received, e.g. "native" or "CODE:ISSUER". */
+  destAsset: string;
+  /** Amount of `sendAsset` actually spent. */
+  sendAmount: bigint;
+  /** Amount of `destAsset` actually received by the merchant. */
+  destAmount: bigint;
+  /**
+   * Exchange rate used for the conversion, expressed as `destAmount / sendAmount`.
+   * Provided as a number for convenience; use `sendAmount`/`destAmount` for exact math.
+   */
+  exchangeRate: number;
+  /** Optional payment reference/memo. */
+  reference?: string;
+};
+
+const CROSS_ASSET_PAYMENT_EVENT = 'cross_asset_payment';
+
+function toBigInt(value: unknown): bigint {
+  if (typeof value === 'bigint') return value;
+  if (typeof value === 'number') return BigInt(Math.trunc(value));
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed === '') return 0n;
+    return BigInt(trimmed);
+  }
+  return 0n;
+}
+
+function toAssetString(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    // Soroban asset enums are commonly serialized as { native: ... } or { credit_alphanum4: ... }.
+    if ('native' in obj) return 'native';
+    if (typeof obj.code === 'string' && typeof obj.issuer === 'string') {
+      return `${obj.code}:${obj.issuer}`;
+    }
+    const keys = Object.keys(obj);
+    if (keys.length === 1) {
+      const inner = obj[keys[0]];
+      if (inner && typeof inner === 'object') {
+        const innerObj = inner as Record<string, unknown>;
+        if (typeof innerObj.code === 'string' && typeof innerObj.issuer === 'string') {
+          return `${innerObj.code}:${innerObj.issuer}`;
+        }
+      }
+      return keys[0];
+    }
+  }
+  return String(value ?? '');
+}
+
+/**
+ * Decode a raw `LumenFlowEvent` into a typed `CrossAssetPaymentEvent`.
+ *
+ * Returns `null` when the event is not a cross-asset payment event or its
+ * payload cannot be parsed.
+ */
+export function decodeCrossAssetPaymentEvent(
+  event: LumenFlowEvent,
+): CrossAssetPaymentEvent | null {
+  const isCrossAsset =
+    event.topics[1] === CROSS_ASSET_PAYMENT_EVENT ||
+    event.type === CROSS_ASSET_PAYMENT_EVENT;
+  if (!isCrossAsset) return null;
+
+  let payload: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(event.value);
+    if (!parsed || typeof parsed !== 'object') return null;
+    payload = parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+
+  const sendAmount = toBigInt(payload.send_amount ?? payload.sendAmount);
+  const destAmount = toBigInt(payload.dest_amount ?? payload.destAmount);
+
+  let exchangeRate: number;
+  if (typeof payload.exchange_rate === 'number') {
+    exchangeRate = payload.exchange_rate;
+  } else if (typeof payload.exchangeRate === 'number') {
+    exchangeRate = payload.exchangeRate;
+  } else if (sendAmount > 0n) {
+    exchangeRate = Number(destAmount) / Number(sendAmount);
+  } else {
+    exchangeRate = 0;
+  }
+
+  const reference = payload.reference ?? payload.memo;
+
+  return {
+    payer: String(payload.payer ?? ''),
+    merchant: String(payload.merchant ?? ''),
+    sendAsset: toAssetString(payload.send_asset ?? payload.sendAsset),
+    destAsset: toAssetString(payload.dest_asset ?? payload.destAsset),
+    sendAmount,
+    destAmount,
+    exchangeRate,
+    reference: typeof reference === 'string' ? reference : undefined,
+  };
+}
+
 export type UnsubscribeFn = () => void;
 
 type SubscribeOptions = {
@@ -117,4 +231,4 @@ export function subscribe(
 }
 
 /** Convenience namespace so callers can write `sdk.events.subscribe(...)`. */
-export const events = { subscribe };
+export const events = { subscribe, decodeCrossAssetPaymentEvent };

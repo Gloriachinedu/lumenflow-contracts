@@ -5,6 +5,7 @@
     "test:receipt": "playwright test tests/receipt.spec.js",
     "test:playwright": "playwright test tests/playwright/",
     "test:e2e": "playwright test",
+    "test:lighthouse": "npm --prefix frontend run test:lighthouse",
     "lint:html": "htmlhint \"frontend/**/*.html\" --config .htmlhintrc",
     "lint:js": "eslint \"frontend/**/*.js\" \"tests/**/*.js\"",
     "check:i18n": "node scripts/check-i18n-locales.mjs",
@@ -12,6 +13,7 @@
     "test:roadmap": "node --test \"scripts/*.test.mjs\""
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.10.2",
     "@html-eslint/eslint-plugin": "^0.67.0",
     "@playwright/test": "^1.63.0",
     "eslint": "^10.13.0",

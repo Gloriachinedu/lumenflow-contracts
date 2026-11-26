@@ -35,6 +35,8 @@ This command ensures the manifest is complete and that Docker Compose can parse 
 
 Use a local `.env` file or runtime environment variables for secrets and credentials. Do not hardcode private keys, secret values, or network credentials in repository files.
 
+> **Deprecated test keys:** Any testnet secret keys shown in earlier revisions of this guide (or in public forums, tutorials, and example fixtures) are **deprecated and have been unfunded**. They must never be reused. Generate a fresh keypair for every environment with `./scripts/generate_smoke_keypair.sh` — see [CONTRIBUTING.md](../CONTRIBUTING.md) for the key-handling policy.
+
 ```bash
 curl "https://friendbot.stellar.org?addr=<YOUR_PUBLIC_KEY>"
 ```
@@ -42,7 +44,7 @@ curl "https://friendbot.stellar.org?addr=<YOUR_PUBLIC_KEY>"
 ### 2. Build and deploy
 
 ```bash
-NETWORK=testnet SOURCE_ACCOUNT=<testnet-secret-key> ./scripts/deploy.sh
+NETWORK=testnet SOURCE_ACCOUNT=S_EXAMPLE_DO_NOT_USE ./scripts/deploy.sh
 ```
 
 The script prints the `CONTRACT_ID` on success. Save it.
@@ -52,7 +54,7 @@ The script prints the `CONTRACT_ID` on success. Save it.
 ```bash
 stellar contract invoke \
   --id <CONTRACT_ID> \
-  --source-account <admin-secret-key> \
+  --source-account S_EXAMPLE_DO_NOT_USE \
   --network testnet \
   -- set_admin --admin <admin-address>
 ```
@@ -64,7 +66,7 @@ stellar contract invoke \
 ```bash
 stellar contract invoke \
   --id <CONTRACT_ID> \
-  --source-account <merchant-secret-key> \
+  --source-account S_EXAMPLE_DO_NOT_USE \
   --network testnet \
   -- register_merchant \
   --merchant_address <merchant-address> \
@@ -78,9 +80,9 @@ stellar contract invoke \
 
 ```bash
 CONTRACT_ID=<id> \
-ADMIN_KEY=<admin-secret> \
-MERCHANT_KEY=<merchant-secret> \
-PAYER_KEY=<payer-secret> \
+ADMIN_KEY=S_EXAMPLE_DO_NOT_USE \
+MERCHANT_KEY=S_EXAMPLE_DO_NOT_USE \
+PAYER_KEY=S_EXAMPLE_DO_NOT_USE \
 TOKEN_ADDRESS=<sac-token-address> \
 ADMIN_ADDRESS=<admin-address> \
 MERCHANT_ADDRESS=<merchant-address> \
@@ -97,7 +99,7 @@ A zero exit code means the contract is functional.
 
 ### Security notes
 
-- **Never reuse testnet keys on mainnet.** Generate fresh keypairs.
+- **Never reuse testnet keys on mainnet.** Generate fresh keypairs for each environment with `./scripts/generate_smoke_keypair.sh`. All previously published example keys are deprecated and unfunded.
 - Store the admin secret key in a hardware wallet or a secrets manager (e.g., AWS Secrets Manager, HashiCorp Vault). Do not commit it to source control.
 - Do not hardcode secrets in repository files or Docker Compose manifests.
 - Use `.env`-style files, OS environment variables, or platform secret stores for local development.
@@ -116,11 +118,11 @@ cp .env.example .env.local
 Then set secrets locally:
 
 ```bash
-export SOURCE_ACCOUNT="S..."
-export ADMIN_KEY="S..."
+export SOURCE_ACCOUNT="S_EXAMPLE_DO_NOT_USE"
+export ADMIN_KEY="S_EXAMPLE_DO_NOT_USE"
 ```
 
-Avoid committing `.env.local` or any files that contain real secret keys.
+Avoid committing `.env.local` or any files that contain real secret keys. Never commit real keys — see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ### 1. Generate and fund a mainnet deployer account
 
@@ -133,7 +135,7 @@ stellar account show --account <deployer-public-key> --network mainnet
 ### 2. Build and deploy
 
 ```bash
-NETWORK=mainnet SOURCE_ACCOUNT=<mainnet-deployer-secret> ./scripts/deploy.sh
+NETWORK=mainnet SOURCE_ACCOUNT=S_EXAMPLE_DO_NOT_USE ./scripts/deploy.sh
 ```
 
 Save the printed `CONTRACT_ID` immediately. Share it with your team through a secure channel.
@@ -143,7 +145,7 @@ Save the printed `CONTRACT_ID` immediately. Share it with your team through a se
 ```bash
 stellar contract invoke \
   --id <CONTRACT_ID> \
-  --source-account <admin-secret-key> \
+  --source-account S_EXAMPLE_DO_NOT_USE \
   --network mainnet \
   -- set_admin --admin <admin-address>
 ```
@@ -155,7 +157,7 @@ Default is 90 days (7 776 000 seconds). Adjust if needed:
 ```bash
 stellar contract invoke \
   --id <CONTRACT_ID> \
-  --source-account <admin-secret-key> \
+  --source-account S_EXAMPLE_DO_NOT_USE \
   --network mainnet \
   -- set_payment_cleanup_period --admin <admin-address> --period 7776000
 ```
@@ -224,7 +226,7 @@ canary contract  ←── 5%──┘
 ### Deploy a canary
 
 ```bash
-NETWORK=testnet SOURCE_ACCOUNT=<deployer-secret> ./scripts/deploy-canary.sh
+NETWORK=testnet SOURCE_ACCOUNT=S_EXAMPLE_DO_NOT_USE ./scripts/deploy-canary.sh
 ```
 
 The script:

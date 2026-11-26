@@ -163,76 +163,107 @@
    * This block only runs when native support is absent, so there is no CSS
    * specificity conflict for modern browsers.
    */
+  // High-contrast focus colour tokens (WCAG 2.1 AA — 1.4.11 Non-text
+  // Contrast and 2.4.7 Focus Visible).  These values are shared with the
+  // main stylesheet so the polyfill and native `:focus-visible` rules stay
+  // in sync.  The light-mode ring (#0b3d91) achieves > 7:1 against white
+  // and the dark-mode ring (#ffd166) achieves > 7:1 against the dark
+  // surface, both well above the 3:1 minimum for focus indicators.
+  var FOCUS_RING_LIGHT = '#0b3d91';
+  var FOCUS_RING_DARK = '#ffd166';
+
+  /**
+   * Build a focus-ring rule for the given selector list, emitting both a
+   * light-mode and a dark-mode (prefers-color-scheme) variant so the ring
+   * remains visible on every audited page regardless of theme.
+   *
+   * @param {string} selectors  Comma-separated selector list.
+   * @returns {string[]}        Array of CSS rule strings.
+   */
+  function focusRingRules(selectors) {
+    return [
+      selectors + ' {',
+      '  outline: 3px solid ' + FOCUS_RING_LIGHT + ';',
+      '  outline-offset: 2px;',
+      '}',
+      '@media (prefers-color-scheme: dark) {',
+      '  ' + selectors + ' {',
+      '    outline-color: ' + FOCUS_RING_DARK + ';',
+      '  }',
+      '}',
+    ];
+  }
+
   var style = document.createElement('style');
   style.id = 'lf-focus-visible-polyfill';
-  style.textContent = [
-    /* General interactive elements */
-    'a.focus-visible,',
-    'button.focus-visible,',
-    'input.focus-visible,',
-    'select.focus-visible,',
-    'textarea.focus-visible,',
-    '[tabindex].focus-visible {',
-    '  outline: 3px solid #5a3fd6;',
-    '  outline-offset: 2px;',
-    '}',
+  style.textContent = [].concat(
+    /* General interactive elements — covers links, buttons, form controls,
+       summary/details, and any element made focusable via tabindex. */
+    focusRingRules([
+      'a.focus-visible',
+      'button.focus-visible',
+      'input.focus-visible',
+      'select.focus-visible',
+      'textarea.focus-visible',
+      'summary.focus-visible',
+      '[tabindex].focus-visible',
+      '[contenteditable].focus-visible',
+      '[role="button"].focus-visible',
+      '[role="link"].focus-visible',
+      '[role="tab"].focus-visible',
+      '[role="menuitem"].focus-visible',
+      '[role="option"].focus-visible',
+      '[role="checkbox"].focus-visible',
+      '[role="radio"].focus-visible',
+      '[role="switch"].focus-visible',
+    ].join(', ')),
 
     /* Remove outline for pointer-focused elements (mouse clicks should not
        show focus rings; the .focus-visible class is only added for keyboard) */
-    'a:focus:not(.focus-visible),',
-    'button:focus:not(.focus-visible),',
-    'input:focus:not(.focus-visible),',
-    'select:focus:not(.focus-visible),',
-    'textarea:focus:not(.focus-visible),',
-    '[tabindex]:focus:not(.focus-visible) {',
-    '  outline: none;',
-    '}',
+    [
+      'a:focus:not(.focus-visible),',
+      'button:focus:not(.focus-visible),',
+      'input:focus:not(.focus-visible),',
+      'select:focus:not(.focus-visible),',
+      'textarea:focus:not(.focus-visible),',
+      'summary:focus:not(.focus-visible),',
+      '[tabindex]:focus:not(.focus-visible) {',
+      '  outline: none;',
+      '}',
+    ].join('\n'),
 
     /* Component-specific overrides — match specificity of existing styles */
 
     /* Wallet chip (wallet-status.js) */
-    '.wallet-chip.focus-visible {',
-    '  outline: 3px solid #5a3fd6;',
-    '  outline-offset: 2px;',
-    '}',
+    focusRingRules('.wallet-chip.focus-visible'),
 
     /* Filter panel / toolbar chips (filter-keyboard.js) */
-    '.filter-panel *.focus-visible,',
-    '.toolbar *.focus-visible {',
-    '  outline: 3px solid #5a3fd6;',
-    '  outline-offset: 2px;',
-    '}',
+    focusRingRules('.filter-panel *.focus-visible, .toolbar *.focus-visible'),
 
-    '.chip button.focus-visible {',
-    '  outline: 3px solid #5a3fd6;',
-    '  outline-offset: 2px;',
-    '}',
+    focusRingRules('.chip button.focus-visible'),
 
     /* Combobox trigger (filter-keyboard.js) */
-    '.lf-combobox-trigger.focus-visible {',
-    '  outline: 3px solid #5a3fd6;',
-    '  outline-offset: 2px;',
-    '}',
+    focusRingRules('.lf-combobox-trigger.focus-visible'),
 
     /* Copy button (lumenflow-shared.js) */
-    '.lf-copy-btn.focus-visible {',
-    '  outline: 3px solid #5a3fd6;',
-    '  outline-offset: 2px;',
-    '}',
+    focusRingRules('.lf-copy-btn.focus-visible'),
 
     /* Toast close button (focus-management.js, toast.js) */
-    '.lf-toast__close.focus-visible,',
-    '.lf-toast-close.focus-visible {',
-    '  outline: 3px solid #5a3fd6;',
-    '  outline-offset: 2px;',
-    '}',
+    focusRingRules('.lf-toast__close.focus-visible, .lf-toast-close.focus-visible'),
 
     /* Dark-mode toggle (styles.css) */
-    '#lf-dark-toggle.focus-visible {',
-    '  outline: 3px solid #5a3fd6;',
-    '  outline-offset: 2px;',
-    '}',
-  ].join('\n');
+    focusRingRules('#lf-dark-toggle.focus-visible'),
+
+    /* Skip link (focus-management.js) — must be visible when focused */
+    focusRingRules('.lf-skip-link.focus-visible'),
+
+    /* Modal / dialog close buttons and dialog containers */
+    focusRingRules('.lf-modal-close.focus-visible, [role="dialog"] .focus-visible'),
+
+    /* Navigation menu items and pagination controls */
+    focusRingRules('.lf-nav-item.focus-visible, .lf-pagination button.focus-visible')
+  ).join('\n');
+=======
 
   // Inject before the first <link> or <style> so the rules are overridden
   // by component-specific styles if needed.

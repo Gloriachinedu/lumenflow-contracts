@@ -29,6 +29,8 @@ The CI workflow `.github/workflows/differential-tests.yml` runs the full suite w
 
 Get from zero to your first successful payment in under 10 minutes using the testnet.
 
+> **Prefer a walkthrough?** Watch the [SDK integration video walkthrough](https://www.youtube.com/watch?v=SDK_INTEGRATION_VIDEO_ID) for a step-by-step Node.js integration demo. A written transcript is available at [`docs/sdk-integration-transcript.md`](../docs/sdk-integration-transcript.md) for accessibility.
+
 ### Step 1: Install
 
 ```bash
@@ -1102,6 +1104,24 @@ npm install
 npm run build
 npm test
 ```
+
+## Migrating between versions
+
+Minor releases of `@lumenflow/sdk` may contain **breaking API changes**. A migration
+is required whenever you upgrade across a minor version boundary that is marked as
+breaking in the [`CHANGELOG.md`](CHANGELOG.md) — for example, when a method
+signature changes, a type is renamed, or a return shape is altered.
+
+Before upgrading:
+
+1. Read the [`CHANGELOG.md`](CHANGELOG.md) entry for the target version.
+2. Follow the matching versioned migration section in the
+   [Upgrade Guide](../docs/upgrade-guide.md), which provides step-by-step
+   instructions and before/after code samples for every breaking change.
+3. Run your test suite against the new version.
+
+If the release notes do not mention any breaking changes, the upgrade is
+drop-in and no migration steps are needed.
 
 ## Version and RPC diagnostics
 

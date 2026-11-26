@@ -11,7 +11,57 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
       - name: Install swagger-cli
         run: npm install -g swagger-cli
       - name: Validate OpenAPI spec
         run: swagger-cli validate docs/openapi.yaml
+
+  contract-tests:
+    runs-on: ubuntu-latest
+    needs: validate-openapi
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install mock server dependencies
+        working-directory: tests/mock-server
+        run: npm install
+      - name: Install contract test dependencies
+        run: npm install -g dredd
+      - name: Start mock server
+        working-directory: tests/mock-server
+        run: |
+          npm start &
+          echo $! > /tmp/mock-server.pid
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/health > /dev/null 2>&1 || curl -sf http://localhost:3000/ > /dev/null 2>&1; then
+              echo "Mock server is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Mock server failed to start"
+          exit 1
+      - name: Run Dredd contract tests
+        run: |
+          dredd docs/openapi.yaml http://localhost:3000 \
+            --hookfiles=tests/mock-server/dredd-hooks.js \
+            --reporter=dot \
+            --level=error
+      - name: Check for unimplemented spec endpoints
+        run: |
+          node tests/mock-server/check-endpoints.js --spec docs/openapi.yaml --base-url http://localhost:3000 --fail-on-missing-implementation
+      - name: Warn on implemented endpoints missing from spec
+        if: always()
+        run: |
+          node tests/mock-server/check-endpoints.js --spec docs/openapi.yaml --base-url http://localhost:3000 --warn-on-missing-spec || true
+      - name: Stop mock server
+        if: always()
+        run: |
+          if [ -f /tmp/mock-server.pid ]; then
+            kill "$(cat /tmp/mock-server.pid)" || true
+          fi

@@ -83,3 +83,80 @@ resource "aws_cloudwatch_metric_alarm" "high_cpu" {
   alarm_actions       = [aws_sns_topic.alerts.arn]
   ok_actions          = [aws_sns_topic.alerts.arn]
 }
+
+# Monitoring exporter deployment with bounded CPU/memory
+resource "kubernetes_deployment" "monitoring_exporter" {
+  metadata {
+    name      = "${var.project}-${var.environment}-monitoring-exporter"
+    namespace = var.kubernetes_namespace
+    labels = {
+      app = "monitoring-exporter"
+    }
+  }
+
+  spec {
+    replicas = 2
+
+    selector {
+      match_labels = {
+        app = "monitoring-exporter"
+      }
+    }
+
+    template {
+      metadata {
+        labels = {
+          app = "monitoring-exporter"
+        }
+      }
+
+      spec {
+        container {
+          name  = "monitoring-exporter"
+          image = var.monitoring_exporter_image
+
+          resources {
+            requests = {
+              cpu    = "100m"
+              memory = "128Mi"
+            }
+            limits = {
+              cpu    = "500m"
+              memory = "512Mi"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+# HPA for monitoring exporter: min 2, max 10, scale on CPU > 70%
+resource "kubernetes_horizontal_pod_autoscaler_v2" "monitoring_exporter" {
+  metadata {
+    name      = "${var.project}-${var.environment}-monitoring-exporter"
+    namespace = var.kubernetes_namespace
+  }
+
+  spec {
+    min_replicas = 2
+    max_replicas = 10
+
+    scale_target_ref {
+      api_version = "apps/v1"
+      kind        = "Deployment"
+      name        = kubernetes_deployment.monitoring_exporter.metadata[0].name
+    }
+
+    metric {
+      type = "Resource"
+      resource {
+        name = "cpu"
+        target {
+          type                = "Utilization"
+          average_utilization = 70
+        }
+      }
+    }
+  }
+}
