@@ -53,7 +53,8 @@ body {
 
 .header-nav { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .nav-link {
-  color: var(--color-text-muted);
+  /* Use full-strength text colour so links meet 4.5:1 contrast in both modes */
+  color: var(--color-text);
   text-decoration: none;
   padding: 0.25rem 0.6rem;
   border-radius: var(--radius);
@@ -61,7 +62,8 @@ body {
 }
 .nav-link:hover,
 .nav-link:focus-visible { background: var(--color-surface-alt); color: var(--color-text); }
-.nav-link.active { color: var(--color-accent); font-weight: 600; }
+.nav-link:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.nav-link.active { color: var(--color-accent-text-on-surface); font-weight: 600; }
 
 .header-controls {
   display: flex;
@@ -78,7 +80,7 @@ body {
   color: var(--color-text);
   font-size: 0.875rem;
 }
-.date-input:focus { outline: 2px solid var(--color-accent); }
+.date-input:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
 
 .btn {
   background: var(--color-accent);
@@ -90,10 +92,11 @@ body {
   font-size: 0.875rem;
 }
 .btn:hover { background: var(--color-accent-hover); }
-.btn:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.btn:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
 .btn-sm { padding: 0.3rem 0.65rem; font-size: 0.8125rem; }
 
-.last-refresh { font-size: 0.75rem; color: var(--color-text-muted); }
+/* Small text must still hit 4.5:1 — use the darker muted token */
+.last-refresh { font-size: 0.75rem; color: var(--color-text-muted-strong); }
 
 /* ── Main layout ───────────────────────────────────────────────────── */
 .dashboard-main { padding: 1.5rem; }
@@ -113,7 +116,7 @@ body {
   box-shadow: var(--shadow-card);
 }
 .kpi-value { font-size: 1.75rem; font-weight: 700; line-height: 1.2; }
-.kpi-label { font-size: 0.8125rem; color: var(--color-text-muted); margin-top: 0.25rem; }
+.kpi-label { font-size: 0.8125rem; color: var(--color-text-muted-strong); margin-top: 0.25rem; }
 
 /* ── Panel grid ────────────────────────────────────────────────────── */
 .panels-grid {
@@ -139,7 +142,7 @@ body {
   border-bottom: 1px solid var(--color-border);
 }
 .panel-title { font-size: 0.9375rem; font-weight: 600; }
-.panel-subtitle { font-size: 0.8125rem; color: var(--color-text-muted); }
+.panel-subtitle { font-size: 0.8125rem; color: var(--color-text-muted-strong); }
 .panel-body { padding: 1rem 1.25rem; }
 
 /* ── Funnel chart ──────────────────────────────────────────────────── */
@@ -179,7 +182,7 @@ body {
   font-size: 0.8125rem;
   color: var(--color-danger);
 }
-.funnel-dropoff.no-drop { color: var(--color-text-muted); }
+.funnel-dropoff.no-drop { color: var(--color-text-muted-strong); }
 
 /* ── CSV export button ─────────────────────────────────────────────── */
 .btn-export {
@@ -218,8 +221,8 @@ body {
 .data-table th {
   text-align: left;
   padding: 0.5rem 0.625rem;
-  color: var(--color-text-muted);
-  font-weight: 500;
+  color: var(--color-text-muted-strong);
+  font-weight: 600;
   border-bottom: 1px solid var(--color-border);
   white-space: nowrap;
 }
@@ -239,15 +242,16 @@ body {
   font-size: 0.8125rem;
   font-weight: 600;
 }
-.pct-high   { background: color-mix(in srgb, var(--color-success) 20%, transparent); color: var(--color-success); }
-.pct-medium { background: color-mix(in srgb, var(--color-warning) 30%, transparent); color: var(--color-warning-text); }
-.pct-low    { background: color-mix(in srgb, var(--color-danger)  20%, transparent); color: var(--color-danger); }
+/* Pills use solid tinted backgrounds with dark text tokens to guarantee 4.5:1 */
+.pct-high   { background: var(--color-success-bg); color: var(--color-success-text); }
+.pct-medium { background: var(--color-warning-bg); color: var(--color-warning-text); }
+.pct-low    { background: var(--color-danger-bg);  color: var(--color-danger-text); }
 
 /* ── States ────────────────────────────────────────────────────────── */
 .loading-msg, .empty-msg {
   padding: 1.5rem 0;
   text-align: center;
-  color: var(--color-text-muted);
+  color: var(--color-text-muted-strong);
   font-size: 0.875rem;
 }
 
@@ -259,4 +263,12 @@ body {
   .funnel-conversion { display: none; }
   .funnel-dropoff { display: none; }
   .kpi-value { font-size: 1.4rem; }
+}
+
+/* ── Forced-colours / high-contrast fallback ───────────────────────── */
+@media (forced-colors: active) {
+  .btn,
+  .nav-link:focus-visible,
+  .date-input:focus-visible { outline: 2px solid CanvasText; }
+  .pct-pill { border: 1px solid CanvasText; }
 }

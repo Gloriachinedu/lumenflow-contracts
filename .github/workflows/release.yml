@@ -261,13 +261,23 @@ jobs:
   release:
     name: Build & Publish Release
     runs-on: ubuntu-latest
-    needs: [changelog, container-scan]
+    needs: [changelog, container-scan, build-cli]
     outputs:
       hashes: ${{ steps.provenance-hash.outputs.hashes }}
+      wasm-name: ${{ steps.provenance-hash.outputs.wasm-name }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56745cba8c7296529d2fc39830  # v4
         with:
           persist-credentials: false
+
+      # Download every CLI archive (including the Windows .zip and its .sha256)
+      # produced by the build-cli matrix so they can be attached to the release.
+      - name: Download CLI artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          pattern: cli-*
+          path: cli-artifacts
+          merge-multiple: true
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8  # master
@@ -354,8 +364,9 @@ jobs:
       - name: Prepare SLSA subject
         id: provenance-hash
         run: |
-          echo "hashes=$(sha256sum lumenflow_${{ github.ref_name }}.wasm | base64 -w0)" \
-            >> "$GITHUB_OUTPUT"
+          WASM="lumenflow_${{ github.ref_name }}.wasm"
+          echo "wasm-name=$WASM" >> "$GITHUB_OUTPUT"
+          echo "hashes=$(sha256sum "$WASM" | base64 -w0)" >> "$GITHUB_OUTPUT"
 
       - name: Write SHA-256 checksum file
         run: |
@@ -392,6 +403,7 @@ jobs:
             lumenflow_${{ github.ref_name }}.wasm.sha256
             lumenflow_${{ github.ref_name }}.wasm.sig
             lumenflow_${{ github.ref_name }}.wasm.cert
+            cli-artifacts/*
           generate_release_notes: false
           draft: false
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
@@ -467,6 +479,11 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
+  # ── SLSA Level 2 provenance (Issue #1545) ────────────────────────────────
+  # The generic SLSA3 generator produces a signed, non-forgeable provenance
+  # attestation (.intoto.jsonl) for the WASM binary built in the `release` job.
+  # The reusable workflow runs on a hosted runner and signs the provenance with
+  # the GitHub OIDC identity, satisfying SLSA Build Level 2.
   provenance:
     name: Generate SLSA Provenance
     needs: release
@@ -477,4 +494,40 @@ jobs:
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     with:
       base64-subjects: ${{ needs.release.outputs.hashes }}
+      # Attach the .intoto.jsonl to the existing GitHub Release created above.
       upload-assets: true
+      # Fail closed if the provenance cannot be generated or uploaded.
+      compile-generator: true
+
+  # ── Attach provenance to the GitHub Release ──────────────────────────────
+  # The generic generator uploads the attestation as a workflow artifact; this
+  # job downloads it and attaches the .intoto.jsonl file to the release so it
+  # sits alongside the WASM, .sha256, .sig and .cert assets.
+  attach-provenance:
+    name: Attach Provenance to Release
+    runs-on: ubuntu-latest
+    needs: [release, provenance]
+    permissions:
+      contents: write
+    steps:
+      - name: Download provenance attestation
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16  # v4
+        with:
+          name: ${{ needs.provenance.outputs.attestation-name }}
+          path: provenance
+
+      - name: Rename attestation
+        run: |
+          ATTESTATION="lumenflow_${{ github.ref_name }}.intoto.jsonl"
+          mv provenance/*.intoto.jsonl "$ATTESTATION"
+          echo "ATTESTATION=$ATTESTATION" >> "$GITHUB_ENV"
+          echo "### SLSA Provenance" >> "$GITHUB_STEP_SUMMARY"
+          echo "Attestation: $ATTESTATION" >> "$GITHUB_STEP_SUMMARY"
+          echo "Subject: ${{ needs.release.outputs.wasm-name }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload attestation to GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
+        with:
+          files: ${{ env.ATTESTATION }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}

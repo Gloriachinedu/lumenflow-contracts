@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Onboarding Analytics — LumenFlow</title>
-  <link rel="stylesheet" href="../shared.css" />
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="../shared.css" integrity="sha384-PLACEHOLDER_SHARED_CSS_SRI" crossorigin="anonymous" />
+  <link rel="stylesheet" href="styles.css" integrity="sha384-PLACEHOLDER_ONBOARDING_STYLES_SRI" crossorigin="anonymous" />
 </head>
 <body>
   <a href="#main-content" class="skip-link">Skip to main content</a>
@@ -19,15 +19,16 @@
         <a href="../fraud-analytics/index.html" class="nav-link">Fraud Analytics</a>
         <a href="index.html" class="nav-link active" aria-current="page">Onboarding Analytics</a>
       </nav>
-      <div class="header-controls">
+      <div class="header-controls" role="group" aria-label="Date range and refresh controls">
         <label for="date-from" class="sr-only">From date</label>
         <input type="date" id="date-from" class="date-input" aria-label="Filter from date" />
         <span aria-hidden="true">–</span>
         <label for="date-to" class="sr-only">To date</label>
         <input type="date" id="date-to" class="date-input" aria-label="Filter to date" />
-        <button id="apply-filter-btn" class="btn btn-sm" aria-label="Apply date range filter">Apply</button>
-        <button id="refresh-btn" class="btn btn-sm" aria-label="Refresh dashboard data">↻ Refresh</button>
-        <button id="export-csv-btn" class="btn btn-sm" aria-label="Export funnel data as CSV" disabled>⬇ Export CSV</button>
+        <button id="apply-filter-btn" type="button" class="btn btn-sm" aria-label="Apply date range filter">Apply</button>
+        <button id="refresh-btn" type="button" class="btn btn-sm" aria-label="Refresh dashboard data">
+          <span aria-hidden="true">↻</span> Refresh
+        </button>
         <span id="last-refresh" class="last-refresh" aria-live="polite"></span>
       </div>
     </div>
@@ -75,8 +76,7 @@
         </div>
         <div class="panel-body">
           <div id="funnel-loading" class="loading-msg" role="status" aria-live="polite">Loading…</div>
-          <div id="funnel-chart" class="funnel-chart" role="img" aria-label="Merchant activation funnel chart: wallet connect, merchant register, first payment" hidden></div>
-          <div id="funnel-empty" class="empty-msg" hidden>No funnel data for the selected period.</div>
+          <div id="funnel-chart" class="funnel-chart" role="img" aria-label="Merchant registration funnel chart. Equivalent data is available in the funnel step completion table." hidden></div>
           <table id="funnel-table" class="data-table sr-only" aria-label="Funnel step completion data">
             <caption>Merchant activation funnel — step completion counts, conversion rates, and drop-off rates</caption>
             <thead>
@@ -100,6 +100,7 @@
         <div class="panel-body">
           <div id="steps-loading" class="loading-msg" role="status" aria-live="polite">Loading…</div>
           <table id="steps-table" class="data-table" aria-label="Per-step completion rates" hidden>
+            <caption>Per-step completion rates, drop-off counts and stage for each onboarding step</caption>
             <thead>
               <tr>
                 <th scope="col">Step</th>
@@ -112,7 +113,7 @@
             </thead>
             <tbody id="steps-body"></tbody>
           </table>
-          <div id="steps-empty" class="empty-msg" hidden>No data for the selected period.</div>
+          <div id="steps-empty" class="empty-msg" role="status" aria-live="polite" hidden>No data for the selected period.</div>
         </div>
       </section>
 
@@ -124,6 +125,7 @@
         <div class="panel-body">
           <div id="wallet-loading" class="loading-msg" role="status" aria-live="polite">Loading…</div>
           <table id="wallet-table" class="data-table" aria-label="Wallet connection outcomes by provider" hidden>
+            <caption>Wallet connection attempts, successes and failures by provider</caption>
             <thead>
               <tr>
                 <th scope="col">Provider</th>
@@ -135,13 +137,13 @@
             </thead>
             <tbody id="wallet-body"></tbody>
           </table>
-          <div id="wallet-empty" class="empty-msg" hidden>No wallet data for the selected period.</div>
+          <div id="wallet-empty" class="empty-msg" role="status" aria-live="polite" hidden>No wallet data for the selected period.</div>
         </div>
       </section>
 
     </div><!-- /panels-grid -->
   </main>
 
-  <script src="app.js"></script>
+  <script src="app.js" integrity="sha384-PLACEHOLDER_ONBOARDING_APP_JS_SRI" crossorigin="anonymous"></script>
 </body>
 </html>

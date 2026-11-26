@@ -65,7 +65,14 @@ function renderActiveFilters() {
     if (val && val !== 'Any') {
       const chip = document.createElement('div');
       chip.className = 'chip';
-      chip.innerHTML = `<span>${labels[key]}${val}</span><button onclick="removeFilter('${key}')" aria-label="Remove filter ${labels[key]}${val}">&times;</button>`;
+      const label = document.createElement('span');
+      label.textContent = `${labels[key]}${val}`;
+      const btn = document.createElement('button');
+      btn.textContent = '\u00d7';
+      btn.setAttribute('aria-label', `Remove filter ${labels[key]}${val}`);
+      btn.addEventListener('click', () => removeFilter(key));
+      chip.appendChild(label);
+      chip.appendChild(btn);
       container.appendChild(chip);
     }
   }
@@ -89,7 +96,7 @@ const STATUS_MAP = {
 };
 function statusBadgeHtml(status) {
   const entry = STATUS_MAP[status] || { label: status || 'Unknown', cls: 'status-unknown' };
-  return `<span class="status-badge ${entry.cls}">${entry.label}</span>`;
+  return `<span class="status-badge ${entry.cls}">${escapeHtml(entry.label)}</span>`;
 }
 
 // formatDate is imported from lumenflow-shared.js (Intl.DateTimeFormat, issue #1017)
@@ -193,7 +200,9 @@ function renderSkeletonRows() {
     tr.setAttribute('aria-hidden', 'true');
     SKELETON_WIDTHS[i].forEach(cls => {
       const td = document.createElement('td');
-      td.innerHTML = `<span class="skeleton-cell ${cls}"></span>`;
+      const span = document.createElement('span');
+      span.className = `skeleton-cell ${cls}`;
+      td.appendChild(span);
       tr.appendChild(td);
     });
     body.appendChild(tr);
@@ -246,17 +255,83 @@ function renderRows(payments) {
       ? convertToXlm(p.amount, p.token)
       : formatTokenAmount(p.amount, p.token);
     const tr = document.createElement('tr');
-    const verifiedBadgeHtml = p.merchant_verified
-      ? '<span class="verified-badge" role="img" aria-label="Verified merchant — this merchant has been verified by LumenFlow" tabindex="0">✔<span class="verified-tooltip">This merchant has been verified by LumenFlow, confirming their identity and business legitimacy.</span></span>'
-      : '';
-    tr.innerHTML = `
-      <td data-label="Date">${formatDate(p.paid_at)}</td>
-      <td data-label="Order ID"><code>${p.order_id}</code>${copyButtonHtml(p.order_id, 'Copy order ID')}</td>
-      <td data-label="Merchant"><code title="${p.merchant_address}">${p.merchant_address.slice(0,8)}…</code>${copyButtonHtml(p.merchant_address, 'Copy address')}${verifiedBadgeHtml}</td>
-      <td data-label="Amount" class="amount-cell">${amountDisplay}</td>
-      <td data-label="Status">${statusBadgeHtml(p.status)}</td>`;
+
+    // Date
+    const dateTd = document.createElement('td');
+    dateTd.dataset.label = 'Date';
+    dateTd.textContent = formatDate(p.paid_at);
+    tr.appendChild(dateTd);
+
+    // Order ID — untrusted, rendered via textContent only
+    const orderTd = document.createElement('td');
+    orderTd.dataset.label = 'Order ID';
+    const orderCode = document.createElement('code');
+    orderCode.textContent = p.order_id ?? '';
+    orderTd.appendChild(orderCode);
+    appendCopyButton(orderTd, p.order_id, 'Copy order ID');
+    tr.appendChild(orderTd);
+
+    // Merchant — untrusted, rendered via textContent only
+    const merchantTd = document.createElement('td');
+    merchantTd.dataset.label = 'Merchant';
+    const merchantCode = document.createElement('code');
+    const merchantAddress = p.merchant_address ?? '';
+    merchantCode.title = merchantAddress;
+    merchantCode.textContent = `${merchantAddress.slice(0, 8)}\u2026`;
+    merchantTd.appendChild(merchantCode);
+    appendCopyButton(merchantTd, merchantAddress, 'Copy address');
+    if (p.merchant_verified) {
+      merchantTd.appendChild(createVerifiedBadge());
+    }
+    tr.appendChild(merchantTd);
+
+    // Amount
+    const amountTd = document.createElement('td');
+    amountTd.dataset.label = 'Amount';
+    amountTd.className = 'amount-cell';
+    amountTd.textContent = amountDisplay;
+    tr.appendChild(amountTd);
+
+    // Status — untrusted, rendered via textContent only
+    const statusTd = document.createElement('td');
+    statusTd.dataset.label = 'Status';
+    statusTd.appendChild(createStatusBadge(p.status));
+    tr.appendChild(statusTd);
+
     body.appendChild(tr);
   });
+}
+
+// ── Safe DOM builders for untrusted values ──────────────────────────────────
+function createStatusBadge(status) {
+  const entry = STATUS_MAP[status] || { label: status || 'Unknown', cls: 'status-unknown' };
+  const span = document.createElement('span');
+  span.className = `status-badge ${entry.cls}`;
+  span.textContent = entry.label;
+  return span;
+}
+
+function createVerifiedBadge() {
+  const span = document.createElement('span');
+  span.className = 'verified-badge';
+  span.setAttribute('role', 'img');
+  span.setAttribute('aria-label', 'Verified merchant — this merchant has been verified by LumenFlow');
+  span.tabIndex = 0;
+  span.textContent = '✔';
+  const tooltip = document.createElement('span');
+  tooltip.className = 'verified-tooltip';
+  tooltip.textContent = 'This merchant has been verified by LumenFlow, confirming their identity and business legitimacy.';
+  span.appendChild(tooltip);
+  return span;
+}
+
+// copyButtonHtml returns static markup with the value only in a data attribute;
+// parse it in an inert document and move the resulting node into the cell.
+function appendCopyButton(cell, value, label) {
+  const template = document.createElement('template');
+  template.innerHTML = copyButtonHtml(value, label);
+  const node = template.content.firstElementChild;
+  if (node) cell.appendChild(node);
 }
 
 // ── Main update ─────────────────────────────────────────────────────────────
@@ -321,23 +396,56 @@ function showFilterError(id, message) {
   document.getElementById(id).classList.toggle('input-error', !!message);
 }
 
+// Applies a single filter value, validating it first. Returns true when the
+// value was accepted so keyboard handlers can decide whether to close menus.
+function applyFilter(id, key, value) {
+  const validator = filterValidators[id];
+  if (validator) {
+    const message = validator(value);
+    showFilterError(id, message);
+    if (message) return false; // invalid values are never applied or sent to the contract
+  }
+  filters[key] = value;
+  updateUrl();
+  renderActiveFilters();
+  updateResults();
+  return true;
+}
+
+// Applies every filter from the current DOM state (used by Enter/Space on
+// filter controls and by the "Apply filters" button).
+function applyAllFilters() {
+  inputBindings.forEach(({ id, key }) => {
+    const el = document.getElementById(id);
+    if (el) applyFilter(id, key, el.value);
+  });
+}
+
 inputBindings.forEach(({ id, key }) => {
-  document.getElementById(id).addEventListener('change', e => {
-    const validator = filterValidators[id];
-    if (validator) {
-      const message = validator(e.target.value);
-      showFilterError(id, message);
-      if (message) return; // invalid values are never applied or sent to the contract
+  const el = document.getElementById(id);
+  el.addEventListener('change', e => {
+    applyFilter(id, key, e.target.value);
+  });
+  // Enter/Space applies the selected filter immediately; Escape reverts the
+  // control to the last applied value and closes any open dropdown.
+  el.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+      e.preventDefault();
+      applyFilter(id, key, el.value);
+      if (el.tagName === 'SELECT') el.blur();
+    } else if (e.key === 'Escape' || e.key === 'Esc') {
+      e.preventDefault();
+      el.value = filters[key] || (key === 'status' ? 'Any' : '');
+      showFilterError(id, '');
+      if (el.tagName === 'SELECT') el.blur();
     }
-    filters[key] = e.target.value;
-    updateUrl();
-    renderActiveFilters();
-    updateResults();
   });
 });
 
 window.removeFilter = removeFilter;
 window.retryFetch   = retryFetch;
+// Exposed for the security regression test (issue #1531).
+window.__historyRenderRows = renderRows;
 window.addEventListener('popstate', initFromUrl);
 renderModeBanner();
 initCopyButtons(document.body);

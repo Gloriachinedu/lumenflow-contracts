@@ -72,6 +72,9 @@ const exportBtn = document.getElementById('export-csv-btn');
 const authGate  = document.getElementById('auth-gate');
 const dashboardRoot = document.getElementById('dashboard-root');
 
+// Live region for announcing loading / refresh / error states to screen readers.
+const statusRegion = document.getElementById('dashboard-status');
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function pct(num, denom) {
@@ -99,6 +102,15 @@ function pctClass(value) {
 
 function setVisible(el, visible) {
   if (visible) { el.removeAttribute('hidden'); } else { el.setAttribute('hidden', ''); }
+}
+
+// Announce a message to assistive technology via the polite live region.
+function announce(message) {
+  if (!statusRegion) return;
+  // Clear first so repeated identical messages are re-announced.
+  statusRegion.textContent = '';
+  // Defer so the DOM mutation is observed as a change by screen readers.
+  window.setTimeout(() => { statusRegion.textContent = message; }, 50);
 }
 
 // ── Demo data factory ──────────────────────────────────────────────────────
@@ -267,13 +279,16 @@ function renderFunnel(stepCounts) {
     const dropoff = i === 0 ? 0 : prevCount - count;
     const dropoffPct = i === 0 ? 0 : pct(dropoff, prevCount);
 
-    // Visual funnel bar row
+    // Visual funnel bar row. The bar itself is decorative; the numeric values
+    // are exposed to assistive tech via the sr-only table below, so the whole
+    // visual row is hidden from the accessibility tree to avoid duplication.
     const row = document.createElement('div');
     row.className = 'funnel-step';
+    row.setAttribute('aria-hidden', 'true');
     row.innerHTML = `
       <span class="funnel-step-label">${escHtml(stage.label)}</span>
       <div class="funnel-bar-wrap" role="presentation">
-        <div class="funnel-bar" style="width:${widthPct}%" aria-hidden="true"></div>
+        <div class="funnel-bar" style="width:${widthPct}%"></div>
       </div>
       <span class="funnel-count">${count.toLocaleString()}</span>
       <span class="funnel-dropoff${dropoff === 0 ? ' no-drop' : ''}">
@@ -281,10 +296,11 @@ function renderFunnel(stepCounts) {
       </span>`;
     funnelChart.appendChild(row);
 
-    // Accessible table row (sr-only)
+    // Accessible table row (sr-only). Column headers live in the table's
+    // <thead>; associate each cell with its header via scope="col".
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${escHtml(stage.label)}</td>
+      <th scope="row">${escHtml(stage.label)}</th>
       <td>${count.toLocaleString()}</td>
       <td>${dropoff > 0 ? fmtPct(dropoffPct) : '—'}</td>`;
     funnelTableBody.appendChild(tr);
@@ -317,7 +333,7 @@ function renderSteps(stepCounts) {
     const cls = pctClass(completionPct);
     tr.innerHTML = `
       <td>${i + 1}</td>
-      <td>${escHtml(stage.label)}</td>
+      <th scope="row">${escHtml(stage.label)}</th>
       <td>${count.toLocaleString()}</td>
       <td>${dropoff > 0 ? dropoff.toLocaleString() : '—'}</td>
       <td><span class="pct-pill ${cls}">${fmtPct(completionPct)}</span></td>`;
@@ -346,7 +362,7 @@ function renderWallet(walletProviders) {
     const cls = pctClass(successPct);
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${escHtml(wp.provider)}</td>
+      <th scope="row">${escHtml(wp.provider)}</th>
       <td>${wp.attempts.toLocaleString()}</td>
       <td>${wp.connected.toLocaleString()}</td>
       <td>${wp.failed.toLocaleString()}</td>
@@ -372,6 +388,8 @@ async function render(fromMs, toMs) {
   walletLoading.textContent = 'Loading…';
   setVisible(walletLoading, true);
   setVisible(walletTable,   false);
+
+  announce('Loading analytics data…');
 
   try {
     const data = await fetchData(fromMs, toMs);
@@ -399,11 +417,13 @@ async function render(fromMs, toMs) {
     renderWallet(data.walletProviders);
 
     lastRefreshEl.textContent = 'Updated ' + new Date().toLocaleTimeString();
+    announce('Analytics data updated at ' + new Date().toLocaleTimeString());
   } catch (err) {
     console.error('[onboarding-analytics] fetch error:', err);
     funnelLoading.textContent = 'Failed to load data.';
     stepsLoading.textContent  = 'Failed to load data.';
     walletLoading.textContent = 'Failed to load data.';
+    announce('Failed to load analytics data. Please try refreshing.');
   }
 }
 
@@ -446,9 +466,17 @@ refreshBtn.addEventListener('click', () => {
   render(currentFrom, currentTo);
 });
 
-if (exportBtn) {
-  exportBtn.addEventListener('click', exportFunnelCsv);
-}
+// Native <button> elements already handle Enter/Space, but guard against
+// custom elements or future refactors by wiring explicit keyboard handlers.
+[applyBtn, refreshBtn].forEach((btn) => {
+  if (!btn) return;
+  btn.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+      e.preventDefault();
+      btn.click();
+    }
+  });
+});
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────
 

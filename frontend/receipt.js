@@ -106,6 +106,14 @@ function refundStatusIcon(status) {
   return { Pending: '⏳', Approved: '✔', Rejected: '✗', Completed: '✅' }[status] || '•';
 }
 
+/**
+ * Escapes a string for safe insertion into HTML text/attribute contexts.
+ * Retained for any future unavoidable HTML string building; prefer
+ * textContent/createElement wherever possible (issue #1531).
+ *
+ * @param {*} str
+ * @returns {string}
+ */
 function escapeHtml(str) {
   return String(str ?? '')
     .replace(/&/g, '&amp;')
@@ -115,37 +123,47 @@ function escapeHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
+/**
+ * Builds a refund timeline element using DOM APIs only.
+ * Contract-derived values (dates) are inserted via textContent to prevent
+ * stored XSS (issue #1531).
+ *
+ * @param {object} r - refund record
+ * @returns {HTMLElement}
+ */
 function buildRefundTimeline(r) {
-  const steps = [];
+  const timeline = document.createElement('div');
+  timeline.className = 'refund-timeline';
+
+  const addStep = (cls, icon, text) => {
+    const step = document.createElement('div');
+    step.className = 'timeline-step ' + cls;
+    const em = document.createElement('em');
+    em.className = 'refund-status-icon';
+    em.textContent = icon;
+    step.appendChild(em);
+    step.appendChild(document.createTextNode(' ' + text));
+    timeline.appendChild(step);
+  };
 
   // Step 1 — always present: submitted
-  steps.push(`<div class="timeline-step step-status-approved">
-    <em class="refund-status-icon">📩</em> Submitted — ${formatDate(r.created_at)}
-  </div>`);
+  addStep('step-status-approved', '📩', 'Submitted — ' + formatDate(r.created_at));
 
   // Step 2 — middle state
   if (r.status === 'Completed' || r.status === 'Approved') {
-    steps.push(`<div class="timeline-step step-status-approved">
-      <em class="refund-status-icon">✔</em> Approved
-    </div>`);
+    addStep('step-status-approved', '✔', 'Approved');
   } else if (r.status === 'Rejected') {
-    steps.push(`<div class="timeline-step step-status-rejected">
-      <em class="refund-status-icon">✗</em> Rejected
-    </div>`);
+    addStep('step-status-rejected', '✗', 'Rejected');
   } else {
-    steps.push(`<div class="timeline-step step-status-pending">
-      <em class="refund-status-icon">⏳</em> Awaiting merchant review
-    </div>`);
+    addStep('step-status-pending', '⏳', 'Awaiting merchant review');
   }
 
   // Step 3 — completed transfer
   if (r.status === 'Completed' && r.executed_at) {
-    steps.push(`<div class="timeline-step step-status-completed">
-      <em class="refund-status-icon">✅</em> Refund transferred — ${formatDate(r.executed_at)}
-    </div>`);
+    addStep('step-status-completed', '✅', 'Refund transferred — ' + formatDate(r.executed_at));
   }
 
-  return `<div class="refund-timeline">${steps.join('')}</div>`;
+  return timeline;
 }
 
 // ── Data fetching ─────────────────────────────────────────────────────────────
@@ -287,18 +305,54 @@ function renderReceipt({ payment, merchant, refunds }) {
     refunds.forEach(r => {
       const item = document.createElement('div');
       item.className = 'refund-item';
-      item.innerHTML = `
-        <div class="refund-row">
-          <span><strong>${r.refund_id}</strong></span>
-          <span><strong>${formatAmount(r.amount)} XLM</strong></span>
-        </div>
-        <div class="refund-row">
-          <span>${refundStatusLabel(r.status)}</span>
-        </div>
-        <div class="refund-meta">
-          <div><strong>Reason:</strong> ${r.reason || '—'}</div>
-          ${r.executed_at ? `<div><strong>Processed:</strong> ${formatDate(r.executed_at)}</div>` : ''}
-        </div>`;
+
+      // All contract-derived values are inserted via textContent to prevent
+      // stored XSS (issue #1531). No innerHTML is used here.
+      const row1 = document.createElement('div');
+      row1.className = 'refund-row';
+
+      const idSpan = document.createElement('span');
+      const idStrong = document.createElement('strong');
+      idStrong.textContent = r.refund_id ?? '';
+      idSpan.appendChild(idStrong);
+
+      const amountSpan = document.createElement('span');
+      const amountStrong = document.createElement('strong');
+      amountStrong.textContent = formatAmount(r.amount) + ' XLM';
+      amountSpan.appendChild(amountStrong);
+
+      row1.appendChild(idSpan);
+      row1.appendChild(amountSpan);
+
+      const row2 = document.createElement('div');
+      row2.className = 'refund-row';
+      const statusSpan = document.createElement('span');
+      statusSpan.textContent = refundStatusLabel(r.status);
+      row2.appendChild(statusSpan);
+
+      const meta = document.createElement('div');
+      meta.className = 'refund-meta';
+
+      const reasonDiv = document.createElement('div');
+      const reasonLabel = document.createElement('strong');
+      reasonLabel.textContent = 'Reason:';
+      reasonDiv.appendChild(reasonLabel);
+      reasonDiv.appendChild(document.createTextNode(' ' + (r.reason || '—')));
+
+      meta.appendChild(reasonDiv);
+
+      if (r.executed_at) {
+        const processedDiv = document.createElement('div');
+        const processedLabel = document.createElement('strong');
+        processedLabel.textContent = 'Processed:';
+        processedDiv.appendChild(processedLabel);
+        processedDiv.appendChild(document.createTextNode(' ' + formatDate(r.executed_at)));
+        meta.appendChild(processedDiv);
+      }
+
+      item.appendChild(row1);
+      item.appendChild(row2);
+      item.appendChild(meta);
       list.appendChild(item);
     });
     document.getElementById('refunds-section').style.display = 'block';
@@ -327,6 +381,7 @@ function copyLink() {
     return;
   }
 
+  // document.title is a text sink (not parsed as HTML), so interpolation is safe.
   document.title = `Receipt ${orderId} – LumenFlow`;
   document.getElementById('loading').style.display = 'block';
 

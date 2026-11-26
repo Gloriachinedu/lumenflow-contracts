@@ -11,7 +11,7 @@
  *   window.showToast('Message', 'success');
  */
 
-const TOAST_DURATION_MS = 5000;
+const TOAST_DURATION_MS = 8000;
 const CONTAINER_ID      = 'lf-toast-container';
 
 const TOAST_CSS = `
@@ -68,6 +68,25 @@ const TOAST_CSS = `
   outline-offset: 2px;
   border-radius: 3px;
 }
+.lf-toast-retry {
+  flex-shrink: 0;
+  align-self: center;
+  background: rgba(255,255,255,0.18);
+  border: 1px solid rgba(255,255,255,0.6);
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  transition: background 0.1s;
+}
+.lf-toast-retry:hover { background: rgba(255,255,255,0.32); }
+.lf-toast-retry:focus-visible {
+  outline: 2px solid rgba(255,255,255,0.9);
+  outline-offset: 2px;
+}
 @keyframes lf-toast-in  { from { opacity:0; transform:translateX(110%); } to { opacity:1; transform:translateX(0); } }
 @keyframes lf-toast-out { from { opacity:1; transform:translateX(0); max-height:200px; } to { opacity:0; transform:translateX(110%); max-height:0; } }
 `;
@@ -99,11 +118,35 @@ function escapeHtml(str) {
 
 /**
  * Shows a non-blocking toast notification.
- * @param {string} message
+ *
+ * The message is always rendered as human-readable text (HTML-escaped), so
+ * callers should pass the mapped message from errorMessages.js rather than a
+ * raw error code.
+ *
+ * @param {string} message Human-readable message to display.
  * @param {'success'|'error'|'info'} [type='info']
- * @param {number} [duration=5000] ms before auto-dismiss; 0 = never
+ * @param {number|{duration?: number, retryable?: boolean, onRetry?: Function}} [options=8000]
+ *   Either a duration in ms (0 = never auto-dismiss) or an options object.
+ * @param {{duration?: number, retryable?: boolean, onRetry?: Function}} [extra]
+ *   Options object when the third argument was a duration.
  */
-export function showToast(message, type = 'info', duration = TOAST_DURATION_MS) {
+export function showToast(message, type = 'info', options = TOAST_DURATION_MS, extra) {
+  let duration = TOAST_DURATION_MS;
+  let retryable = false;
+  let onRetry = null;
+
+  const applyOptions = (opts) => {
+    if (opts == null) return;
+    if (typeof opts === 'number') { duration = opts; return; }
+    if (typeof opts === 'object') {
+      if (typeof opts.duration === 'number') duration = opts.duration;
+      if (opts.retryable === true) retryable = true;
+      if (typeof opts.onRetry === 'function') onRetry = opts.onRetry;
+    }
+  };
+  applyOptions(options);
+  applyOptions(extra);
+
   const container = ensureContainer();
   const icons = { success: '✔', error: '✕', info: 'ℹ' };
   const toast = document.createElement('div');
@@ -114,9 +157,18 @@ export function showToast(message, type = 'info', duration = TOAST_DURATION_MS) 
   toast.innerHTML = `
     <em class="lf-toast-icon" aria-hidden="true">${icons[type] ?? icons.info}</em>
     <span class="lf-toast-body">${escapeHtml(message)}</span>
+    ${retryable ? '<button class="lf-toast-retry" type="button">Retry</button>' : ''}
     <button class="lf-toast-close" aria-label="Dismiss notification" type="button">✕</button>
   `;
   toast.querySelector('.lf-toast-close').addEventListener('click', () => removeToast(toast));
+  if (retryable) {
+    toast.querySelector('.lf-toast-retry').addEventListener('click', () => {
+      removeToast(toast);
+      if (onRetry) {
+        try { onRetry(); } catch (err) { console.error('[toast] onRetry handler failed:', err); }
+      }
+    });
+  }
   container.appendChild(toast);
   if (duration > 0) setTimeout(() => removeToast(toast), duration);
 }

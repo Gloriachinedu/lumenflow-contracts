@@ -266,6 +266,7 @@ function showError(msg) {
   }
   banner.textContent = `⚠ ${msg}`;
   banner.style.display = 'block';
+  announce(`Error: ${msg}`);
   clearTimeout(banner._timer);
   banner._timer = setTimeout(() => { banner.style.display = 'none'; }, 8000);
 }
@@ -323,9 +324,34 @@ function shorten(addr) {
 function setStatus(status) {
   state.status = status;
   document.querySelectorAll('.tabs .tab').forEach(btn => {
-    btn.setAttribute('aria-selected', btn.dataset.status === status);
+    const selected = btn.dataset.status === status;
+    btn.setAttribute('aria-selected', selected ? 'true' : 'false');
+    btn.setAttribute('tabindex', selected ? '0' : '-1');
   });
   render();
+  announce(`Showing ${status} refunds`);
+}
+
+// ── Live region announcements ─────────────────────────────────────────────────
+/** Announce a message to screen readers via the polite live region. */
+function announce(msg) {
+  let region = document.getElementById('a11y-live');
+  if (!region) {
+    region = document.createElement('div');
+    region.id = 'a11y-live';
+    region.setAttribute('role', 'status');
+    region.setAttribute('aria-live', 'polite');
+    region.setAttribute('aria-atomic', 'true');
+    region.style.cssText = [
+      'position:absolute', 'width:1px', 'height:1px',
+      'padding:0', 'margin:-1px', 'overflow:hidden',
+      'clip:rect(0,0,0,0)', 'white-space:nowrap', 'border:0',
+    ].join(';');
+    document.body.appendChild(region);
+  }
+  // Clear then set so repeated identical messages are re-announced
+  region.textContent = '';
+  setTimeout(() => { region.textContent = msg; }, 50);
 }
 
 function render() {
@@ -357,14 +383,24 @@ function render() {
       <td></td>
     `;
     const actions = tr.querySelector('td:last-child');
+    const label = r.refundId || r.id;
     if (r.status === 'pending') {
-      const approve = document.createElement('button'); approve.textContent = 'Approve';
-      const reject  = document.createElement('button'); reject.textContent  = 'Reject';
+      const approve = document.createElement('button');
+      approve.type = 'button';
+      approve.textContent = 'Approve';
+      approve.setAttribute('aria-label', `Approve refund ${label}`);
+      const reject = document.createElement('button');
+      reject.type = 'button';
+      reject.textContent = 'Reject';
+      reject.setAttribute('aria-label', `Reject refund ${label}`);
       approve.addEventListener('click', () => confirmAction('approve', r.id));
       reject.addEventListener('click',  () => confirmAction('reject',  r.id));
       actions.appendChild(approve); actions.appendChild(reject);
     } else if (r.status === 'approved') {
-      const execute = document.createElement('button'); execute.textContent = 'Execute';
+      const execute = document.createElement('button');
+      execute.type = 'button';
+      execute.textContent = 'Execute';
+      execute.setAttribute('aria-label', `Execute refund ${label}`);
       execute.addEventListener('click', () => confirmAction('execute', r.id));
       actions.appendChild(execute);
     }
@@ -389,6 +425,7 @@ function updateStatus(id, newStatus) {
   const r = state.refunds.find(x => x.id === id);
   if (r) r.status = newStatus;
   render();
+  announce(`Refund ${id} marked ${newStatus}`);
 }
 
 async function executeRefund(id) {
@@ -414,12 +451,16 @@ async function executeRefund(id) {
 // ── Modal helpers ─────────────────────────────────────────────────────────────
 
 function openModal(modal) {
+  if (!modal) return;
   modal.style.display = 'block';
   modal.setAttribute('aria-hidden', 'false');
+  modal.setAttribute('aria-modal', 'true');
+  if (!modal.hasAttribute('role')) modal.setAttribute('role', 'dialog');
   trapFocus(modal);
 }
 
 function closeModal(modal) {
+  if (!modal) return;
   modal.style.display = 'none';
   modal.setAttribute('aria-hidden', 'true');
   releaseFocusTrap();
@@ -429,18 +470,24 @@ let lastFocused  = null;
 let trapListener = null;
 function trapFocus(modal) {
   lastFocused = document.activeElement;
-  const focusable = modal.querySelectorAll('button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])');
+  const focusable = Array.from(
+    modal.querySelectorAll(
+      'button:not([disabled]),[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
+    )
+  ).filter(el => el.offsetParent !== null || el === document.activeElement);
   const first = focusable[0];
   const last  = focusable[focusable.length - 1];
-  first && first.focus();
+  if (first) first.focus();
   trapListener = (e) => {
     if (e.key === 'Tab') {
+      if (!focusable.length) { e.preventDefault(); return; }
       if (e.shiftKey && document.activeElement === first) {
         e.preventDefault(); last.focus();
       } else if (!e.shiftKey && document.activeElement === last) {
         e.preventDefault(); first.focus();
       }
     } else if (e.key === 'Escape') {
+      e.preventDefault();
       closeModal(modal);
     }
   };
@@ -448,9 +495,10 @@ function trapFocus(modal) {
 }
 
 function releaseFocusTrap() {
-  document.removeEventListener('keydown', trapListener);
+  if (trapListener) document.removeEventListener('keydown', trapListener);
   trapListener = null;
-  if (lastFocused) lastFocused.focus();
+  if (lastFocused && typeof lastFocused.focus === 'function') lastFocused.focus();
+  lastFocused = null;
 }
 
 // ── Wallet connect handlers ───────────────────────────────────────────────────
@@ -494,6 +542,40 @@ function shorten(a) { return a ? a.slice(0, 6) + '…' + a.slice(-4) : '—'; }
 document.querySelectorAll('.tabs .tab').forEach(btn =>
   btn.addEventListener('click', () => setStatus(btn.dataset.status))
 );
+
+// Keyboard support for the tablist: Arrow keys move focus, Home/End jump.
+(function initTabKeyboard() {
+  const tabs = Array.from(document.querySelectorAll('.tabs .tab'));
+  if (!tabs.length) return;
+  const tablist = tabs[0].parentElement;
+  if (tablist && !tablist.hasAttribute('role')) tablist.setAttribute('role', 'tablist');
+
+  tabs.forEach((btn, i) => {
+    if (!btn.hasAttribute('role')) btn.setAttribute('role', 'tab');
+    btn.setAttribute('tabindex', btn.getAttribute('aria-selected') === 'true' ? '0' : '-1');
+    btn.addEventListener('keydown', (e) => {
+      let target = null;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        target = tabs[(i + 1) % tabs.length];
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        target = tabs[(i - 1 + tabs.length) % tabs.length];
+      } else if (e.key === 'Home') {
+        target = tabs[0];
+      } else if (e.key === 'End') {
+        target = tabs[tabs.length - 1];
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        setStatus(btn.dataset.status);
+        return;
+      }
+      if (target) {
+        e.preventDefault();
+        target.focus();
+        setStatus(target.dataset.status);
+      }
+    });
+  });
+})();
 
 // ── Mock fetch — replace with real API/EventSource in production ──────────────
 
@@ -705,6 +787,40 @@ document.querySelectorAll('.tabs .tab').forEach(btn =>
   btn.addEventListener('click', () => setStatus(btn.dataset.status))
 );
 
+// Keyboard support for the tablist: Arrow keys move focus, Home/End jump.
+(function initTabKeyboard() {
+  const tabs = Array.from(document.querySelectorAll('.tabs .tab'));
+  if (!tabs.length) return;
+  const tablist = tabs[0].parentElement;
+  if (tablist && !tablist.hasAttribute('role')) tablist.setAttribute('role', 'tablist');
+
+  tabs.forEach((btn, i) => {
+    if (!btn.hasAttribute('role')) btn.setAttribute('role', 'tab');
+    btn.setAttribute('tabindex', btn.getAttribute('aria-selected') === 'true' ? '0' : '-1');
+    btn.addEventListener('keydown', (e) => {
+      let target = null;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        target = tabs[(i + 1) % tabs.length];
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        target = tabs[(i - 1 + tabs.length) % tabs.length];
+      } else if (e.key === 'Home') {
+        target = tabs[0];
+      } else if (e.key === 'End') {
+        target = tabs[tabs.length - 1];
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        setStatus(btn.dataset.status);
+        return;
+      }
+      if (target) {
+        e.preventDefault();
+        target.focus();
+        setStatus(target.dataset.status);
+      }
+    });
+  });
+})();
+
 // ── CSV export ────────────────────────────────────────────────────────────────
 function csvEscape(value) {
   const str = value == null ? '' : String(value);
@@ -770,7 +886,11 @@ function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   localStorage.setItem('lumenflow_theme', theme);
   const btn = document.getElementById('themeToggle');
-  if (btn) btn.textContent = theme === 'dark' ? '☀️ Light' : '🌙 Dark';
+  if (btn) {
+    btn.textContent = theme === 'dark' ? '☀️ Light' : '🌙 Dark';
+    btn.setAttribute('aria-label', theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+    btn.setAttribute('aria-pressed', theme === 'dark' ? 'true' : 'false');
+  }
 }
 
 const themeToggleBtn = document.getElementById('themeToggle');
@@ -781,6 +901,8 @@ if (themeToggleBtn) {
   });
   const initialTheme = document.documentElement.getAttribute('data-theme') || 'light';
   themeToggleBtn.textContent = initialTheme === 'dark' ? '☀️ Light' : '🌙 Dark';
+  themeToggleBtn.setAttribute('aria-label', initialTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+  themeToggleBtn.setAttribute('aria-pressed', initialTheme === 'dark' ? 'true' : 'false');
 }
 
 // ── Demo / live mode banner ───────────────────────────────────────────────────
@@ -800,6 +922,9 @@ if (themeToggleBtn) {
     : `✔ Live mode – connected to contract ${CONTRACT_ID.slice(0, 8)}… on ${NETWORK}.`;
   document.body.prepend(banner);
 })();
+
+// ── Accessibility: ensure the live region exists on load ─────────────────────
+announce('Merchant dashboard loaded');
 
 // ── Initialise ────────────────────────────────────────────────────────────────
 
