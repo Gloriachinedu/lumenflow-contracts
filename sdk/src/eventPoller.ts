@@ -12,6 +12,17 @@ export interface ContractEvent {
   value: unknown;
 }
 
+export interface EventPollerTlsOptions {
+  /** PEM-encoded CA certificate(s) used to verify the internal RPC endpoint. */
+  ca?: string | Buffer | Array<string | Buffer>;
+  /** PEM-encoded client certificate presented for mutual TLS. */
+  cert?: string | Buffer;
+  /** PEM-encoded private key for the client certificate. */
+  key?: string | Buffer;
+  /** Reject unauthorized server certificates. Defaults to true. */
+  rejectUnauthorized?: boolean;
+}
+
 export interface EventPollerOptions {
   rpcUrl: string;
   contractId: string;

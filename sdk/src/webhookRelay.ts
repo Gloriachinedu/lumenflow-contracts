@@ -76,7 +76,36 @@ export interface DeliveryResponse {
   status: number;
 }
 
-/** Performs the actual HTTP POST to the downstream webhook. */
+/**
+ * TLS material for mutual TLS (mTLS) between internal services.
+ *
+ * Every field accepts either the PEM contents directly or a filesystem path
+ * (the underlying HTTP client resolves paths). Certificates are issued by the
+ * internal CA and must have a validity of less than 90 days; rotation is
+ * automated by the deployment tooling.
+ */
+export interface MtlsOptions {
+  /** PEM contents or path to the internal CA bundle used to verify the peer. */
+  ca: string;
+  /** PEM contents or path to this service's client certificate. */
+  cert: string;
+  /** PEM contents or path to this service's private key. */
+  key: string;
+  /**
+   * Whether to verify the peer certificate. Defaults to `true`. Setting this
+   * to `false` is rejected when `requireMtls` is enabled.
+   */
+  rejectUnauthorized?: boolean;
+}
+
+/**
+ * Performs the actual HTTP POST to the downstream webhook.
+ *
+ * When mTLS is configured, the injected function MUST use an HTTP client /
+ * agent built from {@link WebhookRelayOptions.mtls} (e.g. an
+ * `https.Agent` with `ca`, `cert`, `key`). The relay never downgrades to
+ * plain HTTP for internal service calls.
+ */
 export type DeliveryFn = (event: RelayEvent) => Promise<DeliveryResponse>;
 
 /** Structured log levels, ordered from most to least verbose. */

@@ -1308,6 +1308,9 @@ impl PaymentProcessingContract {
 
         // Reject disallowed tokens (second check after nonce — keeps token check near top
         // but also guards against re-entrance between the first check and here).
+        // The allow-list is the sole gate for cross-asset support: any token the
+        // admin has whitelisted may be used, and the token address is bound into
+        // the payment record for later refunds/escrow.
         if !storage::is_token_allowed(&env, &token_address) {
             return Err(PaymentError::TokenNotAllowed);
         }
@@ -1335,7 +1338,11 @@ impl PaymentProcessingContract {
         }
         storage::increment_rate_limit_counter(&env, &merchant_address, window_start);
 
-        // Transfer tokens from payer to merchant (minus platform fee)
+        // Transfer tokens from payer to merchant (minus platform fee).
+        // Fee module: `fee_bps` is capped at `storage::MAX_PLATFORM_FEE_BPS` by
+        // `set_platform_fee`, so `platform_fee <= amount` and `merchant_amount`
+        // cannot underflow. If no fee recipient is configured the fee is simply
+        // not collected (merchant still receives the net amount).
         let token_client = token::Client::new(&env, &token_address);
         let fee_bps = storage::get_platform_fee_bps(&env);
         let platform_fee: i128 = if fee_bps > 0 {
@@ -1478,7 +1485,9 @@ impl PaymentProcessingContract {
         // Advance nonce before any external calls
         storage::increment_nonce(&env, &payer);
 
-        // Transfer tokens from payer to merchant (minus platform fee)
+        // Transfer tokens from payer to merchant (minus platform fee).
+        // Same fee semantics as `process_payment_with_signature`: `fee_bps` is
+        // bounded by `storage::MAX_PLATFORM_FEE_BPS`, so the subtraction is safe.
         let token_client = token::Client::new(&env, &token_address);
         let fee_bps = storage::get_platform_fee_bps(&env);
         let platform_fee: i128 = if fee_bps > 0 {
@@ -1517,9 +1526,10 @@ impl PaymentProcessingContract {
         storage::add_merchant_payment_id(&env, &merchant_address, &order_id)?;
         storage::add_payer_payment_id(&env, &payer, &order_id)?;
 
-        // Update merchant total
+        // Update merchant total (net of fee, consistent with
+        // `process_payment_with_signature`).
         let mut m = merchant;
-        m.total_received += amount;
+        m.total_received += merchant_amount;
         storage::set_merchant(&env, &m);
 
         // Update merchant stats
@@ -1613,6 +1623,24 @@ impl PaymentProcessingContract {
     /// * [`PaymentError::MerchantNotFound`] — any item's merchant is not registered.
     /// * [`PaymentError::MerchantInactive`] — any item's merchant is deactivated.
     /// * [`PaymentError::InvalidSignature`] — any item's signature verification fails.
+    ///
+    /// # Security notes (see `docs/audit/threat-model-batch-payments.md`)
+    /// * **Spoofing / Tampering** — every item's signature is verified in Phase 1
+    ///   over `network_id || contract_address || order_id || amount`, binding the
+    ///   signature to this contract, network and amount. Unlike
+    ///   `process_payment_with_signature`, the batch payload carries **no nonce and
+    ///   no timestamp**, so replay protection relies solely on the
+    ///   `PaymentAlreadyExists` / `DuplicateOrderId` order-id checks.
+    /// * **Cross-asset payments** — the token allow-list is enforced per item, so a
+    ///   batch may legitimately mix tokens; each `(token, merchant)` group is
+    ///   transferred with its own token client. A single disallowed token rejects
+    ///   the whole batch atomically.
+    /// * **Fee handling** — `batch_payment` does **not** apply the platform fee:
+    ///   stored `PaymentOrder.platform_fee` is always `0` and the full amount is
+    ///   transferred to the merchant. Fees are only charged by
+    ///   `process_payment_with_signature` / `process_payment_with_nonce`.
+    /// * **Repudiation** — one `payment_processed` event is emitted per item in
+    ///   Phase 5, after all transfers and state writes succeed.
     pub fn batch_payment(
         env: Env,
         payer: Address,
@@ -1662,7 +1690,11 @@ impl PaymentProcessingContract {
                 return Err(PaymentError::MerchantInactive);
             }
 
-            // Rate-limit check per merchant
+            // Rate-limit check per merchant. NOTE: the counter is incremented here,
+            // in the validation pass, so a batch that later fails (e.g. on a bad
+            // signature) still consumes rate-limit budget for the merchants already
+            // visited. This is intentional (fail-closed against probing) and is
+            // documented in the threat model under Denial of Service.
             let window_start = storage::current_window_start(&env);
             let current_count =
                 storage::get_rate_limit_counter(&env, &item.merchant_address, window_start);
@@ -1672,7 +1704,9 @@ impl PaymentProcessingContract {
             }
             storage::increment_rate_limit_counter(&env, &item.merchant_address, window_start);
 
-            // Build payload: network_id + contract address + order_id + amount
+            // Build payload: network_id + contract address + order_id + amount.
+            // The payload is deliberately nonce-free and timestamp-free; replay is
+            // prevented by the order-id uniqueness checks above, not by the signature.
             let mut payload = Bytes::new(&env);
             let network_id_bytes: Bytes = env.ledger().network_id().into();
             payload.append(&network_id_bytes);
@@ -1722,6 +1756,11 @@ impl PaymentProcessingContract {
         }
 
         // ── Phase 3: Execute one token.transfer per unique (token, merchant) group ──
+        //
+        // Cross-asset batches are supported: each group carries its own token
+        // address, so a single batch may pay different merchants in different
+        // allow-listed tokens. No platform fee is deducted here — the full
+        // grouped amount is transferred (see the security notes on `batch_payment`).
         for (tok, merch, grouped_total) in groups.iter() {
             let token_client = token::Client::new(&env, &tok);
             token_client.transfer(&payer, &merch, &grouped_total);
@@ -1744,6 +1783,8 @@ impl PaymentProcessingContract {
                 refunded_amount: 0,
                 memo: item.memo.clone(),
                 tags: item.tags.clone(),
+                // Batch payments do not charge the platform fee; the fee module
+                // only applies to process_payment_with_signature / _with_nonce.
                 platform_fee: 0,
             };
 
