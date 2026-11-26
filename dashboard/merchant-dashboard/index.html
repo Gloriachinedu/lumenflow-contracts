@@ -186,6 +186,94 @@
       </div>
     </section>
 
+    <!-- ── Merchant Tier Panel (Issue #1572) ──────────────────────────────── -->
+    <section id="tier-section" aria-labelledby="tier-heading">
+      <h2 id="tier-heading">Merchant Tier</h2>
+      <div class="tier-panel" role="status" aria-live="polite">
+        <div class="tier-current">
+          <span class="tier-label">Current tier</span>
+          <span id="tier-current-value" class="tier-value">—</span>
+        </div>
+        <div class="tier-next">
+          <span class="tier-label">Next tier</span>
+          <span id="tier-next-value" class="tier-value">—</span>
+        </div>
+        <div class="tier-threshold">
+          <span class="tier-label">Next tier threshold (30-day volume)</span>
+          <span id="tier-next-threshold" class="tier-value">—</span>
+        </div>
+        <div class="tier-progress-wrapper">
+          <div
+            id="tier-progress"
+            class="tier-progress"
+            role="progressbar"
+            aria-label="Progress toward next tier"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="0"
+          ></div>
+        </div>
+        <p id="tier-note" class="tier-note"></p>
+      </div>
+    </section>
+
+    <!-- ── Settlement Report (Issue #1573) ────────────────────────────────── -->
+    <section id="settlement-section" aria-labelledby="settlement-heading">
+      <h2 id="settlement-heading">Settlement Report</h2>
+      <p class="section-desc">Review your settlement summary and itemised payments for a selected date range.</p>
+
+      <form id="settlementRangeForm" class="settlement-range-form" novalidate>
+        <div class="form-row">
+          <label for="settlement-start" class="form-label">Start date</label>
+          <input type="date" id="settlement-start" class="form-input" aria-required="true" />
+        </div>
+        <div class="form-row">
+          <label for="settlement-end" class="form-label">End date</label>
+          <input type="date" id="settlement-end" class="form-input" aria-required="true" />
+        </div>
+        <div class="form-actions">
+          <button type="submit" id="settlementApplyBtn" class="btn-primary">Apply Range</button>
+        </div>
+      </form>
+
+      <div class="settlement-summary" role="group" aria-label="Settlement summary">
+        <div class="summary-card">
+          <span class="summary-label">Gross Volume</span>
+          <span id="summary-gross" class="summary-value">—</span>
+        </div>
+        <div class="summary-card">
+          <span class="summary-label">Refunds</span>
+          <span id="summary-refunds" class="summary-value">—</span>
+        </div>
+        <div class="summary-card">
+          <span class="summary-label">Fees</span>
+          <span id="summary-fees" class="summary-value">—</span>
+        </div>
+        <div class="summary-card">
+          <span class="summary-label">Net Settlement</span>
+          <span id="summary-net" class="summary-value">—</span>
+        </div>
+      </div>
+
+      <div class="settlement-actions">
+        <button id="settlementCsvBtn" class="btn-outline" type="button">Download CSV</button>
+        <button id="settlementJsonBtn" class="btn-outline" type="button">Download JSON</button>
+      </div>
+
+      <div id="settlement-empty" class="empty">No payments in the selected range.</div>
+      <table id="settlementTable" role="table" aria-label="Itemised settlement payments">
+        <thead>
+          <tr>
+            <th scope="col">Timestamp</th>
+            <th scope="col">Amount</th>
+            <th scope="col">Fee</th>
+            <th scope="col">Net</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
     <!-- Payment Volume Trend Chart (Issue #1248) -->
     <section id="trend-section" aria-labelledby="trend-heading">
       <h2 id="trend-heading">Payment Volume – Last 30 Days</h2>
