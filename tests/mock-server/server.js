@@ -12,6 +12,101 @@ const http = require("http");
 
 const PORT = parseInt(process.env.PORT || "8080", 10);
 
+// ── Admin IP allowlist ────────────────────────────────────────────────────────
+//
+// Comma-separated list of CIDRs (or bare IPs) permitted to reach admin routes.
+// Example: ADMIN_IP_ALLOWLIST="127.0.0.1/32,10.0.0.0/8,::1/128"
+// When unset, admin routes are reachable only from loopback addresses.
+
+const ADMIN_IP_ALLOWLIST_ENV = process.env.ADMIN_IP_ALLOWLIST;
+
+function parseIPv4(ip) {
+  const parts = ip.split(".");
+  if (parts.length !== 4) return null;
+  const nums = parts.map((p) => (/^\d+$/.test(p) ? parseInt(p, 10) : NaN));
+  if (nums.some((n) => Number.isNaN(n) || n < 0 || n > 255)) return null;
+  return nums;
+}
+
+function ipv4ToInt(ip) {
+  const nums = parseIPv4(ip);
+  if (!nums) return null;
+  return ((nums[0] << 24) >>> 0) + (nums[1] << 16) + (nums[2] << 8) + nums[3];
+}
+
+function normalizeIp(ip) {
+  if (!ip) return "";
+  // Strip IPv4-mapped IPv6 prefix (::ffff:127.0.0.1 → 127.0.0.1)
+  if (ip.startsWith("::ffff:")) return ip.slice(7);
+  return ip;
+}
+
+function parseCidr(entry) {
+  const trimmed = entry.trim();
+  if (!trimmed) return null;
+
+  const [addr, prefixRaw] = trimmed.split("/");
+  const ip = normalizeIp(addr);
+
+  if (ip.includes(":")) {
+    // IPv6: support exact-match entries only (no prefix math)
+    if (prefixRaw !== undefined && prefixRaw !== "128") return null;
+    return { family: 6, ip };
+  }
+
+  const base = ipv4ToInt(ip);
+  if (base === null) return null;
+
+  const prefix = prefixRaw === undefined ? 32 : parseInt(prefixRaw, 10);
+  if (Number.isNaN(prefix) || prefix < 0 || prefix > 32) return null;
+
+  const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+  return { family: 4, network: (base & mask) >>> 0, mask };
+}
+
+function parseAllowlist(raw) {
+  const source = raw === undefined || raw === null ? "127.0.0.1/32,::1/128" : raw;
+  return source
+    .split(",")
+    .map(parseCidr)
+    .filter((entry) => entry !== null);
+}
+
+let adminAllowlist = parseAllowlist(ADMIN_IP_ALLOWLIST_ENV);
+
+function setAdminAllowlist(raw) {
+  adminAllowlist = parseAllowlist(raw);
+}
+
+function ipMatchesEntry(ip, entry) {
+  if (entry.family === 6) return ip === entry.ip;
+  const value = ipv4ToInt(ip);
+  if (value === null) return false;
+  return ((value & entry.mask) >>> 0) === entry.network;
+}
+
+function isIpAllowed(ip) {
+  const normalized = normalizeIp(ip);
+  if (!normalized) return false;
+  return adminAllowlist.some((entry) => ipMatchesEntry(normalized, entry));
+}
+
+function getClientIp(req) {
+  // Prefer the socket address; honour X-Forwarded-For only for the first hop.
+  const forwarded = req.headers["x-forwarded-for"];
+  if (typeof forwarded === "string" && forwarded.length > 0) {
+    return normalizeIp(forwarded.split(",")[0].trim());
+  }
+  return normalizeIp(req.socket && req.socket.remoteAddress);
+}
+
+function adminIpGuard(req, res) {
+  if (isIpAllowed(getClientIp(req))) return true;
+  // 403 (not 401) so callers cannot infer whether admin auth exists.
+  json(res, 403, { error: "Forbidden" });
+  return false;
+}
+
 // ── In-memory state ───────────────────────────────────────────────────────────
 
 let state = {
@@ -264,7 +359,54 @@ const routes = {
 
     json(res, 200, payment);
   },
+
+  // ── Admin endpoints (IP allowlisted) ────────────────────────────────────────
+
+  "POST /mock/admin/pause_contract": async (req, res) => {
+    const body = await readBody(req);
+    state.contractPaused = true;
+    json(res, 200, { ok: true, paused: true, reason: body.reason || null });
+  },
+
+  "POST /mock/admin/emergency_withdraw": async (req, res) => {
+    const body = await readBody(req);
+    json(res, 200, { ok: true, withdrawn: true, destination: body.destination || null });
+  },
+
+  "POST /mock/admin/suspend_merchant": async (req, res) => {
+    const body = await readBody(req);
+    if (!body.address) return badRequest(res, "address required");
+    const merchant = state.merchants.get(body.address) || { address: body.address };
+    merchant.suspended = true;
+    state.merchants.set(body.address, merchant);
+    json(res, 200, { ok: true, suspended: true, address: body.address });
+  },
 };
+
+// ── Route introspection ───────────────────────────────────────────────────────
+
+/**
+ * Returns a stable, machine-readable list of implemented endpoints.
+ *
+ * Each entry is `{ method, path }` where `path` is the pathname without any
+ * query string (e.g. `{ method: "GET", path: "/mock/contract/get_refund" }`).
+ * The list is sorted so that contract tests and CI can diff it deterministically
+ * against `docs/openapi.yaml`.
+ *
+ * @returns {{ method: string, path: string }[]}
+ */
+function listRoutes() {
+  return Object.keys(routes)
+    .map((key) => {
+      const [method, path] = key.split(" ");
+      return { method, path };
+    })
+    .sort((a, b) =>
+      a.path === b.path
+        ? a.method.localeCompare(b.method)
+        : a.path.localeCompare(b.path)
+    );
+}
 
 // ── Server ────────────────────────────────────────────────────────────────────
 
@@ -277,6 +419,12 @@ const server = http.createServer(async (req, res) => {
 
   // Strip query string for route matching
   const pathname = req.url.split("?")[0];
+
+  // Admin routes are IP allowlisted; non-allowlisted callers get 403.
+  if (pathname.startsWith(ADMIN_ROUTE_PREFIX) && !adminIpGuard(req, res)) {
+    return;
+  }
+
   const key = `${req.method} ${pathname}`;
   const handler = routes[key];
 
@@ -292,6 +440,47 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`Mock contract server listening on http://localhost:${PORT}`);
-});
+/**
+ * Starts the mock server programmatically.
+ *
+ * @param {number} [port] Port to listen on (defaults to `PORT`).
+ * @returns {Promise<import("http").Server>} Resolves once the server is listening.
+ */
+function start(port = PORT) {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, () => {
+      server.removeListener("error", reject);
+      console.log(`Mock contract server listening on http://localhost:${server.address().port}`);
+      resolve(server);
+    });
+  });
+}
+
+/**
+ * Stops the mock server.
+ *
+ * @returns {Promise<void>}
+ */
+function stop() {
+  return new Promise((resolve, reject) => {
+    if (!server.listening) return resolve();
+    server.close((err) => (err ? reject(err) : resolve()));
+  });
+}
+
+module.exports = {
+  routes,
+  listRoutes,
+  start,
+  stop,
+  server,
+  resetState,
+  PORT,
+};
+
+// Only auto-start when executed directly (e.g. `node server.js`), not when
+// required by the contract test or CI tooling.
+if (require.main === module) {
+  start();
+}

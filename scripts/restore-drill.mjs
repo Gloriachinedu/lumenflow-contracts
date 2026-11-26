@@ -14,11 +14,14 @@
  */
 
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { dirname, resolve, join } from 'node:path';
 
 const SNAPSHOT_VERSION = 1;
+
+/** Maximum acceptable Recovery Time Objective, in seconds (4 hours). */
+export const RTO_LIMIT_SECONDS = 4 * 60 * 60;
 
 export class RestoreDrillError extends Error {
   constructor(message) {
@@ -121,9 +124,106 @@ export function runRestoreDrill(files) {
   };
 }
 
+/**
+ * Resolve the most recent backup bundle under `dir`. A bundle is either a
+ * single `.json` snapshot file or a directory containing one. Selection is by
+ * modification time, newest first.
+ */
+export function findLatestBackup(dir) {
+  const candidates = [];
+  for (const name of readdirSync(dir)) {
+    const full = join(dir, name);
+    const stat = statSync(full);
+    if (stat.isFile() && name.endsWith('.json')) {
+      candidates.push({ path: full, mtimeMs: stat.mtimeMs });
+    } else if (stat.isDirectory()) {
+      for (const inner of readdirSync(full)) {
+        if (inner.endsWith('.json')) {
+          const innerFull = join(full, inner);
+          const innerStat = statSync(innerFull);
+          if (innerStat.isFile()) {
+            candidates.push({ path: innerFull, mtimeMs: innerStat.mtimeMs });
+          }
+        }
+      }
+    }
+  }
+  if (candidates.length === 0) {
+    throw new RestoreDrillError(`no backup bundles found under "${dir}"`);
+  }
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return candidates[0].path;
+}
+
+/**
+ * Restore the latest backup bundle found under `backupDir`, run an optional
+ * smoke test against the restored files, and measure the elapsed RTO.
+ *
+ * `smokeTest` receives the restored name -> content map and may throw to fail
+ * the drill. Returns a machine-readable report including `rtoSeconds`.
+ */
+export function runLatestBackupDrill(backupDir, smokeTest) {
+  const startedAt = process.hrtime.bigint();
+  const snapshotPath = findLatestBackup(backupDir);
+  const snapshot = readFileSync(snapshotPath, 'utf8');
+  const restored = restoreSnapshot(snapshot);
+
+  if (typeof smokeTest === 'function') {
+    smokeTest(restored);
+  }
+
+  const names = Object.keys(restored).sort();
+  const bytes = names.reduce((n, name) => n + Buffer.byteLength(restored[name], 'utf8'), 0);
+  const checksum = JSON.parse(snapshot).digest;
+  const rtoSeconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
+
+  return {
+    ok: true,
+    rtoSeconds,
+    rtoWithinLimit: rtoSeconds < RTO_LIMIT_SECONDS,
+    fileCount: names.length,
+    bytes,
+    checksum,
+    snapshotPath,
+  };
+}
+
+function parseArgs(argv) {
+  const args = { latestBackup: null, targets: [] };
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--latest-backup') {
+      const value = argv[i + 1];
+      if (!value) {
+        throw new RestoreDrillError('--latest-backup requires a directory path');
+      }
+      args.latestBackup = value;
+      i += 1;
+    } else if (arg.startsWith('--latest-backup=')) {
+      args.latestBackup = arg.slice('--latest-backup='.length);
+    } else {
+      args.targets.push(arg);
+    }
+  }
+  return args;
+}
+
 function main(argv) {
   const here = dirname(fileURLToPath(import.meta.url));
-  const targets = argv.length > 0 ? argv : ['codecov.yml', 'Makefile', 'Cargo.toml'];
+  const args = parseArgs(argv);
+
+  if (args.latestBackup) {
+    const report = runLatestBackupDrill(resolve(here, '..', args.latestBackup));
+    process.stdout.write(`${JSON.stringify(report)}\n`);
+    if (!report.rtoWithinLimit) {
+      throw new RestoreDrillError(
+        `RTO ${report.rtoSeconds.toFixed(1)}s exceeds limit of ${RTO_LIMIT_SECONDS}s`,
+      );
+    }
+    return;
+  }
+
+  const targets = args.targets.length > 0 ? args.targets : ['codecov.yml', 'Makefile', 'Cargo.toml'];
   const files = {};
   for (const rel of targets) {
     files[rel] = readFileSync(resolve(here, '..', rel), 'utf8');

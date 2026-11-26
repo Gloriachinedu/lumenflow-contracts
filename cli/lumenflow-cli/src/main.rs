@@ -120,6 +120,11 @@ enum Commands {
         #[arg(long)]
         admin: String,
     },
+    /// Payment operations
+    Payment {
+        #[command(subcommand)]
+        action: PaymentCommands,
+    },
     /// Print the resolved configuration (useful for debugging)
     PrintConfig,
     /// Batch pay multiple merchants from a CSV file
@@ -146,6 +151,22 @@ enum Commands {
     Admin {
         #[command(subcommand)]
         action: AdminCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum PaymentCommands {
+    /// Get the status of a payment by order ID
+    Status {
+        /// Order ID to look up
+        #[arg(short, long)]
+        order_id: String,
+        /// Poll until the payment reaches a terminal state (Completed/Failed)
+        #[arg(long, default_value_t = false)]
+        watch: bool,
+        /// Maximum seconds to poll in watch mode before giving up
+        #[arg(long, default_value_t = 60)]
+        timeout: u64,
     },
 }
 
@@ -197,6 +218,31 @@ enum MerchantCommands {
         /// New merchant category
         #[arg(long)]
         category: Option<String>,
+    },
+    /// Register a new merchant.
+    ///
+    /// Pass `--interactive` to be prompted for each field with real-time
+    /// validation and a confirmation summary before submission. Otherwise all
+    /// flags are required and the merchant is submitted directly.
+    Register {
+        /// Merchant Stellar address (required unless --interactive)
+        #[arg(long)]
+        address: Option<String>,
+        /// Merchant name (required unless --interactive)
+        #[arg(long)]
+        name: Option<String>,
+        /// Merchant description (required unless --interactive)
+        #[arg(long)]
+        description: Option<String>,
+        /// Merchant contact information (required unless --interactive)
+        #[arg(long)]
+        contact_info: Option<String>,
+        /// Merchant category (required unless --interactive)
+        #[arg(long)]
+        category: Option<String>,
+        /// Prompt for each field interactively with validation and confirmation
+        #[arg(long, default_value_t = false)]
+        interactive: bool,
     },
 }
 
@@ -1104,6 +1150,113 @@ fn print_results_table(results: &[RowResult]) {
     println!("{}", sep);
 }
 
+// ── Payment status ────────────────────────────────────────────────────────────
+
+/// Terminal states for a payment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaymentState {
+    Pending,
+    Completed,
+    Failed,
+}
+
+impl PaymentState {
+    /// Parse a status string returned by the contract.
+    pub fn from_str(s: &str) -> PaymentState {
+        match s.trim().to_lowercase().as_str() {
+            "completed" => PaymentState::Completed,
+            "failed" => PaymentState::Failed,
+            _ => PaymentState::Pending,
+        }
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, PaymentState::Completed | PaymentState::Failed)
+    }
+}
+
+/// Query the contract for the current status of a payment.
+///
+/// Returns the raw status string as reported by the contract.
+fn fetch_payment_status(config: &Config, order_id: &str) -> Result<String> {
+    let mut cmd = base_invoke(config)?;
+    cmd.args(["--", "get_payment_status", "--order_id", order_id]);
+
+    let output = cmd
+        .output()
+        .context("failed to invoke get_payment_status")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("get_payment_status failed: {}", stderr.trim());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let status = stdout
+        .lines()
+        .rev()
+        .map(|l| l.trim())
+        .find(|l| !l.is_empty())
+        .unwrap_or("Pending")
+        .to_string();
+
+    Ok(status)
+}
+
+/// Print a status line with a UTC timestamp.
+fn print_status_update(order_id: &str, status: &str) {
+    let ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
+    println!("[{}] Order {}: {}", ts, order_id, status);
+}
+
+/// Handle `payment status`, including optional watch/polling mode.
+///
+/// Exit codes:
+/// - 0: payment Completed (or one-shot query succeeded)
+/// - 1: payment Failed
+/// - 2: watch mode timed out before reaching a terminal state
+fn handle_payment_status(
+    config: &Config,
+    order_id: &str,
+    watch: bool,
+    timeout_secs: u64,
+) -> Result<()> {
+    if !watch {
+        let status = fetch_payment_status(config, order_id)?;
+        print_status_update(order_id, &status);
+        return Ok(());
+    }
+
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(timeout_secs);
+    let interval = std::time::Duration::from_secs(3);
+
+    loop {
+        let status = fetch_payment_status(config, order_id)?;
+        print_status_update(order_id, &status);
+
+        match PaymentState::from_str(&status) {
+            PaymentState::Completed => {
+                std::process::exit(0);
+            }
+            PaymentState::Failed => {
+                std::process::exit(1);
+            }
+            PaymentState::Pending => {}
+        }
+
+        if start.elapsed() + interval > timeout {
+            eprintln!(
+                "Timed out after {}s waiting for order {} to reach a terminal state.",
+                timeout_secs, order_id
+            );
+            std::process::exit(2);
+        }
+
+        std::thread::sleep(interval);
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 fn main() -> Result<()> {
@@ -1213,6 +1366,33 @@ fn main() -> Result<()> {
                 }
 
                 println!("\nSuccess! Merchant profile updated for {}.", address);
+            }
+            MerchantCommands::Register {
+                address,
+                name,
+                description,
+                contact_info,
+                category,
+                interactive,
+            } => {
+                let contract_id = config.contract_id.as_deref().unwrap_or("N/A");
+
+                let registration = if *interactive {
+                    match prompt_merchant_registration()? {
+                        Some(r) => r,
+                        None => return Ok(()),
+                    }
+                } else {
+                    registration_from_flags(
+                        address.clone(),
+                        name.clone(),
+                        description.clone(),
+                        contact_info.clone(),
+                        category.clone(),
+                    )?
+                };
+
+                submit_merchant_registration(&registration, contract_id);
             }
         },
         Commands::Refund { action } => {
@@ -1344,6 +1524,15 @@ fn main() -> Result<()> {
         Commands::Stats { .. } => {
             println!("{}", format_stats());
         }
+        Commands::Payment { action } => match action {
+            PaymentCommands::Status {
+                order_id,
+                watch,
+                timeout,
+            } => {
+                handle_payment_status(&config, order_id, *watch, *timeout)?;
+            }
+        },
         Commands::PrintConfig => {
             println!("Resolved configuration:");
             println!(
@@ -2216,5 +2405,74 @@ mod tests {
         std::env::remove_var("LUMENFLOW_ADMIN_KEY");
         let m = Cli::command().try_get_matches_from(["lumenflow", "merchant", "list"]);
         assert!(m.is_err(), "merchant list without --admin-key should fail");
+    }
+
+    #[test]
+    fn test_payment_status_args_parse() {
+        let cli = Cli::try_parse_from([
+            "lumenflow",
+            "payment",
+            "status",
+            "--order-id",
+            "ORD1",
+        ])
+        .expect("payment status should parse");
+
+        match cli.command {
+            Commands::Payment {
+                action: PaymentCommands::Status {
+                    order_id,
+                    watch,
+                    timeout,
+                },
+            } => {
+                assert_eq!(order_id, "ORD1");
+                assert!(!watch);
+                assert_eq!(timeout, 60);
+            }
+            _ => panic!("expected Commands::Payment {{ Status }}"),
+        }
+    }
+
+    #[test]
+    fn test_payment_status_watch_args_parse() {
+        let cli = Cli::try_parse_from([
+            "lumenflow",
+            "payment",
+            "status",
+            "--order-id",
+            "ORD1",
+            "--watch",
+            "--timeout",
+            "15",
+        ])
+        .expect("payment status --watch should parse");
+
+        match cli.command {
+            Commands::Payment {
+                action: PaymentCommands::Status {
+                    order_id,
+                    watch,
+                    timeout,
+                },
+            } => {
+                assert_eq!(order_id, "ORD1");
+                assert!(watch);
+                assert_eq!(timeout, 15);
+            }
+            _ => panic!("expected Commands::Payment {{ Status }}"),
+        }
+    }
+
+    #[test]
+    fn test_payment_state_parsing() {
+        assert_eq!(PaymentState::from_str("Completed"), PaymentState::Completed);
+        assert_eq!(PaymentState::from_str("completed"), PaymentState::Completed);
+        assert_eq!(PaymentState::from_str("Failed"), PaymentState::Failed);
+        assert_eq!(PaymentState::from_str("Pending"), PaymentState::Pending);
+        assert_eq!(PaymentState::from_str("anything-else"), PaymentState::Pending);
+        assert!(PaymentState::Completed.is_terminal());
+        assert!(PaymentState::Failed.is_terminal());
+        assert!(!PaymentState::Pending.is_terminal());
     }
 }

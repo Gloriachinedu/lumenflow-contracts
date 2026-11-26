@@ -1,0 +1,58 @@
+{
+  "ci": {
+    "collect": {
+      "staticDistDir": "./frontend",
+      "numberOfRuns": 3,
+      "url": [
+        "http://localhost/index.html",
+        "http://localhost/dashboard.html",
+        "http://localhost/history.html",
+        "http://localhost/multisig.html",
+        "http://localhost/onboarding.html",
+        "http://localhost/payment-history.html",
+        "http://localhost/payment-history-paginated.html",
+        "http://localhost/receipt.html"
+      ],
+      "settings": {
+        "chromeFlags": "--no-sandbox --headless"
+      }
+    },
+    "assert": {
+      "assertMatrix": [
+        {
+          "matchingUrlPattern": ".*",
+          "assertions": {
+            "largest-contentful-paint": [
+              "error",
+              {
+                "maxNumericValue": 2500
+              }
+            ],
+            "max-potential-fid": [
+              "error",
+              {
+                "maxNumericValue": 100
+              }
+            ],
+            "cumulative-layout-shift": [
+              "error",
+              {
+                "maxNumericValue": 0.1
+              }
+            ],
+            "categories:accessibility": [
+              "error",
+              {
+                "minScore": 0.9
+              }
+            ]
+          }
+        }
+      ],
+      "aggregationMethod": "optimistic"
+    },
+    "upload": {
+      "target": "temporary-public-storage"
+    }
+  }
+}

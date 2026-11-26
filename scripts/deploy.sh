@@ -63,3 +63,30 @@ echo "    --id $CONTRACT_ID \\"
 echo "    --source-account \$SOURCE_ACCOUNT \\"
 echo "    --network $NETWORK \\"
 echo "    -- set_admin --admin <ADMIN_ADDRESS>"
+echo ""
+
+# Allowlist USDC (Stellar) as the first supported non-native token (issue #1576).
+# USDC_ADDRESS must be the network-specific SAC address set in .env.<NETWORK>:
+#   mainnet: <USDC SAC address on mainnet>
+#   testnet: <USDC SAC address on testnet>
+if [[ -n "${USDC_ADDRESS:-}" ]]; then
+  echo "==> Adding USDC to the allowed token list: $USDC_ADDRESS"
+  stellar contract invoke \
+    --id "$CONTRACT_ID" \
+    --source-account "$SOURCE_ACCOUNT" \
+    --network "$NETWORK" \
+    "${EXTRA_ARGS[@]}" \
+    -- add_allowed_token --token "$USDC_ADDRESS"
+
+  if [[ -n "${USDC_ISSUER:-}" ]]; then
+    echo "==> Adding USDC issuer to the allowed issuer list: $USDC_ISSUER"
+    stellar contract invoke \
+      --id "$CONTRACT_ID" \
+      --source-account "$SOURCE_ACCOUNT" \
+      --network "$NETWORK" \
+      "${EXTRA_ARGS[@]}" \
+      -- add_allowed_issuer --issuer "$USDC_ISSUER"
+  fi
+else
+  echo "==> USDC_ADDRESS not set; skipping add_allowed_token (issue #1576)."
+fi

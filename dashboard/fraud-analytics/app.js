@@ -86,6 +86,20 @@ const alertCount    = document.getElementById('alert-count');
 const lastRefreshEl = document.getElementById('last-refresh');
 const refreshBtn    = document.getElementById('refresh-btn');
 
+/**
+ * Announce a message to assistive technology via the shared live region.
+ * Falls back gracefully when the region is not present in the DOM.
+ *
+ * @param {string} message
+ */
+function announce(message) {
+  const region = document.getElementById('a11y-live-region');
+  if (!region) return;
+  // Clear first so repeated identical messages are re-announced.
+  region.textContent = '';
+  window.setTimeout(() => { region.textContent = message; }, 50);
+}
+
 // ── Formatting helpers ────────────────────────────────────────────────────
 
 function fmtTime(ts) {
@@ -198,20 +212,26 @@ function renderSuspiciousEvents(events) {
   loadEl.hidden = true;
   countEl.textContent = events.length;
 
-  if (events.length === 0) { emptyEl.hidden = false; return; }
+  if (events.length === 0) {
+    emptyEl.hidden = false;
+    tableEl.hidden = true;
+    announce('No suspicious activity events in the last 24 hours.');
+    return;
+  }
 
   tbody.innerHTML = '';
   events.forEach(ev => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${fmtTime(ev.ts)}</td>
-      <td title="${ev.merchant}">${shorten(ev.merchant)}</td>
+      <td title="${ev.merchant}"><span class="sr-only">Merchant: </span>${shorten(ev.merchant)}</td>
       <td class="${severityClass(ev.reason)}">${reasonLabel(ev.reason)}</td>
       <td>${ev.amount ? fmtAmount(ev.amount) + ' XLM' : '—'}</td>
     `;
     tbody.appendChild(tr);
   });
   tableEl.hidden = false;
+  announce(`Suspicious activity table updated with ${events.length} event${events.length === 1 ? '' : 's'}.`);
 
   // Update alert badge for newly seen events
   const freshIds = events.map(e => e.id).filter(id => !seenEventIds.has(id));
@@ -234,14 +254,19 @@ function renderRefundRates(rates) {
   const tbody   = document.getElementById('refund-body');
 
   loadEl.hidden = true;
-  if (rates.length === 0) { emptyEl.hidden = false; return; }
+  if (rates.length === 0) {
+    emptyEl.hidden = false;
+    tableEl.hidden = true;
+    announce('No refund rate data available.');
+    return;
+  }
 
   tbody.innerHTML = '';
   rates.slice(0, 10).forEach(r => {
     const rateClass = r.rate > 25 ? 'rate-high' : r.rate > 15 ? 'rate-medium' : 'rate-ok';
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td title="${r.merchant}">${shorten(r.merchant)}</td>
+      <td title="${r.merchant}"><span class="sr-only">Merchant: </span>${shorten(r.merchant)}</td>
       <td>${r.payments.toLocaleString()}</td>
       <td>${r.refunds.toLocaleString()}</td>
       <td class="${rateClass}">${r.rate.toFixed(1)} %</td>
@@ -249,6 +274,7 @@ function renderRefundRates(rates) {
     tbody.appendChild(tr);
   });
   tableEl.hidden = false;
+  announce(`Refund rate table updated with ${Math.min(rates.length, 10)} merchant${Math.min(rates.length, 10) === 1 ? '' : 's'}.`);
 
   const highRateCount = rates.filter(r => r.rate > 15).length;
   document.getElementById('kpi-high-refund-merchants').textContent = highRateCount;
@@ -264,7 +290,12 @@ function renderLargePayments(payments) {
   loadEl.hidden = true;
   labelEl.textContent = `Threshold: ${fmtAmount(largePaymentThresholdStroops())} XLM`;
 
-  if (payments.length === 0) { emptyEl.hidden = false; return; }
+  if (payments.length === 0) {
+    emptyEl.hidden = false;
+    tableEl.hidden = true;
+    announce('No large payments above the current threshold.');
+    return;
+  }
 
   tbody.innerHTML = '';
   payments.forEach(p => {
@@ -272,14 +303,15 @@ function renderLargePayments(payments) {
     tr.innerHTML = `
       <td>${fmtTime(p.ts)}</td>
       <td>${p.orderId}</td>
-      <td title="${p.merchant}">${shorten(p.merchant)}</td>
-      <td title="${p.payer}">${shorten(p.payer)}</td>
+      <td title="${p.merchant}"><span class="sr-only">Merchant: </span>${shorten(p.merchant)}</td>
+      <td title="${p.payer}"><span class="sr-only">Payer: </span>${shorten(p.payer)}</td>
       <td class="severity-high">${fmtAmount(p.amount)}</td>
     `;
     tbody.appendChild(tr);
   });
   tableEl.hidden = false;
   document.getElementById('kpi-large-payments').textContent = payments.length;
+  announce(`Large payments table updated with ${payments.length} payment${payments.length === 1 ? '' : 's'}.`);
 }
 
 function renderVelocityAnomalies(anomalies) {
@@ -289,14 +321,19 @@ function renderVelocityAnomalies(anomalies) {
   const tbody   = document.getElementById('velocity-body');
 
   loadEl.hidden = true;
-  if (anomalies.length === 0) { emptyEl.hidden = false; return; }
+  if (anomalies.length === 0) {
+    emptyEl.hidden = false;
+    tableEl.hidden = true;
+    announce('No payment velocity anomalies detected.');
+    return;
+  }
 
   tbody.innerHTML = '';
   anomalies.forEach(a => {
     const spikeClass = a.spikeFactor >= 6 ? 'severity-high' : a.spikeFactor >= 4 ? 'severity-medium' : 'severity-low';
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td title="${a.merchant}">${shorten(a.merchant)}</td>
+      <td title="${a.merchant}"><span class="sr-only">Merchant: </span>${shorten(a.merchant)}</td>
       <td>${a.paymentsPerHour}</td>
       <td>${a.avgPerHour.toFixed(1)}</td>
       <td class="${spikeClass}">${a.spikeFactor.toFixed(1)}×</td>
@@ -305,6 +342,7 @@ function renderVelocityAnomalies(anomalies) {
   });
   tableEl.hidden = false;
   document.getElementById('kpi-velocity-anomalies').textContent = anomalies.length;
+  announce(`Velocity anomalies table updated with ${anomalies.length} anomal${anomalies.length === 1 ? 'y' : 'ies'}.`);
 }
 
 // ── Main refresh cycle ────────────────────────────────────────────────────
@@ -346,6 +384,7 @@ async function refresh() {
   lastRefreshEl.textContent = `Last updated: ${now.toLocaleTimeString()}`;
   refreshBtn.disabled = false;
   refreshBtn.textContent = '↻ Refresh';
+  announce(`Dashboard refreshed at ${now.toLocaleTimeString()}.`);
 }
 
 // ── Settings panel ────────────────────────────────────────────────────────
@@ -375,6 +414,7 @@ function openSettings() {
   settingsBtn.setAttribute('aria-expanded', 'true');
   settingsClose.focus();
   savedMsg.hidden = true;
+  announce('Settings panel opened.');
 }
 
 /** Close the settings panel. */
@@ -382,6 +422,31 @@ function closeSettings() {
   settingsPanel.hidden = true;
   settingsBtn.setAttribute('aria-expanded', 'false');
   settingsBtn.focus();
+  announce('Settings panel closed.');
+}
+
+/**
+ * Trap Tab focus within the settings panel while it is open so keyboard
+ * users cannot tab into obscured background content.
+ *
+ * @param {KeyboardEvent} e
+ */
+function trapSettingsFocus(e) {
+  if (e.key !== 'Tab' || settingsPanel.hidden) return;
+  const focusable = settingsPanel.querySelectorAll(
+    'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+  );
+  if (focusable.length === 0) return;
+  const first = focusable[0];
+  const last  = focusable[focusable.length - 1];
+
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
 }
 
 /** Validate and save settings, then re-render the dashboard. */
@@ -428,6 +493,7 @@ function handleSettingsSave(e) {
 
   // Show confirmation and re-render dashboard without closing the panel
   savedMsg.hidden = false;
+  announce('Settings saved.');
   refresh();
 }
 
@@ -438,6 +504,7 @@ function handleSettingsReset() {
   LARGE_PAYMENT_THRESHOLD = largePaymentThresholdStroops();
   populateSettingsForm();
   savedMsg.hidden = false;
+  announce('Settings reset to defaults.');
   refresh();
 }
 
@@ -452,10 +519,13 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// Keyboard: Escape closes the panel
+// Keyboard: Escape closes the panel; Tab is trapped inside while open
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !settingsPanel.hidden) {
+  if (settingsPanel.hidden) return;
+  if (e.key === 'Escape') {
     closeSettings();
+  } else {
+    trapSettingsFocus(e);
   }
 });
 
@@ -470,4 +540,9 @@ settingsReset.addEventListener('click', handleSettingsReset);
 
 refresh();
 setInterval(refresh, REFRESH_MS);
-refreshBtn.addEventListener('click', () => { newAlertCount = 0; alertBadge.hidden = true; refresh(); });
+refreshBtn.addEventListener('click', () => {
+  newAlertCount = 0;
+  alertBadge.hidden = true;
+  announce('Alerts cleared.');
+  refresh();
+});
