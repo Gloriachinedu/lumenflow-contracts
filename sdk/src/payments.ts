@@ -10,11 +10,99 @@
  * transport, which provides sub-second latency compared to HTTP polling.
  */
 
-import { PaymentEvent, PaymentOrder } from './types';
-import { paginate, PageFetcher } from './pagination';
+import { PaymentEvent } from './types';
+import {
+  LumenFlowValidationError,
+  validateProcessPaymentInput,
+  validateRegisterMerchantInput,
+} from './validation';
 
 /** Callback invoked for each incoming payment event. */
 export type PaymentCallback = (event: PaymentEvent) => void;
+
+/** Parameters accepted by `processPayment`. */
+export interface ProcessPaymentParams {
+  /** Merchant order identifier; must be a non-empty string. */
+  orderId: string;
+  /** Payment amount in stroops; must be positive. */
+  amount: number | bigint;
+  /** Stellar address of the token (or `native`); must be a valid address. */
+  tokenAddress: string;
+}
+
+/** Parameters accepted by `registerMerchant`. */
+export interface RegisterMerchantParams {
+  /** Human-readable merchant name; must be a non-empty string. */
+  name: string;
+  /** Stellar account address of the merchant; must be valid. */
+  address: string;
+}
+
+/** Minimal RPC client surface used by the public payment methods. */
+export interface PaymentRpcClient {
+  submitTransaction(envelope: Record<string, unknown>): Promise<unknown>;
+  registerMerchant?(payload: RegisterMerchantParams): Promise<unknown>;
+}
+
+/** Options for the public payment methods. */
+export interface PaymentMethodOptions {
+  /** RPC client used to submit requests. */
+  rpc?: PaymentRpcClient;
+}
+
+/**
+ * Submits a payment request to the RPC layer.
+ *
+ * All inputs are validated before any network call is made; invalid input
+ * throws a `LumenFlowValidationError` identifying the offending field.
+ *
+ * @param params  - Payment parameters (`orderId`, `amount`, `tokenAddress`).
+ * @param options - Optional RPC client override.
+ * @returns The RPC submission result.
+ * @throws {LumenFlowValidationError} When any input parameter is invalid.
+ */
+export async function processPayment(
+  params: ProcessPaymentParams,
+  options: PaymentMethodOptions = {},
+): Promise<unknown> {
+  validateProcessPaymentInput(params);
+
+  const rpc = options.rpc;
+  if (!rpc) {
+    throw new LumenFlowValidationError('rpc', 'An RPC client is required to process a payment');
+  }
+
+  return rpc.submitTransaction({
+    orderId: params.orderId,
+    amount: params.amount.toString(),
+    tokenAddress: params.tokenAddress,
+  });
+}
+
+/**
+ * Registers a merchant with the RPC layer.
+ *
+ * All inputs are validated before any network call is made; invalid input
+ * throws a `LumenFlowValidationError` identifying the offending field.
+ *
+ * @param params  - Merchant parameters (`name`, `address`).
+ * @param options - Optional RPC client override.
+ * @returns The RPC submission result.
+ * @throws {LumenFlowValidationError} When any input parameter is invalid.
+ */
+export async function registerMerchant(
+  params: RegisterMerchantParams,
+  options: PaymentMethodOptions = {},
+): Promise<unknown> {
+  validateRegisterMerchantInput(params);
+
+  const rpc = options.rpc;
+  if (!rpc || typeof rpc.registerMerchant !== 'function') {
+    throw new LumenFlowValidationError('rpc', 'An RPC client is required to register a merchant');
+  }
+
+  return rpc.registerMerchant({ name: params.name, address: params.address });
+}
 
 /** Object returned by `subscribeToPayments`. Call `unsubscribe()` to close. */
 export interface PaymentSubscription {

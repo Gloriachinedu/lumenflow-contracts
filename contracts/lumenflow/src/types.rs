@@ -29,6 +29,23 @@ pub struct Merchant {
     pub total_received: i128,
     /// Number of merchants that registered using this merchant's referral address.
     pub referral_count: u32,
+    /// Optional maximum payment amount this merchant will accept. `None` means
+    /// no limit is enforced (issue #1592).
+    pub max_payment_amount: Option<i128>,
+}
+
+/// Per-merchant profile settings that can be configured by the merchant.
+///
+/// `refund_window_secs` overrides the global refund window for this merchant
+/// when set. When `None`, the contract-wide default is used.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantProfile {
+    /// The merchant this profile belongs to.
+    pub merchant: Address,
+    /// Merchant-specific refund window in seconds. When `None`, the global
+    /// default refund window applies.
+    pub refund_window_secs: Option<u64>,
 }
 
 /// Summary entry returned by `get_referral_stats`. Contains the referring
@@ -70,15 +87,19 @@ pub struct PaymentOrder {
     pub platform_fee: i128,
 }
 
+/// Public, unauthenticated read-only summary of a payment.
+///
+/// Returned by `get_payment_summary`, which is callable without payer or
+/// merchant auth so third-party explorers and dashboards can query it.
+/// Deliberately excludes sensitive fields such as the payer address.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PaymentSummary {
     pub order_id: String,
-    pub merchant_address: Address,
+    pub merchant: Address,
     pub amount: i128,
-    pub token: Address,
     pub status: PaymentStatus,
-    pub paid_at: u64,
+    pub created_at: u64,
 }
 
 #[contracttype]
@@ -354,6 +375,21 @@ pub struct EscrowCancelledEvent {
     pub amount: i128,
 }
 
+/// Data payload for `lumenflow/emergency_withdrawal`.
+///
+/// Emitted when an admin triggers an emergency withdrawal of stuck escrow
+/// funds to the governance treasury after the emergency lock period.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmergencyWithdrawalEvent {
+    /// The escrow order_id from which funds were withdrawn.
+    pub escrow_id: String,
+    /// Amount transferred to the treasury in stroops.
+    pub amount: i128,
+    /// The treasury address that received the funds.
+    pub recipient: Address,
+}
+
 // ── Dispute ───────────────────────────────────────────────────────────────────
 
 /// Full lifecycle state machine for a dispute.
@@ -374,6 +410,33 @@ pub enum DisputeStatus {
     Resolved,
     /// Admin has escalated the dispute (e.g. to an external arbitration layer).
     Escalated,
+}
+
+impl DisputeStatus {
+    /// Returns `true` if a transition from `self` to `target` is allowed.
+    ///
+    /// The only legal transitions are:
+    ///
+    /// ```text
+    /// Open         → UnderReview
+    /// Open         → Escalated
+    /// UnderReview  → Escalated
+    /// UnderReview  → Resolved
+    /// Escalated    → Resolved
+    /// ```
+    ///
+    /// Every other source→target pair (including self-transitions and any
+    /// transition out of `Resolved`, which is terminal) returns `false`.
+    pub fn can_transition_to(&self, target: &DisputeStatus) -> bool {
+        matches!(
+            (self, target),
+            (DisputeStatus::Open, DisputeStatus::UnderReview)
+                | (DisputeStatus::Open, DisputeStatus::Escalated)
+                | (DisputeStatus::UnderReview, DisputeStatus::Escalated)
+                | (DisputeStatus::UnderReview, DisputeStatus::Resolved)
+                | (DisputeStatus::Escalated, DisputeStatus::Resolved)
+        )
+    }
 }
 
 /// Final outcome recorded when a dispute is resolved.
@@ -406,6 +469,48 @@ pub struct DisputeRecord {
     /// Optional resolution or escalation notes written by the admin.
     pub resolution: Option<String>,
     pub created_at: u64,
+}
+
+// ── Fee module ────────────────────────────────────────────────────────────────
+
+/// Protocol fee configuration.
+///
+/// The fee is expressed in basis points (1 bps = 0.01 %). A `bps` value of `0`
+/// disables the fee module entirely: no fee is deducted and no extra token
+/// transfer is performed during payment processing.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeeConfig {
+    /// Address that receives the deducted protocol fee.
+    pub recipient: Address,
+    /// Fee in basis points. Must be ≤ 10_000 (100 %). `0` disables the module.
+    pub bps: u32,
+}
+
+// ── Cross-asset payments ──────────────────────────────────────────────────────
+
+/// Data payload for `lumenflow/cross_asset_payment`.
+///
+/// Emitted by `process_payment_cross_asset` after a DEX path payment has been
+/// executed. `exchange_rate` is the effective rate expressed in basis points
+/// scaled by 10_000 (i.e. `received_amount * 10_000 / send_amount`).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CrossAssetPaymentEvent {
+    pub order_id: String,
+    pub payer: Address,
+    pub merchant: Address,
+    /// Asset the payer sent.
+    pub send_asset: Address,
+    /// Asset the merchant received.
+    pub dest_asset: Address,
+    /// Amount of `send_asset` debited from the payer.
+    pub send_amount: i128,
+    /// Amount of `dest_asset` credited to the merchant.
+    pub received_amount: i128,
+    /// Effective exchange rate in basis points (received * 10_000 / sent).
+    pub exchange_rate: u32,
+    pub timestamp: u64,
 }
 
 // ── Suspicious Activity ───────────────────────────────────────────────────────
@@ -555,6 +660,59 @@ pub struct PaymentStatusUpdatedEvent {
     pub original_amount: i128,
 }
 
+// ── Diagnostic event payloads (issue #1589) ───────────────────────────────────
+//
+// These events are emitted on performance-critical paths so that off-chain
+// monitoring (see `lumenflow_exporter.py`) can track contract execution
+// metrics. Each payload carries a `ledger_sequence_delta` — the difference
+// between the ledger sequence at which the operation was observed and the
+// ledger sequence at which it was initiated — which serves as a
+// duration-equivalent measure of execution latency.
+
+/// Topic symbol for the payment-processed diagnostic event.
+pub const TOPIC_PAYMENT_PROCESSED_DIAGNOSTIC: &str = "payment_processed_diagnostic";
+/// Topic symbol for the refund-issued diagnostic event.
+pub const TOPIC_REFUND_ISSUED_DIAGNOSTIC: &str = "refund_issued_diagnostic";
+/// Topic symbol for the batch-payment-completed diagnostic event.
+pub const TOPIC_BATCH_PAYMENT_COMPLETED_DIAGNOSTIC: &str = "batch_payment_completed_diagnostic";
+
+/// Data payload for `lumenflow/payment_processed_diagnostic`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaymentProcessedDiagnostic {
+    pub order_id: String,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    /// Ledger sequence delta (duration-equivalent) for this operation.
+    pub ledger_sequence_delta: u32,
+}
+
+/// Data payload for `lumenflow/refund_issued_diagnostic`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefundIssuedDiagnostic {
+    pub refund_id: String,
+    pub order_id: String,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    /// Ledger sequence delta (duration-equivalent) for this operation.
+    pub ledger_sequence_delta: u32,
+}
+
+/// Data payload for `lumenflow/batch_payment_completed_diagnostic`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchPaymentCompletedDiagnostic {
+    /// Number of payments successfully processed in the batch.
+    pub batch_size: u32,
+    /// Aggregate amount processed across the batch.
+    pub total_amount: i128,
+    /// Ledger sequence delta (duration-equivalent) for the whole batch.
+    pub ledger_sequence_delta: u32,
+}
+
 // ── Admin Audit Log ───────────────────────────────────────────────────────────
 
 /// The type of admin action recorded in the audit log.
@@ -573,6 +731,7 @@ pub enum AdminActionType {
     SetMultisigExpiryDuration,
     SetRefundWindow,
     SetMinRefundAmount,
+    SetMerchantRefundWindow,
     DeactivateMerchant,
     ReactivateMerchant,
     VerifyMerchant,
@@ -582,6 +741,9 @@ pub enum AdminActionType {
     SetPauseGuardians,
     UpgradeContract,
     ConfirmMerchantDataDeletion,
+    EmergencyWithdraw,
+    SuspendMerchant,
+    UnsuspendMerchant,
     Other,
 }
 

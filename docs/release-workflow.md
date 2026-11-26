@@ -102,14 +102,24 @@ when it is available, falling back to a manual stub only when the tool is not in
    generated accurately. Do **not** manually edit `CHANGELOG.md`; it is regenerated
    automatically by CI.
 
-3. **Run the release script** (optional local preview):
+3. **Update the upgrade guide for breaking changes** — if any commit in this release
+   contains a `BREAKING CHANGE` footer (or a `!` after the type/scope), you must add a
+   migration section to [`docs/upgrade-guide.md`](./upgrade-guide.md) **before**
+   tagging. Use the versioned migration template in the
+   [Migration section template](./upgrade-guide.md#migration-section-template)
+   and follow the [writing a migration section](./upgrade-guide.md#writing-a-migration-section)
+   guidance. Review the new section alongside the generated `CHANGELOG.md` so the
+   ⚠ BREAKING CHANGES entries and the migration steps stay consistent. Releases
+   without breaking changes do not require an upgrade-guide update.
+
+4. **Run the release script** (optional local preview):
    ```bash
    ./scripts/release.sh X.Y.Z
    ```
    This bumps versions, regenerates `CHANGELOG.md` via `conventional-changelog-cli`,
    stages the files, creates a commit, and tags the release.
 
-4. **Push the tag**:
+5. **Push the tag**:
    ```bash
    git push origin main && git push origin vX.Y.Z
    ```

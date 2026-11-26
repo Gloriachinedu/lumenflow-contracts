@@ -4,8 +4,52 @@ Command-line interface for the LumenFlow Soroban payment contract.
 
 ## Installation
 
+### From source
+
 ```bash
 cargo install --path cli/lumenflow-cli
+```
+
+### Pre-built binaries
+
+Pre-built binaries for Linux (x86_64, arm64), macOS (x86_64, arm64), and
+Windows (x86_64-pc-windows-msvc) are attached to every
+[GitHub Release](https://github.com/lumenflow/lumenflow/releases). This is the
+recommended path for Windows users, who otherwise need a full MSVC linker
+toolchain to build from source.
+
+Download the Windows archive and extract it with PowerShell:
+
+```powershell
+$version = "v0.1.0"  # replace with the release you want
+$url = "https://github.com/lumenflow/lumenflow/releases/download/$version/lumenflow-$version-x86_64-pc-windows-msvc.zip"
+Invoke-WebRequest -Uri $url -OutFile lumenflow.zip
+Expand-Archive -Path lumenflow.zip -DestinationPath "$env:LOCALAPPDATA\lumenflow" -Force
+```
+
+Then add the extracted directory to your `PATH` for the current session:
+
+```powershell
+$env:Path = "$env:LOCALAPPDATA\lumenflow;$env:Path"
+lumenflow --version
+```
+
+#### Verifying the download
+
+Each release publishes a `SHA256SUMS` file and the per-artifact hashes are
+also listed in [`docs/release-hashes.md`](../docs/release-hashes.md). Verify
+the archive before running it:
+
+```powershell
+$expected = "<sha256-from-release-hashes.md>"
+$actual = (Get-FileHash -Algorithm SHA256 -Path lumenflow.zip).Hash.ToLower()
+if ($actual -ne $expected.ToLower()) { throw "Checksum mismatch: $actual" }
+```
+
+On Linux and macOS the equivalent check is:
+
+```bash
+sha256sum -c SHA256SUMS --ignore-missing
 ```
 
 ## Configuration
@@ -241,11 +285,112 @@ The output includes: `refund_id`, `status`, `amount`, `reason`, `initiator`.
 
 ---
 
+### `payment status` — Check a payment's status
+
+```bash
+lumenflow payment status --order-id ORDER_001
+```
+
+Add `--watch` to poll the payment status every 3 seconds until it reaches a
+terminal state. Each update prints the current status and a timestamp.
+
+```bash
+lumenflow payment status --order-id ORDER_001 --watch --timeout 120
+```
+
+| Flag          | Required | Description                                                       |
+|---------------|----------|-------------------------------------------------------------------|
+| `--order-id`  | Yes      | Order ID of the payment to check                                  |
+| `--watch`     | No       | Poll every 3 seconds until a terminal state is reached            |
+| `--timeout`   | No       | Max seconds to wait in watch mode (default: 60)                   |
+
+**Exit codes (watch mode):**
+
+| Code | Meaning                                                       |
+|------|---------------------------------------------------------------|
+| `0`  | Payment reached `Completed`                                   |
+| `1`  | Payment reached `Failed`                                      |
+| `2`  | Timeout elapsed before a terminal state was reached           |
+
+---
+
 ### `history` — View payment history
+=======
 
 ```bash
 lumenflow history --merchant GBUYUAI75XXWDZEKLY66CFYKQPET5JR4EAPL7STQKQCRLKJ74SC65VU
 ```
+
+---
+
+### `merchant register` — Register a merchant
+
+#### Interactive mode (guided)
+
+Pass `--interactive` to be prompted for each field one at a time, with
+real-time validation and a confirmation step before submission:
+
+```
+$ lumenflow merchant register --interactive
+
+🌟  LumenFlow Merchant Registration — network: testnet
+(Press Ctrl-C at any time to cancel)
+
+? Merchant address (G…)  GBUYUAI75XXWDZEKLY66CFYKQPET5JR4EAPL7STQKQCRLKJ74SC65VU
+? Merchant name  Acme Coffee
+? Category  food-and-beverage
+? Website (optional, press Enter to skip)  https://acme.example
+
+┌──────────────────────────────────────────────────────────┐
+│                  Merchant Summary                        │
+├──────────────────────────────────────────────────────────┤
+│  Address:  GBUYUAI75XXWDZEKLY66CFYKQPET5JR4EAPL7...    │
+│  Name:     Acme Coffee                                   │
+│  Category: food-and-beverage                             │
+│  Website:  https://acme.example                          │
+│  Network:  testnet                                       │
+└──────────────────────────────────────────────────────────┘
+
+? Submit this registration? (y/N)
+```
+
+**To exit interactive mode:** press `Ctrl-C` at any prompt, or answer `N`
+at the confirmation step (nothing is submitted).
+
+**Validation rules applied in real time** — an invalid entry prints an
+error and re-prompts for the same field:
+
+```
+? Merchant address (G…)  not-an-address
+✗ Invalid merchant address: must be a 56-character Stellar address starting with G
+? Merchant address (G…)  GBUYUAI75XXWDZEKLY66CFYKQPET5JR4EAPL7STQKQCRLKJ74SC65VU
+```
+
+- Merchant address: 56-character Stellar address starting with `G`
+- Merchant name: non-empty
+- Category: non-empty
+- Website: optional; if provided, must be a valid URL
+
+#### Non-interactive (flag-based) mode
+
+Flag-based registration is **unchanged and fully backwards-compatible** —
+existing scripts are unaffected.
+
+```bash
+lumenflow merchant register \
+  --merchant GBUYUAI75XXWDZEKLY66CFYKQPET5JR4EAPL7STQKQCRLKJ74SC65VU \
+  --name "Acme Coffee" \
+  --category food-and-beverage \
+  --website https://acme.example
+```
+
+| Flag          | Short | Required | Description                          |
+|---------------|-------|----------|--------------------------------------|
+| `--merchant`  | `-m`  | Yes      | Merchant Stellar address (G…)        |
+| `--name`      | `-n`  | Yes      | Merchant display name                |
+| `--category`  | `-c`  | Yes      | Merchant category                    |
+| `--website`   |       | No       | Merchant website URL                 |
+| `--interactive` |     | No       | Prompt for each field interactively  |
 
 ---
 

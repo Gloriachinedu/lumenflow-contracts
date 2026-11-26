@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Fraud Analytics — LumenFlow</title>
   <link rel="stylesheet" href="styles.css" />
+  <!--
+    SRI note: all external (CDN) scripts and stylesheets must include
+    integrity="sha384-..." and crossorigin="anonymous" attributes.
+    Regenerate hashes on dependency upgrade (see docs/sri-update.md).
+  -->
 </head>
 <body>
   <a href="#main-content" class="skip-link">Skip to main content</a>
@@ -23,10 +28,10 @@
         </span>
         <span id="last-refresh" class="last-refresh" aria-live="polite"></span>
         <button id="settings-btn" class="btn btn-sm btn-outline" aria-label="Open alert threshold settings" aria-expanded="false" aria-controls="settings-panel">
-          ⚙ Settings
+          <span aria-hidden="true">⚙</span> Settings
         </button>
         <button id="refresh-btn" class="btn btn-sm" aria-label="Refresh dashboard data">
-          ↻ Refresh
+          <span aria-hidden="true">↻</span> Refresh
         </button>
       </div>
     </div>
@@ -44,7 +49,7 @@
     <div class="settings-panel-inner">
       <div class="settings-header">
         <h2 id="settings-panel-title" class="settings-title">Alert Threshold Settings</h2>
-        <button id="settings-close" class="btn btn-sm btn-ghost" aria-label="Close settings panel">✕</button>
+        <button id="settings-close" class="btn btn-sm btn-ghost" aria-label="Close settings panel"><span aria-hidden="true">✕</span></button>
       </div>
 
       <form id="settings-form" class="settings-form" novalidate>
@@ -124,7 +129,8 @@
         </div>
         <div class="panel-body">
           <div id="events-loading" class="loading-msg" role="status" aria-live="polite">Loading…</div>
-          <table id="events-table" class="data-table" aria-label="Suspicious activity events" hidden>
+          <table id="events-table" class="data-table" hidden>
+            <caption class="visually-hidden">Recent suspicious activity events</caption>
             <thead>
               <tr>
                 <th scope="col">Time</th>
@@ -146,7 +152,8 @@
         </div>
         <div class="panel-body">
           <div id="refund-loading" class="loading-msg" role="status" aria-live="polite">Loading…</div>
-          <table id="refund-table" class="data-table" aria-label="Top merchants by refund rate" hidden>
+          <table id="refund-table" class="data-table" hidden>
+            <caption class="visually-hidden">Top merchants by refund rate</caption>
             <thead>
               <tr>
                 <th scope="col">Merchant</th>
@@ -169,7 +176,8 @@
         </div>
         <div class="panel-body">
           <div id="large-loading" class="loading-msg" role="status" aria-live="polite">Loading…</div>
-          <table id="large-table" class="data-table" aria-label="Large payments in last 24 hours" hidden>
+          <table id="large-table" class="data-table" hidden>
+            <caption class="visually-hidden">Large payments in the last 24 hours</caption>
             <thead>
               <tr>
                 <th scope="col">Time</th>
@@ -193,7 +201,8 @@
         </div>
         <div class="panel-body">
           <div id="velocity-loading" class="loading-msg" role="status" aria-live="polite">Loading…</div>
-          <table id="velocity-table" class="data-table" aria-label="Velocity anomaly merchants" hidden>
+          <table id="velocity-table" class="data-table" hidden>
+            <caption class="visually-hidden">Velocity anomaly merchants</caption>
             <thead>
               <tr>
                 <th scope="col">Merchant</th>
@@ -211,5 +220,10 @@
   </main>
 
   <script src="app.js" type="module"></script>
+  <!--
+    SRI note: any external <script src="https://..."> added here must include
+    integrity="sha384-..." and crossorigin="anonymous". Local scripts (app.js)
+    are same-origin and do not require SRI.
+  -->
 </body>
 </html>

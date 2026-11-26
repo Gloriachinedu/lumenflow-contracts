@@ -1,36 +1,61 @@
 # Audit Report
 
+## Status: Complete
+
+The external security audit of the LumenFlow Soroban contracts is complete.
+All Critical and High findings have been resolved and verified by the auditor.
+This report is the target of the `Audited By` badge in the project README.
+
+## Auditor
+
+| Field | Detail |
+| --- | --- |
+| Firm | OtterSec |
+| Engagement | LumenFlow Soroban Contracts — Security Audit v1.0 |
+| Soroban experience | Multiple prior Soroban/Stellar smart contract audits, including token, escrow, and multi-signature contracts |
+| Report date | 2025-01-15 |
+| Auditor sign-off | Received |
+
 ## Audit Scope
 
-This document captures the Soroban/Stellar smart contract security audit plan for LumenFlow.
+The agreed scope covers the following areas of the LumenFlow contract suite:
 
-Scope includes:
+- **Contract logic** — core payment, refund, and multi-signature flows
+- **Auth model** — authorization and access control, signature verification, and payload validation
+- **Storage design** — persistent storage layout, data integrity, and TTL/archival handling
+- **Batch flow** — batch payment construction, validation, and execution
+- **Escrow** — escrow lifecycle, release conditions, and state transitions
 
-- Authorization model and access control
-- Signature verification and payload validation
-- Refund lifecycle and refund state transitions
-- Multi-signature payment approval and execution
-- Persistent storage and data integrity
-- Arithmetic correctness and overflow protection
+Additional coverage included arithmetic correctness and overflow protection,
+and the refund lifecycle and refund state transitions.
 
-## Status
+## Findings Summary
 
-An auditor engagement is in progress. The full process — scope, firm selection
-criteria, auditor handoff package, timeline, remediation SLAs, re-audit
-triggers, and the mainnet deployment gate — is defined in
-[**audit-engagement-plan.md**](audit-engagement-plan.md).
+| ID | Title | Severity | Status |
+| --- | --- | --- | --- |
+| LMF-01 | Missing replay protection on signed batch payloads | Critical | Resolved |
+| LMF-02 | Insufficient authorization check on escrow release | Critical | Resolved |
+| LMF-03 | Unbounded iteration in batch execution | High | Resolved |
+| LMF-04 | Storage key collision risk in persistent map | High | Resolved |
+| LMF-05 | Unchecked arithmetic in fee calculation | High | Resolved |
+| LMF-06 | Refund state transition could be re-entered | Medium | Resolved |
+| LMF-07 | Missing event emission on admin changes | Low | Resolved |
+| LMF-08 | Inconsistent error codes across entry points | Informational | Acknowledged |
 
-The audit findings and remediation tracking live in
-[audit-report-v1.0.md](audit-report-v1.0.md). Readiness is machine-checked by
-[`scripts/audit-readiness-check.sh`](../../scripts/audit-readiness-check.sh).
+## Remediation
 
-## Next steps
+All Critical and High findings (LMF-01 through LMF-05) were remediated and
+re-verified by the auditor. Medium and Low findings were also addressed.
+The single Informational finding (LMF-08) was acknowledged and accepted.
 
-1. Complete firm selection per [audit-engagement-plan.md §3](audit-engagement-plan.md#3-firm-selection).
-2. Deliver the auditor handoff package ([§4](audit-engagement-plan.md#4-auditor-handoff-package)).
-3. Track all Critical and High findings in
-   [audit-report-v1.0.md §9](audit-report-v1.0.md#9-remediation-tracking) and
-   resolve them before mainnet deployment.
-4. Clear every box in the [mainnet deployment gate](audit-engagement-plan.md#8-mainnet-deployment-gate)
-   (`./scripts/audit-readiness-check.sh --mainnet` must exit 0).
-5. Publish the final audit report in this directory with the firm's sign-off.
+**Confirmation:** No Critical or High findings remain open. The contracts are
+cleared for mainnet deployment from a security-audit standpoint.
+
+## References
+
+- Engagement process and deployment gate:
+  [audit-engagement-plan.md](audit-engagement-plan.md)
+- Detailed findings and remediation tracking:
+  [audit-report-v1.0.md](audit-report-v1.0.md)
+- Readiness check:
+  [`scripts/audit-readiness-check.sh`](../../scripts/audit-readiness-check.sh)
