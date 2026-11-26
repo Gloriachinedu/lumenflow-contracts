@@ -255,6 +255,64 @@ section('Toggle saves preference to localStorage');
   assertEqual(env.attrs['data-theme'],              'light', 'second click: applies light theme');
 }
 
+// ── Tests: persistence across simulated reloads ──────────────────────────────
+
+section('Persistence across reloads (shared localStorage)');
+
+{
+  // First page load: stored dark preference is applied
+  const first = buildModule({ storedTheme: 'dark' });
+  first.initDarkMode();
+  assertEqual(first.env.attrs['data-theme'], 'dark', 'first load: applies stored "dark"');
+
+  // Simulate reload: new module instance sharing the same localStorage store
+  const reloaded = buildModule({ storedTheme: first.env.localStorage._store['lf-theme'] });
+  reloaded.initDarkMode();
+  assertEqual(reloaded.env.attrs['data-theme'], 'dark', 'after reload: still applies "dark"');
+  assertEqual(reloaded.env.localStorage._store['lf-theme'], 'dark', 'after reload: "lf-theme" still "dark"');
+}
+
+{
+  // Toggle on first load, then reload restores the toggled theme
+  const first = buildModule({ storedTheme: 'light' });
+  first.initDarkMode();
+  first.env.buttons['lf-dark-toggle'].click();
+  assertEqual(first.env.localStorage._store['lf-theme'], 'dark', 'toggle writes "dark" to "lf-theme"');
+
+  const reloaded = buildModule({ storedTheme: first.env.localStorage._store['lf-theme'] });
+  reloaded.initDarkMode();
+  assertEqual(reloaded.env.attrs['data-theme'], 'dark', 'after reload: toggled "dark" restored');
+}
+
+// ── Tests: default to system preference without writing storage ──────────────
+
+section('Default to system preference (no storage write)');
+
+{
+  // Empty localStorage, system prefers dark → defaults to dark
+  const { initDarkMode, env } = buildModule({ storedTheme: null, systemDark: true });
+  initDarkMode();
+  assertEqual(env.attrs['data-theme'], 'dark', 'defaults to dark from system preference');
+  assert(!('lf-theme' in env.localStorage._store), 'no "lf-theme" key written before toggle');
+}
+
+{
+  // Empty localStorage, system prefers light → defaults to light
+  const { initDarkMode, env } = buildModule({ storedTheme: null, systemDark: false });
+  initDarkMode();
+  assertEqual(env.attrs['data-theme'], 'light', 'defaults to light from system preference');
+  assert(!('lf-theme' in env.localStorage._store), 'no "lf-theme" key written before toggle');
+}
+
+{
+  // After defaulting to system dark, toggling persists the new theme
+  const { initDarkMode, env } = buildModule({ storedTheme: null, systemDark: true });
+  initDarkMode();
+  env.buttons['lf-dark-toggle'].click();
+  assertEqual(env.localStorage._store['lf-theme'], 'light', 'toggle after system default persists "light"');
+  assertEqual(env.attrs['data-theme'], 'light', 'toggle after system default applies "light"');
+}
+
 // ── Tests: clearing preference reverts to system default ─────────────────────
 
 section('Cleared preference reverts to system default on next init');
@@ -270,6 +328,20 @@ section('Cleared preference reverts to system default on next init');
   const { initDarkMode, env } = buildModule({ storedTheme: null, systemDark: true });
   initDarkMode();
   assertEqual(env.attrs['data-theme'], 'dark', 'after clearing storage, system-dark is applied');
+}
+
+{
+  // Simulate: user saved dark, then cleared it, and page reloads with system light
+  const first = buildModule({ storedTheme: 'dark' });
+  first.initDarkMode();
+  assertEqual(first.env.attrs['data-theme'], 'dark', 'before clearing: stored "dark" applied');
+
+  first.env.localStorage.removeItem('lf-theme');
+  assertEqual(first.env.localStorage._store['lf-theme'], undefined, 'removeItem clears "lf-theme"');
+
+  const reloaded = buildModule({ storedTheme: first.env.localStorage._store['lf-theme'] ?? null, systemDark: false });
+  reloaded.initDarkMode();
+  assertEqual(reloaded.env.attrs['data-theme'], 'light', 'after clearing + reload: system-light applied');
 }
 
 // ── Tests: toggle button aria attributes ─────────────────────────────────────

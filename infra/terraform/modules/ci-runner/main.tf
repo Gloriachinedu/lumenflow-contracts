@@ -162,6 +162,95 @@ resource "aws_iam_instance_profile" "runner" {
   role = aws_iam_role.runner.name
 }
 
+###############################################################################
+# Kubernetes workload: CI runner deployment + HPA
+#
+# The runner is deployed as a Kubernetes workload so that CPU/memory requests
+# and limits and autoscaling rules are enforced (see
+# docs/resource-limits-autoscaling.md). The EC2 instance below remains as the
+# bootstrap/registration host for the runner pool.
+###############################################################################
+
+resource "kubernetes_deployment" "runner" {
+  metadata {
+    name      = "lumenflow-ci-runner-${var.environment}"
+    namespace = var.kubernetes_namespace
+    labels = {
+      app         = "lumenflow-ci-runner"
+      environment = var.environment
+    }
+  }
+
+  spec {
+    replicas = 2
+
+    selector {
+      match_labels = {
+        app         = "lumenflow-ci-runner"
+        environment = var.environment
+      }
+    }
+
+    template {
+      metadata {
+        labels = {
+          app         = "lumenflow-ci-runner"
+          environment = var.environment
+        }
+      }
+
+      spec {
+        container {
+          name  = "runner"
+          image = var.runner_image
+
+          resources {
+            requests = {
+              cpu    = var.runner_cpu_request
+              memory = var.runner_memory_request
+            }
+            limits = {
+              cpu    = var.runner_cpu_limit
+              memory = var.runner_memory_limit
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+resource "kubernetes_horizontal_pod_autoscaler_v2" "runner" {
+  metadata {
+    name      = "lumenflow-ci-runner-${var.environment}"
+    namespace = var.kubernetes_namespace
+  }
+
+  spec {
+    min_replicas = 2
+    max_replicas = 10
+
+    scale_target_ref {
+      api_version = "apps/v1"
+      kind        = "Deployment"
+      name        = kubernetes_deployment.runner.metadata[0].name
+    }
+
+    metric {
+      type = "Resource"
+
+      resource {
+        name = "cpu"
+
+        target {
+          type                = "Utilization"
+          average_utilization = 70
+        }
+      }
+    }
+  }
+}
+
 resource "aws_instance" "runner" {
   ami                    = data.aws_ami.ubuntu.id
   instance_type          = var.instance_type

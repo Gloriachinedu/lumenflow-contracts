@@ -147,6 +147,7 @@ import {
 } from "./types";
 import { LumenFlowError, PaymentErrorCode } from "./errors";
 import { withIdempotency, IdempotentResult } from "./idempotency";
+import { withRetry, RetryConfig, DEFAULT_RETRY_CONFIG } from "./retry";
 
 /**
  * A function that signs a Stellar transaction.
@@ -169,6 +170,110 @@ export type Signer = (tx: Transaction) => Promise<Transaction> | Transaction;
  * Version compatibility is defined as matching major versions (semver).
  */
 export const SDK_CONTRACT_MAJOR_VERSION = 0;
+
+/**
+ * The minor version of the contract API this SDK is built against.
+ * Version compatibility is defined as matching minor versions (semver).
+ */
+export const SDK_CONTRACT_MINOR_VERSION = 2;
+
+/**
+ * Parses a semantic version string (e.g. `"0.2.0"`) into its numeric parts.
+ *
+ * @param version - The version string to parse.
+ * @returns The parsed `{ major, minor, patch }` numbers, or `null` when the
+ *   string is not a valid semantic version.
+ */
+export function parseSemver(
+  version: string
+): { major: number; minor: number; patch: number } | null {
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version.trim());
+  if (!match) {
+    return null;
+  }
+  return {
+    major: parseInt(match[1], 10),
+    minor: parseInt(match[2], 10),
+    patch: parseInt(match[3], 10),
+  };
+}
+
+/**
+ * Result of a contract/SDK version compatibility check.
+ */
+export interface VersionCheckResult {
+  /** Whether the deployed contract version is compatible with this SDK. */
+  compatible: boolean;
+  /** The raw version string reported by the contract. */
+  contractVersion: string;
+  /** The SDK version string. */
+  sdkVersion: string;
+  /** Human-readable description of the incompatibility, when applicable. */
+  message?: string;
+}
+
+/**
+ * Compares the deployed contract version against the SDK version.
+ *
+ * Compatibility requires the major **and** minor versions to match.
+ *
+ * @param contractVersion - The version string reported by the contract.
+ * @param sdkVersion - The SDK version string (defaults to {@link VERSION}).
+ * @returns A {@link VersionCheckResult} describing the outcome.
+ */
+export function checkVersionCompatibility(
+  contractVersion: string,
+  sdkVersion: string = VERSION
+): VersionCheckResult {
+  const contract = parseSemver(contractVersion);
+  const sdk = parseSemver(sdkVersion);
+
+  if (!contract) {
+    return {
+      compatible: false,
+      contractVersion,
+      sdkVersion,
+      message:
+        `[LumenFlowSDK] Contract returned an unparseable version string: ` +
+        `"${contractVersion}".`,
+    };
+  }
+
+  if (!sdk) {
+    return {
+      compatible: false,
+      contractVersion,
+      sdkVersion,
+      message: `[LumenFlowSDK] SDK version string is unparseable: "${sdkVersion}".`,
+    };
+  }
+
+  if (contract.major !== sdk.major) {
+    return {
+      compatible: false,
+      contractVersion,
+      sdkVersion,
+      message:
+        `[LumenFlowSDK] Contract version mismatch: SDK expects major version ` +
+        `${sdk.major} but contract reports "${contractVersion}" ` +
+        `(major ${contract.major}). Silent serialisation failures may occur.`,
+    };
+  }
+
+  if (contract.minor !== sdk.minor) {
+    return {
+      compatible: false,
+      contractVersion,
+      sdkVersion,
+      message:
+        `[LumenFlowSDK] Contract version mismatch: SDK expects minor version ` +
+        `${sdk.major}.${sdk.minor} but contract reports "${contractVersion}" ` +
+        `(minor ${contract.major}.${contract.minor}). Silent serialisation failures may occur.`,
+    };
+  }
+
+  return { compatible: true, contractVersion, sdkVersion };
+}
 
 export interface ClientConfig {
   /** The Soroban contract ID (e.g. `"CAAAA..."`). */
@@ -199,11 +304,19 @@ export interface ClientConfig {
    */
   skipVersionCheck?: boolean;
   /**
-   * Throw an error instead of logging a warning when the contract major version
-   * does not match the SDK's expected major version.
+   * Throw an error instead of logging a warning when the contract version
+   * does not match the SDK's expected version.
    * Defaults to `false`.
    */
   strictVersionCheck?: boolean;
+  /**
+   * Optional overrides for the automatic RPC retry behaviour.
+   *
+   * Defaults: 3 attempts, 500 ms base delay, exponential backoff, ±100 ms jitter.
+   * Non-retryable errors (auth failures, validation errors, contract errors)
+   * bypass retry immediately.
+   */
+  retryConfig?: Partial<RetryConfig>;
 }
 
 /**
@@ -236,6 +349,7 @@ export class LumenFlowClient {
   private walletAddress?: string;
   private skipVersionCheck: boolean;
   private strictVersionCheck: boolean;
+  private retryConfig: RetryConfig;
 
   /**
    * Creates a new {@link LumenFlowClient}.
@@ -259,20 +373,36 @@ export class LumenFlowClient {
     this.walletAddress = config.walletAddress;
     this.skipVersionCheck = config.skipVersionCheck ?? false;
     this.strictVersionCheck = config.strictVersionCheck ?? false;
+    this.retryConfig = { ...DEFAULT_RETRY_CONFIG, ...config.retryConfig };
+  }
+
+  /**
+   * Returns a copy of the retry configuration currently used for RPC calls.
+   */
+  getRetryConfig(): RetryConfig {
+    return { ...this.retryConfig };
   }
 
   /**
    * Check that the deployed contract version is compatible with this SDK.
    *
-   * Compatibility is defined as having the same major version (semver).
-   * Call this once after construction — it is invoked automatically by
-   * {@link init}.
+   * Compatibility is defined as having the same major **and** minor version
+   * (semver). Call this once after construction — it is invoked automatically
+   * by {@link init}.
    *
-   * @throws {Error} when `strictVersionCheck` is `true` and the major versions differ.
+   * @returns A Promise resolving to the {@link VersionCheckResult}.
+   * @throws {Error} when `strictVersionCheck` (or `strict`) is `true` and the
+   *   versions are incompatible.
    */
-  async checkContractVersion(): Promise<void> {
+  async checkContractVersion(): Promise<VersionCheckResult> {
+    const skipped: VersionCheckResult = {
+      compatible: true,
+      contractVersion: "unknown",
+      sdkVersion: VERSION,
+    };
+
     if (this.skipVersionCheck) {
-      return;
+      return skipped;
     }
 
     let rawVersion: string;
@@ -285,30 +415,21 @@ export class LumenFlowClient {
         "[LumenFlowSDK] Unable to fetch contract version for compatibility check:",
         err
       );
-      return;
+      return skipped;
     }
 
-    const contractMajor = parseInt(rawVersion.split(".")[0] ?? "0", 10);
-    if (isNaN(contractMajor)) {
-      console.warn(
-        `[LumenFlowSDK] Contract returned an unparseable version string: "${rawVersion}". ` +
-          "Skipping version check."
-      );
-      return;
-    }
+    const result = checkVersionCompatibility(rawVersion, VERSION);
 
-    if (contractMajor !== SDK_CONTRACT_MAJOR_VERSION) {
-      const message =
-        `[LumenFlowSDK] Contract version mismatch: SDK expects major version ` +
-        `${SDK_CONTRACT_MAJOR_VERSION} but contract reports "${rawVersion}" ` +
-        `(major ${contractMajor}). Silent serialisation failures may occur.`;
-
+    if (!result.compatible) {
+      const message = result.message ?? "[LumenFlowSDK] Version mismatch.";
       if (this.strictVersionCheck) {
         throw new Error(message);
       } else {
         console.warn(message);
       }
     }
+
+    return result;
   }
 
   /**
@@ -1432,92 +1553,96 @@ export class LumenFlowClient {
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   private async call(method: string, args: any[] = []): Promise<any> {
-    const tx = new TransactionBuilder(
-      new SorobanRpc.Account("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", "0"),
-      {
-        fee: "100",
-        networkPassphrase: this.networkPassphrase,
+    return withRetry(async () => {
+      const tx = new TransactionBuilder(
+        new SorobanRpc.Account("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", "0"),
+        {
+          fee: "100",
+          networkPassphrase: this.networkPassphrase,
+        }
+      )
+        .addOperation(this.contract.call(method, ...args.map(a => nativeToScVal(a))))
+        .setTimeout(TimeoutInfinite)
+        .build();
+
+      const simulation = await this.server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(simulation)) {
+        throw this.wrapError(simulation);
       }
-    )
-      .addOperation(this.contract.call(method, ...args.map(a => nativeToScVal(a))))
-      .setTimeout(TimeoutInfinite)
-      .build();
 
-    const simulation = await this.server.simulateTransaction(tx);
-    if (SorobanRpc.Api.isSimulationError(simulation)) {
-      throw this.wrapError(simulation);
-    }
-
-    if (simulation.result) {
-      return scValToNative(simulation.result.retval);
-    }
-    return null;
+      if (simulation.result) {
+        return scValToNative(simulation.result.retval);
+      }
+      return null;
+    }, this.retryConfig);
   }
 
   private async invoke(method: string, args: any[] = []): Promise<any> {
+    return this.withLogging(`invoke:${method}`, () => this.executeInvoke(method, args));
+  }
+
+  private async executeInvoke(method: string, args: any[] = []): Promise<any> {
     if (!this.signer) {
       throw new Error("A signer is required for state-changing operations.");
     }
 
-    const sourceAccount = await this.server.getAccount("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"); // Dummy for simulation if needed, but we need real one for execution
-    // Actually, we should probably get the account from the signer or pass it in.
-    // For now, let's assume we can use a dummy for simulation to get the footprint.
+    return withRetry(async () => {
+      const dummyAccount = new SorobanRpc.Account("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", "0");
+      let tx = new TransactionBuilder(dummyAccount, {
+        fee: "100",
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(this.contract.call(method, ...args.map(a => nativeToScVal(a))))
+        .setTimeout(TimeoutInfinite)
+        .build();
 
-    const dummyAccount = new SorobanRpc.Account("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", "0");
-    let tx = new TransactionBuilder(dummyAccount, {
-      fee: "100",
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(this.contract.call(method, ...args.map(a => nativeToScVal(a))))
-      .setTimeout(TimeoutInfinite)
-      .build();
-
-    const simulation = await this.server.simulateTransaction(tx);
-    if (SorobanRpc.Api.isSimulationError(simulation)) {
-      throw this.wrapError(simulation);
-    }
-
-    // Prepare for real execution
-    // We need the actual source account to build the real transaction
-    // Let's assume the first arg is often the "caller/admin/payer/merchant" address if it's an Address.
-    let realSourceAddress = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
-    if (args.length > 0 && args[0] instanceof Address) {
-      // This is a heuristic, but often the first param is the one requiring auth
-      // In Soroban, any account can pay for fees, but the contract usually checks require_auth() on params.
-    }
-
-    // For simplicity in this SDK, we might need a way to specify the fee payer.
-    // Let's just use the simulation's results and let the signer handle the final steps if it's a wallet.
-    // But standard way is to assemble it here.
-
-    tx = SorobanRpc.assembleTransaction(tx, simulation).build();
-    const signedTx = await this.signer(tx);
-    const response = await this.server.sendTransaction(signedTx);
-
-    if (response.status === "ERROR") {
-      throw new Error(`Transaction failed: ${JSON.stringify(response)}`);
-    }
-
-    // Poll for status
-    let statusResponse = await this.server.getTransaction(response.hash);
-    while (statusResponse.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND || 
-           statusResponse.status === SorobanRpc.Api.GetTransactionStatus.PROCESSING) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      statusResponse = await this.server.getTransaction(response.hash);
-    }
-
-    if (statusResponse.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-      if (statusResponse.resultMetaXdr) {
-        // Parse result from meta if needed
-        const result = statusResponse.returnValue;
-        if (result) {
-          return scValToNative(result);
-        }
+      const simulation = await this.server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(simulation)) {
+        throw this.wrapError(simulation);
       }
-      return null;
-    } else {
-      throw new Error(`Transaction failed with status ${statusResponse.status}: ${JSON.stringify(statusResponse)}`);
-    }
+
+      // Prepare for real execution
+      // We need the actual source account to build the real transaction
+      // Let's assume the first arg is often the "caller/admin/payer/merchant" address if it's an Address.
+      let realSourceAddress = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+      if (args.length > 0 && args[0] instanceof Address) {
+        // This is a heuristic, but often the first param is the one requiring auth
+        // In Soroban, any account can pay for fees, but the contract usually checks require_auth() on params.
+      }
+
+      // For simplicity in this SDK, we might need a way to specify the fee payer.
+      // Let's just use the simulation's results and let the signer handle the final steps if it's a wallet.
+      // But standard way is to assemble it here.
+
+      tx = SorobanRpc.assembleTransaction(tx, simulation).build();
+      const signedTx = await this.signer!(tx);
+      const response = await this.server.sendTransaction(signedTx);
+
+      if (response.status === "ERROR") {
+        throw new Error(`Transaction failed: ${JSON.stringify(response)}`);
+      }
+
+      // Poll for status
+      let statusResponse = await this.server.getTransaction(response.hash);
+      while (statusResponse.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND ||
+             statusResponse.status === SorobanRpc.Api.GetTransactionStatus.PROCESSING) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        statusResponse = await this.server.getTransaction(response.hash);
+      }
+
+      if (statusResponse.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+        if (statusResponse.resultMetaXdr) {
+          // Parse result from meta if needed
+          const result = statusResponse.returnValue;
+          if (result) {
+            return scValToNative(result);
+          }
+        }
+        return null;
+      } else {
+        throw new Error(`Transaction failed with status ${statusResponse.status}: ${JSON.stringify(statusResponse)}`);
+      }
+    }, this.retryConfig);
   }
 
   private wrapError(simulation: SorobanRpc.Api.SimulateTransactionErrorResponse): Error {

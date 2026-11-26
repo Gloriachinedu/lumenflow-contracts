@@ -9,12 +9,33 @@
     (function() {
       try {
         var stored = localStorage.getItem('lf-theme');
-        var theme = stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        var theme = (stored === 'dark' || stored === 'light')
+          ? stored
+          : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
         document.documentElement.setAttribute('data-theme', theme);
-      } catch (e) {}
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'light');
+      }
     })();
   </script>
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://horizon.stellar.org; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none';" />
+  <!--
+    Subresource Integrity (SRI) policy
+    ----------------------------------
+    Every external <script> and <link rel="stylesheet"> MUST carry both an
+    `integrity` (sha384) attribute and `crossorigin="anonymous"` so a
+    compromised CDN cannot inject malicious JavaScript into the payment UI.
+
+    Regenerating hashes on a CDN dependency upgrade:
+      1. Pin the exact version in the URL (never use @latest / floating tags).
+      2. Download the asset, e.g.:
+           curl -sSL https://cdn.jsdelivr.net/npm/<pkg>@<version>/<file> -o asset.js
+      3. Compute the hash and prefix it with the algorithm:
+           openssl dgst -sha384 -binary asset.js | openssl base64 -A
+         then use: integrity="sha384-<base64>"
+      4. Paste the new integrity value below and keep crossorigin="anonymous".
+      5. Run the CI integrity check (scripts/check-sri.js) to verify.
+  -->
   <title>Merchant Dashboard – LumenFlow</title>
   <meta name="description" content="LumenFlow merchant dashboard: view your payment stats, recent transactions, and manage refunds." />
   <style>

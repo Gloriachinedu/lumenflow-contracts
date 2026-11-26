@@ -129,3 +129,67 @@ describe('cancelPaymentRequest — caller mismatch', () => {
     expect(invokeSpy).not.toHaveBeenCalled();
   });
 });
+
+// ── Edge cases ────────────────────────────────────────────────────────────────
+
+describe('cancelPaymentRequest — edge cases', () => {
+  it('rejects with AlreadyCancelled when the request is already cancelled', async () => {
+    const { client, invokeSpy } = makeClient(MERCHANT);
+
+    // Contract reverts with AlreadyCancelled
+    invokeSpy.mockRejectedValueOnce(
+      new LumenFlowError(
+        PaymentErrorCode.AlreadyCancelled,
+        'payment request already cancelled'
+      )
+    );
+
+    await expect(
+      client.cancelPaymentRequest(MERCHANT, 'REQ_008')
+    ).rejects.toMatchObject({
+      code: PaymentErrorCode.AlreadyCancelled,
+    });
+
+    expect(invokeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects with PaymentAlreadyCompleted when the payment is completed', async () => {
+    const { client, invokeSpy } = makeClient(MERCHANT);
+
+    // Contract reverts with PaymentAlreadyCompleted
+    invokeSpy.mockRejectedValueOnce(
+      new LumenFlowError(
+        PaymentErrorCode.PaymentAlreadyCompleted,
+        'payment already completed'
+      )
+    );
+
+    await expect(
+      client.cancelPaymentRequest(MERCHANT, 'REQ_009')
+    ).rejects.toMatchObject({
+      code: PaymentErrorCode.PaymentAlreadyCompleted,
+    });
+
+    expect(invokeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects with SignatureExpired when the signature has expired', async () => {
+    const { client, invokeSpy } = makeClient(MERCHANT);
+
+    // Contract reverts with SignatureExpired
+    invokeSpy.mockRejectedValueOnce(
+      new LumenFlowError(
+        PaymentErrorCode.SignatureExpired,
+        'signature expired'
+      )
+    );
+
+    await expect(
+      client.cancelPaymentRequest(MERCHANT, 'REQ_010')
+    ).rejects.toMatchObject({
+      code: PaymentErrorCode.SignatureExpired,
+    });
+
+    expect(invokeSpy).toHaveBeenCalledTimes(1);
+  });
+});

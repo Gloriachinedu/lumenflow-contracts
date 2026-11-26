@@ -20,6 +20,80 @@ predictable cost and performance in shared infrastructure.
 
 ---
 
+## Kubernetes: Container Resource Requests and Limits
+
+All Kubernetes deployments defined in `infra/terraform/` must declare both CPU and
+memory **requests** and **limits**. Requests drive scheduling; limits cap burst usage
+and protect neighbouring workloads on the same node.
+
+| Workload | CPU request | CPU limit | Memory request | Memory limit |
+|---|---|---|---|---|
+| API (`lumenflow-api`) | `250m` | `1000m` | `256Mi` | `512Mi` |
+| Webhook relay (`lumenflow-webhook`) | `100m` | `500m` | `128Mi` | `256Mi` |
+| Monitoring exporter (`lumenflow-exporter`) | `50m` | `200m` | `64Mi` | `128Mi` |
+
+These values are enforced by the Terraform module in `infra/terraform/` (the
+`kubernetes_deployment` resources set `resources.requests` and `resources.limits`
+for every container). Any new deployment added to the module must follow the same
+pattern — a deployment without requests and limits is considered a configuration bug.
+
+> **Note:** The values above were reviewed against load test results (see the
+> load test workflow and `docs/monitoring.md`). CPU limits are set at roughly 4×
+> the observed steady-state usage to absorb traffic spikes without throttling,
+> while memory limits leave headroom above the observed peak RSS.
+
+---
+
+## Kubernetes: Horizontal Pod Autoscaler (HPA)
+
+Each API deployment is paired with a `kubernetes_horizontal_pod_autoscaler_v2`
+resource in `infra/terraform/` with the following policy:
+
+| Setting | Value |
+|---|---|
+| Minimum replicas | **2** |
+| Maximum replicas | **10** |
+| Scale-out trigger | Average CPU utilisation **> 70%** |
+| Scale-in behaviour | Default (stabilisation window applies) |
+
+```hcl
+resource "kubernetes_horizontal_pod_autoscaler_v2" "api" {
+  metadata {
+    name      = "lumenflow-api"
+    namespace = var.namespace
+  }
+
+  spec {
+    min_replicas = 2
+    max_replicas = 10
+
+    metric {
+      type = "Resource"
+      resource {
+        name = "cpu"
+        target {
+          type                = "Utilization"
+          average_utilization = 70
+        }
+      }
+    }
+
+    scale_target_ref {
+      api_version = "apps/v1"
+      kind        = "Deployment"
+      name        = "lumenflow-api"
+    }
+  }
+}
+```
+
+The minimum of 2 replicas guarantees availability during rolling updates and single-node
+failures; the maximum of 10 caps cost during unexpected traffic spikes. The 70% CPU
+target was validated against load test results and keeps pods below their CPU limits
+during normal scaling.
+
+---
+
 ## GitHub Actions: Job-level Resource Constraints
 
 ### Concurrency limits
@@ -291,6 +365,7 @@ covers application-level errors. The above resources cover the runner infrastruc
 
 - `infra/terraform/main.tf` — CI runner and CloudWatch alarm resources
 - `infra/terraform/variables.tf` — `ci_runner_instance_type`, `enable_self_hosted_runner`
+- `infra/terraform/` — Kubernetes deployment resources (requests/limits) and HPA definitions
 - `.github/workflows/deploy-testnet.yml` — Deploy + smoke test workflow
 - `docs/monitoring.md` — Application-level monitoring
 - `docs/budget-thresholds.md` — Cost alert thresholds

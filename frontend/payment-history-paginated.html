@@ -3,6 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- Theme bootstrap: apply stored/system theme before first paint to avoid FOUC (issue #1529) -->
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem('lf-theme');
+        var theme = stored === 'dark' || stored === 'light'
+          ? stored
+          : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', theme);
+      } catch (e) {
+        // Storage or matchMedia unavailable — fall back to light without breaking the page
+        document.documentElement.setAttribute('data-theme', 'light');
+      }
+    })();
+  </script>
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://horizon.stellar.org; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none';" />
   <title>Payment History (Paginated) – LumenFlow</title>
   <link rel="manifest" href="manifest.json" />
@@ -125,6 +140,34 @@
     }
     .page-size-wrap select:focus { border-color: #6c47ff; }
 
+    /* ── Filter bar ────────────────────────────────────────────────────── */
+    .filter-bar {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      padding: 0.75rem 0;
+      margin-bottom: 0.5rem;
+    }
+
+    .filter-control { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #555; }
+
+    .filter-select {
+      padding: 0.35rem 0.6rem;
+      border: 1.5px solid #dde1e7;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      outline: none;
+    }
+    .filter-select:focus { border-color: #6c47ff; }
+
+    .filter-select:focus-visible,
+    .filter-apply-btn:focus-visible,
+    .filter-clear-btn:focus-visible {
+      outline: 2px solid #6c47ff;
+      outline-offset: 2px;
+    }
+
     /* Loading overlay */
     .loading-msg {
       text-align: center;
@@ -209,6 +252,35 @@
     </select>
   </div>
 </div>
+
+<!-- Keyboard-accessible filter controls -->
+<div class="filter-bar" id="filter-bar" role="group" aria-label="Payment filters">
+  <div class="filter-control">
+    <label for="filter-status">Status:</label>
+    <select id="filter-status" class="filter-select" data-filter="status" aria-haspopup="listbox">
+      <option value="">All statuses</option>
+      <option value="Completed">Completed</option>
+      <option value="PartiallyRefunded">Partial Refund</option>
+      <option value="FullyRefunded">Fully Refunded</option>
+    </select>
+  </div>
+
+  <div class="filter-control">
+    <label for="filter-merchant">Merchant:</label>
+    <select id="filter-merchant" class="filter-select" data-filter="merchant" aria-haspopup="listbox">
+      <option value="">All merchants</option>
+      <option value="GDUT...XZ1A">GDUT...XZ1A</option>
+      <option value="GCMR...Y9KP">GCMR...Y9KP</option>
+    </select>
+  </div>
+
+  <button class="btn filter-apply-btn" id="filter-apply-btn" type="button" onclick="applyFilters()">
+    Apply filters
+  </button>
+  <button class="btn filter-clear-btn" id="filter-clear-btn" type="button" onclick="clearFilters()">
+    Clear
+  </button>
+</div>
 <div id="loading-indicator" class="loading-indicator" role="status" aria-live="polite" hidden>
   <span class="spinner" aria-hidden="true"></span>
   Loading more payments…
@@ -220,6 +292,7 @@
   window.LF = window.LF || {};
   window.LF.formatNumber = formatNumber;
 </script>
+<script src="filter-keyboard.js"></script>
 <script>
   // ── Format helper ──────────────────────────────────────────────────────────
   function fmtAmount(amount) {
@@ -413,6 +486,67 @@
     document.getElementById('table-body').innerHTML = '';
     loadNextPage();
   }
+
+  // ── Filters ────────────────────────────────────────────────────────────────
+  let activeFilters = { status: '', merchant: '' };
+
+  /**
+   * Reads the current filter dropdown values and applies them to the table.
+   * Called by the Apply button and by filter-keyboard.js on Enter/Space.
+   */
+  function applyFilters() {
+    const statusEl   = document.getElementById('filter-status');
+    const merchantEl = document.getElementById('filter-merchant');
+    activeFilters = {
+      status:   statusEl ? statusEl.value : '',
+      merchant: merchantEl ? merchantEl.value : '',
+    };
+    renderFilteredRows();
+  }
+
+  /**
+   * Clears all filters and restores the unfiltered table.
+   */
+  function clearFilters() {
+    const statusEl   = document.getElementById('filter-status');
+    const merchantEl = document.getElementById('filter-merchant');
+    if (statusEl)   statusEl.value = '';
+    if (merchantEl) merchantEl.value = '';
+    activeFilters = { status: '', merchant: '' };
+    renderFilteredRows();
+  }
+
+  /**
+   * Renders rows from ALL_PAYMENTS honouring the active filters.
+   */
+  function renderFilteredRows() {
+    const tbody = document.getElementById('table-body');
+    if (!tbody) return;
+
+    const filtered = ALL_PAYMENTS.filter(p => {
+      if (activeFilters.status && p.status !== activeFilters.status) return false;
+      if (activeFilters.merchant && p.merchant_address !== activeFilters.merchant) return false;
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No payments match the selected filters.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = filtered.map(p => `
+      <tr>
+        <td><span class="order-id">${p.order_id}</span></td>
+        <td>${p.merchant_address}</td>
+        <td class="amount">${fmtAmount(p.amount)}</td>
+        <td>${statusBadge(p.status)}</td>
+        <td>${p.paid_at}</td>
+      </tr>`).join('');
+  }
+
+  // Expose filter helpers for filter-keyboard.js
+  window.applyFilters = applyFilters;
+  window.clearFilters = clearFilters;
 
   // ── Browser back/forward button support ───────────────────────────────────
   window.addEventListener('popstate', () => {

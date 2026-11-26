@@ -43,6 +43,30 @@ pub const PAYMENT_TTL_LEDGERS: u32 = 12_614_400; // 2 years
 pub const REFUND_TTL_LEDGERS: u32 = 6_307_200; // 1 year
 pub const MULTISIG_TTL_LEDGERS: u32 = 6_307_200; // 1 year
 pub const SUBSCRIPTION_TTL_LEDGERS: u32 = 12_614_400; // 2 years
+/// TTL for dispute records — 1 year; disputes outlive the refund window.
+pub const DISPUTE_TTL_LEDGERS: u32 = 6_307_200; // 1 year
+/// TTL for payment-history index entries (merchant/payer payment ID lists).
+pub const PAYMENT_INDEX_TTL_LEDGERS: u32 = 12_614_400; // 2 years
+/// TTL for refund index entries (order → refund ID lists).
+pub const REFUND_INDEX_TTL_LEDGERS: u32 = 6_307_200; // 1 year
+/// TTL for replay-protection nonce entries — matches the payment window.
+pub const NONCE_TTL_LEDGERS: u32 = 12_614_400; // 2 years
+/// TTL for GDPR data-deletion request records.
+pub const DELETION_REQUEST_TTL_LEDGERS: u32 = 6_307_200; // 1 year
+/// TTL for escrow records — 1 year; escrows are expected to resolve well within this window.
+pub const ESCROW_TTL_LEDGERS: u32 = 6_307_200; // 1 year
+/// TTL for conditional escrow hold records — 1 year.
+pub const ESCROW_HOLD_TTL_LEDGERS: u32 = 6_307_200; // 1 year
+/// TTL for admin audit log entries — 2 years to support long-duration compliance needs.
+pub const ADMIN_AUDIT_TTL_LEDGERS: u32 = 12_614_400; // 2 years
+/// TTL for merchant registration commitments (≈ 100 × 5 s = 500 s ≈ 8 minutes).
+pub const COMMITMENT_TTL_LEDGERS: u32 = 100;
+/// TTL for rate-limit counters — kept alive for 2 windows so a counter is not
+/// silently dropped mid-window.
+pub const RATE_LIMIT_TTL_LEDGERS: u32 = 600;
+/// TTL for auth failure/lockout entries — kept for 2× the lockout duration.
+pub const AUTH_TTL_LEDGERS: u32 = 2_000;
+=======
 
 // ── Compile-time TTL bound assertions ─────────────────────────────────────────
 // Soroban Mainnet maximum persistent entry TTL (3,110,400 ledgers ≈ 6 months).
@@ -73,6 +97,50 @@ const _: () = {
     assert!(
         SUBSCRIPTION_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
         "SUBSCRIPTION_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
+    );
+    assert!(
+        DISPUTE_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
+        "DISPUTE_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
+    );
+    assert!(
+        PAYMENT_INDEX_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
+        "PAYMENT_INDEX_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
+    );
+    assert!(
+        REFUND_INDEX_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
+        "REFUND_INDEX_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
+    );
+    assert!(
+        NONCE_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
+        "NONCE_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
+    );
+    assert!(
+        DELETION_REQUEST_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
+        "DELETION_REQUEST_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
+    );
+    assert!(
+        ESCROW_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
+        "ESCROW_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
+    );
+    assert!(
+        ESCROW_HOLD_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
+        "ESCROW_HOLD_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
+    );
+    assert!(
+        ADMIN_AUDIT_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
+        "ADMIN_AUDIT_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
+    );
+    assert!(
+        COMMITMENT_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
+        "COMMITMENT_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
+    );
+    assert!(
+        RATE_LIMIT_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
+        "RATE_LIMIT_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
+    );
+    assert!(
+        AUTH_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
+        "AUTH_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
     );
 };
 
@@ -159,10 +227,14 @@ pub enum DataKey {
     AdminAuditMaxEntries,
     /// Configurable maximum signers per multisig payment (issue #1269). Short code `MSL`.
     MSL,
-    /// Merchant tier configuration (thresholds + fee reductions). Short code `MTC`.
-    MTC,
-    /// Rolling 30-day payment volume record for a merchant. Short code `MTV`.
-    MTV(Address),
+    /// Treasury address for governance-controlled emergency withdrawals.
+    TreasuryAddress,
+    /// Emergency lock period in seconds (default 90 days). Escrows older than this
+    /// are eligible for emergency withdrawal.
+    EmergencyLockPeriod,
+    /// Approval set for a pending emergency withdrawal, keyed by escrow order_id.
+    /// Stores the Vec<Address> of admins that have approved.
+    EWA(String),
 }
 
 /// The schema version this binary was compiled against.
@@ -319,12 +391,46 @@ pub fn set_merchant_stats(env: &Env, merchant: &Address, stats: &MerchantStats) 
         .set(&DataKey::MS(merchant.clone()), stats);
 }
 
+// NOTE: `MS` (merchant stats) and `GlobalStats` live in *instance* storage, whose
+// TTL is extended once per invocation by the contract entrypoints via
+// `extend_instance_ttl`. They are not persistent entries and therefore do not
+// require per-key `extend_ttl` calls here.
+
 // ── Merchant ──────────────────────────────────────────────────────────────────
 
 pub fn get_merchant(env: &Env, address: &Address) -> Option<Merchant> {
     env.storage()
         .persistent()
         .get(&DataKey::Merchant(address.clone()))
+}
+
+/// Return the merchant-specific refund window in seconds, if the merchant has
+/// configured one.  `None` means the caller should fall back to the global
+/// default via [`get_refund_window`].
+pub fn get_merchant_refund_window(env: &Env, address: &Address) -> Option<u64> {
+    get_merchant(env, address).and_then(|m| m.refund_window_secs)
+}
+
+/// Persist a merchant-specific refund window on the merchant profile.
+///
+/// Returns `PaymentError::MerchantNotFound` if the merchant is not registered.
+/// The caller is responsible for authorization (merchant only) and for
+/// validating the window against [`MIN_REFUND_WINDOW_SECS`].
+pub fn set_merchant_refund_window(
+    env: &Env,
+    address: &Address,
+    window_secs: u64,
+) -> Result<(), PaymentError> {
+    let mut merchant = get_merchant(env, address).ok_or(PaymentError::MerchantNotFound)?;
+    merchant.refund_window_secs = Some(window_secs);
+    set_merchant(env, &merchant);
+    Ok(())
+}
+
+/// Resolve the effective refund window for `merchant`: the merchant-specific
+/// value when set, otherwise the global default.
+pub fn get_effective_refund_window(env: &Env, merchant: &Address) -> u64 {
+    get_merchant_refund_window(env, merchant).unwrap_or_else(|| get_refund_window(env))
 }
 
 pub fn set_merchant(env: &Env, merchant: &Merchant) {
@@ -335,6 +441,18 @@ pub fn set_merchant(env: &Env, merchant: &Merchant) {
     env.storage()
         .persistent()
         .extend_ttl(&key, MERCHANT_TTL_LEDGERS, MERCHANT_TTL_LEDGERS);
+}
+
+/// Extend the TTL of an existing merchant profile without rewriting it.
+/// Called on merchant activity (e.g. new payments) so an active merchant's
+/// profile never archives between explicit profile updates.
+pub fn extend_merchant_ttl(env: &Env, address: &Address) {
+    let key = DataKey::Merchant(address.clone());
+    if env.storage().persistent().has(&key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, MERCHANT_TTL_LEDGERS, MERCHANT_TTL_LEDGERS);
+    }
 }
 
 pub fn get_merchant_list(env: &Env) -> Vec<Address> {
@@ -348,6 +466,30 @@ pub fn add_to_merchant_list(env: &Env, address: &Address) {
     let mut list = get_merchant_list(env);
     list.push_back(address.clone());
     env.storage().instance().set(&DataKey::ML, &list);
+}
+
+// ── Instance TTL ──────────────────────────────────────────────────────────────
+//
+// All instance-storage keys (Admin, Paused, config singletons, GlobalStats,
+// MerchantStats, MerchantList, …) share a single instance entry whose TTL is
+// extended together. Entrypoints call `extend_instance_ttl` on every mutating
+// invocation so the instance entry never archives while the contract is in use.
+
+/// TTL applied to the contract instance entry (2 years, matching the longest
+/// persistent TTL). The host caps each extension at `max_entry_ttl`.
+pub const INSTANCE_TTL_LEDGERS: u32 = 12_614_400; // 2 years
+
+const _INSTANCE_TTL_CHECK: () = assert!(
+    INSTANCE_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
+    "INSTANCE_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
+);
+
+/// Extend the TTL of the contract instance entry. Call from every mutating
+/// entrypoint so instance-storage configuration keys never archive.
+pub fn extend_instance_ttl(env: &Env) {
+    env.storage()
+        .instance()
+        .extend_ttl(INSTANCE_TTL_LEDGERS, INSTANCE_TTL_LEDGERS);
 }
 
 // ── Payment ───────────────────────────────────────────────────────────────────
@@ -366,6 +508,17 @@ pub fn set_payment(env: &Env, payment: &PaymentOrder) {
     env.storage()
         .persistent()
         .extend_ttl(&key, PAYMENT_TTL_LEDGERS, PAYMENT_TTL_LEDGERS);
+}
+
+/// Extend the TTL of an existing payment record without rewriting it.
+/// Used by refund/dispute flows that reference a payment but do not modify it.
+pub fn extend_payment_ttl(env: &Env, order_id: &String) {
+    let key = DataKey::Payment(order_id.clone());
+    if env.storage().persistent().has(&key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, PAYMENT_TTL_LEDGERS, PAYMENT_TTL_LEDGERS);
+    }
 }
 
 pub fn remove_payment(env: &Env, order_id: &String) {
@@ -402,7 +555,7 @@ pub fn add_merchant_payment_id(
     env.storage().persistent().set(&key, &ids);
     env.storage()
         .persistent()
-        .extend_ttl(&key, PAYMENT_TTL_LEDGERS, PAYMENT_TTL_LEDGERS);
+        .extend_ttl(&key, PAYMENT_INDEX_TTL_LEDGERS, PAYMENT_INDEX_TTL_LEDGERS);
 
     if old_len < PAYMENT_HISTORY_WARNING_THRESHOLD && new_len >= PAYMENT_HISTORY_WARNING_THRESHOLD {
         env.events().publish(
@@ -441,7 +594,7 @@ pub fn add_payer_payment_id(
     env.storage().persistent().set(&key, &ids);
     env.storage()
         .persistent()
-        .extend_ttl(&key, PAYMENT_TTL_LEDGERS, PAYMENT_TTL_LEDGERS);
+        .extend_ttl(&key, PAYMENT_INDEX_TTL_LEDGERS, PAYMENT_INDEX_TTL_LEDGERS);
 
     if old_len < PAYMENT_HISTORY_WARNING_THRESHOLD && new_len >= PAYMENT_HISTORY_WARNING_THRESHOLD {
         env.events().publish(
@@ -470,6 +623,16 @@ pub fn set_refund(env: &Env, refund: &RefundRecord) {
         .extend_ttl(&key, REFUND_TTL_LEDGERS, REFUND_TTL_LEDGERS);
 }
 
+/// Extend the TTL of an existing refund record without rewriting it.
+pub fn extend_refund_ttl(env: &Env, refund_id: &String) {
+    let key = DataKey::Refund(refund_id.clone());
+    if env.storage().persistent().has(&key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, REFUND_TTL_LEDGERS, REFUND_TTL_LEDGERS);
+    }
+}
+
 pub fn get_order_refund_ids(env: &Env, order_id: &String) -> Vec<String> {
     env.storage()
         .persistent()
@@ -480,9 +643,13 @@ pub fn get_order_refund_ids(env: &Env, order_id: &String) -> Vec<String> {
 pub fn add_order_refund_id(env: &Env, order_id: &String, refund_id: &String) {
     let mut ids = get_order_refund_ids(env, order_id);
     ids.push_back(refund_id.clone());
+    let key = DataKey::OR(order_id.clone());
+    env.storage().persistent().set(&key, &ids);
+    // Extend TTL so the refund index survives as long as the refund records it
+    // references (1-year window).
     env.storage()
         .persistent()
-        .set(&DataKey::OR(order_id.clone()), &ids);
+        .extend_ttl(&key, REFUND_INDEX_TTL_LEDGERS, REFUND_INDEX_TTL_LEDGERS);
 }
 
 pub fn remove_order_refund_index(env: &Env, order_id: &String) {
@@ -505,7 +672,7 @@ pub fn set_dispute(env: &Env, dispute: &DisputeRecord) {
     // Extend TTL to 1 year so dispute records outlive the refund window.
     env.storage()
         .persistent()
-        .extend_ttl(&key, REFUND_TTL_LEDGERS, REFUND_TTL_LEDGERS);
+        .extend_ttl(&key, DISPUTE_TTL_LEDGERS, DISPUTE_TTL_LEDGERS);
 }
 
 pub fn remove_refund(env: &Env, refund_id: &String) {
@@ -532,6 +699,18 @@ pub fn set_multisig(env: &Env, ms: &MultisigPayment) {
         .extend_ttl(&key, MULTISIG_TTL_LEDGERS, MULTISIG_TTL_LEDGERS);
 }
 
+/// Extend the TTL of an existing multisig payment without rewriting it.
+/// Called on each signature approval so a slow-to-approve payment never
+/// archives mid-collection.
+pub fn extend_multisig_ttl(env: &Env, payment_id: &String) {
+    let key = DataKey::Multisig(payment_id.clone());
+    if env.storage().persistent().has(&key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, MULTISIG_TTL_LEDGERS, MULTISIG_TTL_LEDGERS);
+    }
+}
+
 pub fn remove_multisig(env: &Env, payment_id: &String) {
     env.storage()
         .persistent()
@@ -547,16 +726,22 @@ pub fn get_payment_request(env: &Env, request_id: &String) -> Option<PaymentRequ
 }
 
 pub fn set_payment_request(env: &Env, pr: &PaymentRequest) {
+    let key = DataKey::PaymentRequest(pr.request_id.clone());
+    env.storage().temporary().set(&key, pr);
+    // Extend TTL so an outstanding request remains claimable for a full
+    // payment window rather than archiving prematurely.
     env.storage()
         .temporary()
-        .set(&DataKey::PaymentRequest(pr.request_id.clone()), pr);
+        .extend_ttl(&key, PAYMENT_TTL_LEDGERS, PAYMENT_TTL_LEDGERS);
 
     let mut ids = get_payment_request_ids(env);
     if !ids.contains(&pr.request_id) {
         ids.push_back(pr.request_id.clone());
+        let index_key = DataKey::PaymentRequestIndex;
+        env.storage().temporary().set(&index_key, &ids);
         env.storage()
             .temporary()
-            .set(&DataKey::PaymentRequestIndex, &ids);
+            .extend_ttl(&index_key, PAYMENT_TTL_LEDGERS, PAYMENT_TTL_LEDGERS);
     }
 }
 
@@ -573,9 +758,11 @@ pub fn remove_payment_request(env: &Env, request_id: &String) {
                 kept.push_back(id);
             }
         }
+        let index_key = DataKey::PaymentRequestIndex;
+        env.storage().temporary().set(&index_key, &kept);
         env.storage()
             .temporary()
-            .set(&DataKey::PaymentRequestIndex, &kept);
+            .extend_ttl(&index_key, PAYMENT_TTL_LEDGERS, PAYMENT_TTL_LEDGERS);
     }
 }
 
@@ -611,7 +798,7 @@ pub fn increment_nonce(env: &Env, payer: &Address) {
     // as the account is making payments (2-year window, same as payments).
     env.storage()
         .persistent()
-        .extend_ttl(&key, PAYMENT_TTL_LEDGERS, PAYMENT_TTL_LEDGERS);
+        .extend_ttl(&key, NONCE_TTL_LEDGERS, NONCE_TTL_LEDGERS);
 }
 
 // ── Merchant Nonce (replay protection per merchant) ───────────────────────────
@@ -640,7 +827,7 @@ pub fn increment_merchant_nonce(env: &Env, merchant: &Address) {
         .set(&key, &current.saturating_add(1));
     env.storage()
         .persistent()
-        .extend_ttl(&key, PAYMENT_TTL_LEDGERS, PAYMENT_TTL_LEDGERS);
+        .extend_ttl(&key, NONCE_TTL_LEDGERS, NONCE_TTL_LEDGERS);
 }
 
 // ── Payment Request Rate Limiting ─────────────────────────────────────────────
@@ -753,6 +940,16 @@ pub fn set_subscription_plan(env: &Env, plan: &SubscriptionPlan) {
     env.storage()
         .persistent()
         .extend_ttl(&key, SUBSCRIPTION_TTL_LEDGERS, SUBSCRIPTION_TTL_LEDGERS);
+    // Keep the legacy `SubscriptionPlan` alias key alive in lockstep so older
+    // readers never observe an archived entry.
+    let legacy_key = DataKey::SubscriptionPlan(plan.plan_id.clone());
+    if env.storage().persistent().has(&legacy_key) {
+        env.storage().persistent().extend_ttl(
+            &legacy_key,
+            SUBSCRIPTION_TTL_LEDGERS,
+            SUBSCRIPTION_TTL_LEDGERS,
+        );
+    }
 }
 
 pub fn get_subscription(env: &Env, subscription_id: &String) -> Option<Subscription> {
@@ -769,6 +966,15 @@ pub fn set_subscription(env: &Env, sub: &Subscription) {
     env.storage()
         .persistent()
         .extend_ttl(&key, SUBSCRIPTION_TTL_LEDGERS, SUBSCRIPTION_TTL_LEDGERS);
+    // Keep the legacy `Subscription` alias key alive in lockstep.
+    let legacy_key = DataKey::Subscription(sub.subscription_id.clone());
+    if env.storage().persistent().has(&legacy_key) {
+        env.storage().persistent().extend_ttl(
+            &legacy_key,
+            SUBSCRIPTION_TTL_LEDGERS,
+            SUBSCRIPTION_TTL_LEDGERS,
+        );
+    }
 }
 
 /// Total amount still chargeable across `subscriber`'s active subscriptions in
@@ -782,8 +988,10 @@ pub fn get_subscription_reserve(env: &Env, subscriber: &Address, token: &Address
 
 pub fn set_subscription_reserve(env: &Env, subscriber: &Address, token: &Address, amount: i128) {
     let key = DataKey::SR(subscriber.clone(), token.clone());
+    let legacy_key = DataKey::SubscriptionReserve(subscriber.clone(), token.clone());
     if amount <= 0 {
         env.storage().persistent().remove(&key);
+        env.storage().persistent().remove(&legacy_key);
     } else {
         env.storage().persistent().set(&key, &amount);
         env.storage().persistent().extend_ttl(
@@ -791,18 +999,18 @@ pub fn set_subscription_reserve(env: &Env, subscriber: &Address, token: &Address
             SUBSCRIPTION_TTL_LEDGERS,
             SUBSCRIPTION_TTL_LEDGERS,
         );
+        // Keep the legacy `SubscriptionReserve` alias key alive in lockstep.
+        if env.storage().persistent().has(&legacy_key) {
+            env.storage().persistent().extend_ttl(
+                &legacy_key,
+                SUBSCRIPTION_TTL_LEDGERS,
+                SUBSCRIPTION_TTL_LEDGERS,
+            );
+        }
     }
 }
 
 // ── Escrow ────────────────────────────────────────────────────────────────────
-
-/// TTL for escrow records — 1 year; escrows are expected to resolve well within this window.
-pub const ESCROW_TTL_LEDGERS: u32 = 6_307_200;
-
-const _ESCROW_TTL_CHECK: () = assert!(
-    ESCROW_TTL_LEDGERS <= SOROBAN_MAX_ENTRY_TTL * 5,
-    "ESCROW_TTL_LEDGERS exceeds safe range (5 × max_entry_ttl)"
-);
 
 pub fn get_escrow(env: &Env, order_id: &String) -> Option<EscrowRecord> {
     env.storage()
@@ -818,15 +1026,24 @@ pub fn set_escrow(env: &Env, escrow: &EscrowRecord) {
         .extend_ttl(&key, ESCROW_TTL_LEDGERS, ESCROW_TTL_LEDGERS);
 }
 
+/// Extend the TTL of an existing escrow record without rewriting it.
+/// Used by escrow lifecycle transitions (release/refund) to keep the record
+/// alive for a full window from the most recent state change.
+pub fn extend_escrow_ttl(env: &Env, order_id: &String) {
+    let key = DataKey::Escrow(order_id.clone());
+    if env.storage().persistent().has(&key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, ESCROW_TTL_LEDGERS, ESCROW_TTL_LEDGERS);
+    }
+}
+
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 
 /// Default max payments per merchant per rate-limit window (300 ledgers).
 pub const DEFAULT_RATE_LIMIT_PER_WINDOW: u32 = 100;
 /// Window size in ledgers (300 ledgers ≈ 25 minutes at 5 s/ledger).
 pub const RATE_LIMIT_WINDOW_LEDGERS: u32 = 300;
-/// TTL for rate-limit counters — kept alive for 2 windows so a counter is not
-/// silently dropped mid-window.
-pub const RATE_LIMIT_TTL_LEDGERS: u32 = 600;
 
 pub fn set_payment_rate_limit(env: &Env, limit: u32) {
     env.storage()
@@ -1045,7 +1262,7 @@ pub fn set_deletion_request(env: &Env, merchant: &Address, requested_at: u64) {
     // Keep for up to 1 year so the admin can process it well within the 30-day window.
     env.storage()
         .persistent()
-        .extend_ttl(&key, REFUND_TTL_LEDGERS, REFUND_TTL_LEDGERS);
+        .extend_ttl(&key, DELETION_REQUEST_TTL_LEDGERS, DELETION_REQUEST_TTL_LEDGERS);
 }
 
 /// Removes the pending data-deletion request once it has been processed.
@@ -1091,8 +1308,6 @@ pub const AUTH_MAX_FAILURES: u32 = 10;
 pub const AUTH_FAILURE_WINDOW_LEDGERS: u32 = 100;
 /// Lockout duration in ledgers once the threshold is exceeded.
 pub const AUTH_LOCKOUT_LEDGERS: u32 = 1_000;
-/// TTL for failure counter entries — kept for 2× the lockout duration.
-pub const AUTH_TTL_LEDGERS: u32 = 2_000;
 
 /// (failure_count, window_start_ledger) stored per address.
 #[derive(Clone, Copy)]
@@ -1228,9 +1443,6 @@ pub fn set_storage_version(env: &Env, version: u32) {
 
 // ── Merchant registration commitments (commit-reveal, issue #614) ─────────────
 
-/// TTL in ledgers for a pending commitment (≈ 100 × 5 s = 500 s ≈ 8 minutes).
-pub const COMMITMENT_TTL_LEDGERS: u32 = 100;
-
 pub fn get_merchant_commitment(env: &Env, address: &Address) -> Option<MerchantCommitment> {
     env.storage()
         .temporary()
@@ -1257,9 +1469,6 @@ pub fn remove_merchant_commitment(env: &Env, address: &Address) {
 
 // ── Conditional Escrow Hold (Issue #1111) ─────────────────────────────────────
 
-/// TTL for escrow hold records — 1 year.
-pub const ESCROW_HOLD_TTL_LEDGERS: u32 = 6_307_200;
-
 pub fn get_escrow_hold(env: &Env, escrow_id: &String) -> Option<EscrowHold> {
     env.storage()
         .persistent()
@@ -1274,192 +1483,14 @@ pub fn set_escrow_hold(env: &Env, hold: &EscrowHold) {
         .extend_ttl(&key, ESCROW_HOLD_TTL_LEDGERS, ESCROW_HOLD_TTL_LEDGERS);
 }
 
-// ── Merchant tiers (Issue #1572) ──────────────────────────────────────────────
-//
-// Merchants are assigned a tier based on their rolling 30-day payment volume.
-// Each tier carries a configurable fee reduction (in basis points) that is
-// subtracted from the platform fee.  Thresholds and reductions are stored in a
-// single instance-storage struct so an admin can update them atomically.
-
-/// Number of seconds in the rolling volume window (30 days).
-pub const MERCHANT_TIER_WINDOW_SECS: u64 = 30 * 24 * 3600;
-
-/// Maximum number of volume buckets retained per merchant.  Buckets are
-/// coalesced into fixed-size time slots so this bounds storage growth.
-pub const MAX_MERCHANT_VOLUME_BUCKETS: u32 = 64;
-
-/// Width of a single volume bucket in seconds (30 days / 64 ≈ 11.25 hours).
-pub const MERCHANT_VOLUME_BUCKET_SECS: u64 = MERCHANT_TIER_WINDOW_SECS / MAX_MERCHANT_VOLUME_BUCKETS as u64;
-
-/// TTL for rolling volume records — 2 years, matching merchant profiles.
-pub const MERCHANT_VOLUME_TTL_LEDGERS: u32 = MERCHANT_TTL_LEDGERS;
-
-/// Default Silver tier threshold: 1 000 XLM equivalent in stroops.
-pub const DEFAULT_SILVER_TIER_THRESHOLD: i128 = 1_000_000_000;
-/// Default Gold tier threshold: 10 000 XLM equivalent in stroops.
-pub const DEFAULT_GOLD_TIER_THRESHOLD: i128 = 10_000_000_000;
-/// Default Platinum tier threshold: 100 000 XLM equivalent in stroops.
-pub const DEFAULT_PLATINUM_TIER_THRESHOLD: i128 = 100_000_000_000;
-
-/// Default fee reduction for the Silver tier (25 % of the platform fee).
-pub const DEFAULT_SILVER_FEE_REDUCTION_BPS: u32 = 2_500;
-/// Default fee reduction for the Gold tier (50 % of the platform fee).
-pub const DEFAULT_GOLD_FEE_REDUCTION_BPS: u32 = 5_000;
-/// Default fee reduction for the Platinum tier (100 % — no fee).
-pub const DEFAULT_PLATINUM_FEE_REDUCTION_BPS: u32 = 10_000;
-
-/// Admin-configurable tier thresholds and fee reductions.
-///
-/// `*_threshold` values are cumulative 30-day volume floors in stroops.
-/// `*_fee_reduction_bps` values are reductions applied to the platform fee,
-/// expressed in basis points of the fee (10 000 = full waiver).
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MerchantTierConfig {
-    pub silver_threshold: i128,
-    pub gold_threshold: i128,
-    pub platinum_threshold: i128,
-    pub silver_fee_reduction_bps: u32,
-    pub gold_fee_reduction_bps: u32,
-    pub platinum_fee_reduction_bps: u32,
-}
-
-impl MerchantTierConfig {
-    /// Sensible defaults used when the admin has not configured tiers yet.
-    pub fn default_config() -> Self {
-        Self {
-            silver_threshold: DEFAULT_SILVER_TIER_THRESHOLD,
-            gold_threshold: DEFAULT_GOLD_TIER_THRESHOLD,
-            platinum_threshold: DEFAULT_PLATINUM_TIER_THRESHOLD,
-            silver_fee_reduction_bps: DEFAULT_SILVER_FEE_REDUCTION_BPS,
-            gold_fee_reduction_bps: DEFAULT_GOLD_FEE_REDUCTION_BPS,
-            platinum_fee_reduction_bps: DEFAULT_PLATINUM_FEE_REDUCTION_BPS,
-        }
+/// Extend the TTL of an existing escrow hold without rewriting it.
+pub fn extend_escrow_hold_ttl(env: &Env, escrow_id: &String) {
+    let key = DataKey::EscrowHold(escrow_id.clone());
+    if env.storage().persistent().has(&key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, ESCROW_HOLD_TTL_LEDGERS, ESCROW_HOLD_TTL_LEDGERS);
     }
-}
-
-/// A single rolling-volume bucket: `(bucket_start_secs, amount)`.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct VolumeBucket {
-    pub start: u64,
-    pub amount: i128,
-}
-
-/// Rolling 30-day payment volume record for a merchant.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MerchantVolumeRecord {
-    pub buckets: Vec<VolumeBucket>,
-}
-
-/// Return the configured merchant tier configuration (or defaults).
-pub fn get_merchant_tier_config(env: &Env) -> MerchantTierConfig {
-    env.storage()
-        .instance()
-        .get(&DataKey::MTC)
-        .unwrap_or_else(MerchantTierConfig::default_config)
-}
-
-/// Persist a new merchant tier configuration.  Admin-only; caller is
-/// responsible for authorization.
-pub fn set_merchant_tier_config(env: &Env, config: &MerchantTierConfig) {
-    env.storage().instance().set(&DataKey::MTC, config);
-}
-
-/// Read the raw rolling volume record for `merchant`, if any.
-pub fn get_merchant_volume_record(env: &Env, merchant: &Address) -> Option<MerchantVolumeRecord> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::MTV(merchant.clone()))
-}
-
-/// Persist the rolling volume record for `merchant`, extending its TTL.
-pub fn set_merchant_volume_record(env: &Env, merchant: &Address, record: &MerchantVolumeRecord) {
-    let key = DataKey::MTV(merchant.clone());
-    env.storage().persistent().set(&key, record);
-    env.storage().persistent().extend_ttl(
-        &key,
-        MERCHANT_VOLUME_TTL_LEDGERS,
-        MERCHANT_VOLUME_TTL_LEDGERS,
-    );
-}
-
-/// Record `amount` of payment volume for `merchant` at timestamp `now`.
-///
-/// Volume is coalesced into fixed-width buckets of
-/// [`MERCHANT_VOLUME_BUCKET_SECS`] seconds.  Buckets older than the 30-day
-/// window are pruned, and the bucket list is capped at
-/// [`MAX_MERCHANT_VOLUME_BUCKETS`] entries (oldest evicted first).
-pub fn record_merchant_volume(env: &Env, merchant: &Address, amount: i128, now: u64) {
-    if amount <= 0 {
-        return;
-    }
-    let window_start = now.saturating_sub(MERCHANT_TIER_WINDOW_SECS);
-    let bucket_start = now - (now % MERCHANT_VOLUME_BUCKET_SECS);
-
-    let existing = get_merchant_volume_record(env, merchant);
-    let mut buckets: Vec<VolumeBucket> = Vec::new(env);
-
-    if let Some(record) = existing {
-        for bucket in record.buckets.iter() {
-            // Drop buckets that have fallen out of the rolling window.
-            if bucket.start >= window_start {
-                buckets.push_back(bucket);
-            }
-        }
-    }
-
-    // Merge into the current bucket if it already exists, else append.
-    let mut merged = false;
-    let mut rebuilt: Vec<VolumeBucket> = Vec::new(env);
-    for bucket in buckets.iter() {
-        if bucket.start == bucket_start {
-            rebuilt.push_back(VolumeBucket {
-                start: bucket.start,
-                amount: bucket.amount.saturating_add(amount),
-            });
-            merged = true;
-        } else {
-            rebuilt.push_back(bucket);
-        }
-    }
-    if !merged {
-        rebuilt.push_back(VolumeBucket {
-            start: bucket_start,
-            amount,
-        });
-    }
-
-    // Enforce the bucket cap by evicting the oldest entries.
-    let len = rebuilt.len();
-    let mut capped: Vec<VolumeBucket> = Vec::new(env);
-    let skip = len.saturating_sub(MAX_MERCHANT_VOLUME_BUCKETS);
-    for (i, bucket) in rebuilt.iter().enumerate() {
-        if (i as u32) >= skip {
-            capped.push_back(bucket);
-        }
-    }
-
-    set_merchant_volume_record(
-        env,
-        merchant,
-        &MerchantVolumeRecord { buckets: capped },
-    );
-}
-
-/// Sum the merchant's rolling 30-day volume as of timestamp `now`.
-pub fn get_merchant_rolling_volume(env: &Env, merchant: &Address, now: u64) -> i128 {
-    let window_start = now.saturating_sub(MERCHANT_TIER_WINDOW_SECS);
-    let mut total: i128 = 0;
-    if let Some(record) = get_merchant_volume_record(env, merchant) {
-        for bucket in record.buckets.iter() {
-            if bucket.start >= window_start {
-                total = total.saturating_add(bucket.amount);
-            }
-        }
-    }
-    total
 }
 
 // ── Admin Audit Log (Issue #1115) ─────────────────────────────────────────────
@@ -1472,9 +1503,6 @@ pub fn get_merchant_rolling_volume(env: &Env, merchant: &Address, now: u64) -> i
 /// Default maximum number of admin audit log entries retained in persistent
 /// storage.  Oldest-first eviction kicks in beyond this cap.
 pub const DEFAULT_ADMIN_AUDIT_MAX_ENTRIES: u32 = 10_000;
-
-/// TTL for audit log entries — 2 years to support long-duration compliance needs.
-pub const ADMIN_AUDIT_TTL_LEDGERS: u32 = 12_614_400;
 
 /// Return the total number of audit log entries ever written.
 pub fn get_admin_audit_count(env: &Env) -> u32 {
@@ -1588,4 +1616,55 @@ pub fn query_admin_audit_log(
     }
 
     results
+}
+
+// ── Emergency withdrawal (Issue #1511) ───────────────────────────────────────
+
+/// Default emergency lock period: 90 days in seconds.
+pub const DEFAULT_EMERGENCY_LOCK_PERIOD_SECS: u64 = 90 * 24 * 3600;
+
+/// Minimum number of admin co-approvals required to execute an emergency
+/// withdrawal. The initiating admin counts as one approval, so at least two
+/// additional admins must call `approve_emergency_withdrawal` before the
+/// withdrawal can proceed (3-of-N multisig confirmation).
+pub const EMERGENCY_WITHDRAWAL_REQUIRED_APPROVALS: u32 = 3;
+
+pub fn get_treasury_address(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::TreasuryAddress)
+}
+
+pub fn set_treasury_address(env: &Env, address: &Address) {
+    env.storage().instance().set(&DataKey::TreasuryAddress, address);
+}
+
+pub fn get_emergency_lock_period(env: &Env) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::EmergencyLockPeriod)
+        .unwrap_or(DEFAULT_EMERGENCY_LOCK_PERIOD_SECS)
+}
+
+pub fn set_emergency_lock_period(env: &Env, secs: u64) {
+    env.storage().instance().set(&DataKey::EmergencyLockPeriod, &secs);
+}
+
+/// Return the list of admin addresses that have approved an emergency
+/// withdrawal for `escrow_id`.
+pub fn get_emergency_withdrawal_approvals(env: &Env, escrow_id: &String) -> Vec<Address> {
+    env.storage()
+        .instance()
+        .get(&DataKey::EWA(escrow_id.clone()))
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+pub fn set_emergency_withdrawal_approvals(env: &Env, escrow_id: &String, approvals: &Vec<Address>) {
+    env.storage()
+        .instance()
+        .set(&DataKey::EWA(escrow_id.clone()), approvals);
+}
+
+pub fn clear_emergency_withdrawal_approvals(env: &Env, escrow_id: &String) {
+    env.storage()
+        .instance()
+        .remove(&DataKey::EWA(escrow_id.clone()));
 }
