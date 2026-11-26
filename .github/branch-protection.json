@@ -8,7 +8,11 @@
       "Lint",
       "Test",
       "Auth Tests",
-      "Build WASM"
+      "Build WASM",
+      "CI",
+      "Coverage",
+      "Security Scan",
+      "OpenAPI Validation"
     ]
   },
   "enforce_admins": true,

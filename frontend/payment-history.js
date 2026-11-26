@@ -14,11 +14,44 @@
     { order_id: 'ORDER_012', merchant_address: 'GCMR...Y9KP', amount: 540,  status: 'Completed',          paid_at: '2026-06-23' },
   ];
 
-  const PAGE_SIZE = 5;
+  const DEFAULT_PAGE_SIZE = 5;
+  let pageSize = DEFAULT_PAGE_SIZE;
   let currentPage = 1;
   let sortField = 'paid_at';
   let sortAsc = false;
   let filtered = [...MOCK_PAYMENTS];
+
+  // ── Cursor-based pagination state ──────────────────────────────────────────
+  // cursorStack holds the cursor used to fetch each page. Index 0 is always
+  // null (first page). The cursor at index i is the "before" cursor for page i+1.
+  let cursorStack = [null];
+  let hasPrev = false;
+  let hasNext = false;
+  let totalRecords = 0;
+
+  // ── URL helpers ────────────────────────────────────────────────────────────
+  function readUrlState() {
+    const params = new URLSearchParams(window.location.search);
+    const cursor = params.get('cursor');
+    const limit = parseInt(params.get('limit'), 10);
+    if (!isNaN(limit) && limit > 0) {
+      pageSize = limit;
+    }
+    return cursor || null;
+  }
+
+  function writeUrlState(cursor) {
+    const params = new URLSearchParams(window.location.search);
+    if (cursor) {
+      params.set('cursor', cursor);
+    } else {
+      params.delete('cursor');
+    }
+    params.set('limit', String(pageSize));
+    const qs = params.toString();
+    const url = window.location.pathname + (qs ? '?' + qs : '');
+    history.pushState({ cursor }, '', url);
+  }
 
   // ── Filtering ──────────────────────────────────────────────────────────────
   function applyFilters() {
@@ -74,6 +107,36 @@
     renderPage(sorted);
   }
 
+  // ── Data loading (cursor-based) ────────────────────────────────────────────
+  // Replace the mock slice with a contract/backend call that accepts a cursor
+  // and returns { records, has_prev, has_next, total }.
+  function fetchPage(cursor) {
+    const sorted = [...filtered].sort((a, b) => {
+      const av = a[sortField], bv = b[sortField];
+      if (av < bv) return sortAsc ? -1 : 1;
+      if (av > bv) return sortAsc ? 1 : -1;
+      return 0;
+    });
+    const start = cursor ? parseInt(cursor, 10) : 0;
+    const records = sorted.slice(start, start + pageSize);
+    const nextStart = start + pageSize;
+    return {
+      records,
+      has_prev: start > 0,
+      has_next: nextStart < sorted.length,
+      total: sorted.length,
+      next_cursor: nextStart < sorted.length ? String(nextStart) : null,
+    };
+  }
+
+  function loadPage(cursor) {
+    const result = fetchPage(cursor);
+    hasPrev = result.has_prev;
+    hasNext = result.has_next;
+    totalRecords = result.total;
+    renderPage(result.records);
+  }
+
   // ── Rendering ──────────────────────────────────────────────────────────────
   function statusBadge(status) {
     const map = {
@@ -82,67 +145,135 @@
       FullyRefunded:      ['badge-fully-refunded',  'Fully Refunded'],
     };
     const [cls, label] = map[status] || ['', status];
-    return `<span class="badge ${cls}">${label}</span>`;
+    const span = document.createElement('span');
+    span.className = cls ? `badge ${cls}` : 'badge';
+    span.textContent = label;
+    return span;
   }
 
-  function renderPage(sorted) {
-    const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
-    if (currentPage > totalPages) currentPage = totalPages;
-
-    const start = (currentPage - 1) * PAGE_SIZE;
-    const page  = sorted.slice(start, start + PAGE_SIZE);
-
+  function renderPage(page) {
     // Table rows
     const tbody = document.getElementById('table-body');
     const cardsList = document.getElementById('cards-list');
     tbody.setAttribute('aria-busy', 'false');
     cardsList.setAttribute('aria-busy', 'false');
+    tbody.replaceChildren();
     if (page.length === 0) {
-      tbody.innerHTML = '';
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 5;
+      td.className = 'empty';
+      td.textContent = 'No payments found.';
+      tr.appendChild(td);
+      tbody.appendChild(tr);
     } else {
-      tbody.innerHTML = page.map(p => `
-        <tr>
-          <td><span class="order-id">${p.order_id}</span></td>
-          <td>${p.merchant_address}</td>
-          <td class="amount">${p.amount.toLocaleString()} XLM</td>
-          <td>${statusBadge(p.status)}</td>
-          <td>${p.paid_at}</td>
-        </tr>`).join('');
+      page.forEach(p => {
+        const tr = document.createElement('tr');
+
+        const orderTd = document.createElement('td');
+        const orderSpan = document.createElement('span');
+        orderSpan.className = 'order-id';
+        orderSpan.textContent = p.order_id;
+        orderTd.appendChild(orderSpan);
+        tr.appendChild(orderTd);
+
+        const merchantTd = document.createElement('td');
+        merchantTd.textContent = p.merchant_address;
+        tr.appendChild(merchantTd);
+
+        const amountTd = document.createElement('td');
+        amountTd.className = 'amount';
+        amountTd.textContent = `${p.amount.toLocaleString()} XLM`;
+        tr.appendChild(amountTd);
+
+        const statusTd = document.createElement('td');
+        statusTd.appendChild(statusBadge(p.status));
+        tr.appendChild(statusTd);
+
+        const dateTd = document.createElement('td');
+        dateTd.textContent = p.paid_at;
+        tr.appendChild(dateTd);
+
+        tbody.appendChild(tr);
+      });
     }
 
     // Cards
+    cardsList.replaceChildren();
     if (page.length === 0) {
-      cardsList.innerHTML = '';
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'No payments found.';
+      cardsList.appendChild(empty);
     } else {
-      cardsList.innerHTML = page.map(p => `
-        <div class="payment-card">
-          <div class="card-header">
-            <span class="card-order-id">${p.order_id}</span>
-            <span class="card-amount">${p.amount.toLocaleString()} XLM</span>
-          </div>
-          <div class="card-row">
-            <span class="card-label">Merchant</span>
-            <span>${p.merchant_address}</span>
-          </div>
-          <div class="card-row">
-            <span class="card-label">Status</span>
-            <span>${statusBadge(p.status)}</span>
-          </div>
-          <div class="card-row">
-            <span class="card-label">Date</span>
-            <span>${p.paid_at}</span>
-          </div>
-        </div>`).join('');
+      page.forEach(p => {
+        const card = document.createElement('div');
+        card.className = 'payment-card';
+
+        const header = document.createElement('div');
+        header.className = 'card-header';
+        const cardOrderId = document.createElement('span');
+        cardOrderId.className = 'card-order-id';
+        cardOrderId.textContent = p.order_id;
+        const cardAmount = document.createElement('span');
+        cardAmount.className = 'card-amount';
+        cardAmount.textContent = `${p.amount.toLocaleString()} XLM`;
+        header.appendChild(cardOrderId);
+        header.appendChild(cardAmount);
+        card.appendChild(header);
+
+        const merchantRow = document.createElement('div');
+        merchantRow.className = 'card-row';
+        const merchantLabel = document.createElement('span');
+        merchantLabel.className = 'card-label';
+        merchantLabel.textContent = 'Merchant';
+        const merchantValue = document.createElement('span');
+        merchantValue.textContent = p.merchant_address;
+        merchantRow.appendChild(merchantLabel);
+        merchantRow.appendChild(merchantValue);
+        card.appendChild(merchantRow);
+
+        const statusRow = document.createElement('div');
+        statusRow.className = 'card-row';
+        const statusLabel = document.createElement('span');
+        statusLabel.className = 'card-label';
+        statusLabel.textContent = 'Status';
+        const statusValue = document.createElement('span');
+        statusValue.appendChild(statusBadge(p.status));
+        statusRow.appendChild(statusLabel);
+        statusRow.appendChild(statusValue);
+        card.appendChild(statusRow);
+
+        const dateRow = document.createElement('div');
+        dateRow.className = 'card-row';
+        const dateLabel = document.createElement('span');
+        dateLabel.className = 'card-label';
+        dateLabel.textContent = 'Date';
+        const dateValue = document.createElement('span');
+        dateValue.textContent = p.paid_at;
+        dateRow.appendChild(dateLabel);
+        dateRow.appendChild(dateValue);
+        card.appendChild(dateRow);
+
+        cardsList.appendChild(card);
+      });
     }
 
     // Empty state
     toggleEmptyState(sorted.length === 0);
 
     // Pagination controls
-    document.getElementById('page-info').textContent =
-      sorted.length === 0 ? 'No results' : `Page ${currentPage} of ${totalPages} (${sorted.length} records)`;
-    document.getElementById('prev-btn').disabled = currentPage <= 1;
-    document.getElementById('next-btn').disabled = currentPage >= totalPages;
+    const pageInfo = document.getElementById('page-info');
+    pageInfo.textContent = totalRecords === 0
+      ? 'No results'
+      : `Page ${currentPage} (${totalRecords} records)`;
+
+    const prevBtn = document.getElementById('prev-btn');
+    const nextBtn = document.getElementById('next-btn');
+    prevBtn.disabled = !hasPrev;
+    nextBtn.disabled = !hasNext;
+    prevBtn.setAttribute('aria-disabled', String(!hasPrev));
+    nextBtn.setAttribute('aria-disabled', String(!hasNext));
   }
 
   // ── Empty state ────────────────────────────────────────────────────────────
@@ -160,8 +291,58 @@
   }
 
   // ── Pagination ─────────────────────────────────────────────────────────────
-  function prevPage() { if (currentPage > 1) { currentPage--; sortAndRender(); } }
-  function nextPage() { currentPage++; sortAndRender(); }
+  function prevPage() {
+    if (!hasPrev || cursorStack.length <= 1) return;
+    cursorStack.pop();
+    currentPage = Math.max(1, currentPage - 1);
+    const cursor = cursorStack[cursorStack.length - 1];
+    writeUrlState(cursor);
+    loadPage(cursor);
+  }
+
+  function nextPage() {
+    if (!hasNext) return;
+    const result = fetchPage(cursorStack[cursorStack.length - 1]);
+    if (!result.next_cursor) return;
+    cursorStack.push(result.next_cursor);
+    currentPage++;
+    writeUrlState(result.next_cursor);
+    loadPage(result.next_cursor);
+  }
+
+  function changePageSize(newSize) {
+    const size = parseInt(newSize, 10);
+    if (isNaN(size) || size <= 0) return;
+    pageSize = size;
+    currentPage = 1;
+    cursorStack = [null];
+    writeUrlState(null);
+    loadPage(null);
+  }
 
   // ── Init ───────────────────────────────────────────────────────────────────
-  sortAndRender();
+  function init() {
+    const initialCursor = readUrlState();
+    if (initialCursor) {
+      cursorStack = [null, initialCursor];
+      currentPage = 2;
+    } else {
+      cursorStack = [null];
+      currentPage = 1;
+    }
+    loadPage(initialCursor);
+  }
+
+  window.addEventListener('popstate', () => {
+    const cursor = readUrlState();
+    if (cursor) {
+      cursorStack = [null, cursor];
+      currentPage = 2;
+    } else {
+      cursorStack = [null];
+      currentPage = 1;
+    }
+    loadPage(cursor);
+  });
+
+  init();

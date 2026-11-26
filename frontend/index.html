@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://horizon.stellar.org; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none';" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'" />
     <title>LumenFlow</title>
     <link rel="manifest" href="manifest.json" />
     <meta name="theme-color" content="#6c47ff" />
@@ -12,157 +12,29 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="LumenFlow" />
     <link rel="apple-touch-icon" href="icons/icon.svg" />
+    <!--
+      SRI policy: every externally hosted <script> or <link rel="stylesheet"> MUST
+      carry `integrity` and `crossorigin="anonymous"` attributes. Same-origin
+      assets (e.g. styles.css) are covered by CSP 'self' and need no SRI.
+      When adding/upgrading a CDN dependency, regenerate its hash with:
+        curl -sSL <url> | openssl dgst -sha384 -binary | openssl base64 -A
+      then set integrity="sha384-<hash>" and crossorigin="anonymous".
+      CI enforces this via scripts/check-sri.mjs.
+    -->
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <main>
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+    <main id="main-content" tabindex="-1">
       <h1>LumenFlow</h1>
       <p>Scalable, secure, and decentralized payments on Stellar Soroban.</p>
-      <nav style="margin-top:1.5rem;display:flex;flex-wrap:wrap;gap:0.75rem;">
-        <a href="dashboard.html" style="font-weight:600;color:#6c47ff;text-decoration:none;padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:8px;">Merchant Dashboard</a>
-        <a href="history.html"   style="font-weight:600;color:#6c47ff;text-decoration:none;padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:8px;">Payment History</a>
-        <a href="receipt.html"   style="font-weight:600;color:#6c47ff;text-decoration:none;padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:8px;">View Receipt</a>
-        <a href="multisig.html"  style="font-weight:600;color:#6c47ff;text-decoration:none;padding:0.45rem 1rem;border:1.5px solid #6c47ff;border-radius:8px;">Multisig Payment</a>
+      <nav aria-label="Primary" style="margin-top:1.5rem;display:flex;flex-wrap:wrap;gap:0.75rem;">
+        <a href="dashboard.html" class="nav-link">Merchant Dashboard</a>
+        <a href="history.html"   class="nav-link">Payment History</a>
+        <a href="receipt.html"   class="nav-link">View Receipt</a>
+        <a href="multisig.html"  class="nav-link">Multisig Payment</a>
       </nav>
     </main>
-    <script>
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker
-            .register('./sw.js', { scope: './' })
-            .catch((err) => console.warn('[PWA] Service worker registration failed:', err));
-        });
-      }
-    </script>
-    <script>
-      // Form auto-save: persist non-sensitive payment form state to sessionStorage
-      // so accidental navigation does not lose entered data.
-      (function () {
-        var STORAGE_KEY = 'lumenflow:autosave:index';
-        // Only these fields are ever persisted.
-        var ALLOWED_FIELDS = [
-          'amount',
-          'asset',
-          'destination',
-          'memo',
-          'memoType',
-          'fee',
-          'network',
-          'note',
-          'email',
-          'reference',
-        ];
-        // Never persist these, even if they match an allow-listed name pattern.
-        var DENIED_PATTERN = /(private|secret|seed|mnemonic|passphrase|password|pin|key)/i;
-
-        function isAllowed(name) {
-          if (!name) return false;
-          if (DENIED_PATTERN.test(name)) return false;
-          return ALLOWED_FIELDS.indexOf(name) !== -1;
-        }
-
-        function getForm() {
-          return document.querySelector('form[data-autosave]') || document.querySelector('form');
-        }
-
-        function collectState(form) {
-          var state = {};
-          if (!form) return state;
-          var elements = form.querySelectorAll('input, select, textarea');
-          for (var i = 0; i < elements.length; i++) {
-            var el = elements[i];
-            var name = el.name || el.id;
-            if (!isAllowed(name)) continue;
-            if (el.type === 'password' || el.type === 'hidden') continue;
-            if (el.type === 'checkbox' || el.type === 'radio') {
-              state[name] = el.checked;
-            } else {
-              state[name] = el.value;
-            }
-          }
-          return state;
-        }
-
-        function saveState(form) {
-          try {
-            var state = collectState(form);
-            if (Object.keys(state).length === 0) return;
-            sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-          } catch (err) {
-            console.warn('[Autosave] Failed to save form state:', err);
-          }
-        }
-
-        function clearState() {
-          try {
-            sessionStorage.removeItem(STORAGE_KEY);
-          } catch (err) {
-            console.warn('[Autosave] Failed to clear form state:', err);
-          }
-        }
-
-        function readState() {
-          try {
-            var raw = sessionStorage.getItem(STORAGE_KEY);
-            if (!raw) return null;
-            var parsed = JSON.parse(raw);
-            return parsed && typeof parsed === 'object' ? parsed : null;
-          } catch (err) {
-            console.warn('[Autosave] Failed to read form state:', err);
-            return null;
-          }
-        }
-
-        function applyState(form, state) {
-          if (!form || !state) return;
-          var elements = form.querySelectorAll('input, select, textarea');
-          for (var i = 0; i < elements.length; i++) {
-            var el = elements[i];
-            var name = el.name || el.id;
-            if (!isAllowed(name)) continue;
-            if (!Object.prototype.hasOwnProperty.call(state, name)) continue;
-            if (el.type === 'checkbox' || el.type === 'radio') {
-              el.checked = !!state[name];
-            } else {
-              el.value = state[name];
-            }
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-          }
-        }
-
-        function init() {
-          var form = getForm();
-          if (!form) return;
-
-          var saved = readState();
-          if (saved && Object.keys(saved).length > 0) {
-            var restore = window.confirm('Restore previous session?');
-            if (restore) {
-              applyState(form, saved);
-            } else {
-              clearState();
-            }
-          }
-
-          form.addEventListener('input', function () {
-            saveState(form);
-          });
-          form.addEventListener('change', function () {
-            saveState(form);
-          });
-
-          form.addEventListener('submit', function () {
-            // Clear saved state on successful submission.
-            clearState();
-          });
-        }
-
-        if (document.readyState === 'loading') {
-          document.addEventListener('DOMContentLoaded', init);
-        } else {
-          init();
-        }
-      })();
-    </script>
+    <script src="sw-register.js"></script>
   </body>
 </html>

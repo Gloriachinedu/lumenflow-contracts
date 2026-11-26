@@ -9,6 +9,7 @@
 [![Stellar](https://img.shields.io/badge/Stellar-Soroban-blueviolet)](https://soroban.stellar.org)
 [![Audited by](https://img.shields.io/badge/Audited%20By-TBD-lightgrey)](docs/audit/audit-report.md)
 [![Discord](https://img.shields.io/discord/123456789012345678?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.gg/lumenflow)
+[![Run in Postman](https://run.pstmn.io/button.svg)](https://www.postman.com/lumenflow/workspace/lumenflow-public/collection/lumenflow-api)
 
 [English](README.md) | [Español](README.es.md) | [Português](README.pt.md)
 
@@ -116,7 +117,23 @@ Invoke-WebRequest -Uri "https://github.com/Gloriachinedu/lumenflow-contracts/rel
 Expand-Archive lumenflow-cli.zip -DestinationPath $env:USERPROFILE\bin
 ```
 
-Replace `<VERSION>` with the desired release tag (e.g. `1.0.0`). Checksums for each archive are published as `.sha256` files alongside the binaries on the release page.
+> **No linker toolchain required.** The Windows archive ships a pre-built
+> `lumenflow-cli.exe` compiled for the `x86_64-pc-windows-msvc` target, so you
+> no longer need Visual Studio Build Tools, the MSVC linker, or a full Rust
+> toolchain to install the CLI on Windows. Just download, extract, and run.
+
+**Verify the Windows download (PowerShell)**
+```powershell
+# Download the published checksum alongside the archive
+Invoke-WebRequest -Uri "https://github.com/Gloriachinedu/lumenflow-contracts/releases/latest/download/lumenflow-cli-v<VERSION>-x86_64-pc-windows-msvc.zip.sha256" -OutFile lumenflow-cli.zip.sha256
+
+# Compare the archive hash against the published value
+$expected = (Get-Content lumenflow-cli.zip.sha256 -Raw).Split()[0].ToLower()
+$actual   = (Get-FileHash lumenflow-cli.zip -Algorithm SHA256).Hash.ToLower()
+if ($actual -eq $expected) { "✅ Checksum OK" } else { throw "❌ Checksum mismatch" }
+```
+
+Replace `<VERSION>` with the desired release tag (e.g. `1.0.0`). Checksums for each archive are published as `.sha256` files alongside the binaries on the release page and are also listed in [`docs/release-hashes.md`](docs/release-hashes.md).
 
 **Install from source**
 ```bash
@@ -146,6 +163,8 @@ LumenFlow is a production-grade payment processing smart contract for the [Stell
 - Testing guidance available in `docs/testing-guide.md`
 - Multisig payment flow guide available in `docs/multisig-guide.md`
 - Contributor onboarding video script available in [docs/onboarding-video-script.md](docs/onboarding-video-script.md)
+- **SDK integration walkthrough video** (Node.js): [watch on YouTube](https://www.youtube.com/watch?v=lumenflow-sdk-integration) · [read the transcript](docs/sdk-integration-transcript.md)
+- **Postman collection** for the public API: [Run in Postman](https://www.postman.com/lumenflow/workspace/lumenflow-public/collection/lumenflow-api) · source file [`docs/lumenflow.postman_collection.json`](docs/lumenflow.postman_collection.json)
 - Secrets and secure local environment setup in [`docs/secrets-and-local-env.md`](docs/secrets-and-local-env.md)
 - Payment link generator guide in [`docs/payment-link-guide.md`](docs/payment-link-guide.md)
 - **SDK quickstart guide** (install → init → register merchant → submit payment → check history): [`sdk/README.md#quick-start`](sdk/README.md#quick-start)
@@ -334,7 +353,7 @@ COVERAGE=1 ./scripts/test.sh
 # → writes lcov.info to the workspace root
 ```
 
-Coverage threshold: **80% line coverage** is enforced in CI. Install `cargo-llvm-cov` once with:
+Coverage thresholds are enforced in CI via Codecov: **80% minimum line coverage for contract code** and **85% minimum line coverage for SDK code**. PRs that drop coverage below these thresholds fail the coverage check. Install `cargo-llvm-cov` once with:
 
 ```bash
 cargo install cargo-llvm-cov --locked
@@ -373,7 +392,7 @@ COVERAGE=1 ./scripts/test.sh
 # lcov data: lcov.info
 ```
 
-CI enforces a minimum **80% line coverage** threshold and uploads both the HTML report and `lcov.info` as build artifacts.
+CI enforces minimum line coverage thresholds through Codecov — **80% for contract code** and **85% for SDK code** — and uploads both the HTML report and `lcov.info` as build artifacts. The Codecov status checks (`patch` and `project`) fail any PR that falls below these thresholds, and uncovered lines are annotated directly in the PR diff view.
 
 Test coverage includes:
 
@@ -1122,6 +1141,27 @@ Need help or want to discuss LumenFlow?
 Merchants can receive real-time payment event notifications in their backend systems via the Horizon event stream. See [docs/webhook-integration.md](docs/webhook-integration.md) for a full guide including a Node.js example server and idempotency best practices.
 
 ---
+
+## Dependency Updates
+
+Dependencies are kept current automatically via [Dependabot](https://docs.github.com/en/code-security/dependabot), configured in [`.github/dependabot.yml`](.github/dependabot.yml).
+
+### Covered ecosystems
+
+| Ecosystem | Directory | Schedule |
+|-----------|-----------|----------|
+| `cargo` (Rust workspace, contracts, CLI) | `/` | Monthly |
+| `npm` (SDK) | `/sdk` | Weekly |
+| `npm` (frontend) | `/frontend` | Weekly |
+| `github-actions` (workflows) | `/` | Weekly |
+
+### Policy
+
+- **Schedule:** `npm` and `github-actions` dependencies are checked **weekly**; `cargo` dependencies are checked **monthly** to limit churn in the contract workspace.
+- **Target branch:** every Dependabot PR targets `main`.
+- **Labels:** all Dependabot PRs are automatically labelled `dependencies` so they can be filtered and triaged easily.
+- **Security updates:** Dependabot alerts for vulnerable dependencies create pull requests **immediately**, independent of the regular schedule. These should be reviewed and merged with priority.
+- **Review:** routine version bumps are merged once CI passes; major version bumps and security fixes require maintainer review.
 
 ## Contributing
 

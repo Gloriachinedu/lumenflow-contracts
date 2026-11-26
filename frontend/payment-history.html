@@ -3,7 +3,25 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://horizon.stellar.org; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none';" />
+  <!-- theme bootstrap: apply stored/system theme before first paint to avoid FOUC (issue #1529) -->
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem('lf-theme');
+        var theme = stored === 'dark' || stored === 'light'
+          ? stored
+          : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', theme);
+      } catch (e) {
+        /* storage blocked: fall back to system preference without breaking the page */
+        try {
+          var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+          document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+        } catch (e2) { /* no-op */ }
+      }
+    })();
+  </script>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://horizon.stellar.org; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none';" />
   <title>Payment History – LumenFlow</title>
   <link rel="manifest" href="manifest.json" />
   <meta name="theme-color" content="#6c47ff" />
@@ -80,7 +98,7 @@
     }
 
     thead th {
-      padding: 0.9rem 1rem;
+      padding: 0;
       text-align: left;
       font-size: 0.75rem;
       font-weight: 700;
@@ -89,13 +107,27 @@
       color: #555;
       border-bottom: 1px solid #eee;
       white-space: nowrap;
-      cursor: pointer;
       user-select: none;
     }
-    thead th:hover { color: #6c47ff; }
-    thead th .sort-icon { margin-left: 0.3rem; opacity: 0.5; }
-    thead th.active .sort-icon { opacity: 1; color: #6c47ff; }
-    thead th:focus { outline: 2px solid #6c47ff; outline-offset: -2px; }
+    .sort-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      width: 100%;
+      padding: 0.9rem 1rem;
+      background: none;
+      border: none;
+      font: inherit;
+      color: inherit;
+      text-transform: inherit;
+      letter-spacing: inherit;
+      cursor: pointer;
+      text-align: left;
+    }
+    .sort-btn:hover { color: #6c47ff; }
+    .sort-btn .sort-icon { opacity: 0.5; }
+    .sort-btn.active .sort-icon { opacity: 1; color: #6c47ff; }
+    .sort-btn:focus-visible { outline: 2px solid #6c47ff; outline-offset: -2px; }
     thead th[aria-sort="ascending"]  .sort-icon::after { content: ' (ascending)';  position: absolute; clip: rect(0,0,0,0); }
     thead th[aria-sort="descending"] .sort-icon::after { content: ' (descending)'; position: absolute; clip: rect(0,0,0,0); }
 
@@ -389,13 +421,13 @@
   <label for="search" class="sr-only">Search by order ID or merchant</label>
   <input type="search" id="search" placeholder="Search order ID…" oninput="applyFilters()" aria-label="Search by order ID or merchant" />
   <label for="status-filter" class="sr-only">Filter by status</label>
-  <select id="status-filter" onchange="applyFilters()" aria-label="Filter by payment status">
+  <select id="status-filter" onchange="applyFilters()" aria-label="Filter by payment status" aria-haspopup="listbox" aria-controls="status-filter" tabindex="0">
     <option value="">All statuses</option>
     <option value="Completed">Completed</option>
     <option value="PartiallyRefunded">Partially Refunded</option>
     <option value="FullyRefunded">Fully Refunded</option>
   </select>
-  <button class="btn btn-outline" onclick="resetFilters()">Reset filters</button>
+  <button class="btn btn-outline" id="reset-filters-btn" onclick="resetFilters()" tabindex="0">Reset filters</button>
 </div>
 
 <!-- Desktop table -->
@@ -404,11 +436,11 @@
     <caption class="sr-only">Payment history records, sortable by column</caption>
     <thead>
       <tr>
-        <th scope="col" onclick="sortBy('order_id')">Order ID <span class="sort-icon" aria-hidden="true">↕</span></th>
-        <th scope="col" onclick="sortBy('merchant_address')">Merchant <span class="sort-icon" aria-hidden="true">↕</span></th>
-        <th scope="col" onclick="sortBy('amount')">Amount <span class="sort-icon" aria-hidden="true">↕</span></th>
-        <th scope="col" onclick="sortBy('status')">Status <span class="sort-icon" aria-hidden="true">↕</span></th>
-        <th scope="col" onclick="sortBy('paid_at')">Date <span class="sort-icon" aria-hidden="true">↕</span></th>
+        <th scope="col" aria-sort="none"><button type="button" class="sort-btn" data-sort-key="order_id" onclick="sortBy('order_id')">Order ID <span class="sort-icon" aria-hidden="true">↕</span></button></th>
+        <th scope="col" aria-sort="none"><button type="button" class="sort-btn" data-sort-key="merchant_address" onclick="sortBy('merchant_address')">Merchant <span class="sort-icon" aria-hidden="true">↕</span></button></th>
+        <th scope="col" aria-sort="none"><button type="button" class="sort-btn" data-sort-key="amount" onclick="sortBy('amount')">Amount <span class="sort-icon" aria-hidden="true">↕</span></button></th>
+        <th scope="col" aria-sort="none"><button type="button" class="sort-btn" data-sort-key="status" onclick="sortBy('status')">Status <span class="sort-icon" aria-hidden="true">↕</span></button></th>
+        <th scope="col" aria-sort="none"><button type="button" class="sort-btn" data-sort-key="paid_at" onclick="sortBy('paid_at')">Date <span class="sort-icon" aria-hidden="true">↕</span></button></th>
       </tr>
     </thead>
     <tbody id="table-body" aria-busy="true" aria-label="Loading payment history">
@@ -446,14 +478,15 @@
 
 <!-- Pagination -->
 <nav class="pagination" aria-label="Payment history pagination">
-  <button class="btn btn-outline" id="prev-btn" onclick="prevPage()" disabled aria-label="Go to previous page">← Prev</button>
+  <button type="button" class="btn btn-outline" id="prev-btn" onclick="prevPage()" disabled aria-label="Go to previous page">← Prev</button>
   <span class="page-info" id="page-info" aria-live="polite" aria-atomic="true"></span>
-  <button class="btn btn-outline" id="next-btn" onclick="nextPage()" disabled aria-label="Go to next page">Next →</button>
+  <button type="button" class="btn btn-outline" id="next-btn" onclick="nextPage()" disabled aria-label="Go to next page">Next →</button>
 </nav>
 
 </main>
 
 <script src="payment-history.js"></script>
+<script src="filter-keyboard.js"></script>
 <script>
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {

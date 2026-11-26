@@ -23,6 +23,7 @@
 - [ ] `cargo clippy` passes with no warnings
 - [ ] `cargo fmt` applied
 - [ ] WASM build succeeds (`cargo build --target wasm32-unknown-unknown --release`)
+- [ ] Testnet integration tests pass (`npm run test:integration` in `sdk/`, requires `STELLAR_TESTNET_KEY`)
 
 ## Related Issues
 

@@ -12,19 +12,22 @@
   --color-surface-alt:    #f0f2f5;
   --color-border:         #e0e0e6;
   --color-text:           #0b1726;
-  --color-text-muted:     #5a6880;
-  --color-accent:         #0b66ff;
-  --color-accent-hover:   #0050cc;
+  --color-text-muted:     #4a5568;
+  --color-accent:         #0b5cd6;
+  --color-accent-hover:   #0047a8;
   --color-accent-text:    #ffffff;
-  --color-danger:         #d63031;
-  --color-danger-hover:   #b02020;
-  --color-success:        #00b894;
+  --color-danger:         #c0392b;
+  --color-danger-hover:   #962d22;
+  --color-success:        #0a7d5a;
   --color-warning:        #fdcb6e;
-  --color-warning-text:   #7a5200;
+  --color-warning-text:   #6b4700;
 
-  /* Status indicator colours */
-  --color-live:           #00b894;   /* green  */
-  --color-reconnecting:   #fdcb6e;   /* yellow */
+  /* Status indicator colours (darkened for AA contrast on light surfaces) */
+  --color-live:           #0a7d5a;   /* green  */
+  --color-reconnecting:   #8a5a00;   /* amber  */
+
+  /* Focus ring (≥3:1 against adjacent colours) */
+  --color-focus-ring:     #0b5cd6;
 
   /* Shadows */
   --shadow-card:          0 2px 8px rgba(0, 0, 0, 0.07);
@@ -54,6 +57,8 @@
   --color-live:           #3fb950;
   --color-reconnecting:   #d29922;
 
+  --color-focus-ring:     #79b8ff;
+
   --shadow-card:          0 2px 8px rgba(0, 0, 0, 0.4);
 }
 
@@ -77,6 +82,8 @@
 
     --color-live:           #3fb950;
     --color-reconnecting:   #d29922;
+
+    --color-focus-ring:     #79b8ff;
 
     --shadow-card:          0 2px 8px rgba(0, 0, 0, 0.4);
   }
@@ -104,8 +111,8 @@
   background: var(--color-border);
 }
 
-.theme-toggle:focus {
-  outline: 3px solid rgba(88, 166, 255, 0.4);
+.theme-toggle:focus-visible {
+  outline: 3px solid var(--color-focus-ring);
   outline-offset: 2px;
 }
 
@@ -124,11 +131,13 @@
 .status-indicator.live {
   color: var(--color-live);
   border-color: var(--color-live);
+  background: var(--color-surface);
 }
 
 .status-indicator.reconnecting {
   color: var(--color-reconnecting);
   border-color: var(--color-reconnecting);
+  background: var(--color-surface);
 }
 
 .status-indicator::before {

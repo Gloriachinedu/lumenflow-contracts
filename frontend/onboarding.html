@@ -9,7 +9,9 @@
     (function() {
       try {
         var stored = localStorage.getItem('lf-theme');
-        var theme = stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        var theme = (stored === 'dark' || stored === 'light')
+          ? stored
+          : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
         document.documentElement.setAttribute('data-theme', theme);
       } catch (e) {}
     })();
@@ -18,6 +20,12 @@
   <title>Merchant Onboarding – LumenFlow</title>
   <meta name="description" content="Register your business on LumenFlow in a few simple steps." />
   <link rel="stylesheet" href="styles.css" />
+  <!--
+    SRI policy: every external (CDN) <script>/<link rel="stylesheet"> MUST carry
+    integrity="sha384-…" and crossorigin="anonymous". CI verifies this.
+    To regenerate hashes after a CDN dependency upgrade, see
+    docs/sri-update-process.md (e.g. `npm run sri:update`).
+  -->
   <style>
     body { align-items: center; }
 
@@ -76,6 +84,18 @@
     .step-node.active   .step-label { color: #6c47ff; font-weight: 600; }
     .step-node.completed .step-label { color: #6c47ff; }
 
+    /* ── Focus visibility (WCAG 2.4.7) ───────────────────────────────────── */
+    .wallet-btn:focus-visible,
+    .btn:focus-visible,
+    .btn-link:focus-visible,
+    .next-steps-list a:focus-visible,
+    .wizard-card a.btn:focus-visible {
+      outline: 3px solid #6c47ff;
+      outline-offset: 2px;
+    }
+    .wizard-card a.btn:focus-visible { outline-offset: 3px; }
+=======
+
     /* ── Wizard card ─────────────────────────────────────────────────────── */
     .wizard-card {
       background: #fff;
@@ -116,7 +136,8 @@
       padding: 1rem;
       text-align: center;
     }
-    .benefit-card .icon { font-size: 1.75rem; margin-bottom: 0.5rem; }
+    .benefit-card .icon { font-size: 1.75rem; margin-bottom: 0.5rem; line-height: 1; }
+=======
     .benefit-card strong { display: block; font-size: 0.82rem; color: #1a1a2e; }
     .benefit-card span { font-size: 0.75rem; color: #888; }
 
@@ -255,26 +276,26 @@
 </nav>
 
 <!-- Step indicator -->
-<ol class="stepper wizard-steps" id="stepIndicator" aria-label="Onboarding steps">
-  <li class="step-node active" id="step-node-1">
-    <div class="step-circle" id="step-circle-1" aria-label="Step 1: Welcome">1</div>
-    <div class="step-label">Welcome</div>
+<ol class="wizard-steps" id="stepIndicator" aria-label="Onboarding steps">
+  <li class="step-node active" id="step-node-1" aria-current="step">
+    <span class="step-circle" id="step-circle-1" aria-hidden="true">1</span>
+    <span class="step-label">Welcome</span>
   </li>
   <li class="step-node" id="step-node-2">
-    <div class="step-circle" id="step-circle-2" aria-label="Step 2: Wallet">2</div>
-    <div class="step-label">Wallet</div>
+    <span class="step-circle" id="step-circle-2" aria-hidden="true">2</span>
+    <span class="step-label">Wallet</span>
   </li>
   <li class="step-node" id="step-node-3">
-    <div class="step-circle" id="step-circle-3" aria-label="Step 3: Details">3</div>
-    <div class="step-label">Details</div>
+    <span class="step-circle" id="step-circle-3" aria-hidden="true">3</span>
+    <span class="step-label">Details</span>
   </li>
   <li class="step-node" id="step-node-4">
-    <div class="step-circle" id="step-circle-4" aria-label="Step 4: Review">4</div>
-    <div class="step-label">Review</div>
+    <span class="step-circle" id="step-circle-4" aria-hidden="true">4</span>
+    <span class="step-label">Review</span>
   </li>
   <li class="step-node" id="step-node-5">
-    <div class="step-circle" id="step-circle-5" aria-label="Step 5: Done">5</div>
-    <div class="step-label">Done</div>
+    <span class="step-circle" id="step-circle-5" aria-hidden="true">5</span>
+    <span class="step-label">Done</span>
   </li>
 </ol>
 
@@ -298,29 +319,29 @@
 
   <!-- Step 1: Welcome -->
   <section class="wizard-step active" id="step-1" aria-labelledby="step1-heading">
-    <h2 id="step1-heading">Welcome to LumenFlow 🌟</h2>
+    <h2 id="step1-heading">Welcome to LumenFlow <span aria-hidden="true">🌟</span></h2>
     <p class="wizard-subtitle">Accept payments on Stellar in minutes. Let's get your merchant account set up.</p>
 
     <div class="benefits-grid">
       <div class="benefit-card">
-        <div class="icon">⚡</div>
+        <div class="icon" aria-hidden="true">⚡</div>
         <strong>Instant Settlement</strong>
         <span>Funds settle in seconds on Stellar</span>
       </div>
       <div class="benefit-card">
-        <div class="icon">💸</div>
+        <div class="icon" aria-hidden="true">💸</div>
         <strong>Low Fees</strong>
         <span>Minimal platform fees, no hidden costs</span>
       </div>
       <div class="benefit-card">
-        <div class="icon">🔐</div>
+        <div class="icon" aria-hidden="true">🔐</div>
         <strong>Multi-sig Security</strong>
         <span>Optional multi-party approval for payments</span>
       </div>
     </div>
 
     <div class="wizard-nav">
-      <button class="btn btn-primary btn-full" onclick="goToStep(2)">Get Started →</button>
+      <button class="btn btn-primary btn-full" onclick="goToStep(2)">Get Started <span aria-hidden="true">→</span></button>
     </div>
   </section>
 
@@ -331,28 +352,28 @@
 
     <div class="wallet-options">
       <button class="wallet-btn" id="btn-freighter" onclick="connectFreighter()">
-        <span>🔑</span> Connect Freighter
+        <span aria-hidden="true">🔑</span> Connect Freighter
       </button>
       <button class="wallet-btn" id="btn-albedo" onclick="connectAlbedo()">
-        <span>🔑</span> Connect Albedo
+        <span aria-hidden="true">🔑</span> Connect Albedo
       </button>
     </div>
 
     <div class="field">
-      <label for="wallet-address">Connected Address</label>
-      <div class="address-display" id="wallet-address" aria-live="polite">Not connected — click a wallet above</div>
+      <span class="field-label" id="wallet-address-label">Connected Address</span>
+      <div class="address-display" id="wallet-address" role="status" aria-live="polite" aria-labelledby="wallet-address-label">Not connected — click a wallet above</div>
     </div>
 
     <div id="already-registered" class="alert alert-info" style="display:none">
-      ℹ️ This address is already registered. You can proceed or <a href="history.html">view your dashboard</a>.
+      <span aria-hidden="true">ℹ️</span> This address is already registered. You can proceed or <a href="history.html">view your dashboard</a>.
     </div>
 
     <div class="wizard-nav">
-      <button class="btn btn-outline" onclick="goToStep(1)">← Back</button>
-      <button class="btn btn-primary" id="btn-next-2" onclick="goToStep(3)">Continue →</button>
+      <button class="btn btn-outline" onclick="goToStep(1)"><span aria-hidden="true">←</span> Back</button>
+      <button class="btn btn-primary" id="btn-next-2" onclick="goToStep(3)">Continue <span aria-hidden="true">→</span></button>
     </div>
 
-    <p style="font-size:0.78rem;color:#aaa;margin-top:0.75rem;text-align:center">
+    <p style="font-size:0.78rem;color:#767676;margin-top:0.75rem;text-align:center">
       No wallet? <button class="btn-link" onclick="useDemo()">Continue in demo mode</button>
     </p>
   </section>
@@ -364,27 +385,30 @@
 
     <form id="business-form" novalidate>
       <div class="field">
-        <label for="biz-name">Business Name <span style="color:#e53e3e">*</span></label>
-        <input type="text" id="biz-name" placeholder="e.g. Acme Store" maxlength="80" autocomplete="organization" />
-        <div class="err-msg" id="err-biz-name">Business name is required.</div>
+        <label for="biz-name">Business Name <span style="color:#e53e3e" aria-hidden="true">*</span></label>
+        <input type="text" id="biz-name" placeholder="e.g. Acme Store" maxlength="80" autocomplete="organization"
+          aria-required="true" aria-describedby="err-biz-name" />
+        <div class="err-msg" id="err-biz-name" role="alert">Business name is required.</div>
       </div>
 
       <div class="field">
-        <label for="biz-desc">Description <span style="color:#e53e3e">*</span></label>
+        <label for="biz-desc">Description <span style="color:#e53e3e" aria-hidden="true">*</span></label>
         <textarea id="biz-desc" rows="3" placeholder="Brief description of your products or services…" maxlength="280"
+          aria-required="true" aria-describedby="err-biz-desc"
           style="width:100%;padding:0.55rem 0.75rem;border:1.5px solid #dde1e7;border-radius:8px;font-size:0.9rem;outline:none;resize:vertical;transition:border-color 0.15s;font-family:inherit"></textarea>
-        <div class="err-msg" id="err-biz-desc">Description is required.</div>
+        <div class="err-msg" id="err-biz-desc" role="alert">Description is required.</div>
       </div>
 
       <div class="field">
-        <label for="biz-email">Contact Email <span style="color:#e53e3e">*</span></label>
-        <input type="email" id="biz-email" placeholder="support@yourbusiness.com" autocomplete="email" />
-        <div class="err-msg" id="err-biz-email">A valid email address is required.</div>
+        <label for="biz-email">Contact Email <span style="color:#e53e3e" aria-hidden="true">*</span></label>
+        <input type="email" id="biz-email" placeholder="support@yourbusiness.com" autocomplete="email"
+          aria-required="true" aria-describedby="err-biz-email" />
+        <div class="err-msg" id="err-biz-email" role="alert">A valid email address is required.</div>
       </div>
 
       <div class="field">
-        <label for="biz-category">Category <span style="color:#e53e3e">*</span></label>
-        <select id="biz-category">
+        <label for="biz-category">Category <span style="color:#e53e3e" aria-hidden="true">*</span></label>
+        <select id="biz-category" aria-required="true" aria-describedby="err-biz-category">
           <option value="">— Select a category —</option>
           <option value="Retail">Retail</option>
           <option value="Services">Services</option>
@@ -392,13 +416,13 @@
           <option value="Food">Food &amp; Beverage</option>
           <option value="Other">Other</option>
         </select>
-        <div class="err-msg" id="err-biz-category">Please select a category.</div>
+        <div class="err-msg" id="err-biz-category" role="alert">Please select a category.</div>
       </div>
     </form>
 
     <div class="wizard-nav">
-      <button class="btn btn-outline" onclick="goToStep(2)">← Back</button>
-      <button class="btn btn-primary" onclick="validateAndNext()">Continue →</button>
+      <button class="btn btn-outline" onclick="goToStep(2)"><span aria-hidden="true">←</span> Back</button>
+      <button class="btn btn-primary" onclick="validateAndNext()">Continue <span aria-hidden="true">→</span></button>
     </div>
   </section>
 
@@ -410,39 +434,39 @@
     <div id="review-summary"></div>
 
     <div class="fee-info">
-      💡 Platform fee: <strong>2.5%</strong> per transaction · Refund window: <strong>30 days</strong> · Min refund: <strong>100 stroops</strong>
+      <span aria-hidden="true">💡</span> Platform fee: <strong>2.5%</strong> per transaction · Refund window: <strong>30 days</strong> · Min refund: <strong>100 stroops</strong>
     </div>
 
     <button class="btn btn-primary btn-full" id="btn-register" onclick="registerMerchant()">
-      🚀 Register Merchant
+      <span aria-hidden="true">🚀</span> Register Merchant
     </button>
 
-    <div class="tx-status" id="tx-status"></div>
+    <div class="tx-status" id="tx-status" role="status" aria-live="polite"></div>
 
     <div class="wizard-nav" style="margin-top:1rem">
-      <button class="btn btn-outline" onclick="goToStep(3)">← Back</button>
+      <button class="btn btn-outline" onclick="goToStep(3)"><span aria-hidden="true">←</span> Back</button>
     </div>
   </section>
 
   <!-- Step 5: Done -->
   <section class="wizard-step" id="step-5" aria-labelledby="step5-heading">
-    <h2 id="step5-heading">🎉 You're Registered!</h2>
+    <h2 id="step5-heading"><span aria-hidden="true">🎉</span> You're Registered!</h2>
     <p class="wizard-subtitle">Your merchant profile is live on the Stellar network. Here's what to do next.</p>
 
     <div class="field">
-      <label>Your Merchant Address</label>
-      <div class="done-address" id="done-address" aria-live="polite">—</div>
+      <span class="field-label" id="done-address-label">Your Merchant Address</span>
+      <div class="done-address" id="done-address" role="status" aria-live="polite" aria-labelledby="done-address-label">—</div>
     </div>
 
     <ul class="next-steps-list">
-      <li>✅ <span>Share your <a href="receipt.html">payment receipt link</a> with customers</span></li>
-      <li>✅ <span>Browse your <a href="history.html">payment history</a></span></li>
-      <li>✅ <span>Manage refunds from your <a href="../dashboard/merchant-dashboard/index.html">merchant dashboard</a></span></li>
-      <li>📖 <span>Read the <a href="../docs/merchant-onboarding.md">onboarding guide</a> for advanced settings</span></li>
+      <li><span aria-hidden="true">✅</span> <span>Share your <a href="receipt.html">payment receipt link</a> with customers</span></li>
+      <li><span aria-hidden="true">✅</span> <span>Browse your <a href="history.html">payment history</a></span></li>
+      <li><span aria-hidden="true">✅</span> <span>Manage refunds from your <a href="../dashboard/merchant-dashboard/index.html">merchant dashboard</a></span></li>
+      <li><span aria-hidden="true">📖</span> <span>Read the <a href="../docs/merchant-onboarding.md">onboarding guide</a> for advanced settings</span></li>
     </ul>
 
     <a href="../dashboard/merchant-dashboard/index.html" class="btn btn-primary btn-full" style="display:block;text-align:center;text-decoration:none;line-height:2.5">
-      Go to Dashboard →
+      Go to Dashboard <span aria-hidden="true">→</span>
     </a>
   </section>
 
@@ -594,20 +618,17 @@
       node.setAttribute('aria-label', `Step ${i} of ${TOTAL_STEPS}: ${STEP_LABELS[i]}`);
 
       if (i < step) {
-        // Completed step — show checkmark
+        // Completed step — show checkmark (decorative; status conveyed via aria-current + label)
         node.classList.add('completed');
         circle.textContent = '✓';
-        circle.setAttribute('aria-label', `Step ${i}: ${STEP_LABELS[i]} — completed`);
       } else if (i === step) {
         // Current step
         node.classList.add('active');
         node.setAttribute('aria-current', 'step');
         circle.textContent = String(i);
-        circle.setAttribute('aria-label', `Step ${i}: ${STEP_LABELS[i]} — current`);
       } else {
         // Future step
         circle.textContent = String(i);
-        circle.setAttribute('aria-label', `Step ${i}: ${STEP_LABELS[i]} — upcoming`);
       }
     }
   }
@@ -769,7 +790,10 @@
       const err   = document.getElementById(id);
       const input = document.getElementById(fieldId);
       err.classList.toggle('visible', show);
-      if (input) input.classList.toggle('error', show);
+      if (input) {
+        input.classList.toggle('error', show);
+        input.setAttribute('aria-invalid', show ? 'true' : 'false');
+      }
       if (show) valid = false;
     }
 
@@ -786,6 +810,15 @@
 
     if (!valid) {
       analytics.track('business_details_validation_failed', { fields: failedFields });
+      // Move focus to the first invalid field so keyboard/screen-reader users
+      // are taken directly to the problem.
+      const firstInvalidId = {
+        name: 'biz-name',
+        description: 'biz-desc',
+        email: 'biz-email',
+        category: 'biz-category',
+      }[failedFields[0]];
+      if (firstInvalidId) document.getElementById(firstInvalidId).focus();
       return;
     }
 
@@ -826,9 +859,10 @@
     const status = document.getElementById('tx-status');
 
     btn.disabled = true;
-    btn.textContent = '⏳ Submitting…';
+    btn.setAttribute('aria-busy', 'true');
+    btn.textContent = 'Submitting…';
     status.className = 'tx-status pending';
-    status.textContent = '⏳ Transaction pending — waiting for network confirmation…';
+    status.textContent = 'Transaction pending — waiting for network confirmation…';
 
     const submitStart = analytics.elapsedMs();
     analytics.track('merchant_registration_submitted', { is_demo: form.isDemo });
@@ -843,8 +877,9 @@
       await new Promise(r => setTimeout(r, 2000));
 
       status.className = 'tx-status success';
-      status.textContent = '✅ Registration confirmed! Your merchant profile is live.';
-      btn.textContent = '✅ Registered';
+      status.textContent = 'Registration confirmed! Your merchant profile is live.';
+      btn.textContent = 'Registered';
+      btn.removeAttribute('aria-busy');
 
       analytics.track('merchant_registration_succeeded', {
         is_demo: form.isDemo,

@@ -240,18 +240,24 @@
       { label: 'Contact Email',  value: form.email },
       { label: 'Category',       value: form.category },
     ];
-    document.getElementById('review-summary').innerHTML = rows.map(r => `
-      <div class="review-row">
-        <span class="review-label">${r.label}</span>
-        <span class="review-value">${escapeHtml(r.value)}</span>
-      </div>`).join('');
-  }
+    const summary = document.getElementById('review-summary');
+    summary.textContent = '';
+    rows.forEach(r => {
+      const row = document.createElement('div');
+      row.className = 'review-row';
 
-  function escapeHtml(str) {
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+      const label = document.createElement('span');
+      label.className = 'review-label';
+      label.textContent = r.label;
+
+      const value = document.createElement('span');
+      value.className = 'review-value';
+      value.textContent = r.value;
+
+      row.appendChild(label);
+      row.appendChild(value);
+      summary.appendChild(row);
+    });
   }
 
   // ── Register (step 4 → 5) ──────────────────────────────────────────────────
