@@ -110,6 +110,9 @@ If you are a developer integrating the LumenFlow SDK (Node.js) after merchant re
 **Validation errors:**
 - All fields on Step 3 are required. Ensure the email is in `user@domain.tld` format.
 
+**Payment failures after registration:**
+- For common payment errors (signature expired, merchant not active, token not allowed, and more), see the [Merchant Payment Failures Troubleshooting Runbook](troubleshooting/merchant-payment-failures.md).
+
 ---
 
 ## Related Resources
@@ -123,3 +126,4 @@ If you are a developer integrating the LumenFlow SDK (Node.js) after merchant re
 - [Merchant Onboarding — Completion Metrics & Funnel Events](merchant-onboarding-metrics.md)
 - [Merchant Payout & Settlement Reporting](merchant-payout-reporting.md) — including [Accounting Integration (QuickBooks / Xero)](merchant-payout-reporting.md#accounting-integration-quickbooks--xero)
 - [Merchant-Facing Reconciliation Between Payouts and Payments](merchant-payment-reconciliation.md)
+- [Merchant Payment Failures Troubleshooting Runbook](troubleshooting/merchant-payment-failures.md) — causes, symptoms, and resolution steps for common payment error codes
