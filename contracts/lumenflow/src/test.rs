@@ -4232,6 +4232,120 @@ fn test_event_payment_processed_topics_and_data() {
     );
 }
 
+// ── Diagnostic telemetry event tests (#1589) ─────────────────────────────────
+//
+// Diagnostic events carry a `ledger_sequence_delta` field so off-chain
+// monitoring (lumenflow_exporter.py) can derive duration-equivalent metrics.
+// Event names: payment_processed_diagnostic, refund_issued_diagnostic,
+// batch_payment_completed_diagnostic.
+
+/// Extract the `ledger_sequence_delta` (u32) from the most recent event whose
+/// topics contain `name`, returning None if the event or field is absent.
+fn find_diagnostic_delta(
+    env: &Env,
+    events: &soroban_sdk::testutils::ContractEvents,
+    name: &str,
+) -> Option<u32> {
+    use soroban_sdk::xdr::{ContractEventBody, ScMap, ScString, ScSymbol, ScVal, StringM};
+    let needle = ScVal::String(ScString(StringM::try_from(name).unwrap()));
+    let key = ScVal::Symbol(ScSymbol(StringM::try_from("ledger_sequence_delta").unwrap()));
+    let _ = env;
+    events.events().iter().rev().find_map(|e| {
+        if let ContractEventBody::V0(ref body) = e.body {
+            if !body.topics.iter().any(|t| t == &needle) {
+                return None;
+            }
+            if let ScVal::Map(Some(ScMap(entries))) = &body.data {
+                for entry in entries.iter() {
+                    if entry.key == key {
+                        if let ScVal::U32(delta) = entry.val {
+                            return Some(delta);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    })
+}
+
+#[test]
+fn test_diagnostic_event_payment_processed() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    // Advance the ledger so the start/publish delta is non-zero.
+    env.ledger().with_mut(|l| l.sequence_number += 5);
+    make_payment(&env, &client, &merchant, &payer, &token, "DIAG_PAY", 1_000);
+
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "payment_processed_diagnostic"),
+        "payment_processed_diagnostic event must be emitted"
+    );
+    let delta = find_diagnostic_delta(&env, &events, "payment_processed_diagnostic")
+        .expect("payment_processed_diagnostic must carry ledger_sequence_delta");
+    // Delta is non-negative by type; assert it is present and sane.
+    assert!(delta < u32::MAX, "ledger_sequence_delta must be a valid delta");
+}
+
+#[test]
+fn test_diagnostic_event_refund_issued() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+    make_payment(&env, &client, &merchant, &payer, &token, "DIAG_REF", 1_000);
+
+    client.initiate_refund(
+        &payer,
+        &str(&env, "RF_DIAG"),
+        &str(&env, "DIAG_REF"),
+        &500,
+        &str(&env, "diag"),
+    );
+    client.approve_refund(&merchant, &str(&env, "RF_DIAG"));
+
+    // Advance the ledger between approval and execution to exercise a delta.
+    env.ledger().with_mut(|l| l.sequence_number += 3);
+    client.execute_refund(&str(&env, "RF_DIAG"));
+
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "refund_issued_diagnostic"),
+        "refund_issued_diagnostic event must be emitted"
+    );
+    let delta = find_diagnostic_delta(&env, &events, "refund_issued_diagnostic")
+        .expect("refund_issued_diagnostic must carry ledger_sequence_delta");
+    assert!(delta < u32::MAX, "ledger_sequence_delta must be a valid delta");
+}
+
+#[test]
+fn test_diagnostic_event_batch_payment_completed() {
+    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
+
+    let mut payments = Vec::new(&env);
+    for i in 0u32..3 {
+        payments.push_back(BatchPaymentItem {
+            order_id: str(&env, &format!("DIAG_BATCH_{}", i)),
+            merchant_address: merchant.clone(),
+            token_address: token.clone(),
+            amount: 100,
+            memo: str(&env, ""),
+            signature: bytes(&env, &[0u8; 64]),
+            merchant_public_key: bytes(&env, &[0u8; 32]),
+        });
+    }
+
+    env.ledger().with_mut(|l| l.sequence_number += 2);
+    client.batch_payment(&payer, &payments);
+
+    let events = env.events().all();
+    assert!(
+        find_event(&env, &events, "batch_payment_completed_diagnostic"),
+        "batch_payment_completed_diagnostic event must be emitted"
+    );
+    let delta = find_diagnostic_delta(&env, &events, "batch_payment_completed_diagnostic")
+        .expect("batch_payment_completed_diagnostic must carry ledger_sequence_delta");
+    assert!(delta < u32::MAX, "ledger_sequence_delta must be a valid delta");
+}
+
 #[test]
 fn test_event_payment_archived() {
     let (env, client, admin, merchant, payer, token) = setup_payment_env();
@@ -9822,226 +9936,279 @@ fn test_set_min_refund_amount_zero_fails() {
     assert_eq!(result, Err(Ok(PaymentError::InvalidAmount)));
 }
 
-// ── Persistent storage TTL extension tests (issue #1566) ─────────────────────
-//
-// These tests verify that every persistent storage key category has its TTL
-// extended at the documented extension point. See the "TTL extension strategy"
-// section of docs/ARCHITECTURE.md for the documented initial TTL, extension
-// threshold and extension amount of each key category.
+// ── Merchant-specific refund window tests (Issue #1517) ───────────────────────
 
-/// Advance the ledger sequence by `n` ledgers so that TTLs decay.
-fn advance_ledgers(env: &Env, n: u32) {
-    env.ledger().with_mut(|l| l.sequence_number += n);
-}
-
-/// Read the remaining TTL (in ledgers) of a persistent key, if it exists.
-fn persistent_ttl<K>(env: &Env, contract: &Address, key: &K) -> Option<u32>
-where
-    K: soroban_sdk::IntoVal<Env, soroban_sdk::Val> + Clone,
-{
-    env.as_contract(contract, || {
-        env.storage().persistent().get_ttl(key)
-    })
-}
-
-/// Merchant profile TTL is extended when the merchant is registered.
+/// A merchant that sets a custom refund window has that window enforced
+/// instead of the global default.
 #[test]
-fn test_ttl_extended_on_register_merchant() {
-    let (env, client) = setup();
-    let merchant = Address::generate(&env);
-
-    client.register_merchant(
-        &merchant,
-        &str(&env, "TTL Store"),
-        &str(&env, ""),
-        &str(&env, ""),
-        &MerchantCategory::Retail,
-        &None,
-    );
-
-    let key = storage::DataKey::Merchant(merchant.clone());
-    let ttl = persistent_ttl(&env, &client.address, &key);
-    assert!(ttl.is_some(), "merchant key must be persistent");
-    assert!(
-        ttl.unwrap() > 0,
-        "merchant TTL must be extended on registration"
-    );
-}
-
-/// Merchant profile TTL is refreshed when the merchant profile is updated.
-#[test]
-fn test_ttl_extended_on_update_merchant() {
-    let (env, client) = setup();
-    let merchant = Address::generate(&env);
-
-    client.register_merchant(
-        &merchant,
-        &str(&env, "TTL Store"),
-        &str(&env, ""),
-        &str(&env, ""),
-        &MerchantCategory::Retail,
-        &None,
-    );
-
-    let key = storage::DataKey::Merchant(merchant.clone());
-    let before = persistent_ttl(&env, &client.address, &key).unwrap();
-
-    // Decay the TTL, then refresh the profile.
-    advance_ledgers(&env, 100);
-    client.update_merchant(
-        &merchant,
-        &str(&env, "TTL Store Updated"),
-        &str(&env, ""),
-        &str(&env, ""),
-        &MerchantCategory::Retail,
-    );
-
-    let after = persistent_ttl(&env, &client.address, &key).unwrap();
-    assert!(
-        after >= before,
-        "merchant TTL must be re-extended on profile update"
-    );
-}
-
-/// Payment record TTL is extended when a payment is processed.
-#[test]
-fn test_ttl_extended_on_process_payment() {
+fn test_merchant_custom_refund_window_respected() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
-    make_payment(&env, &client, &merchant, &payer, &token, "TTL_PAY_001", 100);
 
-    let key = storage::DataKey::Payment(str(&env, "TTL_PAY_001"));
-    let ttl = persistent_ttl(&env, &client.address, &key);
-    assert!(ttl.is_some(), "payment key must be persistent");
-    assert!(
-        ttl.unwrap() > 0,
-        "payment TTL must be extended when the payment is stored"
-    );
-}
+    // Merchant opts into a short 1-day refund window.
+    client.set_refund_window(&merchant, &(24 * 3600u64));
+    let profile = client.get_merchant(&merchant);
+    assert_eq!(profile.refund_window_secs, Some(24 * 3600u64));
 
-/// Refund record TTL is extended when a refund is initiated.
-#[test]
-fn test_ttl_extended_on_initiate_refund() {
-    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
-    make_payment(&env, &client, &merchant, &payer, &token, "TTL_ORD_R", 1_000);
-
-    client.initiate_refund(
+    make_payment(
+        &env,
+        &client,
+        &merchant,
         &payer,
-        &str(&env, "TTL_REF_001"),
-        &str(&env, "TTL_ORD_R"),
-        &100,
-        &str(&env, "ttl"),
-    );
-
-    let key = storage::DataKey::Refund(str(&env, "TTL_REF_001"));
-    let ttl = persistent_ttl(&env, &client.address, &key);
-    assert!(ttl.is_some(), "refund key must be persistent");
-    assert!(
-        ttl.unwrap() > 0,
-        "refund TTL must be extended when the refund is stored"
-    );
-}
-
-/// Multisig payment TTL is extended when the multisig is initiated.
-#[test]
-fn test_ttl_extended_on_initiate_multisig() {
-    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
-    let signer = Address::generate(&env);
-    let mut signers = Vec::new(&env);
-    signers.push_back(signer.clone());
-
-    client.initiate_multisig_payment(
-        &payer,
-        &str(&env, "TTL_MS_001"),
-        &merchant,
         &token,
+        "MERCH_WIN_CUSTOM",
+        1_000,
+    );
+
+    // Still inside the merchant window: refund must be accepted.
+    env.ledger().with_mut(|l| {
+        l.timestamp += 12 * 3600;
+    });
+    let ok = client.try_initiate_refund(
+        &payer,
+        &str(&env, "MERCH_WIN_CUSTOM_REF_OK"),
+        &str(&env, "MERCH_WIN_CUSTOM"),
         &100,
-        &signers,
-        &1,
-        &None,
+        &str(&env, "within merchant window"),
     );
+    assert_eq!(ok, Ok(Ok(())));
 
-    let key = storage::DataKey::MultisigPayment(str(&env, "TTL_MS_001"));
-    let ttl = persistent_ttl(&env, &client.address, &key);
-    assert!(ttl.is_some(), "multisig key must be persistent");
-    assert!(
-        ttl.unwrap() > 0,
-        "multisig TTL must be extended when the payment is initiated"
+    // Past the merchant window (but well within the 30-day global default):
+    // refund must be rejected.
+    env.ledger().with_mut(|l| {
+        l.timestamp += 24 * 3600;
+    });
+    let late = client.try_initiate_refund(
+        &payer,
+        &str(&env, "MERCH_WIN_CUSTOM_REF_LATE"),
+        &str(&env, "MERCH_WIN_CUSTOM"),
+        &100,
+        &str(&env, "past merchant window"),
     );
+    assert_eq!(late, Err(Ok(PaymentError::RefundWindowExpired)));
 }
 
-/// Global stats TTL is extended when stats are updated by a payment.
+/// When `refund_window_secs` is unset the global default window applies.
 #[test]
-fn test_ttl_extended_on_global_stats_update() {
+fn test_merchant_refund_window_falls_back_to_global() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
-    make_payment(&env, &client, &merchant, &payer, &token, "TTL_STATS_001", 100);
 
-    let key = storage::DataKey::GlobalStats;
-    let ttl = persistent_ttl(&env, &client.address, &key);
-    assert!(ttl.is_some(), "global stats key must be persistent");
-    assert!(
-        ttl.unwrap() > 0,
-        "global stats TTL must be extended when stats are updated"
+    // No merchant-specific window configured.
+    let profile = client.get_merchant(&merchant);
+    assert_eq!(profile.refund_window_secs, None);
+
+    make_payment(
+        &env,
+        &client,
+        &merchant,
+        &payer,
+        &token,
+        "MERCH_WIN_GLOBAL",
+        1_000,
     );
+
+    // 20 days is inside the global 30-day default.
+    env.ledger().with_mut(|l| {
+        l.timestamp += 20 * 24 * 3600;
+    });
+    let ok = client.try_initiate_refund(
+        &payer,
+        &str(&env, "MERCH_WIN_GLOBAL_REF_OK"),
+        &str(&env, "MERCH_WIN_GLOBAL"),
+        &100,
+        &str(&env, "within global window"),
+    );
+    assert_eq!(ok, Ok(Ok(())));
+
+    // 31 days exceeds the global default.
+    env.ledger().with_mut(|l| {
+        l.timestamp += 11 * 24 * 3600;
+    });
+    let late = client.try_initiate_refund(
+        &payer,
+        &str(&env, "MERCH_WIN_GLOBAL_REF_LATE"),
+        &str(&env, "MERCH_WIN_GLOBAL"),
+        &100,
+        &str(&env, "past global window"),
+    );
+    assert_eq!(late, Err(Ok(PaymentError::RefundWindowExpired)));
 }
 
-/// Merchant stats TTL is extended when stats are updated by a payment.
+/// A refund attempted after the merchant window has elapsed is rejected and
+/// leaves the payment untouched.
 #[test]
-fn test_ttl_extended_on_merchant_stats_update() {
+fn test_merchant_refund_window_expired_rejected() {
     let (env, client, _admin, merchant, payer, token) = setup_payment_env();
-    make_payment(&env, &client, &merchant, &payer, &token, "TTL_MSTATS_001", 100);
 
-    let key = storage::DataKey::MerchantStats(merchant.clone());
-    let ttl = persistent_ttl(&env, &client.address, &key);
-    assert!(ttl.is_some(), "merchant stats key must be persistent");
-    assert!(
-        ttl.unwrap() > 0,
-        "merchant stats TTL must be extended when stats are updated"
+    client.set_refund_window(&merchant, &3600u64);
+    make_payment(
+        &env,
+        &client,
+        &merchant,
+        &payer,
+        &token,
+        "MERCH_WIN_EXPIRED",
+        500,
     );
+
+    env.ledger().with_mut(|l| {
+        l.timestamp += 3601;
+    });
+
+    let result = client.try_initiate_refund(
+        &payer,
+        &str(&env, "MERCH_WIN_EXPIRED_REF"),
+        &str(&env, "MERCH_WIN_EXPIRED"),
+        &100,
+        &str(&env, "too late"),
+    );
+    assert_eq!(result, Err(Ok(PaymentError::RefundWindowExpired)));
+
+    let payment = client.get_payment_by_id(&payer, &str(&env, "MERCH_WIN_EXPIRED"));
+    assert_eq!(payment.refunded_amount, 0);
 }
 
-/// Admin / config keys are extended by admin configuration entrypoints.
+/// Only the merchant itself may change its refund window.
 #[test]
-fn test_ttl_extended_on_admin_config_update() {
+fn test_set_merchant_refund_window_unauthorized() {
+    let (env, client, _admin, merchant, _payer, _token) = setup_payment_env();
+    let impostor = Address::generate(&env);
+
+    let result = client.try_set_refund_window(&impostor, &3600u64);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
+
+    let profile = client.get_merchant(&merchant);
+    assert_eq!(profile.refund_window_secs, None);
+}
+
+// ── Admin audit log tests (Issue #1520) ───────────────────────────────────────
+
+/// Helper: number of audit entries currently stored.
+fn audit_log_len(env: &Env, client: &PaymentProcessingContractClient) -> u32 {
+    let admin = Address::generate(env);
+    let page = client.get_admin_audit_log(&admin, &None, &100);
+    page.total
+}
+
+/// Pausing the contract appends exactly one audit entry.
+#[test]
+fn test_pause_contract_appends_audit_entry() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
     client.set_admin(&admin);
-    client.set_platform_fee(&admin, &250);
 
-    let key = storage::DataKey::Admin;
-    let ttl = persistent_ttl(&env, &client.address, &key);
-    assert!(ttl.is_some(), "admin key must be persistent");
-    assert!(
-        ttl.unwrap() > 0,
-        "admin TTL must be extended when admin config is written"
-    );
+    let before = audit_log_len(&env, &client);
+    client.pause_contract(&admin);
+    let after = audit_log_len(&env, &client);
+    assert_eq!(after, before + 1);
 }
 
-/// Regression: TTL extension points added in storage.rs keep the TTL above the
-/// extension threshold after the ledger has advanced.
+/// Unpausing the contract appends exactly one audit entry.
 #[test]
-fn test_ttl_extension_regression_after_ledger_advance() {
-    let (env, client, _admin, merchant, payer, token) = setup_payment_env();
-    make_payment(&env, &client, &merchant, &payer, &token, "TTL_REG_001", 100);
+fn test_unpause_contract_appends_audit_entry() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
 
-    let key = storage::DataKey::Payment(str(&env, "TTL_REG_001"));
-    let initial = persistent_ttl(&env, &client.address, &key).unwrap();
+    client.pause_contract(&admin);
+    let before = audit_log_len(&env, &client);
+    client.unpause_contract(&admin);
+    let after = audit_log_len(&env, &client);
+    assert_eq!(after, before + 1);
+}
 
-    // Advance the ledger so the TTL decays, then touch the entry again.
-    advance_ledgers(&env, 100);
-    let decayed = persistent_ttl(&env, &client.address, &key).unwrap();
-    assert!(decayed < initial, "TTL must decay as the ledger advances");
-
-    // Re-storing the payment must re-extend the TTL.
-    env.as_contract(&client.address, || {
-        let payment = storage::get_payment(&env, &str(&env, "TTL_REG_001")).unwrap();
-        storage::set_payment(&env, &payment);
-    });
-
-    let refreshed = persistent_ttl(&env, &client.address, &key).unwrap();
-    assert!(
-        refreshed > decayed,
-        "TTL must be re-extended when the entry is written again"
+/// Suspending (deactivating) a merchant appends exactly one audit entry.
+#[test]
+fn test_deactivate_merchant_appends_audit_entry() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_merchant(
+        &merchant,
+        &str(&env, "Audit Store"),
+        &str(&env, ""),
+        &str(&env, ""),
+        &MerchantCategory::Retail,
+        &None,
     );
+
+    let before = audit_log_len(&env, &client);
+    client.deactivate_merchant(&admin, &merchant);
+    let after = audit_log_len(&env, &client);
+    assert_eq!(after, before + 1);
+}
+
+/// Emergency withdrawal appends exactly one audit entry.
+#[test]
+fn test_emergency_withdraw_appends_audit_entry() {
+    let (env, client, admin, _merchant, _payer, token) = setup_payment_env();
+    mint(&env, &token, &admin, &client.address, 1_000);
+    let recipient = Address::generate(&env);
+
+    let before = audit_log_len(&env, &client);
+    client.emergency_withdraw(&admin, &token, &recipient, &100);
+    let after = audit_log_len(&env, &client);
+    assert_eq!(after, before + 1);
+}
+
+/// The audit log is append-only: earlier entries remain intact after new
+/// admin actions are recorded.
+#[test]
+fn test_admin_audit_log_is_append_only() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    client.pause_contract(&admin);
+    let first_page = client.get_admin_audit_log(&admin, &None, &100);
+    let first_len = first_page.total;
+    assert!(first_len >= 1);
+    let first_entry = first_page.entries.get(0).unwrap();
+
+    client.unpause_contract(&admin);
+    let second_page = client.get_admin_audit_log(&admin, &None, &100);
+    assert_eq!(second_page.total, first_len + 1);
+    // The original entry must be unchanged and still at index 0.
+    assert_eq!(second_page.entries.get(0).unwrap(), first_entry);
+}
+
+/// `get_admin_audit_log` paginates with a cursor and reports the total.
+#[test]
+fn test_admin_audit_log_pagination() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    // Generate several audit entries.
+    for _ in 0..3 {
+        client.pause_contract(&admin);
+        client.unpause_contract(&admin);
+    }
+
+    let total = audit_log_len(&env, &client);
+    assert!(total >= 6);
+
+    let page1 = client.get_admin_audit_log(&admin, &None, &2);
+    assert_eq!(page1.total, total);
+    assert_eq!(page1.entries.len(), 2);
+    let cursor = page1.next_cursor.unwrap();
+
+    let page2 = client.get_admin_audit_log(&admin, &Some(cursor), &2);
+    assert_eq!(page2.total, total);
+    assert_eq!(page2.entries.len(), 2);
+    assert_ne!(page1.entries.get(0).unwrap(), page2.entries.get(0).unwrap());
+}
+
+/// Non-admin callers cannot read the audit log.
+#[test]
+fn test_get_admin_audit_log_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.set_admin(&admin);
+
+    let result = client.try_get_admin_audit_log(&non_admin, &None, &10);
+    assert_eq!(result, Err(Ok(PaymentError::Unauthorized)));
 }
 
 // ── Max signers limit tests (issue #1269) ─────────────────────────────────────

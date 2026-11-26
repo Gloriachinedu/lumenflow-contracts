@@ -234,3 +234,165 @@ describe('DEFAULT_MESSAGES', () => {
     }
   });
 });
+
+// ── Wallet status badge ───────────────────────────────────────────────────────
+
+/**
+ * Minimal DOM shim so the badge renderer can be exercised in Node.js.
+ * Supports the subset of the DOM API used by renderWalletStatusBadge:
+ * createElement, appendChild, setAttribute, textContent, className, dataset.
+ */
+function createFakeElement(tagName = 'div') {
+  const el = {
+    tagName: tagName.toUpperCase(),
+    children: [],
+    attributes: {},
+    dataset: {},
+    className: '',
+    _textContent: '',
+    get textContent() {
+      return this._textContent;
+    },
+    set textContent(value) {
+      this._textContent = String(value);
+    },
+    setAttribute(name, value) {
+      this.attributes[name] = String(value);
+    },
+    getAttribute(name) {
+      return Object.prototype.hasOwnProperty.call(this.attributes, name)
+        ? this.attributes[name]
+        : null;
+    },
+    appendChild(child) {
+      this.children.push(child);
+      return child;
+    },
+    querySelector(selector) {
+      // Supports simple class selectors like '.wallet-status-label'
+      const cls = selector.startsWith('.') ? selector.slice(1) : null;
+      if (!cls) return null;
+      for (const child of this.children) {
+        if (child.className && child.className.split(/\s+/).includes(cls)) {
+          return child;
+        }
+        const nested = child.querySelector ? child.querySelector(selector) : null;
+        if (nested) return nested;
+      }
+      return null;
+    },
+  };
+  return el;
+}
+
+function installFakeDocument() {
+  global.document = {
+    createElement: (tag) => createFakeElement(tag),
+  };
+}
+
+function uninstallFakeDocument() {
+  delete global.document;
+}
+
+const {
+  renderWalletStatusBadge,
+  WALLET_CHANGE_EVENT,
+  WALLET_STATUS_LABELS,
+} = await import('./wallet-status.js');
+
+describe('renderWalletStatusBadge', () => {
+  it('renders a connected badge with aria-live and connected label', () => {
+    installFakeDocument();
+    try {
+      const badge = renderWalletStatusBadge({ connected: true, address: 'GABC123' });
+
+      assert.ok(badge, 'badge element should be returned');
+      assert.equal(badge.getAttribute('aria-live'), 'polite');
+      assert.equal(badge.getAttribute('role'), 'status');
+      assert.equal(badge.getAttribute('data-wallet-connected'), 'true');
+
+      const label = badge.querySelector('.wallet-status-label');
+      assert.ok(label, 'badge should contain a label element');
+      assert.equal(label.textContent, WALLET_STATUS_LABELS.connected);
+    } finally {
+      uninstallFakeDocument();
+    }
+  });
+
+  it('renders a disconnected badge with aria-live and disconnected label', () => {
+    installFakeDocument();
+    try {
+      const badge = renderWalletStatusBadge({ connected: false });
+
+      assert.ok(badge, 'badge element should be returned');
+      assert.equal(badge.getAttribute('aria-live'), 'polite');
+      assert.equal(badge.getAttribute('role'), 'status');
+      assert.equal(badge.getAttribute('data-wallet-connected'), 'false');
+
+      const label = badge.querySelector('.wallet-status-label');
+      assert.ok(label, 'badge should contain a label element');
+      assert.equal(label.textContent, WALLET_STATUS_LABELS.disconnected);
+    } finally {
+      uninstallFakeDocument();
+    }
+  });
+
+  it('updates label and aria attributes on lf:walletchange reconnect event', () => {
+    installFakeDocument();
+    try {
+      const badge = renderWalletStatusBadge({ connected: false });
+
+      const label = badge.querySelector('.wallet-status-label');
+      assert.equal(label.textContent, WALLET_STATUS_LABELS.disconnected);
+
+      // Simulate a reconnect: wallet was disconnected, now connected again.
+      const event = {
+        type: WALLET_CHANGE_EVENT,
+        detail: { connected: true, address: 'GXYZ789' },
+      };
+      badge.__handleWalletChange(event);
+
+      assert.equal(label.textContent, WALLET_STATUS_LABELS.connected);
+      assert.equal(badge.getAttribute('data-wallet-connected'), 'true');
+      assert.equal(badge.getAttribute('aria-live'), 'polite');
+    } finally {
+      uninstallFakeDocument();
+    }
+  });
+
+  it('updates label on lf:walletchange disconnect event', () => {
+    installFakeDocument();
+    try {
+      const badge = renderWalletStatusBadge({ connected: true, address: 'GABC123' });
+
+      const label = badge.querySelector('.wallet-status-label');
+      assert.equal(label.textContent, WALLET_STATUS_LABELS.connected);
+
+      badge.__handleWalletChange({
+        type: WALLET_CHANGE_EVENT,
+        detail: { connected: false },
+      });
+
+      assert.equal(label.textContent, WALLET_STATUS_LABELS.disconnected);
+      assert.equal(badge.getAttribute('data-wallet-connected'), 'false');
+    } finally {
+      uninstallFakeDocument();
+    }
+  });
+
+  it('exposes the lf:walletchange event name constant', () => {
+    assert.equal(WALLET_CHANGE_EVENT, 'lf:walletchange');
+  });
+
+  it('WALLET_STATUS_LABELS has non-empty connected and disconnected labels', () => {
+    assert.ok(
+      typeof WALLET_STATUS_LABELS.connected === 'string' &&
+      WALLET_STATUS_LABELS.connected.length > 0
+    );
+    assert.ok(
+      typeof WALLET_STATUS_LABELS.disconnected === 'string' &&
+      WALLET_STATUS_LABELS.disconnected.length > 0
+    );
+  });
+});
