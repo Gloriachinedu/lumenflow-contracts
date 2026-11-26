@@ -498,7 +498,7 @@
 
 <nav class="lf-nav" aria-label="LumenFlow navigation">
   <span class="lf-nav__brand">⚡ LumenFlow</span>
-  <div id="wallet-status-container"></div>
+  <div id="wallet-status-container" aria-live="polite" aria-atomic="true"></div>
   <div id="lf-lang-nav"></div>
 </nav>
 
@@ -631,6 +631,10 @@
 
 <script type="module" src="history.js"></script>
 <script type="module" src="filter-keyboard.js"></script>
+<script type="module">
+  import { initWalletStatus } from './wallet-status.js';
+  initWalletStatus(document.getElementById('wallet-status-container'));
+</script>
 <script type="module">
   import { initDarkMode } from './dark-mode.js';
   initDarkMode();
