@@ -331,6 +331,35 @@ pub fn get_merchant(env: &Env, address: &Address) -> Option<Merchant> {
         .get(&DataKey::Merchant(address.clone()))
 }
 
+/// Return the merchant-specific refund window in seconds, if the merchant has
+/// configured one.  `None` means the caller should fall back to the global
+/// default via [`get_refund_window`].
+pub fn get_merchant_refund_window(env: &Env, address: &Address) -> Option<u64> {
+    get_merchant(env, address).and_then(|m| m.refund_window_secs)
+}
+
+/// Persist a merchant-specific refund window on the merchant profile.
+///
+/// Returns `PaymentError::MerchantNotFound` if the merchant is not registered.
+/// The caller is responsible for authorization (merchant only) and for
+/// validating the window against [`MIN_REFUND_WINDOW_SECS`].
+pub fn set_merchant_refund_window(
+    env: &Env,
+    address: &Address,
+    window_secs: u64,
+) -> Result<(), PaymentError> {
+    let mut merchant = get_merchant(env, address).ok_or(PaymentError::MerchantNotFound)?;
+    merchant.refund_window_secs = Some(window_secs);
+    set_merchant(env, &merchant);
+    Ok(())
+}
+
+/// Resolve the effective refund window for `merchant`: the merchant-specific
+/// value when set, otherwise the global default.
+pub fn get_effective_refund_window(env: &Env, merchant: &Address) -> u64 {
+    get_merchant_refund_window(env, merchant).unwrap_or_else(|| get_refund_window(env))
+}
+
 pub fn set_merchant(env: &Env, merchant: &Merchant) {
     let key = DataKey::Merchant(merchant.address.clone());
     env.storage().persistent().set(&key, merchant);

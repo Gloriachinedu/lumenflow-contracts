@@ -160,6 +160,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         require_admin_rate_limited(&env, &admin)?;
         storage::set_cleanup_period(&env, period);
+        Self::append_audit(&env, AdminActionType::SetPaymentCleanupPeriod, &admin, String::from_str(&env, ""));
         env.events().publish(
             ("lumenflow", "admin_action"),
             (
@@ -212,6 +213,7 @@ impl PaymentProcessingContract {
         require_admin_rate_limited(&env, &admin)?;
         require_positive(threshold)?;
         storage::set_large_payment_threshold(&env, threshold);
+        Self::append_audit(&env, AdminActionType::SetLargePaymentThreshold, &admin, String::from_str(&env, ""));
         env.events().publish(
             ("lumenflow", "admin_action"),
             (
@@ -234,6 +236,7 @@ impl PaymentProcessingContract {
             return Err(PaymentError::InvalidInput);
         }
         storage::set_multisig_expiry_duration(&env, duration);
+        Self::append_audit(&env, AdminActionType::SetMultisigExpiryDuration, &admin, String::from_str(&env, ""));
         Ok(())
     }
 
@@ -259,6 +262,7 @@ impl PaymentProcessingContract {
             return Err(PaymentError::InvalidInput);
         }
         storage::set_max_multisig_signers(&env, max_signers);
+        Self::append_audit(&env, AdminActionType::SetMaxSigners, &admin, String::from_str(&env, ""));
         env.events().publish(("lumenflow", "max_signers_updated"), max_signers);
         Ok(())
     }
@@ -274,8 +278,47 @@ impl PaymentProcessingContract {
             return Err(PaymentError::InvalidInput);
         }
         storage::set_refund_window(&env, window_secs);
+        Self::append_audit(&env, AdminActionType::SetRefundWindow, &admin, String::from_str(&env, ""));
         env.events()
             .publish(("lumenflow", "refund_window_set"), window_secs);
+        Ok(())
+    }
+
+    /// Set a merchant-specific refund window in seconds (issue #1517). Merchant only.
+    ///
+    /// Overrides the global refund window for payments to `merchant`. When unset,
+    /// `refund_payment` falls back to the global default configured via
+    /// [`set_refund_window`].
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant whose window is being configured. Must sign.
+    /// * `window_secs` - Refund window in seconds. Must be ≥ [`storage::MIN_REFUND_WINDOW_SECS`].
+    ///
+    /// # Errors
+    /// * [`PaymentError::MerchantNotFound`] — no merchant is registered at `merchant`.
+    /// * [`PaymentError::MerchantInactive`] — the merchant has been deactivated.
+    /// * [`PaymentError::InvalidInput`] — `window_secs` is below the minimum.
+    pub fn set_merchant_refund_window(
+        env: Env,
+        merchant: Address,
+        window_secs: u64,
+    ) -> Result<(), PaymentError> {
+        require_not_paused(&env)?;
+        merchant.require_auth();
+        if window_secs < storage::MIN_REFUND_WINDOW_SECS {
+            return Err(PaymentError::InvalidInput);
+        }
+        let mut profile =
+            storage::get_merchant(&env, &merchant).ok_or(PaymentError::MerchantNotFound)?;
+        if !profile.active {
+            return Err(PaymentError::MerchantInactive);
+        }
+        profile.refund_window_secs = Some(window_secs);
+        storage::set_merchant(&env, &profile);
+        env.events().publish(
+            ("lumenflow", "merchant_refund_window_set"),
+            (merchant, window_secs),
+        );
         Ok(())
     }
 
@@ -332,6 +375,7 @@ impl PaymentProcessingContract {
         let lock_until = env.ledger().timestamp() + PAUSE_TIMELOCK_SECS;
         storage::set_unpause_lock_until(&env, lock_until);
         storage::clear_early_unpause_approvals(&env);
+        Self::append_audit(&env, AdminActionType::PauseWithReason, &admin, reason.clone());
         env.events()
             .publish(("lumenflow", "contract_paused"), (reason, lock_until));
         Ok(())
@@ -359,6 +403,7 @@ impl PaymentProcessingContract {
             return Err(PaymentError::InvalidInput);
         }
         storage::set_pause_guardians(&env, &guardians);
+        Self::append_audit(&env, AdminActionType::SetPauseGuardians, &admin, String::from_str(&env, ""));
         Ok(())
     }
 
@@ -423,6 +468,7 @@ impl PaymentProcessingContract {
         require_admin_rate_limited(&env, &admin)?;
         require_positive(amount)?;
         storage::set_min_refund_amount(&env, amount);
+        Self::append_audit(&env, AdminActionType::SetMinRefundAmount, &admin, String::from_str(&env, ""));
         Ok(())
     }
 
@@ -453,6 +499,7 @@ impl PaymentProcessingContract {
             return Err(PaymentError::InvalidInput);
         }
         storage::set_signature_expiry_window(&env, window_secs);
+        Self::append_audit(&env, AdminActionType::SetSignatureExpiryWindow, &admin, String::from_str(&env, ""));
         env.events()
             .publish(("lumenflow", "signature_expiry_window_set"), window_secs);
         Ok(())
@@ -492,6 +539,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         require_admin_rate_limited(&env, &admin)?;
         storage::clear_auth_lockout(&env, &address);
+        Self::append_audit(&env, AdminActionType::ResetAuthLockout, &admin, String::from_str(&env, ""));
         env.events()
             .publish(("lumenflow", "auth_lockout_reset"), address);
         Ok(())
@@ -520,6 +568,7 @@ impl PaymentProcessingContract {
             return Err(PaymentError::InvalidInput);
         }
         storage::set_rate_limit_per_window(&env, limit);
+        Self::append_audit(&env, AdminActionType::SetRateLimit, &admin, String::from_str(&env, ""));
         env.events().publish(("lumenflow", "rate_limit_set"), limit);
         Ok(())
     }
@@ -582,6 +631,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         require_admin(&env, &admin)?;
         storage::set_issuer_allowed(&env, &issuer, true);
+        Self::append_audit(&env, AdminActionType::AddAllowedIssuer, &admin, String::from_str(&env, ""));
         env.events()
             .publish(("lumenflow", "issuer_allowed"), issuer);
         Ok(())
@@ -595,6 +645,7 @@ impl PaymentProcessingContract {
     ) -> Result<(), PaymentError> {
         require_admin(&env, &admin)?;
         storage::set_issuer_allowed(&env, &issuer, false);
+        Self::append_audit(&env, AdminActionType::RemoveAllowedIssuer, &admin, String::from_str(&env, ""));
         env.events()
             .publish(("lumenflow", "issuer_disallowed"), issuer);
         Ok(())
@@ -612,6 +663,7 @@ impl PaymentProcessingContract {
             return Err(PaymentError::InvalidInput);
         }
         storage::set_payment_rate_limit(&env, limit);
+        Self::append_audit(&env, AdminActionType::SetPaymentRateLimit, &admin, String::from_str(&env, ""));
         Ok(())
     }
 
@@ -627,6 +679,7 @@ impl PaymentProcessingContract {
             return Err(PaymentError::InvalidInput);
         }
         storage::set_payment_rate_window(&env, window_secs);
+        Self::append_audit(&env, AdminActionType::SetPaymentRateWindow, &admin, String::from_str(&env, ""));
         Ok(())
     }
 
@@ -1041,6 +1094,7 @@ impl PaymentProcessingContract {
         }
         storage::set_global_stats(&env, &stats);
 
+        Self::append_audit(&env, AdminActionType::DeactivateMerchant, &admin, String::from_str(&env, ""));
         env.events()
             .publish(("lumenflow", "merchant_deactivated"), merchant_address);
         Ok(())
@@ -1066,6 +1120,7 @@ impl PaymentProcessingContract {
         stats.active_merchants += 1;
         storage::set_global_stats(&env, &stats);
 
+        Self::append_audit(&env, AdminActionType::ReactivateMerchant, &admin, String::from_str(&env, ""));
         env.events()
             .publish(("lumenflow", "merchant_reactivated"), merchant_address);
         Ok(())
@@ -1096,6 +1151,7 @@ impl PaymentProcessingContract {
             storage::get_merchant(&env, &merchant_address).ok_or(PaymentError::MerchantNotFound)?;
         merchant.verified = true;
         storage::set_merchant(&env, &merchant);
+        Self::append_audit(&env, AdminActionType::VerifyMerchant, &admin, String::from_str(&env, ""));
         env.events()
             .publish(("lumenflow", "merchant_verified"), merchant_address);
         Ok(())
@@ -1127,6 +1183,7 @@ impl PaymentProcessingContract {
             storage::get_merchant(&env, &merchant_address).ok_or(PaymentError::MerchantNotFound)?;
         merchant.verified = false;
         storage::set_merchant(&env, &merchant);
+        Self::append_audit(&env, AdminActionType::UnverifyMerchant, &admin, String::from_str(&env, ""));
         env.events()
             .publish(("lumenflow", "merchant_unverified"), merchant_address);
         Ok(())
@@ -4679,5 +4736,36 @@ impl PaymentProcessingContract {
 
         let effective_limit = limit.min(100);
         Ok(storage::query_admin_audit_log(&env, from_ledger, to_ledger, effective_limit))
+    }
+
+    /// Paginated view of the admin audit log (issue #1520).
+    ///
+    /// Returns up to `limit` entries starting at absolute index `start`, in
+    /// ascending index order. Entries are append-only and can never be mutated
+    /// or deleted.
+    ///
+    /// # Arguments
+    /// * `admin` - Must be the contract administrator. Must sign the call.
+    /// * `start` - Absolute index of the first entry to return.
+    /// * `limit` - Maximum entries to return (capped at 100, must be > 0).
+    ///
+    /// # Returns
+    /// A `Vec<AdminAuditEntry>`.
+    ///
+    /// # Errors
+    /// * [`PaymentError::Unauthorized`] — caller is not the admin.
+    /// * [`PaymentError::InvalidInput`] — `limit` is 0.
+    pub fn get_admin_audit_log_page(
+        env: Env,
+        admin: Address,
+        start: u32,
+        limit: u32,
+    ) -> Result<Vec<AdminAuditEntry>, PaymentError> {
+        require_admin(&env, &admin)?;
+        if limit == 0 {
+            return Err(PaymentError::InvalidInput);
+        }
+        let effective_limit = limit.min(100);
+        Ok(storage::get_admin_audit_page(&env, start, effective_limit))
     }
 }

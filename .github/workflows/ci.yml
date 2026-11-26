@@ -169,6 +169,82 @@ jobs:
       - name: Lint HTML files (htmlhint direct)
         run: npx --yes htmlhint "frontend/**/*.html" --config .htmlhintrc
 
+      - name: Verify CSP meta tag on all HTML pages
+        run: |
+          node <<'EOF'
+          const fs = require('fs');
+          const path = require('path');
+
+          const roots = ['frontend', 'dashboard'];
+          const htmlFiles = [];
+
+          function walk(dir) {
+            if (!fs.existsSync(dir)) return;
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              const full = path.join(dir, entry.name);
+              if (entry.isDirectory()) {
+                if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+                walk(full);
+              } else if (entry.isFile() && entry.name.endsWith('.html')) {
+                htmlFiles.push(full);
+              }
+            }
+          }
+
+          roots.forEach(walk);
+
+          if (htmlFiles.length === 0) {
+            console.error('ERROR: No HTML files found to validate.');
+            process.exit(1);
+          }
+
+          const metaRe = /<meta\b[^>]*http-equiv\s*=\s*["']?Content-Security-Policy["']?[^>]*>/i;
+          const contentRe = /content\s*=\s*("([^"]*)"|'([^']*)')/i;
+
+          let failed = false;
+
+          for (const file of htmlFiles) {
+            const html = fs.readFileSync(file, 'utf8');
+            const meta = html.match(metaRe);
+
+            if (!meta) {
+              console.error(`ERROR: ${file} is missing a <meta http-equiv="Content-Security-Policy"> tag.`);
+              failed = true;
+              continue;
+            }
+
+            const contentMatch = meta[0].match(contentRe);
+            if (!contentMatch) {
+              console.error(`ERROR: ${file} CSP meta tag has no content attribute.`);
+              failed = true;
+              continue;
+            }
+
+            const policy = contentMatch[2] !== undefined ? contentMatch[2] : contentMatch[3];
+
+            if (/script-src[^;]*'unsafe-inline'/i.test(policy)) {
+              console.error(`ERROR: ${file} CSP script-src must not contain 'unsafe-inline'.`);
+              failed = true;
+              continue;
+            }
+
+            if (!/script-src\s+[^;]*'self'/i.test(policy)) {
+              console.error(`ERROR: ${file} CSP script-src must be restricted to 'self'.`);
+              failed = true;
+              continue;
+            }
+
+            console.log(`OK: ${file}`);
+          }
+
+          if (failed) {
+            console.error('\nCSP validation failed. Add a strict Content-Security-Policy meta tag to each HTML page.');
+            process.exit(1);
+          }
+
+          console.log(`\nCSP meta tag validated on ${htmlFiles.length} HTML file(s).`);
+          EOF
+
       - name: Lint CSS files (stylelint)
         run: npx --yes stylelint "frontend/**/*.css" --config '{"rules":{"block-no-empty":true,"color-no-invalid-hex":true,"no-duplicate-selectors":true}}'
 
