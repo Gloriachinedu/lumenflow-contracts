@@ -71,7 +71,7 @@ jobs:
       #    Severity filter: CRITICAL,HIGH for SARIF (informational record).
       # -----------------------------------------------------------------------
       - name: Scan image with Trivy (SARIF)
-        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8  # v0.30.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.30.0
         with:
           image-ref: lumenflow:scan-${{ github.sha }}
           format: sarif
@@ -94,7 +94,7 @@ jobs:
       # 6. Trivy scan — table output for Critical CVEs (fails the workflow)
       # -----------------------------------------------------------------------
       - name: Fail on Critical CVEs
-        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8  # v0.30.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.30.0
         with:
           image-ref: lumenflow:scan-${{ github.sha }}
           format: table
@@ -107,7 +107,7 @@ jobs:
       #    (continue-on-error keeps the step non-blocking)
       # -----------------------------------------------------------------------
       - name: Warn on High CVEs
-        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8  # v0.30.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.30.0
         continue-on-error: true
         with:
           image-ref: lumenflow:scan-${{ github.sha }}
