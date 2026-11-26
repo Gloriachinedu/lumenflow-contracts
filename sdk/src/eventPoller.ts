@@ -1,5 +1,7 @@
 import { LumenFlowError, PaymentErrorCode } from './errors';
 import { EventCompatError, parseLumenFlowEvent } from './eventCatalog';
+import { LogLevel, StructuredLogger, resolveCorrelationId } from './logging';
+import { redactSensitive } from './logRedaction';
 
 export interface ContractEvent {
   id: string;
@@ -27,74 +29,15 @@ export interface EventPollerOptions {
   eventTypes?: string[];
   fromLedger?: number;
   strict?: boolean;
-  /** mTLS configuration for internal service-to-service calls. */
-  tls?: EventPollerTlsOptions;
+  correlationId?: string;
+  logLevel?: LogLevel;
 }
 
-function isHttpsUrl(url: string): boolean {
-  try {
-    return new URL(url).protocol === 'https:';
-  } catch {
-    return false;
-  }
-}
-
-function validateTlsOptions(options: EventPollerOptions): void {
-  const tls = options.tls;
-  if (!tls) return;
-
-  if (!isHttpsUrl(options.rpcUrl)) {
-    throw new LumenFlowError(
-      PaymentErrorCode.InvalidInput,
-      'mTLS options require an https rpcUrl',
-    );
-  }
-  if (!tls.cert || !tls.key) {
-    throw new LumenFlowError(
-      PaymentErrorCode.InvalidInput,
-      'mTLS requires both client certificate (tls.cert) and private key (tls.key)',
-    );
-  }
-}
-
-async function buildDispatcher(options: EventPollerOptions): Promise<any> {
-  if (!options.tls) return undefined;
-
-  let undici: any;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    undici = require('undici');
-  } catch {
-    throw new LumenFlowError(
-      PaymentErrorCode.InvalidInput,
-      'mTLS requires the "undici" package to be installed',
-    );
-  }
-
-  const agent = new undici.Agent({
-    connect: {
-      ca: options.tls.ca,
-      cert: options.tls.cert,
-      key: options.tls.key,
-      rejectUnauthorized: options.tls.rejectUnauthorized ?? true,
-    },
+function createLogger(options: EventPollerOptions): StructuredLogger {
+  return new StructuredLogger({
+    level: options.logLevel,
+    correlationId: resolveCorrelationId(options.correlationId),
   });
-
-  return new undici.Dispatcher ? agent : agent;
-}
-
-function isTlsHandshakeError(err: unknown): boolean {
-  const code = (err as { code?: string } | undefined)?.code;
-  const message = String((err as { message?: string } | undefined)?.message ?? err);
-  return (
-    code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' ||
-    code === 'SELF_SIGNED_CERT_IN_CHAIN' ||
-    code === 'DEPTH_ZERO_SELF_SIGNED_CERT' ||
-    code === 'ERR_TLS_CERT_ALTNAME_INVALID' ||
-    code === 'CERT_HAS_EXPIRED' ||
-    code === 'ERR_SSL_TLSV1_ALERT_UNKNOWN_CA' ||
-    /certificate|tls|ssl/i.test(message)
-  );
 }
 
 function validateEvent(event: unknown): ContractEvent {
@@ -151,54 +94,66 @@ function buildRpcPayload(options: EventPollerOptions) {
 }
 
 export async function fetchContractEvents(options: EventPollerOptions): Promise<ContractEvent[]> {
-  if (!options.rpcUrl) throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'rpcUrl is required');
-  if (!options.contractId) throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'contractId is required');
+  const logger = createLogger(options);
+  const startedAt = Date.now();
+  const operation = 'fetchContractEvents';
 
-  validateTlsOptions(options);
-  const dispatcher = await buildDispatcher(options);
-
-  let response: Response;
   try {
-    response = await fetch(options.rpcUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildRpcPayload(options)),
-      ...(dispatcher ? { dispatcher } : {}),
-    } as RequestInit);
-  } catch (err) {
-    if (options.tls && isTlsHandshakeError(err)) {
-      throw new LumenFlowError(
-        PaymentErrorCode.InvalidInput,
-        `mTLS handshake with RPC endpoint failed: ${String(
-          (err as { message?: string } | undefined)?.message ?? err,
-        )}`,
-      );
-    }
-    throw new LumenFlowError(PaymentErrorCode.InvalidInput, String(err));
-  }
+    if (!options.rpcUrl) throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'rpcUrl is required');
+    if (!options.contractId) throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'contractId is required');
 
-  let data: any;
-  try {
-    data = await response.json();
-  } catch (err) {
-    throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'Invalid JSON response from RPC');
-  }
-
-  if (data.error) {
-    throw new LumenFlowError(PaymentErrorCode.InvalidInput, data.error.message ?? JSON.stringify(data.error));
-  }
-
-  const events = data.result?.events ?? [];
-  const validEvents: ContractEvent[] = [];
-  for (const event of events) {
+    let response: Response;
     try {
-      validEvents.push(validateEvent(event));
-    } catch (error) {
-      if (options.strict) throw error;
-      console.warn('[LumenFlow] Discarding invalid contract event', error);
+      response = await fetch(options.rpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildRpcPayload(options)),
+      });
+    } catch (err) {
+      throw new LumenFlowError(PaymentErrorCode.InvalidInput, String(err));
     }
+
+    let data: any;
+    try {
+      data = await response.json();
+    } catch (err) {
+      throw new LumenFlowError(PaymentErrorCode.InvalidInput, 'Invalid JSON response from RPC');
+    }
+
+    if (data.error) {
+      throw new LumenFlowError(PaymentErrorCode.InvalidInput, data.error.message ?? JSON.stringify(data.error));
+    }
+
+    const events = data.result?.events ?? [];
+    const validEvents: ContractEvent[] = [];
+    for (const event of events) {
+      try {
+        validEvents.push(validateEvent(event));
+      } catch (error) {
+        if (options.strict) throw error;
+        logger.warn('Discarding invalid contract event', {
+          operation,
+          error: redactSensitive(error),
+        });
+      }
+    }
+
+    logger.info('Fetched contract events', {
+      operation,
+      duration_ms: Date.now() - startedAt,
+      contractId: options.contractId,
+      eventCount: validEvents.length,
+    });
+    return validEvents;
+  } catch (error) {
+    logger.error('Failed to fetch contract events', {
+      operation,
+      duration_ms: Date.now() - startedAt,
+      contractId: options.contractId,
+      error: redactSensitive(error),
+    });
+    throw error;
   }
-  return validEvents;
 }
 
 export function pollContractEvents(
@@ -206,10 +161,27 @@ export function pollContractEvents(
   intervalMs: number,
   callback: (events: ContractEvent[]) => void,
 ): () => void {
+  const logger = createLogger(options);
+  const operation = 'pollContractEvents';
+
   const timer = setInterval(() => {
+    const startedAt = Date.now();
     fetchContractEvents(options)
-      .then(callback)
-      .catch(() => {});
+      .then((events) => {
+        callback(events);
+        logger.debug('Poll cycle completed', {
+          operation,
+          duration_ms: Date.now() - startedAt,
+          eventCount: events.length,
+        });
+      })
+      .catch((error) => {
+        logger.error('Poll cycle failed', {
+          operation,
+          duration_ms: Date.now() - startedAt,
+          error: redactSensitive(error),
+        });
+      });
   }, intervalMs);
 
   return () => clearInterval(timer);

@@ -82,7 +82,10 @@
       FullyRefunded:      ['badge-fully-refunded',  'Fully Refunded'],
     };
     const [cls, label] = map[status] || ['', status];
-    return `<span class="badge ${cls}">${label}</span>`;
+    const span = document.createElement('span');
+    span.className = cls ? `badge ${cls}` : 'badge';
+    span.textContent = label;
+    return span;
   }
 
   function renderPage(sorted) {
@@ -97,42 +100,106 @@
     const cardsList = document.getElementById('cards-list');
     tbody.setAttribute('aria-busy', 'false');
     cardsList.setAttribute('aria-busy', 'false');
+    tbody.replaceChildren();
     if (page.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" class="empty">No payments found.</td></tr>';
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 5;
+      td.className = 'empty';
+      td.textContent = 'No payments found.';
+      tr.appendChild(td);
+      tbody.appendChild(tr);
     } else {
-      tbody.innerHTML = page.map(p => `
-        <tr>
-          <td><span class="order-id">${p.order_id}</span></td>
-          <td>${p.merchant_address}</td>
-          <td class="amount">${p.amount.toLocaleString()} XLM</td>
-          <td>${statusBadge(p.status)}</td>
-          <td>${p.paid_at}</td>
-        </tr>`).join('');
+      page.forEach(p => {
+        const tr = document.createElement('tr');
+
+        const orderTd = document.createElement('td');
+        const orderSpan = document.createElement('span');
+        orderSpan.className = 'order-id';
+        orderSpan.textContent = p.order_id;
+        orderTd.appendChild(orderSpan);
+        tr.appendChild(orderTd);
+
+        const merchantTd = document.createElement('td');
+        merchantTd.textContent = p.merchant_address;
+        tr.appendChild(merchantTd);
+
+        const amountTd = document.createElement('td');
+        amountTd.className = 'amount';
+        amountTd.textContent = `${p.amount.toLocaleString()} XLM`;
+        tr.appendChild(amountTd);
+
+        const statusTd = document.createElement('td');
+        statusTd.appendChild(statusBadge(p.status));
+        tr.appendChild(statusTd);
+
+        const dateTd = document.createElement('td');
+        dateTd.textContent = p.paid_at;
+        tr.appendChild(dateTd);
+
+        tbody.appendChild(tr);
+      });
     }
 
     // Cards
+    cardsList.replaceChildren();
     if (page.length === 0) {
-      cardsList.innerHTML = '<div class="empty">No payments found.</div>';
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'No payments found.';
+      cardsList.appendChild(empty);
     } else {
-      cardsList.innerHTML = page.map(p => `
-        <div class="payment-card">
-          <div class="card-header">
-            <span class="card-order-id">${p.order_id}</span>
-            <span class="card-amount">${p.amount.toLocaleString()} XLM</span>
-          </div>
-          <div class="card-row">
-            <span class="card-label">Merchant</span>
-            <span>${p.merchant_address}</span>
-          </div>
-          <div class="card-row">
-            <span class="card-label">Status</span>
-            <span>${statusBadge(p.status)}</span>
-          </div>
-          <div class="card-row">
-            <span class="card-label">Date</span>
-            <span>${p.paid_at}</span>
-          </div>
-        </div>`).join('');
+      page.forEach(p => {
+        const card = document.createElement('div');
+        card.className = 'payment-card';
+
+        const header = document.createElement('div');
+        header.className = 'card-header';
+        const cardOrderId = document.createElement('span');
+        cardOrderId.className = 'card-order-id';
+        cardOrderId.textContent = p.order_id;
+        const cardAmount = document.createElement('span');
+        cardAmount.className = 'card-amount';
+        cardAmount.textContent = `${p.amount.toLocaleString()} XLM`;
+        header.appendChild(cardOrderId);
+        header.appendChild(cardAmount);
+        card.appendChild(header);
+
+        const merchantRow = document.createElement('div');
+        merchantRow.className = 'card-row';
+        const merchantLabel = document.createElement('span');
+        merchantLabel.className = 'card-label';
+        merchantLabel.textContent = 'Merchant';
+        const merchantValue = document.createElement('span');
+        merchantValue.textContent = p.merchant_address;
+        merchantRow.appendChild(merchantLabel);
+        merchantRow.appendChild(merchantValue);
+        card.appendChild(merchantRow);
+
+        const statusRow = document.createElement('div');
+        statusRow.className = 'card-row';
+        const statusLabel = document.createElement('span');
+        statusLabel.className = 'card-label';
+        statusLabel.textContent = 'Status';
+        const statusValue = document.createElement('span');
+        statusValue.appendChild(statusBadge(p.status));
+        statusRow.appendChild(statusLabel);
+        statusRow.appendChild(statusValue);
+        card.appendChild(statusRow);
+
+        const dateRow = document.createElement('div');
+        dateRow.className = 'card-row';
+        const dateLabel = document.createElement('span');
+        dateLabel.className = 'card-label';
+        dateLabel.textContent = 'Date';
+        const dateValue = document.createElement('span');
+        dateValue.textContent = p.paid_at;
+        dateRow.appendChild(dateLabel);
+        dateRow.appendChild(dateValue);
+        card.appendChild(dateRow);
+
+        cardsList.appendChild(card);
+      });
     }
 
     // Pagination controls

@@ -31,6 +31,20 @@ pub struct Merchant {
     pub referral_count: u32,
 }
 
+/// Per-merchant profile settings that can be configured by the merchant.
+///
+/// `refund_window_secs` overrides the global refund window for this merchant
+/// when set. When `None`, the contract-wide default is used.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantProfile {
+    /// The merchant this profile belongs to.
+    pub merchant: Address,
+    /// Merchant-specific refund window in seconds. When `None`, the global
+    /// default refund window applies.
+    pub refund_window_secs: Option<u64>,
+}
+
 /// Summary entry returned by `get_referral_stats`. Contains the referring
 /// merchant's address, how many merchants they have referred, and the
 /// configured referral reward in basis points.
@@ -354,6 +368,21 @@ pub struct EscrowCancelledEvent {
     pub amount: i128,
 }
 
+/// Data payload for `lumenflow/emergency_withdrawal`.
+///
+/// Emitted when an admin triggers an emergency withdrawal of stuck escrow
+/// funds to the governance treasury after the emergency lock period.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmergencyWithdrawalEvent {
+    /// The escrow order_id from which funds were withdrawn.
+    pub escrow_id: String,
+    /// Amount transferred to the treasury in stroops.
+    pub amount: i128,
+    /// The treasury address that received the funds.
+    pub recipient: Address,
+}
+
 // ── Dispute ───────────────────────────────────────────────────────────────────
 
 /// Full lifecycle state machine for a dispute.
@@ -573,6 +602,7 @@ pub enum AdminActionType {
     SetMultisigExpiryDuration,
     SetRefundWindow,
     SetMinRefundAmount,
+    SetMerchantRefundWindow,
     DeactivateMerchant,
     ReactivateMerchant,
     VerifyMerchant,
@@ -582,6 +612,9 @@ pub enum AdminActionType {
     SetPauseGuardians,
     UpgradeContract,
     ConfirmMerchantDataDeletion,
+    EmergencyWithdraw,
+    SuspendMerchant,
+    UnsuspendMerchant,
     Other,
 }
 

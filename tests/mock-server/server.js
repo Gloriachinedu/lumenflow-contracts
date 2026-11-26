@@ -266,6 +266,31 @@ const routes = {
   },
 };
 
+// ── Route introspection ───────────────────────────────────────────────────────
+
+/**
+ * Returns a stable, machine-readable list of implemented endpoints.
+ *
+ * Each entry is `{ method, path }` where `path` is the pathname without any
+ * query string (e.g. `{ method: "GET", path: "/mock/contract/get_refund" }`).
+ * The list is sorted so that contract tests and CI can diff it deterministically
+ * against `docs/openapi.yaml`.
+ *
+ * @returns {{ method: string, path: string }[]}
+ */
+function listRoutes() {
+  return Object.keys(routes)
+    .map((key) => {
+      const [method, path] = key.split(" ");
+      return { method, path };
+    })
+    .sort((a, b) =>
+      a.path === b.path
+        ? a.method.localeCompare(b.method)
+        : a.path.localeCompare(b.path)
+    );
+}
+
 // ── Server ────────────────────────────────────────────────────────────────────
 
 const server = http.createServer(async (req, res) => {
@@ -292,6 +317,47 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`Mock contract server listening on http://localhost:${PORT}`);
-});
+/**
+ * Starts the mock server programmatically.
+ *
+ * @param {number} [port] Port to listen on (defaults to `PORT`).
+ * @returns {Promise<import("http").Server>} Resolves once the server is listening.
+ */
+function start(port = PORT) {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, () => {
+      server.removeListener("error", reject);
+      console.log(`Mock contract server listening on http://localhost:${server.address().port}`);
+      resolve(server);
+    });
+  });
+}
+
+/**
+ * Stops the mock server.
+ *
+ * @returns {Promise<void>}
+ */
+function stop() {
+  return new Promise((resolve, reject) => {
+    if (!server.listening) return resolve();
+    server.close((err) => (err ? reject(err) : resolve()));
+  });
+}
+
+module.exports = {
+  routes,
+  listRoutes,
+  start,
+  stop,
+  server,
+  resetState,
+  PORT,
+};
+
+// Only auto-start when executed directly (e.g. `node server.js`), not when
+// required by the contract test or CI tooling.
+if (require.main === module) {
+  start();
+}
