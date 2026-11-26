@@ -45,7 +45,31 @@ export interface RelayEvent {
   value?: unknown;
   /** Ledger sequence the event was emitted in. */
   ledger?: number;
+  /**
+   * Extra HTTP headers to send with the delivery POST. Populated by the relay
+   * with the configured CSRF header (see {@link WebhookRelayOptions.csrf}).
+   */
+  headers?: Record<string, string>;
 }
+
+/**
+ * CSRF configuration for outbound webhook deliveries.
+ *
+ * The relay is a server-to-server client: CSRF protection is only meaningful
+ * when the downstream endpoint is browser-facing (e.g. a dashboard API that
+ * also accepts cookie-authenticated requests). The authoritative enforcement
+ * lives in `webhook/webhook-server.js`; this option merely lets the relay
+ * attach a token so such endpoints accept the delivery.
+ */
+export interface RelayCsrfOptions {
+  /** CSRF token value to send with each delivery. */
+  token: string;
+  /** Header carrying the token. Default: `x-csrf-token`. */
+  headerName?: string;
+}
+
+/** Default header used to transmit the CSRF token. */
+export const DEFAULT_CSRF_HEADER = 'x-csrf-token';
 
 /** Persistent record of which event keys have been delivered. */
 export interface DedupeStore {
@@ -299,7 +323,7 @@ export class WebhookRelay {
       let response: DeliveryResponse | undefined;
       let threw = false;
       try {
-        response = await this.deliver(event);
+        response = await this.deliver(this.withCsrf(event));
       } catch {
         threw = true;
       }

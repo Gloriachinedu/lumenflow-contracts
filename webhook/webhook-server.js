@@ -39,6 +39,11 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { MemoryIdempotencyStore } = require('./idempotency-store');
+const {
+  csrfMiddleware,
+  createCsrfToken,
+  setCsrfCookie,
+} = require('../sdk/dist/security/csrfProtection');
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -49,6 +54,7 @@ const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const HORIZON_URL = process.env.HORIZON_URL || 'https://horizon-testnet.stellar.org';
 const MAX_RETRIES = parseInt(process.env.MAX_RETRIES || '5', 10);
 const RETRY_BASE_MS = parseInt(process.env.RETRY_BASE_MS || '500', 10);
+const CSRF_SECRET = process.env.CSRF_SECRET;
 
 // Shared secret used to verify inbound webhook signatures.  Must be supplied
 // via the environment — never hard-coded.
@@ -425,6 +431,149 @@ async function deliverWithRetry(eventName, data, ledger, pagingToken, merchantId
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ---------------------------------------------------------------------------
+// HTTP server with CSRF protection
+//
+// Every state-changing route (POST / PUT / DELETE / PATCH) is guarded by the
+// CSRF middleware from sdk/security/csrfProtection.  Clients obtain a token
+// from GET /csrf-token and must echo it back via the `x-csrf-token` header
+// (or the `_csrf` body field) on subsequent state-changing requests.
+// ---------------------------------------------------------------------------
+
+const STATE_CHANGING_METHODS = new Set(['POST', 'PUT', 'DELETE', 'PATCH']);
+
+/**
+ * Parses the `Cookie` header into a plain object.
+ *
+ * @param {string|undefined} header
+ * @returns {Record<string, string>}
+ */
+function parseCookies(header) {
+  const cookies = {};
+  if (!header) return cookies;
+  for (const part of header.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    const name = part.slice(0, idx).trim();
+    const value = part.slice(idx + 1).trim();
+    if (name) cookies[name] = decodeURIComponent(value);
+  }
+  return cookies;
+}
+
+/**
+ * Ensures the request carries a `session` cookie, minting one if absent.
+ *
+ * @param {http.IncomingMessage} req
+ * @param {http.ServerResponse} res
+ * @returns {string} The session id.
+ */
+function ensureSession(req, res) {
+  const cookies = parseCookies(req.headers.cookie);
+  if (cookies.session) return cookies.session;
+
+  const sessionId = crypto.randomBytes(32).toString('hex');
+  res.setHeader(
+    'Set-Cookie',
+    `session=${sessionId}; Path=/; HttpOnly; Secure; SameSite=Strict`,
+  );
+  return sessionId;
+}
+
+/**
+ * Sends a JSON response with the standard security headers applied.
+ *
+ * @param {http.ServerResponse} res
+ * @param {number} status
+ * @param {object} body
+ */
+function sendJson(res, status, body) {
+  const headers = applySecurityHeaders({ 'Content-Type': 'application/json' });
+  res.writeHead(status, headers);
+  res.end(JSON.stringify(body));
+}
+
+/**
+ * Reads and JSON-parses the request body (best effort).
+ *
+ * @param {http.IncomingMessage} req
+ * @returns {Promise<object>}
+ */
+function readJsonBody(req) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      if (chunks.length === 0) return resolve({});
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      } catch {
+        resolve({});
+      }
+    });
+    req.on('error', () => resolve({}));
+  });
+}
+
+/**
+ * Creates the webhook relay HTTP server with CSRF protection wired in.
+ *
+ * @returns {http.Server}
+ */
+function createServer() {
+  return http.createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://localhost');
+    const method = (req.method || 'GET').toUpperCase();
+
+    // ── Token issuance ─────────────────────────────────────────────────────
+    if (method === 'GET' && url.pathname === '/csrf-token') {
+      const sessionId = ensureSession(req, res);
+      const token = createCsrfToken(sessionId, CSRF_SECRET);
+      const cookie = setCsrfCookie(token);
+      const existing = res.getHeader('Set-Cookie');
+      const cookies = existing
+        ? Array.isArray(existing) ? existing.slice() : [String(existing)]
+        : [];
+      cookies.push(cookie);
+      res.setHeader('Set-Cookie', cookies);
+      return sendJson(res, 200, { token });
+    }
+
+    // ── CSRF guard for all state-changing routes ───────────────────────────
+    if (STATE_CHANGING_METHODS.has(method)) {
+      const body = await readJsonBody(req);
+      const guardedReq = Object.assign(req, { body });
+      let rejected = false;
+      const guardedRes = {
+        statusCode: 200,
+        setHeader: (name, value) => res.setHeader(name, value),
+        getHeader: (name) => res.getHeader(name),
+        end: (payload) => {
+          rejected = true;
+          const headers = applySecurityHeaders(
+            res.getHeader('Content-Type')
+              ? {}
+              : { 'Content-Type': 'application/json' },
+          );
+          res.writeHead(res.statusCode || 403, headers);
+          res.end(payload);
+        },
+      };
+
+      await csrfMiddleware(CSRF_SECRET)(guardedReq, guardedRes, () => {
+        rejected = false;
+      });
+
+      if (rejected) return;
+
+      // Placeholder handler for relayed webhook events.
+      return sendJson(res, 202, { accepted: true });
+    }
+
+    return sendJson(res, 404, { error: 'Not found' });
+  });
 }
 
 // ---------------------------------------------------------------------------
