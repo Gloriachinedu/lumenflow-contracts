@@ -235,6 +235,8 @@ pub enum DataKey {
     MerchantCommitment(Address),
     /// Conditional escrow hold keyed by escrow_id.
     EscrowHold(String),
+    /// Merchant-configured proration policy for subscription cancellations (Issue #1610).
+    MerchantProrationPolicy(Address),
     /// Admin audit log entry keyed by index.
     AdminAuditEntry(u32),
     /// Total count of admin audit log entries (append-only counter).

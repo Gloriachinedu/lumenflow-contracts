@@ -1580,21 +1580,29 @@ export class LumenFlowClient {
 
   /**
    * Cancels an active subscription, preventing future charges.
-   * Only the subscriber may cancel their own subscription.
    *
-   * @param subscriber - Stellar address of the subscriber (must sign).
+   * The merchant's proration policy (configured via `setProrationPolicy`) determines
+   * whether a partial refund is issued for the unused portion of the current cycle.
+   * Pass `requestProration: true` to claim a prorated refund when the merchant's
+   * policy is set to `Prorate`; it is ignored under `NoRefund` and `GracePeriod`.
+   *
+   * @param subscriber - Stellar address of the subscriber or merchant (must sign).
    * @param subscriptionId - ID of the subscription to cancel.
+   * @param requestProration - When `true`, requests a proportional refund for the
+   *   unused billing cycle if the merchant's policy allows it. Defaults to `false`.
    * @returns A Promise that resolves when the cancellation is confirmed.
    * @throws {@link LumenFlowError} if the subscription is already cancelled.
    * @throws {@link LumenFlowError} if the caller is not the subscription's owner.
    */
   async cancelSubscription(
     subscriber: string,
-    subscriptionId: string
+    subscriptionId: string,
+    requestProration: boolean = false
   ): Promise<void> {
     await this.invoke("cancel_subscription", [
       new Address(subscriber),
       subscriptionId,
+      requestProration,
     ]);
   }
 

@@ -45,3 +45,35 @@ Define a recurring payment workflow that allows payers to authorize periodic tok
 ### Backlog Status
 
 Pending product planning sign-off before implementation begins.
+
+---
+
+## Subscription Cancellation Grace Period and Proration Logic
+
+**Issue:** #1610
+**Priority:** Low
+**Estimated Effort:** Medium
+**Dependencies:** Subscription payment implementation
+**Labels:** feature, product, smart-contract
+
+### Design
+
+When a subscriber cancels mid-cycle, the merchant's configured `ProrationPolicy` determines the outcome:
+
+| Policy | Behaviour |
+|--------|-----------|
+| `NoRefund` (default) | No refund; subscriber retains access for the remainder of the paid cycle. |
+| `Prorate` | Unused cycle fraction refunded: `plan_amount × (remaining_secs / interval_secs)`. Requires subscriber to pass `request_proration = true`. |
+| `GracePeriod(secs)` | No refund; no further charges for `secs` seconds post-cancellation. |
+
+### Contract Entrypoints
+
+| Entrypoint | Caller | Description |
+|---|---|---|
+| `set_proration_policy(merchant, policy)` | Merchant | Configure the cancellation policy for their subscriptions |
+| `get_proration_policy(merchant)` | Any | Read the current policy |
+| `cancel_subscription(caller, id, request_proration)` | Payer / Merchant | Cancel with optional proration claim |
+
+### Status
+
+Implemented — see [ADR-009](adr/ADR-009-subscription-cancellation-proration.md).
